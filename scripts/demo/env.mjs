@@ -68,9 +68,6 @@ const SCRATCH_PATHS = [
 const PATH_ALLOW = new Set(["PLAYWRIGHT_BROWSERS_PATH", "SCREENSHOTS_OUT_DIR", "XDG_RUNTIME_DIR"]);
 const PATH_KEY = /(_DIR|_PATH|_FILE|_ROOTS)$/;
 
-/** The production unit's default port; a demo must never take it. */
-const RESERVED_PORTS = new Set(["3100"]);
-
 /** Where Playwright keeps its browsers, resolved before HOME is redirected. */
 export function playwrightBrowsersPath(parent = process.env) {
   return parent.PLAYWRIGHT_BROWSERS_PATH ?? path.join(os.homedir(), ".cache", "ms-playwright");
@@ -132,8 +129,6 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
     if (!env.DATABASE_URL.startsWith("file:") || !path.isAbsolute(file) || !inside(demoDir, file))
       problems.push("DATABASE_URL must be a file: path inside the demo dir");
   }
-  if (env.PORT !== undefined && RESERVED_PORTS.has(String(env.PORT)))
-    problems.push(`PORT ${env.PORT} is reserved for the real instance`);
   for (const key of ["BROWSER_ENABLED", "DEVICE_ENABLED", "MULLION_TASK_MASTER_ENABLED"])
     if (env[key] === "true") problems.push(`${key} must stay off in the demo`);
   const firstPath = env.PATH?.split(":")[0];

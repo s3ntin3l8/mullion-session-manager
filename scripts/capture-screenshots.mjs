@@ -46,7 +46,7 @@ const PROFILES = {
   readme: {
     outDir: README_DIR,
     desktop: { viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 },
-    // 375 CSS px is under styles.css's 699px mobile breakpoint, so the mobile
+    // 375 CSS px is under mobile.css's 699.98px breakpoint, so the mobile
     // layout (drawer sidebar, maximized single group, MobileKeyBar) actually
     // renders. deviceScaleFactor 2 gives the manifest's 750-wide `narrow` files.
     mobile: { viewport: { width: 375, height: 812 }, deviceScaleFactor: 2 },
@@ -207,6 +207,8 @@ async function recordLoop(browser, demo) {
   await page.waitForTimeout(1500);
   // Taken once the session is open, still inside the script's startDelay, so
   // the trimmed loop begins on an empty terminal just before the first line.
+  // Wall-clock, so on a loaded machine the trim can land a little early or
+  // late; landing about 1.5 s before the first line absorbs normal drift.
   const offset = (Date.now() - recordingStarted) / 1000;
   // 35 transcript lines at 0.25 s each, plus a beat at the end.
   await page.waitForTimeout(3000 + AUTH_TRANSCRIPT.length * 250 + 1500);

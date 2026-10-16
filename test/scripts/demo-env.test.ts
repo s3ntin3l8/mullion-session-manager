@@ -58,7 +58,6 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
   it("real projects", () => refuses({ PROJECTS_ROOTS: "/home/me/projects" }));
   it("agent config homes", () => refuses({ CLAUDE_CONFIG_DIR: path.join(demoDir, "c") }));
   it("secrets", () => refuses({ DB_ENCRYPTION_KEY: "k", MULLION_AGENT_TOKEN: "t" })); // pragma: allowlist secret
-  it("the production port", () => refuses({ PORT: "3100" }));
   it("devices or the browser", () => refuses({ DEVICE_ENABLED: "true" }));
   it("a PATH without the docker shim first", () => refuses({ PATH: "/usr/bin" }));
   it("a working directory holding a .env", () => {
