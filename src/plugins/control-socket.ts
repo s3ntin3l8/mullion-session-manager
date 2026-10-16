@@ -22,6 +22,8 @@ import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-chan
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
+import type { SessionSeverity, SessionStatus } from "../shared/types.js";
+import { parseWaitTimeout, parseWaitUntil, waitForSession } from "../services/session-wait.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants
@@ -68,6 +70,11 @@ export const HANDSHAKE_TIMEOUT_MS = 10_000;
 export const MAX_INFLIGHT_OPS = 32;
 /** Max open sessions.attach / events.subscribe streams per connection. */
 export const MAX_OPEN_CHANNELS = 16;
+/** Max simultaneously pending sessions.wait ops on one connection. Each holds
+ * an in-flight slot and re-reads status every tick, so an uncapped fan-out
+ * could fill MAX_INFLIGHT_OPS (pausing the socket and starving the
+ * connection's other ops) and multiply the per-tick work. */
+export const MAX_WAITS_PER_CONNECTION = 4;
 /** Once this many reply bytes are queued unwritten, stop reading requests
  * until the socket 'drain's. */
 export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
@@ -96,6 +103,8 @@ interface ConnectionState {
    * follow-up ops don't need to re-check ownership, only that an entry
    * exists for this id. */
   openChannels: Map<number, SocketChannel>;
+  /** Pending sessions.wait ops (see MAX_WAITS_PER_CONNECTION). */
+  activeWaits: number;
 }
 
 interface ReplyPayload {
@@ -701,6 +710,112 @@ export const OPS: Record<string, OpSpec> = {
       };
     }),
   ),
+  // Server-owned wait (services/session-wait.ts): blocks THIS request — not
+  // the agent's own turn budget — until the target's derived status matches
+  // `until` (statuses and/or severities; default = anything needing
+  // attention), or `timeoutMs` (default 10 min, max 1 h) elapses. At session
+  // scope the target must be a CHILD (waiting on yourself can only time out).
+  // The handler stays pending, so the dispatch loop counts it against
+  // MAX_INFLIGHT_OPS for as long as it waits; a closed socket aborts it.
+  // `afterSeq` is the stale-latch guard (see WaitOptions); the reply carries
+  // the session's current `eventSeq` so a caller can chain it into the next
+  // wait.
+  "sessions.wait": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      const until = parseWaitUntil(body?.until);
+      if (!until.ok) {
+        reply(bad(400, until.error));
+        return;
+      }
+      const timeout = parseWaitTimeout(body?.timeoutMs);
+      if (!timeout.ok) {
+        reply(bad(400, timeout.error));
+        return;
+      }
+      const afterSeq = body?.afterSeq;
+      if (
+        afterSeq !== undefined &&
+        (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
+      ) {
+        reply(bad(400, "'afterSeq' must be a non-negative integer"));
+        return;
+      }
+
+      if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+        reply(bad(429, "too many pending waits on this connection"));
+        return;
+      }
+
+      const id = target.id;
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      conn.socket.once("close", onClose);
+      conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+      try {
+        const result = await waitForSession(
+          {
+            until: until.until,
+            timeoutMs: timeout.timeoutMs,
+            ...(afterSeq !== undefined ? { afterSeq } : {}),
+          },
+          {
+            signal: controller.signal,
+            // A session-scoped waiter must stay active for the whole wait (the
+            // same rule resolveOwnedSessionId applies at the start).
+            authorized: () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!),
+            readStatus: async () => {
+              const res = await injectAndShape(app, {
+                method: "GET",
+                url: `/api/sessions/${enc(id)}`,
+                headers: buildAuthHeaders(app),
+              });
+              if (!res.ok) {
+                if (res.status === 404) return null;
+                throw new Error(res.error ?? "unable to read session status");
+              }
+              const row = res.result as {
+                sessionStatus: SessionStatus;
+                sessionStatusSeverity: SessionSeverity;
+                sessionStatusDetail: string | null;
+              };
+              return {
+                status: row.sessionStatus,
+                severity: row.sessionStatusSeverity,
+                detail: row.sessionStatusDetail ?? null,
+              };
+            },
+            eventSeqHead: () => app.pty.get(id)?.eventSeqHead ?? 0,
+            subscribe: (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
+          },
+        );
+        // Aborted == the peer hung up; there is nobody to reply to.
+        if ("aborted" in result) return;
+        reply({
+          ok: true,
+          status: 200,
+          result: { ...result, eventSeq: app.pty.get(id)?.eventSeqHead ?? 0 },
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        reply(
+          message === "session not found"
+            ? bad(404, message)
+            : message === "not authorized"
+              ? bad(403, "this session is no longer active")
+              : bad(500, message),
+        );
+      } finally {
+        conn.activeWaits -= 1;
+        conn.socket.off("close", onClose);
+      }
+    },
+  },
   // Full scope only (deliberately, not just because REST requires a
   // projectId a session-scoped connection wouldn't have handy) — an agent
   // inside a session has no business spawning an unrelated one.
@@ -1519,6 +1634,7 @@ function handleConnection(
           scope: resolved.scope,
           sessionId: resolved.sessionId,
           openChannels: new Map(),
+          activeWaits: 0,
         };
         continue;
       }

@@ -26,6 +26,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "start_dock_session",
       "spawn_child_session",
       "list_child_sessions",
+      "wait_for_session",
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
@@ -225,6 +226,30 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     await tool.handler({ sessionId: "4" }, { listChildSessions });
     expect(listChildSessions).toHaveBeenLastCalledWith("4");
     expect(JSON.parse(text)).toEqual([{ id: 7, sessionStatus: "working" }]);
+  });
+
+  it("wait_for_session defaults to a 50s timeout, forwards options, and requires a sessionId", async () => {
+    const tool = TOOLS.find((t) => t.name === "wait_for_session")!;
+    const waitForSession = vi.fn().mockResolvedValue({ timedOut: false, status: "finished" });
+    const text = await tool.handler({ sessionId: "7" }, { waitForSession });
+    expect(waitForSession).toHaveBeenCalledWith({
+      sessionId: "7",
+      until: undefined,
+      timeoutMs: 50_000,
+      afterSeq: undefined,
+    });
+    expect(JSON.parse(text)).toEqual({ timedOut: false, status: "finished" });
+    await tool.handler(
+      { sessionId: "7", until: ["finished"], timeoutSeconds: 1.5, afterSeq: 3 },
+      { waitForSession },
+    );
+    expect(waitForSession).toHaveBeenLastCalledWith({
+      sessionId: "7",
+      until: ["finished"],
+      timeoutMs: 1_500,
+      afterSeq: 3,
+    });
+    await expect(tool.handler({}, { waitForSession })).rejects.toThrow("sessionId is required");
   });
 
   it("kill_child_session kills the named child and requires a sessionId", async () => {

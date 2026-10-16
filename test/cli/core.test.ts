@@ -1320,6 +1320,46 @@ describe("runCommand", () => {
       ).toBe(2);
     });
 
+    it("session wait builds the body, stretches the socket timeout, and validates flags", async () => {
+      const client = fakeClient({ request: vi.fn(async () => ({ timedOut: false })) });
+      expect(
+        await runCommand(
+          [
+            "session",
+            "wait",
+            "7",
+            "--until",
+            "finished,blocked",
+            "--timeout",
+            "30",
+            "--after-seq",
+            "4",
+          ],
+          { client, io: fakeIo() },
+        ),
+      ).toBe(0);
+      expect(client.request).toHaveBeenCalledWith(
+        "sessions.wait",
+        { sessionId: "7", until: ["finished", "blocked"], timeoutMs: 30_000, afterSeq: 4 },
+        { timeoutMs: 45_000 },
+      );
+      await runCommand(["session", "wait", "7"], { client, io: fakeIo() });
+      expect(client.request).toHaveBeenLastCalledWith(
+        "sessions.wait",
+        { sessionId: "7" },
+        { timeoutMs: 615_000 },
+      );
+      for (const bad of [
+        ["session", "wait"],
+        ["session", "wait", "7", "--timeout", "0"],
+        ["session", "wait", "7", "--timeout", "abc"],
+        ["session", "wait", "7", "--after-seq", "-1"],
+        ["session", "wait", "7", "--after-seq", "1.5"],
+      ]) {
+        expect(await runCommand(bad, { client: fakeClient(), io: fakeIo() })).toBe(2);
+      }
+    });
+
     it("session spawn-child requires --command", async () => {
       const io = fakeIo();
       expect(await runCommand(["session", "spawn-child"], { client: fakeClient(), io })).toBe(2);

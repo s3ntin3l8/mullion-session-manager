@@ -60,6 +60,12 @@ const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   idle: "dormant",
 };
 
+/** Every SessionStatus / SessionSeverity as runtime values, for validating a
+ * caller-supplied status filter (sessions.wait's `until`). Derived from the
+ * exhaustive map above, so a new status is picked up automatically. */
+export const SESSION_STATUSES = Object.keys(SEVERITY_BY_STATUS) as SessionStatus[];
+export const SESSION_SEVERITIES = [...new Set(Object.values(SEVERITY_BY_STATUS))];
+
 // Severities that mean "put this in front of the user" — drives the tab-
 // title/favicon badge count and the notification-surface's default gate
 // (see the plan doc's §1/§3.2). Deliberately does NOT include "busy": a

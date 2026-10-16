@@ -86,8 +86,11 @@ export class MullionClient {
    * it into a tool-level `isError:true` with the error's own message, the
    * same posture as this class's other methods never throwing something
    * unhelpful. */
-  async controlRequest(op, body) {
-    const client = new MullionSocketClient({ env: this._env });
+  async controlRequest(op, body, requestTimeoutMs) {
+    const client = new MullionSocketClient({
+      env: this._env,
+      ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
+    });
     try {
       return await client.request(op, body);
     } finally {
@@ -442,6 +445,16 @@ export class MullionClient {
       }
       return this.controlRequest("sessions.children", { sessionId: this.ownSessionId });
     }
+  }
+
+  /** Server-side wait on a child's derived status (sessions.wait). The
+   * socket request timeout is stretched to outlast the wait itself. */
+  async waitForSession({ sessionId, until, timeoutMs, afterSeq }) {
+    const body = { sessionId };
+    if (until !== undefined) body.until = until;
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    if (afterSeq !== undefined) body.afterSeq = afterSeq;
+    return this.controlRequest("sessions.wait", body, (timeoutMs ?? 600_000) + 15_000);
   }
 
   /** Kills a child session. Session scope may only name a child of its own

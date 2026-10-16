@@ -206,14 +206,16 @@ export class MullionSocketClient extends EventEmitter {
   /** One request, one reply — resolves with `result` on `ok:true`, rejects
    * with a MullionSocketError (carrying the REST-equivalent `status`) on
    * `ok:false`. Used by every non-streaming op. */
-  async request(op, body) {
+  async request(op, body, { timeoutMs } = {}) {
     await this.connect();
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
+      // `timeoutMs` overrides the safety-net default for ops that legitimately
+      // block server-side (sessions.wait).
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`timed out waiting for a reply to '${op}'`));
-      }, this.requestTimeoutMs);
+      }, timeoutMs ?? this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
         this._send({ id, op, body });

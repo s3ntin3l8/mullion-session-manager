@@ -706,6 +706,7 @@ const SESSION_SPAWN_CHILD_SPEC = {
 };
 const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
+const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
 
 function withSessionId(body, opts) {
   return opts.session !== undefined ? { ...body, sessionId: opts.session } : body;
@@ -791,6 +792,33 @@ const sessionCommands = {
       "'sessionId' is required",
       (ownId) => ({ ...body, sessionId: ownId }),
     );
+    return { json: result };
+  },
+  // Server-side wait on a child's derived status. --timeout is in SECONDS
+  // (default 600, max 3600); the socket request timeout is stretched past it.
+  async wait(client, args, opts) {
+    const { flags, rest } = extractFlags(args, SESSION_WAIT_SPEC);
+    const id = rest[0] ?? opts.session;
+    if (id === undefined) throw new CliUsageError("session id is required");
+    const body = { sessionId: id };
+    if (flags.until !== undefined) body.until = flags.until.split(",").filter(Boolean);
+    let timeoutMs = 600_000;
+    if (flags.timeout !== undefined) {
+      const seconds = Number(flags.timeout);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new CliUsageError("--timeout must be a positive number of seconds");
+      }
+      timeoutMs = Math.round(seconds * 1000);
+      body.timeoutMs = timeoutMs;
+    }
+    if (flags["after-seq"] !== undefined) {
+      const seq = Number(flags["after-seq"]);
+      if (!Number.isInteger(seq) || seq < 0) {
+        throw new CliUsageError("--after-seq must be a non-negative integer");
+      }
+      body.afterSeq = seq;
+    }
+    const result = await client.request("sessions.wait", body, { timeoutMs: timeoutMs + 15_000 });
     return { json: result };
   },
   async create(client, args) {
@@ -1401,7 +1429,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|children|create|spawn-child|kill|rename|logs|exec
+  session list|get|children|wait|create|spawn-child|kill|rename|logs|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download

@@ -329,6 +329,29 @@ describe("MullionClient (issue #271)", () => {
       await expect(noEnv.listChildSessions()).rejects.toThrow("'sessionId' is required");
     });
 
+    it("waitForSession sends sessions.wait with only the options given", async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.wait");
+        bodies.push(msg.body);
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { timedOut: false } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.waitForSession({ sessionId: "5" });
+      await client.waitForSession({
+        sessionId: "5",
+        until: ["done"],
+        timeoutMs: 2_000,
+        afterSeq: 9,
+      });
+      expect(bodies).toEqual([
+        { sessionId: "5" },
+        { sessionId: "5", until: ["done"], timeoutMs: 2_000, afterSeq: 9 },
+      ]);
+    });
+
     it("killChildSession sends sessions.kill with just the sessionId", async () => {
       const bodies: unknown[] = [];
       const socketPath = await startControlServer((msg, socket) => {
