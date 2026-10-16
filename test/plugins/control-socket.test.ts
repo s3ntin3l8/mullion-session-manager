@@ -1865,6 +1865,59 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("events.subscribe includeChildren streams the parent's and its children's events (incl. a child spawned after subscribing), never a sibling's", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const parentPty = fakePtyChildren[fakePtyChildren.length - 1];
+        const { sessionId: otherId } = await createRealSession();
+        const otherPty = fakePtyChildren[fakePtyChildren.length - 1];
+
+        const socket = await sessionScopeSocket(hookToken);
+        const frames = collectFrames(socket);
+        socket.write(
+          `${JSON.stringify({ id: 7, op: "events.subscribe", body: { includeChildren: true } })}\n`,
+        );
+        await waitUntil(() => frames.some((f) => f.ok === true));
+
+        // Spawned AFTER the subscribe — only classifiable on its first event.
+        const { childId } = await spawnChildOf(hookToken);
+        const childPty = fakePtyChildren[fakePtyChildren.length - 1];
+
+        parentPty.emitData("\x1b]2;from-parent\x07");
+        childPty.emitData("\x1b]2;from-child\x07");
+        otherPty.emitData("\x1b]2;from-other\x07");
+        // title_change is debounced at the source (3s).
+        await new Promise((resolve) => setTimeout(resolve, 3_200));
+        await waitUntil(
+          () =>
+            frames.some((f) => f.kind === "title_change" && f.sessionId === childId) &&
+            frames.some((f) => f.kind === "title_change" && f.sessionId !== childId),
+        );
+        await new Promise((resolve) => setImmediate(resolve));
+        const ids = new Set(
+          frames.filter((f) => f.kind === "title_change").map((f) => f.sessionId),
+        );
+        expect(ids.has(childId)).toBe(true);
+        expect(ids.has(otherId)).toBe(false);
+        socket.destroy();
+      }, 15_000);
+
+      it("events.subscribe includeChildren is refused (403) once the caller's own row is no longer active", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        app.db
+          .update(sessions)
+          .set({ status: "exited" })
+          .where(eq(sessions.id, Number(sessionId)))
+          .run();
+        const reply = await ask(socket, "events.subscribe", { includeChildren: true });
+        expect(reply).toMatchObject({ ok: false, status: 403 });
+        socket.destroy();
+      });
+
       it("a parent can still inspect a child that has exited", async () => {
         app = await buildApp();
         await app.ready();

@@ -644,8 +644,11 @@ export async function runSessionExec(client, { projectId, command, cols, rows, k
   return { sessionId, exited };
 }
 
-export async function runEventsTail(client, io) {
-  const stream = await client.openStream("events.subscribe", {});
+export async function runEventsTail(client, io, { includeChildren = false } = {}) {
+  const stream = await client.openStream(
+    "events.subscribe",
+    includeChildren ? { includeChildren: true } : {},
+  );
   await stream.opened;
   stream.on("frame", (msg) => {
     // Event frames carry NO "type" field at all — unlike every other
@@ -1405,8 +1408,9 @@ const bundleCommands = {
 };
 
 const eventsCommands = {
-  async tail(client, _args, _opts, io) {
-    await runEventsTail(client, io);
+  async tail(client, args, _opts, io) {
+    const { flags } = extractFlags(args, { children: "boolean" });
+    await runEventsTail(client, io, { includeChildren: flags.children === true });
     return { streamed: true };
   },
 };
@@ -1539,7 +1543,7 @@ Commands:
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
   bundle status|resync|remove
-  events tail
+  events tail [--children]
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
