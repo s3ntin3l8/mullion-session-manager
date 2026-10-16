@@ -90,6 +90,13 @@ export interface AttachLocalEventsOptions {
    */
   sessionIdFilter?: string;
   /**
+   * Predicate variant of `sessionIdFilter`, for a connection that may see
+   * more than one session (a session-scoped `events.subscribe` that opted
+   * into its own children). Applied in the same three places. When both are
+   * given, an event must satisfy both.
+   */
+  sessionFilter?: (sessionId: number) => boolean;
+  /**
    * Called whenever an incoming "seen" message genuinely advances a
    * session's read cursor (`PtyManager.markEventsSeen`'s own return value) —
    * issue #1427's cross-client read-state sync. Wired by
@@ -135,7 +142,8 @@ export function attachLocalEventsSocket(
   opts?: AttachLocalEventsOptions,
 ): void {
   const matchesFilter = (sessionId: number): boolean =>
-    opts?.sessionIdFilter === undefined || String(sessionId) === opts.sessionIdFilter;
+    (opts?.sessionIdFilter === undefined || String(sessionId) === opts.sessionIdFilter) &&
+    (opts?.sessionFilter === undefined || opts.sessionFilter(sessionId));
 
   // Only accumulated until the replay snapshot below is sent — after that,
   // onEvent's callback pushes straight to sendEvent() and stops appending

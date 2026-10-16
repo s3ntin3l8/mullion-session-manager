@@ -65,7 +65,7 @@ mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
                stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
 mullion bundle status|resync|remove
-mullion events tail
+mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
@@ -347,7 +347,10 @@ working — the boot-time sync already runs automatically with no user action.
 ### events
 
 - `events tail` — subscribes to the aggregated notification-event stream and
-  prints one JSON line per event until interrupted (Ctrl-C).
+  prints one JSON line per event until interrupted (Ctrl-C). Inside a
+  session, the stream is that session's own events; `--children` adds the
+  events of the sessions it spawned (including children spawned after the
+  stream opened).
 
 ### history
 

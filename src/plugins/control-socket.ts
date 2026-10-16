@@ -377,6 +377,36 @@ function sessionRowIsActive(app: FastifyInstance, id: string): boolean {
 }
 
 /**
+ * Event filter for a session-scoped `events.subscribe` with `includeChildren`:
+ * the pinned session plus every session whose `parent_session_id` is it. The
+ * bus carries no "child spawned" event, so an id is classified the first time
+ * one of its events shows up, with one synchronous DB lookup memoised per
+ * subscription — safe to cache negatives too, because `parent_session_id` is
+ * set at creation and never changes.
+ */
+function ownAndChildSessionFilter(
+  app: FastifyInstance,
+  pinnedId: number,
+): (sessionId: number) => boolean {
+  const known = new Map<number, boolean>([[pinnedId, true]]);
+  return (sessionId) => {
+    let isOwn = known.get(sessionId);
+    if (isOwn === undefined) {
+      const row = app.db
+        .select({ parentSessionId: sessions.parentSessionId })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .get();
+      isOwn = row?.parentSessionId === pinnedId;
+      // A row that doesn't exist (yet) is not cached: the event could race
+      // the INSERT.
+      if (row) known.set(sessionId, isOwn);
+    }
+    return isOwn;
+  };
+}
+
+/**
  * Like resolveTargetSessionId, but a session-scoped connection may ALSO name
  * a child it spawned (`sessions.parent_session_id === its pinned id`) — the
  * parent→child orchestration surface. Anything else, including a sibling, an
@@ -1369,7 +1399,7 @@ export const OPS: Record<string, OpSpec> = {
   // before the ack is replay, anything after is live.
   "events.subscribe": {
     scopes: ["full", "session"],
-    handler: ({ app, conn, id, reply }) => {
+    handler: ({ app, conn, id, body, reply }) => {
       const slotError = streamSlotError(conn, id);
       if (slotError) {
         reply(slotError);
@@ -1381,7 +1411,21 @@ export const OPS: Record<string, OpSpec> = {
         // only ever resolve against this process's own PtyManager (see
         // attachAggregatedEventsSocket's own doc comment) — so there is no
         // multi-host aggregation to open here, only a same-process filter.
-        attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });
+        if (body?.includeChildren === true) {
+          // Opt-in: self plus the caller's own children. Like the other
+          // owned ops, the caller's own row must be active when subscribing;
+          // the stream then lives until the socket closes (unlike
+          // events.query, which re-checks per request).
+          if (!sessionRowIsActive(app, conn.sessionId!)) {
+            reply({ ok: false, status: 403, error: "this session is no longer active" });
+            return;
+          }
+          attachLocalEventsSocket(app, channel, {
+            sessionFilter: ownAndChildSessionFilter(app, Number(conn.sessionId)),
+          });
+        } else {
+          attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });
+        }
       } else {
         attachAggregatedEventsSocket(app, channel);
       }
@@ -1438,9 +1482,10 @@ export const OPS: Record<string, OpSpec> = {
   // `session_events` history (src/plugins/event-store.ts) via GET
   // /api/events, one shot, same shape as sessions.list. Full scope may
   // query any session (or omit `sessionId` for every session); session
-  // scope is restricted to its own pinned session only — see
-  // resolveEventsSessionFilter's own doc comment for why this reuses
-  // events.subscribe's isolation model rather than inventing a new one.
+  // scope may query its own pinned session or one of its children — see
+  // resolveEventsSessionFilter / resolveOwnedSessionId. Unlike
+  // events.subscribe's `includeChildren`, the caller's row is re-checked on
+  // every request.
   "events.query": routeOp(
     ["full", "session"],
     owned(({ app, conn, body }) => {

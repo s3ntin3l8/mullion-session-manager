@@ -913,6 +913,17 @@ describe("runSessionExec", () => {
 });
 
 describe("runEventsTail", () => {
+  it("--children opts the subscription into the caller's children", async () => {
+    const stream = new FakeStream();
+    const client = { openStream: vi.fn(async () => stream) };
+    const io = fakeIo();
+    const tailPromise = runEventsTail(client, io, { includeChildren: true });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(client.openStream).toHaveBeenCalledWith("events.subscribe", { includeChildren: true });
+    io.interruptHandlers[0]();
+    await tailPromise;
+  });
+
   it("prints each real event frame (no 'type' field — id, seq, sessionId, kind, ts) as a JSON line, stripping the stream id, and stops on interrupt", async () => {
     const stream = new FakeStream();
     const client = { openStream: vi.fn(async () => stream) };

@@ -191,9 +191,9 @@ over the _persisted_ `session_events` table — distinct from `events.subscribe`
 above, which is a live push feed of the in-memory ring buffer only. Full
 scope may pass `body.sessionId` to scope the query to one session, or omit it
 entirely to query every session; session scope may omit it (defaulting to
-its own pinned session) or pass that same id explicitly, but never a
-different one — same isolation `events.subscribe`'s own `sessionIdFilter`
-already enforces, not a new mechanism. Also takes `body.kind`/`since`/
+its own pinned session) or pass that same id explicitly, or name one of
+its own children (`parent_session_id` = its pinned id, caller still
+active) — anything else is a 403. Also takes `body.kind`/`since`/
 `until`/`limit`/`cursor`, forwarded straight through to `GET /api/events`'s
 own query parameters (see below). **Fleet-wide**: covers every enrolled
 host's events, not just this process's own PtyManager — see
@@ -583,7 +583,12 @@ events belonging to its own pinned session, and an `events.seen` naming a
 different session is silently ignored (there is nothing to have corrupted,
 since that other session's events were never delivered to this connection
 in the first place) — the same isolation `resolveTargetSessionId` gives the
-request/response ops. A full-scope `events.subscribe` gets the complete,
+request/response ops. Pass `body.includeChildren: true` to also receive the
+events of the caller's own children (replayed and live, including children
+spawned after the subscribe — each id is classified on its first event with
+one DB lookup). The caller's row must be active when subscribing (else 403);
+unlike `events.query`, the stream is not re-checked afterwards and lasts until
+the socket closes. Siblings and unrelated sessions are never delivered. A full-scope `events.subscribe` gets the complete,
 unfiltered aggregate across every session, local and remote-hosted alike
 (the same multi-host relay `/ws/events` itself uses) — there is currently no
 way for a full-scope connection to filter down to one session's events via
