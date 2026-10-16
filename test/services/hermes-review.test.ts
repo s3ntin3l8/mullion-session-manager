@@ -16,6 +16,7 @@ import {
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
+  isValidPromptLocation,
   requestHermesReview,
   resetHermesReviewState,
   ReviewCooldownError,
@@ -258,6 +259,72 @@ describe("hermes review relay", () => {
         await requestHermesReview(app, PR);
         await expect(requestHermesReview(app, PR)).resolves.toBeUndefined();
       });
+    });
+  });
+
+  describe("review fixes", () => {
+    it("never puts the configured URL in an error a session can see", async () => {
+      health = () => Promise.reject(new Error(`connect ECONNREFUSED ${API}`));
+      const err = (await requestHermesReview(app, PR).catch((e: unknown) => e)) as Error;
+      expect(err).toBeInstanceOf(HermesUnavailableError);
+      expect(err.message).not.toContain("192.168.2.6");
+      expect((err as HermesUnavailableError).detail).toContain("192.168.2.6");
+    });
+
+    it("hides the URL for a dispatch connection failure too", async () => {
+      dispatch = () => Promise.reject(new Error(`connect ECONNREFUSED ${API}`));
+      const err = (await requestHermesReview(app, PR).catch((e: unknown) => e)) as Error;
+      expect(err.message).not.toContain("192.168.2.6");
+    });
+
+    it("the operator-only connection test still shows the URL", async () => {
+      health = () => Promise.reject(new Error("connect timed out"));
+      await expect(testHermesConnection(app)).rejects.toThrow(/192\.168\.2\.6/);
+    });
+
+    it("fetches the prompt without following redirects", async () => {
+      await requestHermesReview(app, PR);
+      const [, init] = fetchMock.mock.calls.find(([url]) => url === PROMPT_URL)!;
+      expect((init as RequestInit).redirect).toBe("error");
+    });
+
+    it("refuses an oversized prompt", async () => {
+      promptResponse = async () => new Response("x".repeat(200_001), { status: 200 });
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/too large/);
+      expect(calls("/health")).toHaveLength(0);
+    });
+
+    it.each([
+      ["owner/repo/extra", "p.md"],
+      ["owner", "p.md"],
+      ["../etc", "p.md"],
+      ["owner/repo", "../secret.md"],
+      ["owner/repo", "a/../b.md"],
+      ["owner/repo", "p.md?x=1"],
+      ["owner/repo", "p.md#frag"],
+      ["owner/re po", "p.md"],
+    ])("rejects an invalid prompt location %s %s", async (promptRepo, promptPath) => {
+      expect(isValidPromptLocation(promptRepo, promptPath)).toBe(false);
+      applySettingsPatch(app, { reviewRelay: { promptRepo, promptPath } });
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesNotConfiguredError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts a normal nested prompt path", () => {
+      expect(isValidPromptLocation("s3ntin3l8/.github", "prompts/hermes-review-prompt.md")).toBe(
+        true,
+      );
+    });
+
+    it("only one of two concurrent requests for the same PR dispatches", async () => {
+      const results = await Promise.allSettled([
+        requestHermesReview(app, PR),
+        requestHermesReview(app, PR),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect(rejected.reason).toBeInstanceOf(ReviewCooldownError);
+      expect(calls("/v1/chat/completions")).toHaveLength(1);
     });
   });
 

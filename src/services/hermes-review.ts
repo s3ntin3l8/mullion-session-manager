@@ -27,7 +27,14 @@ export class HermesNotConfiguredError extends Error {
 }
 
 export class HermesUnavailableError extends Error {
-  constructor(message: string) {
+  // `message` is safe to return to a session (it travels back through the
+  // control socket); `detail` may carry the configured URL / resolved
+  // addresses / raw network errors, so it is only ever logged server-side —
+  // except for the operator-only "Test connection" route.
+  constructor(
+    message: string,
+    readonly detail?: string,
+  ) {
     super(message);
     this.name = "HermesUnavailableError";
   }
@@ -73,6 +80,20 @@ export function buildReviewMessage(
 // cooldown exists to stop an agent looping on re-reviews, not to be a durable
 // rate limit.
 const lastRequested = new Map<string, number>();
+const MAX_PROMPT_BYTES = 200_000;
+const PROMPT_SEGMENT_RE = /^[A-Za-z0-9_.-]+$/;
+
+// promptRepo/promptPath are interpolated into a raw.githubusercontent.com URL,
+// so keep them to plain owner/repo and path-segment characters: no `..`,
+// query, fragment or scheme tricks that could steer the fetch elsewhere.
+export function isValidPromptLocation(promptRepo: string, promptPath: string): boolean {
+  const repoParts = promptRepo.split("/");
+  if (repoParts.length !== 2 || !repoParts.every((p) => PROMPT_SEGMENT_RE.test(p) && p !== "..")) {
+    return false;
+  }
+  return promptPath.split("/").every((seg) => PROMPT_SEGMENT_RE.test(seg) && seg !== "..");
+}
+
 const promptCache = new Map<string, { text: string; fetchedAt: number }>();
 
 /** Test hook — clears the cooldown and prompt caches. */
@@ -91,18 +112,20 @@ async function loadReviewPrompt(promptRepo: string, promptPath: string): Promise
   const url = `https://raw.githubusercontent.com/${promptRepo}/HEAD/${promptPath}`;
   let res: Response;
   try {
-    res = await fetch(url, { signal: AbortSignal.timeout(PROMPT_TIMEOUT_MS) });
+    res = await fetch(url, { signal: AbortSignal.timeout(PROMPT_TIMEOUT_MS), redirect: "error" });
   } catch (err) {
     throw new HermesUnavailableError(
-      `Could not fetch the review prompt from ${promptRepo}: ${(err as Error).message}`,
+      "Could not fetch the review prompt",
+      `${url}: ${(err as Error).message}`,
     );
   }
   if (!res.ok) {
-    throw new HermesUnavailableError(
-      `Could not fetch the review prompt from ${promptRepo}/${promptPath} (HTTP ${res.status})`,
-    );
+    throw new HermesUnavailableError(`Could not fetch the review prompt (HTTP ${res.status})`, url);
   }
   const text = await res.text();
+  if (text.length > MAX_PROMPT_BYTES) {
+    throw new HermesUnavailableError("The review prompt is too large", url);
+  }
   promptCache.set(key, { text, fetchedAt: Date.now() });
   return text;
 }
@@ -121,7 +144,9 @@ function baseUrl(apiUrl: string): string {
   return apiUrl.replace(/\/+$/, "");
 }
 
-async function checkHealth(root: string): Promise<void> {
+// `verbose` is for the operator-only Test connection route; everything a
+// session can see gets the generic message, with the detail logged instead.
+async function checkHealth(root: string, verbose = false): Promise<void> {
   try {
     const res = await fetch(`${root}/health`, {
       signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
@@ -130,8 +155,10 @@ async function checkHealth(root: string): Promise<void> {
     } as RequestInit);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } catch (err) {
+    const detail = `Hermes API unreachable at ${root}/health (${(err as Error).message})`;
     throw new HermesUnavailableError(
-      `Hermes API unreachable at ${root}/health (${(err as Error).message}) — review not dispatched`,
+      verbose ? detail : "The Hermes API is unreachable — review not dispatched",
+      detail,
     );
   }
 }
@@ -140,7 +167,7 @@ async function checkHealth(root: string): Promise<void> {
 export async function testHermesConnection(app: FastifyInstance): Promise<void> {
   const { apiUrl } = getStoredSettings(app.db).reviewRelay;
   if (!apiUrl) throw new HermesNotConfiguredError("Set the Hermes API URL first");
-  await checkHealth(baseUrl(apiUrl));
+  await checkHealth(baseUrl(apiUrl), true);
 }
 
 export interface HermesReviewRequest {
@@ -167,6 +194,11 @@ export async function requestHermesReview(
       "The Hermes review relay is not configured — set the API URL, key and prompt repo in Settings → Integrations",
     );
   }
+  if (!isValidPromptLocation(promptRepo, promptPath)) {
+    throw new HermesNotConfiguredError(
+      "The prompt repository/path in Settings is invalid — use owner/repo and a plain relative path",
+    );
+  }
   const root = baseUrl(apiUrl);
 
   const cooldownKey = `${owner}/${repo}#${prNumber}`.toLowerCase();
@@ -175,13 +207,40 @@ export async function requestHermesReview(
     const remainingMs = cooldownMinutes * 60_000 - (Date.now() - last);
     if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000));
   }
+  // Reserve the slot BEFORE the awaits below: the check above and a later
+  // set would otherwise let two concurrent requests for one PR both pass and
+  // double-dispatch. A failed dispatch gives the slot back.
+  lastRequested.set(cooldownKey, Date.now());
+  try {
+    await dispatchReview(root, key, { model, owner, repo, prNumber, promptRepo, promptPath });
+  } catch (err) {
+    if (last === undefined) lastRequested.delete(cooldownKey);
+    else lastRequested.set(cooldownKey, last);
+    if (err instanceof HermesUnavailableError && err.detail) {
+      app.log.warn({ detail: err.detail }, "Hermes review relay failed");
+    }
+    throw err;
+  }
+}
 
-  const prompt = await loadReviewPrompt(promptRepo, promptPath);
+async function dispatchReview(
+  root: string,
+  key: string,
+  r: {
+    model: string;
+    owner: string;
+    repo: string;
+    prNumber: number;
+    promptRepo: string;
+    promptPath: string;
+  },
+): Promise<void> {
+  const prompt = await loadReviewPrompt(r.promptRepo, r.promptPath);
   await checkHealth(root);
 
   const body = JSON.stringify({
-    model,
-    messages: [{ role: "user", content: buildReviewMessage(owner, repo, prNumber, prompt) }],
+    model: r.model,
+    messages: [{ role: "user", content: buildReviewMessage(r.owner, r.repo, r.prNumber, prompt) }],
     stream: false,
   });
   let res: Response | null = null;
@@ -200,7 +259,8 @@ export async function requestHermesReview(
     // Timed out after the health check passed: accepted and running.
     if (!isTimeout(err)) {
       throw new HermesUnavailableError(
-        `Could not reach the Hermes API to dispatch the review (${(err as Error).message})`,
+        "Could not reach the Hermes API to dispatch the review",
+        (err as Error).message,
       );
     }
   }
@@ -213,5 +273,4 @@ export async function requestHermesReview(
       );
     }
   }
-  lastRequested.set(cooldownKey, Date.now());
 }
