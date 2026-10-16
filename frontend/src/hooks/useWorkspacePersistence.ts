@@ -416,12 +416,18 @@ export function useWorkspacePersistence({
   // effect's own echo. Also bumps panelsVersion so the toolbar pane count and
   // phone session list re-render (dockview's own panel list isn't otherwise
   // reactive from React's perspective).
+  //
+  // Issue #1618 — subscribes whenever dockviewApi exists, even with no
+  // active workspace yet: only the save is workspace-scoped. Gating the whole
+  // subscription on activeWorkspaceId left panelsVersion frozen on a fresh
+  // install, so App.tsx's tiledPaneCount stayed 0 and the "Nothing tiled
+  // here yet" overlay sat on top of the first tiled session.
   useEffect(() => {
-    if (!dockviewApi || activeWorkspaceId === null) return;
+    if (!dockviewApi) return;
     const workspaceId = activeWorkspaceId;
     const disposable = dockviewApi.onDidLayoutChange(() => {
       setPanelsVersion((v) => v + 1);
-      if (restoringRef.current) return;
+      if (restoringRef.current || workspaceId === null) return;
       scheduleSave(dockviewApi, workspaceId);
     });
     return () => disposable.dispose();

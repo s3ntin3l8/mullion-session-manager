@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { DEFAULT_WORKSPACE_NAME } from "../../src/routes/workspaces.js";
 
 // Workspaces are pure view metadata (a saved dockview layout) — no
 // node-pty/dtach bootstrap involved, so unlike sessions.test.ts this file
@@ -179,6 +181,114 @@ describe("workspaces route", () => {
     const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
     expect((listed.json() as Array<{ id: number }>).find((w) => w.id === id)).toBeUndefined();
 
+    await app.close();
+  });
+});
+
+// Issue #1618 — GET /api/workspaces seeds a "Default" workspace when the table
+// is empty. Each test gets its own brand-new database (the describe above
+// shares one and lets rows accumulate, which would mask the empty-table case).
+describe("workspaces route — default workspace bootstrap", () => {
+  let freshDb: string;
+  let counter = 0;
+
+  beforeEach(() => {
+    closeDb();
+    freshDb = path.join(os.tmpdir(), `workspaces-default-test-${process.pid}-${counter++}.db`);
+    fs.rmSync(freshDb, { force: true });
+    process.env.DATABASE_URL = `file:${freshDb}`;
+  });
+
+  afterEach(() => {
+    closeDb();
+    fs.rmSync(freshDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  it("lists exactly one Default workspace on a fresh database", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([
+      expect.objectContaining({ name: DEFAULT_WORKSPACE_NAME, layout: null }),
+    ]);
+
+    // Idempotent: a second GET returns the same row, not a second one.
+    const again = await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(again.json()).toEqual(res.json());
+    await app.close();
+  });
+
+  // A smoke test, not a race proof: in one process the handler's synchronous
+  // better-sqlite3 calls can't interleave anyway. The cross-connection
+  // guarantee comes from the `immediate` transaction and isn't exercised here.
+  it("returns the same single Default to a burst of parallel GETs (smoke test)", async () => {
+    const app = await buildApp();
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () => app.inject({ method: "GET", url: "/api/workspaces" })),
+    );
+    for (const res of responses) expect(res.statusCode).toBe(200);
+    const ids = new Set(
+      responses.flatMap((res) => (res.json() as Array<{ id: number }>).map((w) => w.id)),
+    );
+    expect(ids.size).toBe(1);
+
+    const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(listed.json()).toHaveLength(1);
+    await app.close();
+  });
+
+  it("reads without the write lock when rows exist, and seeds under an immediate transaction", async () => {
+    const app = await buildApp();
+    const txSpy = vi.spyOn(app.db, "transaction");
+
+    // Empty table: the seed path runs inside an `immediate` transaction,
+    // which is what makes check-then-insert atomic across connections.
+    await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith(expect.any(Function), { behavior: "immediate" });
+
+    // Another connection to the same file holds the write lock. A non-empty
+    // list must still be served from a plain WAL read — no transaction, no
+    // waiting out busy_timeout.
+    txSpy.mockClear();
+    const other = new Database(freshDb);
+    other.exec("BEGIN IMMEDIATE");
+    try {
+      const started = Date.now();
+      const res = await app.inject({ method: "GET", url: "/api/workspaces" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toHaveLength(1);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expect(txSpy).not.toHaveBeenCalled();
+    } finally {
+      other.exec("ROLLBACK");
+      other.close();
+    }
+    await app.close();
+  });
+
+  it("does not seed when workspaces already exist", async () => {
+    const app = await buildApp();
+    await app.inject({ method: "POST", url: "/api/workspaces", payload: { name: "Mine" } });
+    const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
+    expect(listed.json()).toEqual([expect.objectContaining({ name: "Mine" })]);
+    await app.close();
+  });
+
+  it("recreates a Default after every workspace has been deleted", async () => {
+    const app = await buildApp();
+    const first = await app.inject({ method: "GET", url: "/api/workspaces" });
+    const [{ id }] = first.json() as Array<{ id: number }>;
+
+    const deleted = await app.inject({ method: "DELETE", url: `/api/workspaces/${id}` });
+    expect(deleted.statusCode).toBe(204);
+
+    const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
+    const rows = listed.json() as Array<{ id: number; name: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ name: DEFAULT_WORKSPACE_NAME, layout: null });
+    expect(rows[0].id).not.toBe(id);
     await app.close();
   });
 });
