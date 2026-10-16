@@ -58,11 +58,13 @@ export async function workspacesRoute(app: FastifyInstance) {
   // workspaces: the frontend's layout-change subscription and autosave are
   // keyed on an active workspace id, so an empty list left the first tiled
   // session behind the "Nothing tiled here yet" overlay with nothing
-  // persisted. The check-then-insert runs inside one synchronous
-  // better-sqlite3 transaction, so concurrent GETs (two tabs on a fresh
-  // install) can't both observe an empty table and each seed a "Default".
-  // `immediate` takes the write lock up front, so this also holds against a
-  // second connection to the same file, not just within this process.
+  // persisted. Within this process the synchronous better-sqlite3 calls
+  // already can't interleave between concurrent requests; the `immediate`
+  // transaction takes the write lock before the check, so the
+  // check-then-insert is also atomic against a second connection to the
+  // same file. Note this makes a GET write (at most this one fixed row) —
+  // the one exception to auth.ts's "a bare GET can't mutate state" premise,
+  // and harmless: it only creates what the app would create anyway.
   app.get("/api/workspaces", async () => {
     const rows = app.db.transaction(
       (tx) => {

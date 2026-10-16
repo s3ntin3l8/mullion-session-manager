@@ -391,8 +391,9 @@ export function App() {
     bootstrappedRef.current = true;
     // The backend now seeds "Default" itself whenever GET /api/workspaces
     // sees an empty table (issue #1618), so this is a fallback. On failure
-    // the ref is re-armed so the next run of this effect can try again rather than
-    // latching "already bootstrapped" with nothing created.
+    // the ref is re-armed so it doesn't latch "already bootstrapped" with
+    // nothing created; the effect doesn't retry on its own (its deps don't
+    // change on failure), but any later run of it can.
     useDashboardStore
       .getState()
       .createWorkspace(DEFAULT_WORKSPACE_NAME)

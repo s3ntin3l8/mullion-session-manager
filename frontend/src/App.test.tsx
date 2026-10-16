@@ -269,7 +269,7 @@ describe("App tier wiring", () => {
 });
 
 // Issue #1618 — the mount-time workspace load retries a bounded number of
-// times, and a failed "Default" bootstrap re-arms instead of latching.
+// times, and a failed "Default" bootstrap is handled instead of latching.
 describe("App workspace bootstrap", () => {
   const workspace = {
     id: 7,
@@ -350,10 +350,7 @@ describe("App workspace bootstrap", () => {
   it("handles a failed Default bootstrap instead of leaving an unhandled rejection", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const refreshWorkspaces = vi.fn().mockResolvedValue(undefined);
-    const createWorkspace = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("boom"))
-      .mockResolvedValue(workspace);
+    const createWorkspace = vi.fn().mockRejectedValue(new Error("boom"));
     useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
 
     render(<App />);

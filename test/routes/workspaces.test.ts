@@ -218,7 +218,10 @@ describe("workspaces route — default workspace bootstrap", () => {
     await app.close();
   });
 
-  it("still seeds only one Default under parallel GETs", async () => {
+  // A smoke test, not a race proof: in one process the handler's synchronous
+  // better-sqlite3 calls can't interleave anyway. The cross-connection
+  // guarantee comes from the `immediate` transaction and isn't exercised here.
+  it("returns the same single Default to a burst of parallel GETs (smoke test)", async () => {
     const app = await buildApp();
     const responses = await Promise.all(
       Array.from({ length: 8 }, () => app.inject({ method: "GET", url: "/api/workspaces" })),
