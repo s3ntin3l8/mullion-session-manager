@@ -1343,6 +1343,16 @@ describe("runCommand", () => {
         { sessionId: "7", until: ["finished", "blocked"], timeoutMs: 30_000, afterSeq: 4 },
         { timeoutMs: 45_000 },
       );
+      // Whitespace around list items is forgiven; an oversized --timeout is clamped to 1 h.
+      await runCommand(
+        ["session", "wait", "7", "--until", "finished, blocked ,", "--timeout", "99999999"],
+        { client, io: fakeIo() },
+      );
+      expect(client.request).toHaveBeenLastCalledWith(
+        "sessions.wait",
+        { sessionId: "7", until: ["finished", "blocked"], timeoutMs: 3_600_000 },
+        { timeoutMs: 3_615_000 },
+      );
       await runCommand(["session", "wait", "7"], { client, io: fakeIo() });
       expect(client.request).toHaveBeenLastCalledWith(
         "sessions.wait",

@@ -249,6 +249,10 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       timeoutMs: 1_500,
       afterSeq: 3,
     });
+    await tool.handler({ sessionId: "7", timeoutSeconds: 1e12 }, { waitForSession });
+    expect(waitForSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 3_600_000 }),
+    );
     await expect(tool.handler({}, { waitForSession })).rejects.toThrow("sessionId is required");
   });
 

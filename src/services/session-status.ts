@@ -71,7 +71,12 @@ export const SESSION_SEVERITIES = [...new Set(Object.values(SEVERITY_BY_STATUS))
 // (see the plan doc's §1/§3.2). Deliberately does NOT include "busy": a
 // session that's merely working, compacting, or running a subagent isn't
 // waiting on anyone.
-const ATTENTION_SEVERITIES = new Set<SessionSeverity>(["failed", "blocked", "done", "waiting"]);
+export const ATTENTION_SEVERITIES = new Set<SessionSeverity>([
+  "failed",
+  "blocked",
+  "done",
+  "waiting",
+]);
 
 export interface DerivedSessionStatus {
   status: SessionStatus;

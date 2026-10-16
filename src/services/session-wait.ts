@@ -8,6 +8,7 @@
 // head) is injected via WaitDeps so the timing logic is unit-testable with
 // fake timers.
 import {
+  ATTENTION_SEVERITIES,
   SESSION_SEVERITIES,
   SESSION_STATUSES,
   type SessionSeverity,
@@ -16,17 +17,12 @@ import {
 
 /** Anything that needs the parent's attention (or means it's over). Mirrors
  * session-status.ts's ATTENTION_SEVERITIES, plus "gone". */
-export const DEFAULT_WAIT_UNTIL: readonly string[] = [
-  "done",
-  "blocked",
-  "waiting",
-  "failed",
-  "gone",
-];
+export const DEFAULT_WAIT_UNTIL: readonly string[] = [...ATTENTION_SEVERITIES, "gone"];
 export const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60_000;
 export const MAX_WAIT_TIMEOUT_MS = 60 * 60_000;
-/** Consecutive status-read failures tolerated before the wait gives up — one
- * transient hiccup must not kill a wait that may run for an hour. */
+/** The wait gives up on this many CONSECUTIVE failed status reads (so the
+ * first MAX-1 are retried on the next tick) — one transient hiccup must not
+ * kill a wait that may run for an hour. */
 export const MAX_CONSECUTIVE_READ_FAILURES = 3;
 /** `idle` and `needs_input` are time-based and emit no event, so the wait
  * also re-checks on a slow tick. */

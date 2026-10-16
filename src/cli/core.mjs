@@ -801,14 +801,20 @@ const sessionCommands = {
     const id = rest[0] ?? opts.session;
     if (id === undefined) throw new CliUsageError("session id is required");
     const body = { sessionId: id };
-    if (flags.until !== undefined) body.until = flags.until.split(",").filter(Boolean);
+    if (flags.until !== undefined)
+      body.until = flags.until
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
     let timeoutMs = 600_000;
     if (flags.timeout !== undefined) {
       const seconds = Number(flags.timeout);
       if (!Number.isFinite(seconds) || seconds <= 0) {
         throw new CliUsageError("--timeout must be a positive number of seconds");
       }
-      timeoutMs = Math.round(seconds * 1000);
+      // Clamp to the server's own 1 h max: a larger value would overflow the
+      // socket client's 32-bit setTimeout and fire after 1 ms.
+      timeoutMs = Math.round(Math.min(seconds, 3600) * 1000);
       body.timeoutMs = timeoutMs;
     }
     if (flags["after-seq"] !== undefined) {

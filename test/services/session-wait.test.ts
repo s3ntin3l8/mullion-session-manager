@@ -264,6 +264,12 @@ describe("waitForSession", () => {
 });
 
 describe("parseWaitUntil", () => {
+  it("the default is the attention severities plus gone", () => {
+    expect([...DEFAULT_WAIT_UNTIL].sort()).toEqual(
+      ["blocked", "done", "failed", "gone", "waiting"].sort(),
+    );
+  });
+
   it("defaults to the attention set", () => {
     const r = parseWaitUntil(undefined);
     expect(r).toEqual({ ok: true, until: new Set(DEFAULT_WAIT_UNTIL) });

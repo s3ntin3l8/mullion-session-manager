@@ -392,7 +392,9 @@ const waitForSession = {
     const result = await client.waitForSession({
       sessionId: args.sessionId,
       until: args.until,
-      timeoutMs: Math.round(seconds * 1000),
+      // Clamp to the server's 1 h max (a larger value would overflow the
+      // socket client's 32-bit setTimeout).
+      timeoutMs: Math.round(Math.min(seconds, 3600) * 1000),
       afterSeq: args.afterSeq,
     });
     return JSON.stringify(result);
