@@ -67,6 +67,12 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
     refuses({}, { cwd });
   });
 
+  it("reports one problem per offending key", () => {
+    expect(problems({ MULLION_SOCKET_PATH: "/opt/mullion/data/sessions/mullion.sock" })).toEqual([
+      "MULLION_SOCKET_PATH must not reach the demo",
+    ]);
+  });
+
   it("throws unless collecting", () => {
     expect(() => assertDemoEnv({ ...base, MULLION_SOCKET_PATH: "/x" }, demoDir)).toThrow(/refused/);
   });

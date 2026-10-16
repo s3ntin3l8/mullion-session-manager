@@ -106,12 +106,14 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
   const problems = [];
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
+    // One problem per key, most specific first: MULLION_SOCKET_PATH is a
+    // forbidden key before it is an out-of-scratch path.
     if (key.startsWith("MULLION_") && !ALLOWED_MULLION.has(key))
       problems.push(`${key} must not reach the demo`);
-    if (FORBIDDEN.has(key)) problems.push(`${key} must not be set in the demo`);
-    if (SECRET_KEY.test(key))
+    else if (FORBIDDEN.has(key)) problems.push(`${key} must not be set in the demo`);
+    else if (SECRET_KEY.test(key))
       problems.push(`${key} looks like a real secret; the demo never sets it`);
-    if (
+    else if (
       PATH_KEY.test(key) &&
       !PATH_ALLOW.has(key) &&
       path.isAbsolute(value) &&
