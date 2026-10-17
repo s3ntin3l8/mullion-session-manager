@@ -2,11 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 
 const inspectTempStorage = vi.fn(async (..._args: unknown[]) => ({ available: true }));
 const pruneTempStorage = vi.fn(async (_mode?: string) => ({ output: "", reclaimedBytes: 7 }));
+const pruneOptions = vi.fn((_options?: unknown) => undefined);
 vi.mock("../../src/services/temp-storage.js", () => ({
   inspectTempStorage: (...args: unknown[]) => inspectTempStorage(...args),
-  pruneTempStorage: (mode?: string) => pruneTempStorage(mode),
+  pruneTempStorage: (mode?: string, options?: unknown) => {
+    pruneOptions(options);
+    return pruneTempStorage(mode);
+  },
 }));
 
+import path from "node:path";
+import { projects, sessions } from "../../src/db/schema.js";
+import { defaultClaudeSessionsDir } from "../../src/services/claude-scratch.js";
 import { buildTestApp } from "../helpers/app.js";
 
 describe("/api/storage/temp", () => {
@@ -27,6 +34,43 @@ describe("/api/storage/temp", () => {
       payload: { mode: "everything" },
     });
     expect(bad.statusCode).toBe(400);
+  });
+
+  it("consults the registry of every config dir an active session runs with", async () => {
+    inspectTempStorage.mockClear();
+    const app = await buildTestApp();
+    const { lastInsertRowid } = app.db
+      .insert(projects)
+      .values({ name: "p", cwd: "/tmp/p-registry-dirs" })
+      .run();
+    const projectId = Number(lastInsertRowid);
+    const remote = app.db
+      .insert(projects)
+      .values({ name: "r", cwd: "/tmp/r-registry-dirs", hostId: "remote-1" })
+      .run();
+    const env = (dir: string) => JSON.stringify({ CLAUDE_CONFIG_DIR: dir });
+    app.db
+      .insert(sessions)
+      .values([
+        { projectId, command: "claude", cwd: "/tmp", env: env("/work/active") },
+        { projectId, command: "claude", cwd: "/tmp", env: env("/work/dead"), status: "killed" },
+        { projectId, command: "claude", cwd: "/tmp", env: env("/work/exited"), status: "exited" },
+        { projectId, command: "claude", cwd: "/tmp" },
+        {
+          projectId: Number(remote.lastInsertRowid),
+          command: "claude",
+          cwd: "/tmp",
+          env: env("/work/remote"),
+        },
+      ])
+      .run();
+    const expected = {
+      claudeSessionsDirs: [defaultClaudeSessionsDir(), path.join("/work/active", "sessions")],
+    };
+    await app.inject({ method: "GET", url: "/api/storage/temp" });
+    expect(inspectTempStorage).toHaveBeenLastCalledWith(expected);
+    await app.inject({ method: "POST", url: "/api/storage/temp/prune" });
+    expect(pruneOptions).toHaveBeenLastCalledWith(expected);
   });
 
   it("caches inspection across polls and refreshes after a prune", async () => {

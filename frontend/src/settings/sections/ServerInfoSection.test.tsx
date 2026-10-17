@@ -66,6 +66,7 @@ const tempUnavailable: TempStorageStatus = {
   root: "/tmp",
   estimates: { safeBytes: 0, aggressiveBytes: 0 },
   candidates: { safe: 0, aggressive: 0 },
+  claudeScratch: { warnings: [] },
 };
 
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
@@ -188,6 +189,7 @@ describe("Settings -> Server info resources", () => {
         root: "/tmp",
         estimates: { safeBytes: GIB / 2, aggressiveBytes: GIB },
         candidates: { safe: 1, aggressive: 2 },
+        claudeScratch: { warnings: [] },
       },
     });
     vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: GIB });
@@ -210,6 +212,7 @@ describe("Settings -> Server info resources", () => {
         root: "/tmp",
         estimates: { safeBytes: 0, aggressiveBytes: 0 },
         candidates: { safe: 0, aggressive: 0 },
+        claudeScratch: { warnings: [] },
       },
     });
     vi.spyOn(api, "pruneTempStorage").mockResolvedValue({
@@ -222,6 +225,28 @@ describe("Settings -> Server info resources", () => {
     await userEvent.click(button);
     await userEvent.click(button);
     expect(await screen.findByText("Freed 2 B, then stopped: boom")).toBeInTheDocument();
+  });
+
+  it("says when Claude scratch is left alone, and which registry files were skipped", async () => {
+    setup({
+      temp: {
+        available: true,
+        root: "/tmp",
+        estimates: { safeBytes: 0, aggressiveBytes: 0 },
+        candidates: { safe: 0, aggressive: 0 },
+        claudeScratch: {
+          skipped: "/home/me/.claude/sessions/x.json is unparseable and its process may be running",
+          warnings: [
+            "/home/me/.claude/sessions/9.json is unparseable; skipped (its process is gone)",
+          ],
+        },
+      },
+    });
+    render(<ServerInfoSection />);
+    expect(await screen.findByText(/is being left alone:/)).toHaveTextContent(
+      "x.json is unparseable and its process may be running",
+    );
+    expect(screen.getByText(/9\.json is unparseable; skipped/)).toBeInTheDocument();
   });
 
   describe("opt-in ~/.cache cleanup (#1606)", () => {

@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
+import { and, eq, isNotNull } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
+import { projects, sessions } from "../db/schema.js";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
 import {
@@ -39,6 +43,26 @@ function monitoredPaths(app: FastifyInstance): MonitoredPath[] {
     { label: "Working directory", path: process.cwd() },
     ...roots.map((root) => ({ label: `Projects: ${root}`, path: path.resolve(root) })),
   ];
+}
+
+// A session started with its own CLAUDE_CONFIG_DIR registers there, not under
+// the server's, while the tmp dir is shared. Only active sessions can vouch
+// for anything (and only local ones: a remote host's config dir is a path on
+// another machine), and a dir that is gone just means nothing registers there.
+function claudeSessionsDirs(app: FastifyInstance): string[] {
+  const rows = app.db
+    .select({ env: sessions.env })
+    .from(sessions)
+    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .where(
+      and(
+        eq(sessions.status, "active"),
+        eq(projects.hostId, LOCAL_HOST_ID),
+        isNotNull(sessions.env),
+      ),
+    )
+    .all();
+  return claudeSessionsDirsFor(rows.map((row) => row.env));
 }
 
 export async function systemResourcesRoute(app: FastifyInstance) {
@@ -100,7 +124,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
 
   app.get("/api/storage/temp", async () => {
     if (tempCached && tempCached.expiresAt > Date.now()) return tempCached.value;
-    const value = inspectTempStorage();
+    const value = inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) });
     tempCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
     return value;
   });
@@ -119,7 +143,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
     async (request, reply) => {
       try {
-        const result = await pruneTempStorage(request.body?.mode ?? "safe");
+        const result = await pruneTempStorage(request.body?.mode ?? "safe", {
+          claudeSessionsDirs: claudeSessionsDirs(app),
+        });
         cached = null;
         tempCached = null;
         return result;
