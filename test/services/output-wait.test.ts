@@ -15,13 +15,13 @@ function matcher(match: string, regex?: boolean) {
 describe("compileOutputMatcher", () => {
   it("matches a literal substring by default, treating regex metacharacters literally", () => {
     const m = matcher("a.b(c)") as Extract<OutputMatcher, { ok: true }>;
-    expect(m.find("xx a.b(c) yy")).toBe("a.b(c)");
+    expect(m.find("xx a.b(c) yy")).toEqual({ text: "a.b(c)", index: 3 });
     expect(m.find("aXb(c)")).toBeNull();
   });
 
   it("compiles an opt-in regex", () => {
     const m = matcher("Tests: \\d+ passed", true) as Extract<OutputMatcher, { ok: true }>;
-    expect(m.find("Tests: 42 passed")).toBe("Tests: 42 passed");
+    expect(m.find("Tests: 42 passed")).toEqual({ text: "Tests: 42 passed", index: 0 });
     expect(m.find("Tests: x passed")).toBeNull();
   });
 
@@ -47,6 +47,10 @@ describe("compileOutputMatcher", () => {
     "(?!a)b",
     "(?<=a)b",
     "(",
+    "x?",
+    "^",
+    "\\d*",
+    "(foo)?",
   ])("rejects the unsafe/invalid regex %s", (pattern) => {
     expect(compileOutputMatcher(pattern, true).ok).toBe(false);
   });

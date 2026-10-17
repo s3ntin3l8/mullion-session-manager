@@ -437,7 +437,7 @@ tools, a different transport — see [`docs/agent-hooks.md`](agent-hooks.md).
 The other 24 each thinly wrap a control-socket op —
 [`docs/socket-api.md`](socket-api.md#ops)'s canonical Ops table is the
 single list of which op each one wraps and at which scope, rather than
-duplicating that list here. Two of those 18
+duplicating that list here. Two of those 24
 (`get_project_tooling`/`set_project_tooling`) are operator-side tools for
 automating the same per-project row the Mullion Briefing panel edits in the
 UI — `get_project_tooling` is reachable at session scope, `set_project_tooling`

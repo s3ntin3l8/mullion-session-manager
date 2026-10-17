@@ -495,7 +495,7 @@ const promptSession = {
     "it as a new turn — the way to give a worker a follow-up after spawn_child_session. With " +
     "wait:true it then blocks server-side until the child's turn ends (finished, or it needs a " +
     "permission/plan/question answer, errored, or exited) and returns the wait result alongside " +
-    "{delivered, submitted}; on wait.timedOut:true call wait_for_session to keep waiting. " +
+    "{delivered, submitted, outputOffset} (pass outputOffset to wait_for_output as afterOffset); on wait.timedOut:true call wait_for_session to keep waiting. " +
     "Refused with 409 `agent_blocked` while the child is waiting on a dialog (typing would " +
     "answer it — resolve that first), 409 `agent_busy` if you pass wait:true while the child is " +
     "mid-turn (prompt without wait to queue the message, or wait_for_session first), and 501 for " +

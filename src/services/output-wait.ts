@@ -18,7 +18,7 @@ const CHECK_DEBOUNCE_MS = 100;
 const ALIVE_TICK_MS = 1000;
 
 export type OutputMatcher =
-  | { ok: true; find: (text: string) => string | null }
+  | { ok: true; find: (text: string) => { text: string; index: number } | null }
   | {
       ok: false;
       error: string;
@@ -47,7 +47,13 @@ export function compileOutputMatcher(match: unknown, regex: unknown): OutputMatc
     return { ok: false, error: "'regex' must be a boolean" };
   }
   if (regex !== true) {
-    return { ok: true, find: (text) => (text.includes(match) ? match : null) };
+    return {
+      ok: true,
+      find: (text) => {
+        const index = text.indexOf(match);
+        return index === -1 ? null : { text: match, index };
+      },
+    };
   }
   if (FORBIDDEN_REGEX_FEATURES.test(match)) {
     return { ok: false, error: "'match' may not use backreferences or lookarounds" };
@@ -58,10 +64,19 @@ export function compileOutputMatcher(match: unknown, regex: unknown): OutputMatc
   } catch (err) {
     return { ok: false, error: `invalid regex: ${err instanceof Error ? err.message : err}` };
   }
+  if (re.test("")) {
+    return { ok: false, error: "'match' must not match the empty string" };
+  }
   if (!safeRegex(re)) {
     return { ok: false, error: "'match' is too complex (nested quantifiers are not allowed)" };
   }
-  return { ok: true, find: (text) => re.exec(text)?.[0] ?? null };
+  return {
+    ok: true,
+    find: (text) => {
+      const m = re.exec(text);
+      return m ? { text: m[0], index: m.index } : null;
+    },
+  };
 }
 
 export interface OutputWaitDeps {
@@ -107,11 +122,11 @@ export function waitForOutput(
       const text = stripTerminalEscapes(raw.toString("utf8")).slice(-OUTPUT_WINDOW_CHARS);
       const found = matcher.find(text);
       if (found === null) return;
-      const at = text.lastIndexOf(found);
+      const at = found.index;
       const lineStart = text.lastIndexOf("\n", at) + 1;
-      const lineEnd = text.indexOf("\n", at + found.length);
+      const lineEnd = text.indexOf("\n", at + found.text.length);
       const line = text.slice(lineStart, lineEnd === -1 ? undefined : lineEnd).replace(/\r/g, "");
-      settle({ matched: true, text: found, line });
+      settle({ matched: true, text: found.text, line });
     };
 
     const onAbort = (): void => settle({ aborted: true });
