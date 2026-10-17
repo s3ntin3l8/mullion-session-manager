@@ -249,7 +249,8 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   sessionEnv.MULLION_SOCKET_PATH = session.controlSocketPath;
   // Agent-role host (#1627): nothing listens on that path. The var stays (the
   // adapters and skills key off it) and this marker tells the CLI/MCP client
-  // to fail with an explanation instead of a connect error.
+  // to fail with an explanation instead of a connect error. The reader is
+  // MullionSocketClient (src/cli/client.mjs) — keep the literal in sync.
   if (session.controlUnavailable) sessionEnv.MULLION_CONTROL_UNAVAILABLE = "remote-host";
   sessionEnv.MULLION_SESSION_ID = session.id;
   // MULLION_FORWARDER_PATH/MULLION_FORWARDER_NODE — issue: host-global agy/
