@@ -14,6 +14,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
   it("registers the full tool set, in order", () => {
     expect(TOOLS.map((t) => t.name)).toEqual([
       "promote_to_worktree",
+      "report_status",
       "use_browser",
       "browser_action",
       "list_devices",
@@ -617,5 +618,28 @@ describe("start_device / stop_device / delete_device handlers (device lifecycle)
     expect(deleteTool.description).toMatch(/stop_device/);
     expect(startTool.description).not.toMatch(/IRREVERSIBLY/i);
     expect(stopTool.description).toMatch(/reversible/i);
+  });
+});
+
+describe("report_status (issue #1623)", () => {
+  const tool = TOOLS.find((t) => t.name === "report_status")!;
+
+  it("forwards a valid state and message to the client", async () => {
+    const client = { reportStatus: vi.fn().mockResolvedValue(undefined) };
+    const out = await tool.handler({ state: "done", message: "shipped" }, client);
+    expect(client.reportStatus).toHaveBeenCalledWith("done", "shipped");
+    expect(out).toBe("status reported: done");
+  });
+
+  it("tells the caller when the message was truncated", async () => {
+    const client = { reportStatus: vi.fn().mockResolvedValue(undefined) };
+    const out = await tool.handler({ state: "done", message: "y".repeat(300) }, client);
+    expect(out).toContain("truncated to 200");
+  });
+
+  it("rejects an unknown state without calling the client", async () => {
+    const client = { reportStatus: vi.fn() };
+    await expect(tool.handler({ state: "napping" }, client)).rejects.toThrow(/state must be/);
+    expect(client.reportStatus).not.toHaveBeenCalled();
   });
 });

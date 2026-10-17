@@ -11,7 +11,7 @@ import { ImageIcon, KillIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store/index.js";
 import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api, DEFAULT_VOICE_CHORD } from "./api/index.js";
+import { api, ApiError, DEFAULT_VOICE_CHORD } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -41,6 +41,7 @@ import { computePathLinksForRow } from "./lib/terminalPathLinks.js";
 import { useTerminalSearch } from "./hooks/useTerminalSearch.js";
 import { TerminalFindBar } from "./terminal-pane/TerminalFindBar.js";
 import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
+import { quotePastedPath } from "./terminal-pane/quote-paste-path.js";
 import { TerminalLinkTooltip } from "./terminal-pane/TerminalLinkTooltip.js";
 import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
 import { useVoiceDictation } from "./voice/useVoiceDictation.js";
@@ -1558,14 +1559,22 @@ export function TerminalPane(props: {
       setUploadState("uploading");
       // async: a synchronous throw (e.g. encodeURIComponent on an unpaired
       // surrogate in a file name) must reject, not escape Promise.all's setup.
-      const uploadOne = async (file: Blob) =>
-        api.uploadSessionFile(
-          props.params.sessionId,
-          file,
+      const uploadOne = async (file: Blob) => {
+        const name =
           file instanceof File
             ? file.name
-            : `pasted.${file.type.split("/")[1]?.split("+")[0] || "bin"}`,
-        );
+            : `pasted.${file.type.split("/")[1]?.split("+")[0] || "bin"}`;
+        try {
+          return await api.uploadSessionFile(props.params.sessionId, file, name);
+        } catch (err) {
+          // The bytes didn't match the image type the browser claimed —
+          // keep the file anyway, as a plain upload (once, no further retry).
+          if (err instanceof ApiError && err.code === "UPLOAD_IMAGE_MISMATCH") {
+            return api.uploadSessionFile(props.params.sessionId, file, name, { asGeneric: true });
+          }
+          throw err;
+        }
+      };
       const results: PromiseSettledResult<{ path: string }>[] = new Array(files.length);
       let next = 0;
       const worker = async () => {
@@ -1588,9 +1597,15 @@ export function TerminalPane(props: {
           else {
             failed = true;
             console.warn("[terminal] file upload failed:", result.reason);
+            if (
+              result.reason instanceof ApiError &&
+              result.reason.code === "UPLOAD_AGENT_OUTDATED"
+            ) {
+              setUploadNotice(result.reason.message);
+            }
           }
         }
-        if (paths.length > 0) pasteToTerminal(`${paths.join(" ")} `);
+        if (paths.length > 0) pasteToTerminal(`${paths.map(quotePastedPath).join(" ")} `);
         sawUploadFailure ||= failed;
         if (--batchesInFlight === 0) {
           setUploadState(sawUploadFailure ? "error" : "idle");

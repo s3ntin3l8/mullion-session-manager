@@ -38,4 +38,13 @@ describe("sessionsApi.uploadSessionFile", () => {
 
     expect(lastHeaders().get("x-upload-filename")).toBe("file");
   });
+
+  it("asGeneric sends even a recognized image mime as octet-stream with the name", async () => {
+    await sessionsApi.uploadSessionFile(3, new Blob(["x"], { type: "image/png" }), "a.png", {
+      asGeneric: true,
+    });
+
+    expect(lastHeaders().get("content-type")).toBe("application/octet-stream");
+    expect(lastHeaders().get("x-upload-filename")).toBe("a.png");
+  });
 });

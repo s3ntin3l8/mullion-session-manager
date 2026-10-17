@@ -173,15 +173,24 @@ export const sessionsApi = {
   // (URI-encoded — header values are ASCII-only), which the backend
   // sanitizes. request()'s own header logic already sets Content-Type from
   // init.headers when present, overriding its "application/json" default.
-  uploadSessionFile: (sessionId: number, blob: Blob, name?: string) =>
+  // `asGeneric` (issue #1637) forces the octet-stream path for a blob whose
+  // image mime the backend rejected (UPLOAD_IMAGE_MISMATCH), so it still
+  // lands as a plain file instead of being dropped.
+  uploadSessionFile: (
+    sessionId: number,
+    blob: Blob,
+    name?: string,
+    opts?: { asGeneric?: boolean },
+  ) =>
     request<{ path: string }>(`/api/sessions/${sessionId}/uploads`, {
       method: "POST",
       body: blob,
-      headers: UPLOAD_IMAGE_MIMES.has(blob.type)
-        ? { "Content-Type": blob.type }
-        : {
-            "Content-Type": "application/octet-stream",
-            "X-Upload-Filename": encodeURIComponent(name ?? "file"),
-          },
+      headers:
+        !opts?.asGeneric && UPLOAD_IMAGE_MIMES.has(blob.type)
+          ? { "Content-Type": blob.type }
+          : {
+              "Content-Type": "application/octet-stream",
+              "X-Upload-Filename": encodeURIComponent(name ?? "file"),
+            },
     }),
 };

@@ -12,7 +12,7 @@ import { useDashboardStore } from "./store/index.js";
 import { TerminalPane } from "./TerminalPane.js";
 import { useVoiceControls } from "./lib/terminalVoiceRegistry.js";
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "./lib/terminalGridSize.js";
-import { api } from "./api/index.js";
+import { api, ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 import type { Session } from "./api/index.js";
 import {
@@ -2137,6 +2137,89 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
       );
     });
     expect(getByText("Upload failed")).toBeTruthy();
+  });
+
+  it("backslash-escapes a pasted path whose cwd contains a space", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockResolvedValue({
+      path: "/my proj/.mullion-uploads/u/a.txt",
+    });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [new File(["x"], "a.txt", { type: "text/plain" })] },
+    });
+
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith(
+        "/my\\ proj/.mullion-uploads/u/a.txt ",
+      );
+    });
+  });
+
+  it("retries once as a generic file when the image content check fails", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockReset();
+    vi.mocked(api.uploadSessionFile)
+      .mockRejectedValueOnce(new ApiError("mismatch", 400, "UPLOAD_IMAGE_MISMATCH"))
+      .mockResolvedValueOnce({ path: "/cwd/.mullion-uploads/u/fake.png" });
+
+    const { container } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    const fake = new File(["not a png"], "fake.png", { type: "image/png" });
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: { types: ["Files"], files: [fake] },
+    });
+
+    await waitFor(() => {
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith(
+        "/cwd/.mullion-uploads/u/fake.png ",
+      );
+    });
+    expect(api.uploadSessionFile).toHaveBeenCalledTimes(2);
+    expect(api.uploadSessionFile).toHaveBeenLastCalledWith(1, fake, "fake.png", {
+      asGeneric: true,
+    });
+  });
+
+  it("does not retry a second time when the generic retry also fails", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockReset();
+    vi.mocked(api.uploadSessionFile)
+      .mockRejectedValueOnce(new ApiError("mismatch", 400, "UPLOAD_IMAGE_MISMATCH"))
+      .mockRejectedValueOnce(new Error("boom"));
+
+    const { container, getByText } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "fake.png", { type: "image/png" })],
+      },
+    });
+
+    await waitFor(() => expect(getByText("Upload failed")).toBeTruthy());
+    expect(api.uploadSessionFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("explains an outdated remote agent instead of a bare upload failure", async () => {
+    stubFakeWebSocket(true);
+    vi.mocked(api.uploadSessionFile).mockReset();
+    vi.mocked(api.uploadSessionFile).mockRejectedValue(
+      new ApiError("agent too old — update it", 502, "UPLOAD_AGENT_OUTDATED"),
+    );
+
+    const { container, getByText } = renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fireEvent.drop(container.firstElementChild as HTMLElement, {
+      dataTransfer: {
+        types: ["Files"],
+        files: [new File(["x"], "a.pdf", { type: "application/pdf" })],
+      },
+    });
+
+    await waitFor(() => expect(getByText("agent too old — update it")).toBeTruthy());
   });
 
   it("uploads at most 3 files at a time", async () => {

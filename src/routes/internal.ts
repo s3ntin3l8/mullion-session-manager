@@ -110,6 +110,7 @@ import {
   matchesMagicBytes,
   saveSessionFileUpload,
   saveSessionUpload,
+  uploadRetentionMs,
 } from "../services/session-upload.js";
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
@@ -2307,6 +2308,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (mime && name) return reply.badRequest("mime and name are mutually exclusive");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
+      const retentionMs = uploadRetentionMs(app.config);
       // Same signal as POST /api/sessions/:id/uploads: generic mode is chosen
       // by Content-Type, so an image Content-Type can never reach it (and skip
       // the magic-byte check) just by adding a `name`.
@@ -2315,7 +2317,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (isGenericFile) {
         if (!name) return reply.badRequest("name query param is required for a generic upload");
         if (!Buffer.isBuffer(request.body)) return reply.badRequest("expected a raw file body");
-        return { path: saveSessionFileUpload(resolvedCwd, request.body, name) };
+        return { path: saveSessionFileUpload(resolvedCwd, request.body, name, retentionMs) };
       }
       if (!mime) return reply.badRequest("mime query param is required for an image upload");
       if (!extensionForMime(mime)) return reply.badRequest(`Unsupported image type: ${mime}`);
@@ -2327,7 +2329,7 @@ export async function internalRoutes(app: FastifyInstance) {
         return reply.badRequest("File content does not match the declared image type");
       }
 
-      const uploadPath = saveSessionUpload(resolvedCwd, request.body, mime);
+      const uploadPath = saveSessionUpload(resolvedCwd, request.body, mime, retentionMs);
       return { path: uploadPath };
     },
   );

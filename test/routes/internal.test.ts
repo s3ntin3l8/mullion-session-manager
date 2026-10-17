@@ -4299,6 +4299,29 @@ describe("internal routes (agent role, issue #26)", () => {
   });
 
   describe("POST /internal/uploads (issue #68)", () => {
+    it("prunes uploads older than MULLION_UPLOAD_RETENTION_DAYS when a new one lands (issue #1637)", async () => {
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(projectsRoot, "upload-"));
+      const stale = path.join(cwd, ".mullion-uploads", "stale-uuid");
+      fs.mkdirSync(stale, { recursive: true });
+      const old = new Date(Date.now() - 30 * 86_400_000);
+      fs.utimesSync(stale, old, old);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/internal/uploads?cwd=${encodeURIComponent(cwd)}&name=new.txt`,
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/octet-stream" },
+        payload: Buffer.from("x"),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(fs.existsSync(stale)).toBe(false);
+      expect(fs.existsSync(res.json().path)).toBe(true);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("writes an image under <cwd>/.mullion-uploads and returns its absolute path", async () => {
       const app = await buildApp();
       // Must be within projectsRoot: this route now confines cwd via

@@ -6,7 +6,7 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
-import { saveSessionFileUpload, saveSessionUpload } from "./session-upload.js";
+import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "./task-prompt.js";
 import {
   checkoutBranchWorktree,
@@ -416,11 +416,11 @@ class LocalBackend implements SessionBackend {
   }
 
   async uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
-    return { path: saveSessionUpload(cwd, buffer, mime) };
+    return { path: saveSessionUpload(cwd, buffer, mime, uploadRetentionMs(this.app.config)) };
   }
 
   async uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
-    return { path: saveSessionFileUpload(cwd, buffer, name) };
+    return { path: saveSessionFileUpload(cwd, buffer, name, uploadRetentionMs(this.app.config)) };
   }
 
   async resolveReviewGate(

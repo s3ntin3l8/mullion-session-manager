@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_UPLOAD_BYTES, UPLOAD_IMAGE_EXTENSIONS } from "../shared/constants.js";
 
@@ -104,11 +104,16 @@ export function extensionForMime(mime: string): string | null {
  * actual bytes (not just a claimed Content-Type), and a server-generated
  * filename confined to the fixed `.mullion-uploads/` subdirectory.
  */
-export function saveSessionUpload(cwd: string, buffer: Buffer, mime: string): string {
+export function saveSessionUpload(
+  cwd: string,
+  buffer: Buffer,
+  mime: string,
+  retentionMs = 0,
+): string {
   const ext = extensionForMime(mime);
   if (!ext) throw new Error(`Unsupported image type: ${mime}`);
 
-  const uploadDir = ensureUploadDir(cwd);
+  const uploadDir = ensureUploadDir(cwd, retentionMs);
   const filename = `${crypto.randomUUID()}${ext}`;
   const filePath = path.join(uploadDir, filename);
   writeFileSync(filePath, buffer);
@@ -148,8 +153,13 @@ export function sanitizeUploadName(name: string): string {
  * The same containment, symlink, `.gitignore` and size-cap guarantees as
  * saveSessionUpload apply (the size cap is the routes' bodyLimit).
  */
-export function saveSessionFileUpload(cwd: string, buffer: Buffer, originalName: string): string {
-  const uploadDir = ensureUploadDir(cwd);
+export function saveSessionFileUpload(
+  cwd: string,
+  buffer: Buffer,
+  originalName: string,
+  retentionMs = 0,
+): string {
+  const uploadDir = ensureUploadDir(cwd, retentionMs);
   const fileDir = path.join(uploadDir, crypto.randomUUID());
   mkdirSync(fileDir);
   const filePath = path.resolve(fileDir, sanitizeUploadName(originalName));
@@ -161,8 +171,60 @@ export function saveSessionFileUpload(cwd: string, buffer: Buffer, originalName:
   return filePath;
 }
 
-/** Resolves, validates and (if needed) creates `<cwd>/.mullion-uploads`. */
-function ensureUploadDir(cwd: string): string {
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+// Keyed by upload dir (one per project root / session cwd / task worktree),
+// so capped with oldest-first eviction like the repo's other module-level
+// Maps. Evicting only means one extra directory scan for that dir later.
+const MAX_PRUNE_ENTRIES = 500;
+const lastPrunedAt = new Map<string, number>();
+
+/** `MULLION_UPLOAD_RETENTION_DAYS` as milliseconds (0 = pruning off). */
+export function uploadRetentionMs(config: { MULLION_UPLOAD_RETENTION_DAYS: number }): number {
+  return config.MULLION_UPLOAD_RETENTION_DAYS * 86_400_000;
+}
+
+/**
+ * Issue #1637: removes direct children of `uploadDir` (a `<uuid>.<ext>` image
+ * or a `<uuid>/` generic-file directory) whose mtime is older than `maxAgeMs`.
+ * `.gitignore` is kept. Uses lstat/rmSync so a symlinked child is unlinked,
+ * never followed. Never throws — pruning must not fail an upload. Runs at
+ * most once per `PRUNE_INTERVAL_MS` per directory, so a multi-file drop scans
+ * once. `maxAgeMs <= 0` disables it.
+ */
+export function pruneUploadDir(uploadDir: string, maxAgeMs: number, now = Date.now()): void {
+  if (maxAgeMs <= 0) return;
+  const last = lastPrunedAt.get(uploadDir);
+  if (last !== undefined && now - last < PRUNE_INTERVAL_MS) return;
+  // delete-then-set refreshes insertion order, so eviction drops the
+  // least-recently-pruned dir.
+  lastPrunedAt.delete(uploadDir);
+  if (lastPrunedAt.size >= MAX_PRUNE_ENTRIES) {
+    const oldest = lastPrunedAt.keys().next().value;
+    if (oldest !== undefined) lastPrunedAt.delete(oldest);
+  }
+  lastPrunedAt.set(uploadDir, now);
+  try {
+    for (const entry of readdirSync(uploadDir)) {
+      if (entry === ".gitignore") continue;
+      const child = path.join(uploadDir, entry);
+      try {
+        if (now - lstatSync(child).mtimeMs > maxAgeMs) {
+          rmSync(child, { recursive: true, force: true });
+        }
+      } catch {
+        // Raced with another prune/removal — skip this entry.
+      }
+    }
+  } catch {
+    // Unreadable dir — leave it; the upload itself is what matters.
+  }
+}
+
+/**
+ * Resolves, validates and (if needed) creates `<cwd>/.mullion-uploads`, then
+ * prunes stale entries when `retentionMs > 0`.
+ */
+function ensureUploadDir(cwd: string, retentionMs: number): string {
   const root = path.resolve(cwd);
   const uploadDir = path.resolve(root, UPLOAD_SUBDIR);
   // Containment guard (also the CodeQL js/path-injection barrier): the
@@ -194,6 +256,7 @@ function ensureUploadDir(cwd: string): string {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     }
   }
+  pruneUploadDir(uploadDir, retentionMs);
   return uploadDir;
 }
 
