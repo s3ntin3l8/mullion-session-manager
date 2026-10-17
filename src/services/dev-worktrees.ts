@@ -115,11 +115,20 @@ interface Located {
   slug: string;
 }
 
-function locate(repoCwd: string, worktree: GitWorktreeInfo): Located | null {
+/**
+ * The project's directory as git spells it. `git worktree list` prints real
+ * paths, so a project registered through a symlink would otherwise match none of
+ * its own worktrees.
+ */
+async function repoRoot(repoCwd: string): Promise<string> {
+  return fs.realpath(repoCwd).catch(() => path.resolve(repoCwd));
+}
+
+function locate(repoRootPath: string, worktree: GitWorktreeInfo): Located | null {
   if (worktree.isMain) return null;
   const resolved = path.resolve(worktree.path);
   for (const root of ROOTS) {
-    const prefix = path.join(path.resolve(repoCwd), root.dir) + path.sep;
+    const prefix = path.join(repoRootPath, root.dir) + path.sep;
     if (resolved.startsWith(prefix)) {
       return { worktree, kind: root.kind, slug: resolved.slice(prefix.length) };
     }
@@ -228,7 +237,8 @@ async function gather(
 ): Promise<{ ctx: RepoContext; located: Located[] } | null> {
   const worktrees = await listWorktrees(project.cwd);
   if (!worktrees) return null;
-  const located = worktrees.flatMap((worktree) => locate(project.cwd, worktree) ?? []);
+  const root = await repoRoot(project.cwd);
+  const located = worktrees.flatMap((worktree) => locate(root, worktree) ?? []);
   if (located.length === 0) return null;
   const ctx = await repoContext(project);
   return ctx ? { ctx, located } : null;
@@ -273,8 +283,9 @@ let pruneRunning = false;
 /**
  * Removes the stale worktrees: fetches each project first so a branch deleted
  * on the remote since the preview is seen, then re-checks each one right before
- * removing it (clean, unused, same commit, same reason) and removes it without
- * `--force`. Branches are left alone. One failure doesn't stop the rest.
+ * removing it (clean, unused, same commit, same reason) and removes it through
+ * `removeListedWorktree`'s clean-checked path (see the header for what that does
+ * and doesn't guard). Branches are left alone. One failure doesn't stop the rest.
  */
 export async function pruneDevWorktrees(
   options: DevWorktreeOptions,
@@ -290,7 +301,8 @@ export async function pruneDevWorktrees(
       try {
         // Nothing to fetch for a project with no developer worktrees.
         const listed = await listWorktrees(project.cwd);
-        if (!listed?.some((worktree) => locate(project.cwd, worktree))) continue;
+        const root = await repoRoot(project.cwd);
+        if (!listed?.some((worktree) => locate(root, worktree))) continue;
         // Best effort: offline just means refs stay as of the last fetch, which
         // can only hide a stale worktree, never invent one. Gathered after, so
         // the branches it reads include what the fetch just learned.

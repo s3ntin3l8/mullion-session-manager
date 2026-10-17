@@ -261,6 +261,19 @@ describe("dev-worktrees", () => {
       expect(inUse).toHaveBeenCalledWith(project, dir);
     });
 
+    it("finds worktrees when the project is registered through a symlink", async () => {
+      addWorktree("via-link", { pushed: true });
+      deleteRemoteBranch("via-link");
+      // git prints real paths, so the project's own path has to be resolved too.
+      const link = path.join(base, "repo-link");
+      fs.symlinkSync(repo, link);
+      const viaLink = { ...project, cwd: link };
+      const status = await inspectDevWorktrees({ projects: [viaLink] });
+      expect(status.candidates.map((c) => c.slug)).toEqual(["via-link"]);
+      const result = await pruneDevWorktrees({ projects: [viaLink] });
+      expect(result.output).toBe("Removed 1 stale developer worktree.");
+    });
+
     it("tolerates a project that isn't a repo or a path that doesn't exist", async () => {
       addWorktree("ok", { pushed: true });
       deleteRemoteBranch("ok");
@@ -307,12 +320,12 @@ describe("dev-worktrees", () => {
       expect((await pruneDevWorktrees(opts())).output).toBe("Removed 1 stale developer worktree.");
     });
 
-    it("re-checks right before removing: work that appeared meanwhile saves the worktree", async () => {
+    it("leaves a worktree alone that gained uncommitted work before the cleanup got to it", async () => {
       const dir = addWorktree("racy", { pushed: true });
       deleteRemoteBranch("racy");
       const result = await pruneDevWorktrees(
         opts({
-          // Runs after the listing's first look and before the removal's re-check.
+          // The fetch comes before the first look at each worktree.
           fetch: async () => {
             fs.writeFileSync(path.join(dir, "late.txt"), "just saved");
           },

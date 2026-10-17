@@ -107,6 +107,7 @@ import {
 import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
+import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
 
 interface CreateProjectBody {
   name: string;
@@ -503,8 +504,6 @@ function isWithinAnyWorktree(candidate: string, worktreePaths: string[]): boolea
  * once it's gone (see docs/tasks.md's Worktree lifecycle section). Returns
  * the task id when a match is found, else `null`.
  */
-const RESUMABLE_TASK_STATUSES = ["claimed", "in_progress", "reviewing", "failed"] as const;
-
 function branchClaimedByResumableTask(
   app: FastifyInstance,
   projectId: number,

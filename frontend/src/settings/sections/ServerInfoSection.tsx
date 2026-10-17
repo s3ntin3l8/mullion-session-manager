@@ -148,11 +148,12 @@ export function ServerInfoSection() {
               )
             : null;
         // Aggressive-only; the server decides which worktrees are stale.
-        // Run whenever the endpoint answers, not only when the preview lists
-        // something: the preview is as of the last fetch, and fetching is the
-        // first thing the cleanup does.
+        // Always in aggressive mode, whatever the preview says: it may still be
+        // loading (it is the slow one), have failed, or be as of the last fetch,
+        // and fetching is the first thing the cleanup does. The server decides
+        // what is stale.
         const worktreeResult =
-          mode === "aggressive" && worktrees?.available
+          mode === "aggressive"
             ? await settle("Developer worktree cleanup failed.", () => api.pruneDevWorktrees())
             : null;
         // Usually nothing, so only worth a mention when it did something.

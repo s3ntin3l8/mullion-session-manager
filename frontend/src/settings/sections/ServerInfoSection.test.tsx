@@ -335,6 +335,18 @@ describe("Settings -> Server info resources", () => {
       expect(api.pruneDevWorktrees).toHaveBeenCalledTimes(1);
     });
 
+    it("runs the cleanup even while the preview is still loading, or failed", async () => {
+      setup();
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "getDevWorktrees").mockReturnValue(new Promise(() => {}));
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneDevWorktrees).toHaveBeenCalledTimes(1);
+    });
+
     it("doesn't wait for the worktree preview before showing the rest", async () => {
       setup();
       vi.spyOn(api, "getDevWorktrees").mockReturnValue(new Promise(() => {}));

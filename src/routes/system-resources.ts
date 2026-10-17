@@ -32,8 +32,13 @@ import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.
 
 const STATS_CACHE_MS = 10_000;
 // `docker system df -v` is slow on large hosts; share one result across polls.
-const DOCKER_STORAGE_CACHE_MS = 30_000;
-const DOCKER_PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
+// Inspections are shared across polls: `docker system df -v` and the temp walk
+// are slow, and every tier is only measured when the page opens or refreshes.
+const INSPECT_CACHE_MS = 30_000;
+// The worktree preview costs more (a git status and a size walk per worktree,
+// and GitHub for unpushed branches), so it is held longer.
+const WORKTREE_INSPECT_CACHE_MS = 60_000;
+const PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
 
 function databaseDirectory(databaseUrl: string): string {
   const dbPath = databaseUrl.replace(/^file:/, "");
@@ -155,14 +160,14 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.get("/api/storage/docker", async () => {
     if (dockerCached && dockerCached.expiresAt > Date.now()) return dockerCached.value;
     const value = inspectDockerStorage();
-    dockerCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    dockerCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
     return value;
   });
 
   app.post<{ Body?: { mode?: DockerPruneMode } }>(
     "/api/storage/docker/prune",
     {
-      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      config: { rateLimit: PRUNE_RATE_LIMIT },
       schema: {
         body: {
           type: ["object", "null"],
@@ -196,14 +201,14 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.get("/api/storage/temp", async () => {
     if (tempCached && tempCached.expiresAt > Date.now()) return tempCached.value;
     const value = inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) });
-    tempCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    tempCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
     return value;
   });
 
   app.post<{ Body?: { mode?: TempPruneMode } }>(
     "/api/storage/temp/prune",
     {
-      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      config: { rateLimit: PRUNE_RATE_LIMIT },
       schema: {
         body: {
           type: ["object", "null"],
@@ -239,7 +244,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.get("/api/storage/opencode", async () => {
     if (opencodeCached && opencodeCached.expiresAt > Date.now()) return opencodeCached.value;
     const value = inspectOpencodeStorage();
-    opencodeCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    opencodeCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
     return value;
   });
 
@@ -247,7 +252,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // and the VACUUM is skipped whenever opencode has the database open.
   app.post(
     "/api/storage/opencode/prune",
-    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    { config: { rateLimit: PRUNE_RATE_LIMIT } },
     async (_request, reply) => {
       try {
         const result = await pruneOpencodeStorage();
@@ -273,7 +278,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.get("/api/storage/worktrees", async () => {
     if (worktreesCached && worktreesCached.expiresAt > Date.now()) return worktreesCached.value;
     const value = inspectDevWorktrees(devWorktreeOptions());
-    worktreesCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    worktreesCached = { expiresAt: Date.now() + WORKTREE_INSPECT_CACHE_MS, value };
     return value;
   });
 
@@ -281,7 +286,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // never from the client.
   app.post(
     "/api/storage/worktrees/prune",
-    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    { config: { rateLimit: PRUNE_RATE_LIMIT } },
     async (_request, reply) => {
       try {
         const result = await pruneDevWorktrees(devWorktreeOptions());
@@ -307,7 +312,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.get("/api/storage/caches", async () => {
     if (cachesCached && cachesCached.expiresAt > Date.now()) return cachesCached.value;
     const value = inspectCacheStorage();
-    cachesCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    cachesCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
     return value;
   });
 
@@ -318,7 +323,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   app.post<{ Body?: { cacheDirs?: string[] } | null }>(
     "/api/storage/caches/prune",
     {
-      config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT },
+      config: { rateLimit: PRUNE_RATE_LIMIT },
       schema: {
         body: {
           type: ["object", "null"],

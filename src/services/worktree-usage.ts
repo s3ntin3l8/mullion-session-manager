@@ -5,10 +5,10 @@ import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { isGitRepo } from "./git-status.js";
 
-// Task states a worktree is still needed in: the same set routes/projects.ts's
-// worktree-removal guard uses (a `done`/`cancelled` task keeps its
-// `worktreePath` forever, so it must not count).
-const RESUMABLE_TASK_STATUSES = ["claimed", "in_progress", "reviewing", "failed"] as const;
+// Task states a worktree is still needed in (a `done`/`cancelled` task keeps its
+// `worktreePath` forever, so it must not count). Shared with routes/projects.ts's
+// worktree-removal guard, so the two can't drift.
+export const RESUMABLE_TASK_STATUSES = ["claimed", "in_progress", "reviewing", "failed"] as const;
 
 const isWithin = (candidate: string, directory: string) => {
   const resolvedCandidate = path.resolve(candidate);
