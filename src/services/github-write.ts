@@ -1072,6 +1072,42 @@ export async function findPullRequestByHead(
     : null;
 }
 
+/**
+ * The most recent MERGED pull request whose head is `head` (`owner:branch`),
+ * with the commit that head pointed at when it merged and the branch it merged
+ * into — so a caller can tell a branch whose work is all in the merged PR from
+ * one that has had commits added since, and a merge into the default branch
+ * from one into some other feature branch. Read-only. `state=closed` returns merged and abandoned PRs alike, so
+ * the first one with a `merged_at` wins (newest first, as in
+ * `findPullRequestByHead`). Only looks at the newest few: a branch name reused
+ * across many PRs resolves to its latest merge or nothing, never an old one.
+ */
+export async function findMergedPullRequestByHead(
+  token: string,
+  owner: string,
+  repo: string,
+  head: string,
+): Promise<{ number: number; headSha: string; baseRef: string } | null> {
+  const results = await githubRequest<
+    Array<{
+      number: number;
+      merged_at: string | null;
+      head: { sha: string };
+      base: { ref: string };
+    }>
+  >(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/pulls?head=${encodeURIComponent(head)}&state=closed&sort=created&direction=desc&per_page=5`,
+  );
+  const merged = results.find((pr) => pr.merged_at !== null);
+  return merged
+    ? { number: merged.number, headSha: merged.head.sha, baseRef: merged.base.ref }
+    : null;
+}
+
 // #744 — release-please detection/trigger/merge. `release-please--branches--`
 // is release-please-action's own fixed branch-name prefix (verified against
 // PR #803/#801/#807 in this repo — head `release-please--branches--main--

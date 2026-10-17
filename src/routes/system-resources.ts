@@ -19,6 +19,15 @@ import {
 } from "../services/temp-storage.js";
 import { inspectCacheStorage, pruneCacheStorage } from "../services/cache-storage.js";
 import { inspectOpencodeStorage, pruneOpencodeStorage } from "../services/opencode-storage.js";
+import {
+  inspectDevWorktrees,
+  pruneDevWorktrees,
+  type DevWorktreeOptions,
+} from "../services/dev-worktrees.js";
+import { findMergedPullRequestByHead } from "../services/github-write.js";
+import { resolveGitHubToken } from "../services/github-integration.js";
+import { resolveRepoRef } from "../services/host-git.js";
+import { worktreeInUse } from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -66,7 +75,68 @@ function claudeSessionsDirs(app: FastifyInstance): string[] {
   return claudeSessionsDirsFor(rows.map((row) => row.env));
 }
 
+const MERGED_PR_CACHE_MS = 10 * 60_000;
+const MERGED_PR_CACHE_MAX = 500;
+
 export async function systemResourcesRoute(app: FastifyInstance) {
+  // The preview polls; a merged PR doesn't un-merge, and an unmerged one is
+  // unlikely to merge between two looks, so each (repo, branch, commit) is
+  // asked about GitHub at most once per window, answers of "no" included.
+  const mergedPrCache = new Map<string, { at: number; pr: number | null }>();
+
+  async function mergedPullRequest(
+    project: { cwd: string },
+    branch: string,
+    tipSha: string,
+    defaultBranch: string,
+  ): Promise<number | null> {
+    const key = `${project.cwd}\0${branch}\0${tipSha}\0${defaultBranch}`;
+    const hit = mergedPrCache.get(key);
+    if (hit && Date.now() - hit.at < MERGED_PR_CACHE_MS) return hit.pr;
+    let pr: number | null = null;
+    try {
+      const repoRef = await resolveRepoRef(app, { cwd: project.cwd, hostId: LOCAL_HOST_ID });
+      const token = repoRef ? await resolveGitHubToken(app, repoRef, "read") : null;
+      // Nothing to ask without a GitHub remote and a token: not cached, since
+      // either can appear later.
+      if (!repoRef || !token) return null;
+      const found = await findMergedPullRequestByHead(
+        token,
+        repoRef.owner,
+        repoRef.repo,
+        `${repoRef.owner}:${branch}`,
+      );
+      // Only if it merged exactly this commit (later commits on the branch are
+      // work the merged PR doesn't contain), and into the default branch (a
+      // merge into another feature branch isn't "elsewhere" yet).
+      if (found?.headSha === tipSha && found.baseRef === defaultBranch) pr = found.number;
+    } catch {
+      // Rate limited, offline, a bad token: unknown, not "no". Answering null
+      // without remembering it means the next look asks again.
+      return null;
+    }
+    if (mergedPrCache.size >= MERGED_PR_CACHE_MAX) {
+      const oldest = mergedPrCache.keys().next().value;
+      if (oldest !== undefined) mergedPrCache.delete(oldest);
+    }
+    mergedPrCache.set(key, { at: Date.now(), pr });
+    return pr;
+  }
+
+  // Local projects only: a remote host's worktrees are on another machine.
+  function devWorktreeOptions(): DevWorktreeOptions {
+    const rows = app.db
+      .select({ id: projects.id, name: projects.name, cwd: projects.cwd })
+      .from(projects)
+      .where(eq(projects.hostId, LOCAL_HOST_ID))
+      .all();
+    return {
+      projects: rows,
+      inUse: (_project, worktreePath) => worktreeInUse(app, worktreePath),
+      mergedPr: mergedPullRequest,
+    };
+  }
+
   let cached: { expiresAt: number; value: Awaited<ReturnType<typeof sampleSystemStats>> } | null =
     null;
 
@@ -190,6 +260,40 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         }
         return reply.internalServerError(
           error instanceof Error ? error.message : "opencode database cleanup failed",
+        );
+      }
+    },
+  );
+
+  let worktreesCached: {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof inspectDevWorktrees>>>;
+  } | null = null;
+
+  app.get("/api/storage/worktrees", async () => {
+    if (worktreesCached && worktreesCached.expiresAt > Date.now()) return worktreesCached.value;
+    const value = inspectDevWorktrees(devWorktreeOptions());
+    worktreesCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    return value;
+  });
+
+  // No body: which worktrees are stale is decided here, from git and GitHub,
+  // never from the client.
+  app.post(
+    "/api/storage/worktrees/prune",
+    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    async (_request, reply) => {
+      try {
+        const result = await pruneDevWorktrees(devWorktreeOptions());
+        cached = null;
+        worktreesCached = null;
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message === "DEV_WORKTREE_PRUNE_IN_PROGRESS") {
+          return reply.conflict("Developer worktree cleanup is already running");
+        }
+        return reply.internalServerError(
+          error instanceof Error ? error.message : "Developer worktree cleanup failed",
         );
       }
     },

@@ -92,6 +92,8 @@ export type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  DevWorktreeStatus,
+  DevWorktreeCandidate,
   PruneResult,
   Project,
   CreateProjectDirOptions,

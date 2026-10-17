@@ -18,6 +18,7 @@ import type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  DevWorktreeStatus,
   PruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
@@ -107,6 +108,11 @@ export const systemApi = {
   // while opencode isn't running.
   pruneOpencodeStorage: () =>
     request<PruneResult>("/api/storage/opencode/prune", { method: "POST" }),
+
+  getDevWorktrees: () => request<DevWorktreeStatus>("/api/storage/worktrees"),
+  // Nothing to choose: the server works out which worktrees are stale itself,
+  // and removes only clean, unused ones (their branches are kept).
+  pruneDevWorktrees: () => request<PruneResult>("/api/storage/worktrees/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),
