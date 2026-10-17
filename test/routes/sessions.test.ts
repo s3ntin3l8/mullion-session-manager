@@ -1434,9 +1434,14 @@ describe("sessions route", () => {
       }
       expect(statuses.slice(0, 120).every((c) => c === 404)).toBe(true);
       expect(statuses[120]).toBe(429);
-      // The bucket is route-scoped: an unrelated route is unaffected.
-      const sibling = await app.inject({ method: "GET", url: "/health" });
+      // The bucket is route-scoped: uploads must not drain the shared /api
+      // budget the rest of the dashboard draws on.
+      const sibling = await app.inject({ method: "GET", url: "/api/projects" });
       expect(sibling.statusCode).toBe(200);
+      expect(sibling.headers["x-ratelimit-limit"]).toBe(String(app.config.RATE_LIMIT_MAX));
+      expect(Number(sibling.headers["x-ratelimit-remaining"])).toBeGreaterThan(
+        app.config.RATE_LIMIT_MAX - 10,
+      );
       await app.close();
     });
 
