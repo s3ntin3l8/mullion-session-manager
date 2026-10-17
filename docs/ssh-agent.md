@@ -200,3 +200,18 @@ ambient agent) while other hosts use the same paired helper.
   `StreamLocalBindUnlink yes` is active and remove any stale socket.
 - Signatures time out: unlock the laptop's SSH agent and check for a local
   approval prompt.
+- Helper logs "did not complete the WebSocket upgrade":
+  - Look in Mullion's log (`journalctl --user -u mullion | grep agent-bridge`)
+    for `agent-bridge websocket upgrade rejected`. It is logged at `warn` with
+    the `statusCode`, `hasUpgradeHeader` and `hasOrigin` of the request:
+    `429` is the connect rate limit, `403` is the Origin check, and `404`
+    means the request carried no `Upgrade` header (a proxy stripped it, or it
+    was a plain GET).
+  - No such line means the request never reached Mullion. Check that the
+    reverse proxy's bridge router (`/ws/agent-bridge` and
+    `/api/bridges/renew`) is exempt from forward-auth (see
+    [`deploy/README.md`](../deploy/README.md)), and read the proxy's own
+    access log for that time.
+  - The connect rate limit is one 20/min bucket per client IP. Behind a
+    proxy that IP is the proxy's, so several helpers (or a reconnect storm)
+    share it.
