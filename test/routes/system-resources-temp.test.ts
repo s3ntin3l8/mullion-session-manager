@@ -44,6 +44,10 @@ describe("/api/storage/temp", () => {
       .values({ name: "p", cwd: "/tmp/p-registry-dirs" })
       .run();
     const projectId = Number(lastInsertRowid);
+    const remote = app.db
+      .insert(projects)
+      .values({ name: "r", cwd: "/tmp/r-registry-dirs", hostId: "remote-1" })
+      .run();
     const env = (dir: string) => JSON.stringify({ CLAUDE_CONFIG_DIR: dir });
     app.db
       .insert(sessions)
@@ -52,6 +56,12 @@ describe("/api/storage/temp", () => {
         { projectId, command: "claude", cwd: "/tmp", env: env("/work/dead"), status: "killed" },
         { projectId, command: "claude", cwd: "/tmp", env: env("/work/exited"), status: "exited" },
         { projectId, command: "claude", cwd: "/tmp" },
+        {
+          projectId: Number(remote.lastInsertRowid),
+          command: "claude",
+          cwd: "/tmp",
+          env: env("/work/remote"),
+        },
       ])
       .run();
     const expected = {

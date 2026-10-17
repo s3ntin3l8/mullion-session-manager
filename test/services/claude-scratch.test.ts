@@ -99,8 +99,11 @@ describe("claude-scratch", () => {
     const live = await loadLiveSessions([base]);
     expect(live.blocked).toBeUndefined();
     expect(live.ids).toEqual(new Set(["live"]));
+    // readdir order is filesystem-dependent: check both without relying on it.
     expect(live.warnings).toHaveLength(2);
-    expect(live.warnings[0]).toContain(`${String(deadPid)}.json`);
+    for (const pid of [deadPid, deadPid + 1]) {
+      expect(live.warnings.filter((w) => w.includes(`${String(pid)}.json`))).toHaveLength(1);
+    }
   });
 
   it("unions several registries; only the first must exist", async () => {

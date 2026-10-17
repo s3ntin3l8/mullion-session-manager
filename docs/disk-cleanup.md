@@ -55,7 +55,10 @@ cross-checked against `/proc`:
   the registry's `version` field and from the `claude` binaries actually
   running (`/proc/<pid>/exe`, which also covers unregistered sessions and a
   binary replaced by an upgrade). If any running session doesn't say which
-  version it runs, no version dir is removed.
+  version it runs, no version dir is removed. The binary scan only
+  recognises Claude Code's own `…/claude/versions/<version>` layout, so an
+  unregistered session started from a different install (an npm global, say)
+  isn't seen by it; that session is protected by the grace window alone.
 - **Empty project dirs** are removed once they have sat empty for the same
   window, never in the pass that emptied them, so a session creating
   `proj` and then `proj/<uuid>` can't race the cleanup. `rmdir` refuses a dir
