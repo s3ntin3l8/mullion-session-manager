@@ -278,8 +278,26 @@ export function ServerInfoSection() {
             days; aggressive uses a 24-hour window and also clears the npm cache (an{" "}
             <code>npm ci</code> running in a session at that moment may fail). Claude scratch under{" "}
             <code>claude-*</code> is cleaned per session, and only for sessions that are no longer
-            running: safe after 24 hours, aggressive after 10 minutes.
+            running: safe after 24 hours, aggressive after 10 minutes. The same windows cover
+            bundled skills of Claude Code versions nobody is running and empty project folders;
+            other stray files and folders there follow the general 7-day / 24-hour windows.
           </div>
+          {temp.claudeScratch.skipped && (
+            <div className="settings-footer-note">
+              Claude scratch under <code>claude-*</code> is being left alone:{" "}
+              {temp.claudeScratch.skipped}.
+            </div>
+          )}
+          {temp.claudeScratch.warnings.length > 0 && (
+            <div className="settings-footer-note">
+              Skipped session registry files:
+              <ul>
+                {temp.claudeScratch.warnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
       {caches?.available && visibleCaches.length > 0 && (

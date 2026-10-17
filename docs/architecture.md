@@ -167,15 +167,10 @@ way as a namespaced one.
 /api/opencode/models` and `GET /api/agy/models` — bare-array model catalogs
   for the Settings model pickers, despite the route's own name only naming
   opencode), `system-resources` (Settings → Server's resource-monitoring
-  surface — CPU/memory/disk sampling, Docker storage inspection/prune, and the
-  host temp-file tier in `services/temp-storage.ts` — user-owned, socket-free,
-  non-denylisted top-level `os.tmpdir()` entries by newest in-tree mtime, plus
-  `npm cache clean` in aggressive mode, per-session `claude-<uid>` scratch in
-  `services/claude-scratch.ts` (only sessions absent from Claude Code's
-  `~/.claude/sessions` registry; the whole tree is skipped when that registry
-  can't be read), and the opt-in `~/.cache` allowlist in
-  `services/cache-storage.ts` — fixed ids, chosen via `settings.diskCleanup`,
-  read server-side so a request can't widen the set),
+  surface — CPU/memory/disk sampling plus the Docker, host temp-file
+  (`services/temp-storage.ts`, with Claude scratch in
+  `services/claude-scratch.ts`) and opt-in `~/.cache`
+  (`services/cache-storage.ts`) cleanup tiers; see `docs/disk-cleanup.md`),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals

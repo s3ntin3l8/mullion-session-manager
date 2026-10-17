@@ -5,8 +5,9 @@ import path from "node:path";
 import type { Stats } from "node:fs";
 import {
   defaultClaudeSessionsDir,
-  listClaudeScratchEntries,
-  loadLiveSessionIds,
+  isLivePidFile,
+  loadLiveSessions,
+  scanClaudeDir,
 } from "./claude-scratch.js";
 
 const SAFE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -19,7 +20,12 @@ const NPM_TIMEOUT_MS = 120_000;
 // only needs a day's grace in safe mode (long enough to --resume a crash with
 // its scratch intact); aggressive takes any dead session, but never a dir
 // touched in the last ten minutes, which could belong to a session that is
-// still starting up, or one that doesn't register itself in the registry.
+// still starting up, or one that doesn't register itself in the registry
+// (headless/SDK sessions may not: only this window protects those). The same
+// windows cover `bundled-skills/<version>` and empty project dirs (issue
+// #1614): the latter are only ever removed once they have sat empty this long,
+// which is also what keeps a session's two-step `mkdir proj; mkdir proj/<uuid>`
+// from racing the cleanup.
 const SESSION_SAFE_AGE_MS = 24 * 60 * 60 * 1000;
 const SESSION_AGGRESSIVE_AGE_MS = 10 * 60 * 1000;
 
@@ -50,11 +56,19 @@ export interface TempPruneResult {
   error?: string;
 }
 
+export interface ClaudeScratchStatus {
+  /** Why `claude-<uid>` is being left alone entirely, when liveness is unknown. */
+  skipped?: string;
+  /** Registry files that were skipped but didn't stop the rest. */
+  warnings: string[];
+}
+
 export interface TempStorageStatus {
   available: boolean;
   root: string;
   estimates: { safeBytes: number; aggressiveBytes: number };
   candidates: { safe: number; aggressive: number };
+  claudeScratch: ClaudeScratchStatus;
   error?: string;
 }
 
@@ -66,8 +80,13 @@ export interface TempStorageOptions {
   /** Test seam; defaults to the real uid. */
   uid?: number;
   runNpmCacheClean?: () => Promise<string>;
-  /** Directory holding Claude Code's live-session registry (`~/.claude/sessions`). */
-  claudeSessionsDir?: string;
+  /**
+   * Claude Code live-session registries (`<config dir>/sessions`), the
+   * server's own first; see `loadLiveSessions`.
+   */
+  claudeSessionsDirs?: string[];
+  /** Test seam: the /proc used to find running `claude` binaries. */
+  procDir?: string;
 }
 
 interface Candidate {
@@ -156,13 +175,20 @@ async function listCandidates(
   return { entries, names, rootDev };
 }
 
-interface Target {
-  entry: Candidate;
-  /** Set for Claude session directories; liveness is re-checked before removal. */
-  sessionId?: string;
+interface TargetWindows {
   safeMs: number;
   aggressiveMs: number;
 }
+
+/** What a removable entry is; the first two are re-checked against liveness before removal. */
+type TargetSpec = TargetWindows &
+  (
+    | { kind: "session"; sessionId: string }
+    | { kind: "bundled"; version: string }
+    | { kind: "temp" | "empty-project" | "loose" }
+  );
+
+type Target = TargetSpec & { entry: Candidate };
 
 const windowFor = (target: Target, mode: TempPruneMode) =>
   mode === "aggressive" ? target.aggressiveMs : target.safeMs;
@@ -171,25 +197,38 @@ const isDue = (target: Target, mode: TempPruneMode, now: number) =>
   now - target.entry.newestMtimeMs > windowFor(target, mode);
 
 /**
- * Every removable top-level temp entry, plus Claude session scratch under
- * `claude-<uid>`. That tree is skipped entirely whenever the registry of
- * running sessions can't be read: unknown must never count as "not running".
+ * Every removable top-level temp entry, plus what lives under `claude-<uid>`:
+ * session scratch, `bundled-skills/<version>` for versions no running
+ * `claude` uses, empty project dirs, and loose files and directories. That
+ * tree is skipped entirely whenever the registries of running sessions can't
+ * be read: unknown must never count as "not running".
  */
 async function gatherTargets(
   root: string,
   uid: number,
   options: TempStorageOptions,
-): Promise<{ targets: Target[]; rootDev: number }> {
+): Promise<{ targets: Target[]; rootDev: number; claudeScratch: ClaudeScratchStatus }> {
   const { entries, names, rootDev } = await listCandidates(root, uid);
   const targets: Target[] = entries.map((entry) => ({
     entry,
+    kind: "temp",
     safeMs: SAFE_AGE_MS,
     aggressiveMs: AGGRESSIVE_AGE_MS,
   }));
+  const claudeScratch: ClaudeScratchStatus = { warnings: [] };
   // One registry read serves every claude-<uid> dir (they belong to one user);
   // the per-removal re-check in pruneTempStorage reads it again on purpose.
-  const registryDir = options.claudeSessionsDir ?? defaultClaudeSessionsDir();
-  let live: Set<string> | null | undefined;
+  const registryDirs = options.claudeSessionsDirs ?? [defaultClaudeSessionsDir()];
+  let live: Awaited<ReturnType<typeof loadLiveSessions>> | undefined;
+  const offer = async (fullPath: string, spec: TargetSpec) => {
+    const entry = await evaluateEntry(
+      path.dirname(fullPath),
+      rootDev,
+      uid,
+      path.basename(fullPath),
+    );
+    if (entry) targets.push({ ...spec, entry });
+  };
   for (const name of names) {
     if (!/^claude-/.test(name)) continue;
     const claudeDir = path.join(root, name);
@@ -202,32 +241,44 @@ async function gatherTargets(
     } catch {
       continue;
     }
-    live ??= await loadLiveSessionIds(registryDir);
-    if (live === null) continue;
-    let scratch;
+    live ??= await loadLiveSessions(registryDirs, { procDir: options.procDir });
+    if (live.blocked) {
+      claudeScratch.skipped = live.blocked;
+      continue;
+    }
+    let scan;
     try {
-      scratch = await listClaudeScratchEntries(claudeDir);
+      scan = await scanClaudeDir(claudeDir);
     } catch {
       continue;
     }
-    for (const item of scratch) {
-      if (live.has(item.sessionId)) continue;
-      const entry = await evaluateEntry(
-        path.dirname(item.fullPath),
-        rootDev,
-        uid,
-        path.basename(item.fullPath),
-      );
-      if (!entry) continue;
-      targets.push({
-        entry,
-        sessionId: item.sessionId,
-        safeMs: SESSION_SAFE_AGE_MS,
-        aggressiveMs: SESSION_AGGRESSIVE_AGE_MS,
+    const session = { safeMs: SESSION_SAFE_AGE_MS, aggressiveMs: SESSION_AGGRESSIVE_AGE_MS };
+    for (const item of scan.sessions) {
+      if (live.ids.has(item.sessionId)) continue;
+      await offer(item.fullPath, { kind: "session", sessionId: item.sessionId, ...session });
+    }
+    // Unknown is not "unused": if any running session's version couldn't be
+    // established, no version dir can be proven stale.
+    if (live.versionsComplete) {
+      for (const item of scan.bundledVersions) {
+        if (live.versions.has(item.version)) continue;
+        await offer(item.fullPath, { kind: "bundled", version: item.version, ...session });
+      }
+    }
+    for (const fullPath of scan.emptyProjects) {
+      await offer(fullPath, { kind: "empty-project", ...session });
+    }
+    for (const fullPath of scan.loose) {
+      if (await isLivePidFile(fullPath)) continue;
+      await offer(fullPath, {
+        kind: "loose",
+        safeMs: SAFE_AGE_MS,
+        aggressiveMs: AGGRESSIVE_AGE_MS,
       });
     }
   }
-  return { targets, rootDev };
+  if (live) claudeScratch.warnings = live.warnings;
+  return { targets, rootDev, claudeScratch };
 }
 
 export async function dirSize(dir: string): Promise<number> {
@@ -287,7 +338,7 @@ export async function inspectTempStorage(
   const now = options.now ?? Date.now();
   const uid = options.uid ?? process.getuid?.() ?? -1;
   try {
-    const { targets } = await gatherTargets(root, uid, options);
+    const { targets, claudeScratch } = await gatherTargets(root, uid, options);
     const safe = targets.filter((t) => isDue(t, "safe", now));
     const aggressive = targets.filter((t) => isDue(t, "aggressive", now));
     const npmBytes = await dirSize(npmCachePath(options));
@@ -299,6 +350,7 @@ export async function inspectTempStorage(
         aggressiveBytes: aggressive.reduce((sum, t) => sum + t.entry.bytes, 0) + npmBytes,
       },
       candidates: { safe: safe.length, aggressive: aggressive.length },
+      claudeScratch,
     };
   } catch (error) {
     return {
@@ -306,6 +358,7 @@ export async function inspectTempStorage(
       root,
       estimates: { safeBytes: 0, aggressiveBytes: 0 },
       candidates: { safe: 0, aggressive: 0 },
+      claudeScratch: { warnings: [] },
       error: error instanceof Error ? error.message : "Temp directory is unavailable",
     };
   }
@@ -327,11 +380,10 @@ export async function pruneTempStorage(
     const gathered = await gatherTargets(root, uid, options);
     const targets = gathered.targets.filter((t) => isDue(t, mode, now));
     const rootDev = gathered.rootDev;
-    const registryDir = options.claudeSessionsDir ?? defaultClaudeSessionsDir();
+    const registryDirs = options.claudeSessionsDirs ?? [defaultClaudeSessionsDir()];
     let reclaimedBytes = 0;
     let removed = 0;
     const errors: string[] = [];
-    const emptiedParents = new Set<string>();
     for (const target of targets) {
       const { entry } = target;
       // A big rm -r can take minutes and listing happened up front: re-check
@@ -344,25 +396,42 @@ export async function pruneTempStorage(
         path.basename(entry.fullPath),
       );
       if (!fresh || now - fresh.newestMtimeMs <= windowFor(target, mode)) continue;
-      if (target.sessionId !== undefined) {
-        // A session may have started since listing; ask the registry again.
-        const live = await loadLiveSessionIds(registryDir);
-        if (live === null || live.has(target.sessionId)) continue;
+      if (target.kind === "session" || target.kind === "bundled") {
+        // A session may have started since listing; ask the registries again.
+        const live = await loadLiveSessions(registryDirs, {
+          procDir: options.procDir,
+          includeBinaries: target.kind === "bundled",
+        });
+        if (live.blocked) continue;
+        if (target.kind === "session" && live.ids.has(target.sessionId)) continue;
+        if (
+          target.kind === "bundled" &&
+          (!live.versionsComplete || live.versions.has(target.version))
+        ) {
+          continue;
+        }
       }
+      if (target.kind === "loose" && (await isLivePidFile(fresh.fullPath))) continue;
       try {
-        await fs.rm(fresh.fullPath, { recursive: true, force: true });
+        if (target.kind === "empty-project") {
+          // rmdir, not rm -r: a session that created its first child since
+          // listing makes this fail, which is exactly the answer wanted.
+          try {
+            await fs.rmdir(fresh.fullPath);
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code === "ENOTEMPTY" || code === "ENOENT") continue;
+            throw error;
+          }
+        } else {
+          await fs.rm(fresh.fullPath, { recursive: true, force: true });
+        }
         reclaimedBytes += fresh.bytes;
         removed += 1;
-        if (target.sessionId !== undefined) emptiedParents.add(path.dirname(fresh.fullPath));
       } catch (error) {
         // One stubborn entry (e.g. a root-owned file inside) must not block the rest.
         errors.push(`${entry.name}: ${error instanceof Error ? error.message : "remove failed"}`);
       }
-    }
-    for (const parent of emptiedParents) {
-      // Drop a project dir once its last session is gone; rmdir refuses a
-      // non-empty one, which is exactly the check wanted here.
-      await fs.rmdir(parent).catch(() => undefined);
     }
     let output = `Removed ${String(removed)} temp entries.`;
     const tempError = errors.length > 0 ? errors.slice(0, 3).join("; ") : undefined;

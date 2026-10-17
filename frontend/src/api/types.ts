@@ -113,6 +113,12 @@ export interface TempStorageStatus {
   root: string;
   estimates: { safeBytes: number; aggressiveBytes: number };
   candidates: { safe: number; aggressive: number };
+  claudeScratch: {
+    /** Why Claude's scratch is left alone entirely (running sessions couldn't be told apart). */
+    skipped?: string;
+    /** Session registry files that were skipped without stopping the rest. */
+    warnings: string[];
+  };
   error?: string;
 }
 
