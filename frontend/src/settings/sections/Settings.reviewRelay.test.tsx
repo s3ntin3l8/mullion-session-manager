@@ -29,7 +29,13 @@ describe("Settings -> Integrations -> Review relay", () => {
   beforeEach(() => {
     // The store is a module singleton: an earlier test's committed field must
     // not leak into the next one's initial state.
-    useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        reviewRelay: { ...DEFAULT_SETTINGS.reviewRelay, provider: "hermes" },
+      },
+      settingsLoaded: true,
+    });
     hermes = { hasKey: false, updatedAt: null };
     testResponse = () => jsonResponse(200, { ok: true });
     settingsPatches = [];
@@ -106,7 +112,7 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("shows the relay as not configured by default", async () => {
     await renderCard();
     expect(await screen.findByText("Review relay not configured")).toBeInTheDocument();
-    expect(screen.getByText(/Set the API URL, prompt repository, and API key/)).toBeInTheDocument();
+    expect(screen.getByText(/Set the API URL and API key/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Clear key" })).not.toBeInTheDocument();
   });
 
@@ -194,7 +200,11 @@ describe("Settings -> Integrations -> Review relay", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        reviewRelay: { ...DEFAULT_SETTINGS.reviewRelay, apiUrl: "http://192.168.2.6:8643" },
+        reviewRelay: {
+          ...DEFAULT_SETTINGS.reviewRelay,
+          provider: "hermes",
+          apiUrl: "http://192.168.2.6:8643",
+        },
       },
     });
     const user = userEvent.setup();
@@ -207,7 +217,11 @@ describe("Settings -> Integrations -> Review relay", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        reviewRelay: { ...DEFAULT_SETTINGS.reviewRelay, apiUrl: "http://192.168.2.6:8643" },
+        reviewRelay: {
+          ...DEFAULT_SETTINGS.reviewRelay,
+          provider: "hermes",
+          apiUrl: "http://192.168.2.6:8643",
+        },
       },
     });
     testResponse = () =>
@@ -222,5 +236,38 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("disables Test connection until an API URL is set", async () => {
     await renderCard();
     expect(screen.getByRole("button", { name: "Test connection" })).toBeDisabled();
+  });
+
+  it("hides the Hermes fields when the reviewer is None", async () => {
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS });
+    await renderCard();
+    expect(screen.getByTestId("review-relay-none")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("owner/repo")).not.toBeInTheDocument();
+  });
+
+  it("switches the reviewer to Hermes", async () => {
+    useDashboardStore.setState({ settings: DEFAULT_SETTINGS });
+    const user = userEvent.setup();
+    await renderCard();
+    await user.click(screen.getByRole("button", { name: "Hermes" }));
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { provider: "hermes" } }),
+    );
+  });
+
+  it("is ready with just a URL and key, no prompt repository", async () => {
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        reviewRelay: {
+          ...DEFAULT_SETTINGS.reviewRelay,
+          provider: "hermes",
+          apiUrl: "http://192.168.2.6:8643",
+        },
+      },
+    });
+    hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
+    await renderCard();
+    expect(await screen.findByText("Review relay ready")).toBeInTheDocument();
   });
 });

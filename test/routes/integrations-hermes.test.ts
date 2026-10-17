@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { applySettingsPatch } from "../../src/services/settings.js";
+import { applySettingsPatch, mergeSettings } from "../../src/services/settings.js";
 import { clearHermesKey, getHermesKey } from "../../src/services/hermes-integration.js";
 
 const tmpDb = path.join(os.tmpdir(), `integrations-hermes-test-${process.pid}.db`);
@@ -113,9 +113,20 @@ describe("Hermes review relay integration routes", () => {
   });
 
   describe("settings.reviewRelay sanitizing", () => {
+    it("treats relay settings saved before `provider` existed as Hermes", () => {
+      const merged = mergeSettings({ reviewRelay: { apiUrl: "http://h:8643" } });
+      expect(merged.reviewRelay.provider).toBe("hermes");
+      expect(mergeSettings({ reviewRelay: { apiUrl: "" } }).reviewRelay.provider).toBe("none");
+      expect(
+        mergeSettings({ reviewRelay: { provider: "none", apiUrl: "http://h:8643" } }).reviewRelay
+          .provider,
+      ).toBe("none");
+    });
+
     it("has safe defaults (feature off)", async () => {
       const res = await call("GET", "/api/settings");
       expect(res.json().reviewRelay).toEqual({
+        provider: "none",
         apiUrl: "",
         model: "hermes-agent",
         promptRepo: "",

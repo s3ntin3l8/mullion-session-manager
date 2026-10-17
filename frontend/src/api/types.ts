@@ -1755,6 +1755,7 @@ export interface AppSettings {
   // Non-secret half of the Hermes review relay — the key itself is
   // write-only via api.setHermesKey and never part of settings.
   reviewRelay: {
+    provider: "none" | "hermes";
     apiUrl: string;
     model: string;
     promptRepo: string;

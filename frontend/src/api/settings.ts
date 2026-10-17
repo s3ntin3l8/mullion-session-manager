@@ -228,6 +228,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     heartbeatSeconds: -1,
   },
   reviewRelay: {
+    provider: "none",
     apiUrl: "",
     model: "hermes-agent",
     promptRepo: "",

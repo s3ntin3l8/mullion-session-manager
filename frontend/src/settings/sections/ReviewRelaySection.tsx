@@ -8,6 +8,7 @@ import {
   NumberField,
   Row,
   SecondaryButton,
+  Segmented,
   StyledList,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -133,103 +134,131 @@ export function ReviewRelaySection() {
       .finally(() => setTesting(false));
   };
 
-  const ready = relay.apiUrl !== "" && relay.promptRepo !== "" && !!integration?.hasKey;
+  const ready = relay.apiUrl !== "" && !!integration?.hasKey;
+
+  const providerRow = (
+    <Row
+      label="Reviewer"
+      desc="Who handles review requests from agents (mullion review / request_review)."
+    >
+      <Segmented
+        options={[
+          { value: "none", label: "None" },
+          { value: "hermes", label: "Hermes" },
+        ]}
+        value={relay.provider}
+        onChange={(v) => updateSettings({ reviewRelay: { provider: v } })}
+      />
+    </Row>
+  );
 
   return (
     <div style={{ marginTop: 24 }} data-testid="review-relay-section">
       <GroupHeading
-        title="Review relay (Hermes)"
-        desc="Let agents request a Hermes pull request review directly, instead of through a GitHub workflow. Agents never see the API key."
+        title="Review relay"
+        desc="Let agents request a pull request review from a reviewer bot with its own GitHub identity, instead of through a GitHub workflow. Agents never see the API key."
       />
-      <StyledList>
-        <ListRow
-          testId="review-relay-row"
-          dot={ready ? "on" : "off"}
-          title={ready ? "Review relay ready" : "Review relay not configured"}
-          subtitle={
-            integration?.hasKey
-              ? "API key set"
-              : "Set the API URL, prompt repository, and API key below"
-          }
-          trailing={
-            integration?.hasKey ? (
-              <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
-            ) : undefined
-          }
-        />
-      </StyledList>
-
-      <TextSettingRow
-        label="API URL"
-        desc="Base URL of the Hermes API server."
-        key={relay.apiUrl}
-        value={relay.apiUrl}
-        placeholder="http://hermes.local:8643"
-        onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
-      />
-      <TextSettingRow
-        label="Model"
-        desc="The model name the API server advertises."
-        key={relay.model}
-        value={relay.model}
-        width={180}
-        onCommit={(v) => updateSettings({ reviewRelay: { model: v } })}
-      />
-      <TextSettingRow
-        label="Prompt repository"
-        desc="Public owner/repo holding the review prompt."
-        key={relay.promptRepo}
-        value={relay.promptRepo}
-        placeholder="owner/repo"
-        width={220}
-        onCommit={(v) => updateSettings({ reviewRelay: { promptRepo: v } })}
-      />
-      <TextSettingRow
-        label="Prompt path"
-        desc="Path of the review prompt inside that repository."
-        key={relay.promptPath}
-        value={relay.promptPath}
-        onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
-      />
-      <Row
-        label="Cooldown"
-        desc="Minimum time between two review requests for the same pull request."
-      >
-        <CooldownField
-          key={relay.cooldownMinutes}
-          value={relay.cooldownMinutes}
-          onCommit={(v) => updateSettings({ reviewRelay: { cooldownMinutes: v } })}
-        />
-      </Row>
-      <Row label="API key" desc="Stored encrypted on the server; never shown again." align="start">
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div className="settings-numberfield" style={{ width: 260 }}>
-            <input
-              type="password"
-              autoComplete="off"
-              style={{ flex: 1, textAlign: "left", width: "auto" }}
-              placeholder={integration?.hasKey ? "Replace key…" : "Hermes API key"}
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveKey();
-              }}
-            />
-          </div>
-          <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
-            {saving ? "Saving…" : "Save key"}
-          </SecondaryButton>
+      {providerRow}
+      {relay.provider === "none" ? (
+        <div style={{ opacity: 0.7, fontSize: 12 }} data-testid="review-relay-none">
+          Agents cannot request reviews through Mullion; reviews come from your repository&apos;s
+          own workflow.
         </div>
-      </Row>
-      <div style={{ marginTop: 10 }}>
-        <SecondaryButton onClick={test} disabled={testing || relay.apiUrl === ""}>
-          {testing ? "Testing…" : "Test connection"}
-        </SecondaryButton>
-        {testResult && (
-          <span style={{ marginLeft: 10, fontSize: 11.5, color: "var(--dim)" }}>{testResult}</span>
-        )}
-      </div>
-      {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+      ) : (
+        <>
+          <StyledList>
+            <ListRow
+              testId="review-relay-row"
+              dot={ready ? "on" : "off"}
+              title={ready ? "Review relay ready" : "Review relay not configured"}
+              subtitle={integration?.hasKey ? "API key set" : "Set the API URL and API key below"}
+              trailing={
+                integration?.hasKey ? (
+                  <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
+                ) : undefined
+              }
+            />
+          </StyledList>
+
+          <TextSettingRow
+            label="API URL"
+            desc="Base URL of the Hermes API server (a review-bot profile whose GitHub App can post reviews)."
+            key={relay.apiUrl}
+            value={relay.apiUrl}
+            placeholder="http://hermes.local:8643"
+            onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
+          />
+          <TextSettingRow
+            label="Model"
+            desc="The model name the API server advertises."
+            key={relay.model}
+            value={relay.model}
+            width={180}
+            onCommit={(v) => updateSettings({ reviewRelay: { model: v } })}
+          />
+          <TextSettingRow
+            label="Prompt repository"
+            desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
+            key={relay.promptRepo}
+            value={relay.promptRepo}
+            placeholder="owner/repo"
+            width={220}
+            onCommit={(v) => updateSettings({ reviewRelay: { promptRepo: v } })}
+          />
+          <TextSettingRow
+            label="Prompt path"
+            desc="Path of the review prompt inside that repository."
+            key={relay.promptPath}
+            value={relay.promptPath}
+            onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
+          />
+          <Row
+            label="Cooldown"
+            desc="Minimum time between two review requests for the same pull request."
+          >
+            <CooldownField
+              key={relay.cooldownMinutes}
+              value={relay.cooldownMinutes}
+              onCommit={(v) => updateSettings({ reviewRelay: { cooldownMinutes: v } })}
+            />
+          </Row>
+          <Row
+            label="API key"
+            desc="Stored encrypted on the server; never shown again."
+            align="start"
+          >
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div className="settings-numberfield" style={{ width: 260 }}>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  style={{ flex: 1, textAlign: "left", width: "auto" }}
+                  placeholder={integration?.hasKey ? "Replace key…" : "Hermes API key"}
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveKey();
+                  }}
+                />
+              </div>
+              <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
+                {saving ? "Saving…" : "Save key"}
+              </SecondaryButton>
+            </div>
+          </Row>
+          <div style={{ marginTop: 10 }}>
+            <SecondaryButton onClick={test} disabled={testing || relay.apiUrl === ""}>
+              {testing ? "Testing…" : "Test connection"}
+            </SecondaryButton>
+            {testResult && (
+              <span style={{ marginLeft: 10, fontSize: 11.5, color: "var(--dim)" }}>
+                {testResult}
+              </span>
+            )}
+          </div>
+          {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+        </>
+      )}
     </div>
   );
 }

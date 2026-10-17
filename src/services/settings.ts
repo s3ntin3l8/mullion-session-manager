@@ -453,11 +453,15 @@ export interface AppSettings {
   // GET /api/settings — it lives encrypted in the `integrations` table
   // (services/hermes-integration.ts). Empty `apiUrl` means the feature is off.
   reviewRelay: {
+    // Which reviewer `request_review` / `mullion review` dispatches to.
+    // "none" = no reviewer configured; "hermes" = the Hermes API relay.
+    provider: "none" | "hermes";
     // Base URL of the Hermes API server, e.g. http://host:8643 (no trailing path).
     apiUrl: string;
     // Model name the API server advertises (API_SERVER_MODEL_NAME).
     model: string;
-    // "owner/repo" holding the review prompt; fetched unauthenticated.
+    // Optional "owner/repo" holding a custom review prompt, fetched
+    // unauthenticated. Empty = Mullion's built-in prompt.
     promptRepo: string;
     // Path of the review prompt inside promptRepo.
     promptPath: string;
@@ -609,6 +613,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     heartbeatSeconds: -1,
   },
   reviewRelay: {
+    provider: "none",
     apiUrl: "",
     model: "hermes-agent",
     promptRepo: "",
@@ -1123,6 +1128,7 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       }),
     },
     reviewRelay: {
+      provider: settings.reviewRelay.provider === "hermes" ? "hermes" : "none",
       apiUrl: safeString(settings.reviewRelay.apiUrl, DEFAULT_SETTINGS.reviewRelay.apiUrl),
       model: safeString(settings.reviewRelay.model, DEFAULT_SETTINGS.reviewRelay.model),
       promptRepo: safeString(
@@ -1150,7 +1156,20 @@ function safeString(value: unknown, fallback: string): string {
 
 /** Deep-merges a possibly-partial/older stored blob over the current defaults. */
 export function mergeSettings(stored: unknown): AppSettings {
-  return sanitizeSettings(deepMerge(DEFAULT_SETTINGS, stored));
+  const merged = sanitizeSettings(deepMerge(DEFAULT_SETTINGS, stored));
+  // Relay settings saved before `provider` existed were Hermes-only: keep
+  // them working instead of silently switching the reviewer off.
+  const legacy = (stored as { reviewRelay?: { provider?: unknown; apiUrl?: unknown } } | null)
+    ?.reviewRelay;
+  if (
+    legacy &&
+    legacy.provider === undefined &&
+    typeof legacy.apiUrl === "string" &&
+    legacy.apiUrl.trim()
+  ) {
+    merged.reviewRelay.provider = "hermes";
+  }
+  return merged;
 }
 
 // Singleton row id — see db/schema.ts's `settings` table doc comment.

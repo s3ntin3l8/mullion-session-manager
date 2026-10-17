@@ -593,6 +593,7 @@ function renderPane(
       github: { pollActiveSeconds: -1, pollQuietSeconds: -1, pollStaleThresholdSeconds: -1 },
       hosts: { heartbeatSeconds: -1 },
       reviewRelay: {
+        provider: "none",
         apiUrl: "",
         model: "hermes-agent",
         promptRepo: "",

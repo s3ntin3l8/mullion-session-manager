@@ -13,6 +13,7 @@ import {
 } from "../../src/services/hermes-integration.js";
 import {
   buildReviewMessage,
+  BUILTIN_REVIEW_PROMPT,
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
@@ -60,6 +61,7 @@ describe("hermes review relay", () => {
     resetHermesReviewState();
     applySettingsPatch(app, {
       reviewRelay: {
+        provider: "hermes",
         apiUrl: API,
         model: "hermes-agent",
         promptRepo: "acme/.github",
@@ -110,11 +112,12 @@ describe("hermes review relay", () => {
   });
 
   describe("buildReviewMessage", () => {
-    it("matches the workflow's header and appends the prompt", () => {
+    it("builds a generic header requiring a bot identity, then appends the prompt", () => {
       const msg = buildReviewMessage("acme", "widgets", 7, "PROMPT");
       expect(msg).toContain("Target: pr #7 in repo acme/widgets");
-      expect(msg).toContain("github-code-review skill");
-      expect(msg).toContain("scripts/app-token.sh");
+      expect(msg).toContain("GitHub App bot identity");
+      expect(msg).toContain("never with a personal user token");
+      expect(msg).not.toContain("app-token.sh");
       expect(msg).toContain("Do NOT ask the human for secrets.");
       expect(msg).toContain("Honor a maximum of 30 agent turns.");
       expect(msg.endsWith("PROMPT")).toBe(true);
@@ -202,10 +205,21 @@ describe("hermes review relay", () => {
       expect(fetchMock.mock.calls.filter(([url]) => url === PROMPT_URL)).toHaveLength(1);
     });
 
+    it("uses the built-in prompt without fetching when no prompt repo is set", async () => {
+      applySettingsPatch(app, { reviewRelay: { promptRepo: "" } });
+      await requestHermesReview(app, PR);
+      expect(fetchMock.mock.calls.some(([url]) => url === PROMPT_URL)).toBe(false);
+      const post = fetchMock.mock.calls.find(([url]) =>
+        String(url).endsWith("/v1/chat/completions"),
+      );
+      const content = JSON.parse(String(post![1].body)).messages[0].content as string;
+      expect(content).toContain(BUILTIN_REVIEW_PROMPT);
+    });
+
     describe("configuration", () => {
       it.each([
         ["no API URL", () => applySettingsPatch(app, { reviewRelay: { apiUrl: "" } })],
-        ["no prompt repo", () => applySettingsPatch(app, { reviewRelay: { promptRepo: "" } })],
+        ["provider none", () => applySettingsPatch(app, { reviewRelay: { provider: "none" } })],
         ["no key", () => clearHermesKey(app)],
       ])("refuses with %s", async (_label, mutate) => {
         mutate();
