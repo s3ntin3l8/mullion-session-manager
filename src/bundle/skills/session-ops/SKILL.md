@@ -94,7 +94,7 @@ mullion status done --message "tests pass"     # finished (a waiting parent wake
 mullion status needs_input --message "approve the deploy?"
 ```
 
-The MCP equivalent is `report_status {state, message?}`. It writes the same
+`--message` is ignored for `working` and cut at 200 chars. `needs_input` also clears an earlier `done`. The MCP equivalent is `report_status {state, message?}`. It writes the same
 hook messages a real adapter would (`turn_start`, `progress: done`,
 `notification`) to your own hook socket, so it only works from inside a
 session. Agents with a hook adapter (Claude Code, Codex, opencode, agy) don't

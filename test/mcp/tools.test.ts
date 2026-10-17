@@ -631,6 +631,12 @@ describe("report_status (issue #1623)", () => {
     expect(out).toBe("status reported: done");
   });
 
+  it("tells the caller when the message was truncated", async () => {
+    const client = { reportStatus: vi.fn().mockResolvedValue(undefined) };
+    const out = await tool.handler({ state: "done", message: "y".repeat(300) }, client);
+    expect(out).toContain("truncated to 200");
+  });
+
   it("rejects an unknown state without calling the client", async () => {
     const client = { reportStatus: vi.fn() };
     await expect(tool.handler({ state: "napping" }, client)).rejects.toThrow(/state must be/);

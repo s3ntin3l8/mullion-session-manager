@@ -20,7 +20,11 @@ import {
   CliUsageError,
   USAGE,
 } from "../../src/cli/core.mjs";
-import { MullionSocketError, statusHookMessage } from "../../src/cli/client.mjs";
+import {
+  MullionSocketError,
+  statusHookMessages,
+  statusTruncationNote,
+} from "../../src/cli/client.mjs";
 
 // ---------------------------------------------------------------------------
 // extractFlags / parseGlobalFlags
@@ -2492,24 +2496,38 @@ describe("runCommand", () => {
     });
   });
 
-  describe("statusHookMessage", () => {
-    it("maps each state onto an existing hook message", () => {
-      expect(statusHookMessage("working", "ignored")).toEqual({ kind: "turn_start" });
-      expect(statusHookMessage("done")).toEqual({ kind: "progress", phase: "done" });
-      expect(statusHookMessage("needs_input")).toEqual({
-        kind: "notification",
-        title: "mullion",
-        body: "needs input",
-      });
-      expect(statusHookMessage("needs_input", "approve the deploy")).toMatchObject({
-        body: "approve the deploy",
-      });
-      expect(statusHookMessage("nope")).toBeNull();
+  describe("statusHookMessages", () => {
+    it("maps each state onto existing hook messages, in send order", () => {
+      expect(statusHookMessages("working", "ignored")).toEqual([{ kind: "turn_start" }]);
+      expect(statusHookMessages("done")).toEqual([{ kind: "progress", phase: "done" }]);
+      // needs_input leads with turn_start so a latched `finished` from an
+      // earlier `done` is cleared (finished outranks needs_input).
+      expect(statusHookMessages("needs_input", "approve the deploy")).toEqual([
+        { kind: "turn_start" },
+        { kind: "notification", title: "mullion", body: "approve the deploy" },
+      ]);
+      expect(statusHookMessages("needs_input")).toMatchObject([
+        { kind: "turn_start" },
+        { body: "needs input" },
+      ]);
+      expect(statusHookMessages("nope")).toBeNull();
     });
 
-    it("caps the message at 200 chars", () => {
-      const msg = statusHookMessage("done", "x".repeat(500)) as { lastAssistantMessage: string };
+    it("caps the message at 200 chars and says so", () => {
+      const [msg] = statusHookMessages("done", "x".repeat(500)) as [
+        { lastAssistantMessage: string },
+      ];
       expect(msg.lastAssistantMessage).toHaveLength(200);
+      expect(statusTruncationNote("x".repeat(500))).toContain("truncated to 200");
+      expect(statusTruncationNote("short")).toBe("");
+      expect(statusTruncationNote(undefined)).toBe("");
+    });
+
+    it("sendHookMessage refuses a non-object message instead of writing garbage", async () => {
+      const { sendHookMessage } = await import("../../src/cli/client.mjs");
+      await expect(
+        sendHookMessage({ hookSocketPath: "/x", hookToken: "t", message: null, what: "t" }),
+      ).rejects.toThrow(/invalid/);
     });
   });
 

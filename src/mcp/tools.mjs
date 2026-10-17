@@ -6,7 +6,7 @@
 // shape by server.mjs) or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
-import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS } from "../cli/client.mjs";
+import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
 
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
@@ -904,7 +904,8 @@ const reportStatus = {
       state: { type: "string", enum: SELF_REPORT_STATES },
       message: {
         type: "string",
-        description: "Short note (max 200 chars): what finished, or what you need.",
+        description:
+          "Short note (max 200 chars, longer is cut): what finished, or what you need. Ignored for `working`.",
       },
     },
   },
@@ -914,7 +915,7 @@ const reportStatus = {
       throw new Error(`state must be one of ${SELF_REPORT_STATES.join(", ")}`);
     }
     await client.reportStatus(state, typeof args?.message === "string" ? args.message : undefined);
-    return `status reported: ${state}`;
+    return `status reported: ${state}${statusTruncationNote(args?.message)}`;
   },
 };
 

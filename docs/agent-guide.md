@@ -181,7 +181,7 @@ Pick based on how you're working:
 mcp_servers.mullion.*` overrides for Codex, its own `mcp.<name>` config
   keys for opencode, and `~/.gemini/config/mcp_config.json` for agy). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
-  `promote_to_worktree`, `spawn_child_session`, `list_devices`,
+  `promote_to_worktree`, `report_status`, `spawn_child_session`, `list_devices`,
   `start_device`/`stop_device`, and `use_device`/`device_action` — the ops
   actually reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
@@ -350,7 +350,7 @@ mullion status done --message "tests pass"     # finished (a waiting parent wake
 mullion status needs_input --message "approve the deploy?"
 ```
 
-The MCP equivalent is `report_status {state, message?}`. It writes the same
+`--message` is ignored for `working` and cut at 200 chars. `needs_input` also clears an earlier `done`. The MCP equivalent is `report_status {state, message?}`. It writes the same
 hook messages a real adapter would (`turn_start`, `progress: done`,
 `notification`) to your own hook socket, so it only works from inside a
 session. Agents with a hook adapter (Claude Code, Codex, opencode, agy) don't

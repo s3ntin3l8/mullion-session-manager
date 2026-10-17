@@ -69,7 +69,7 @@ mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
-mullion status <working|done|needs_input> [--message "..."]
+mullion status <working|done|needs_input> [--message "..."]   # --message ignored for working
 mullion mcp
 mullion config
 ```
@@ -404,8 +404,9 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 - `status <working|done|needs_input> [--message <text>]` — self-reports this
   session's state for CLIs without a hook adapter (issue #1623). Maps onto the
   existing hook messages (`turn_start`, `progress: done`, `notification`) over
-  the hook socket, so `session wait` / `sessions.wait` see it. Only works from
-  inside a session.
+  the hook socket, so `session wait` / `sessions.wait` see it. `--message` is
+  ignored for `working`, and cut at 200 chars (the output says so).
+  `needs_input` also clears a prior `done`. Only works from inside a session.
 
 ### review
 

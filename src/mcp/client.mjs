@@ -6,7 +6,7 @@ import {
   isMissingIdError,
   resolveOwnSessionId,
   sendHookMessage,
-  statusHookMessage,
+  statusHookMessages,
 } from "../cli/client.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
@@ -193,13 +193,13 @@ export class MullionClient {
   }
 
   /** Issue #1623 — self-reports this session's state over the hook socket
-   * (see statusHookMessage in cli/client.mjs). Rejects when not configured. */
+   * (see statusHookMessages in cli/client.mjs). Rejects when not configured. */
   reportStatus(state, message) {
     return sendHookMessage({
       hookSocketPath: this.hookSocketPath,
       hookToken: this.hookToken,
-      message: statusHookMessage(state, message),
-      what: "status",
+      message: statusHookMessages(state, message),
+      what: "report_status",
     });
   }
 
