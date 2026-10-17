@@ -37,11 +37,21 @@ export interface BroadcastChannelOptions {
    * github-ws-broadcast.ts) passes this directly.
    */
   onEmpty?: () => void;
+  /**
+   * When false, `subscribe` does not attach its own `close`/`error`
+   * listeners — the owner is responsible for calling `unsubscribe`. Internal:
+   * createKeyedBroadcastChannel uses it so one socket subscribed to N keys
+   * carries one listener pair, not N (MaxListenersExceededWarning, #1640).
+   * Defaults to true.
+   */
+  attachSocketListeners?: boolean;
 }
 
 export interface BroadcastChannel<TEvent> {
   /** Adds `socket` to the subscriber set; removes it automatically on `close`/`error`. */
   subscribe(socket: WebSocket): void;
+  /** Removes `socket` from the subscriber set (no-op if absent). */
+  unsubscribe(socket: WebSocket): void;
   /** JSON-stringifies `event` once and fans it out to every open, non-backed-up subscriber. */
   broadcast(event: TEvent): void;
   /** Test-only introspection. */
@@ -61,7 +71,12 @@ export function createBroadcastChannel<TEvent>(
   }
 
   function subscribe(socket: WebSocket): void {
+    // Idempotent: re-subscribing an already-subscribed socket (e.g. a
+    // repeated subscribe message on mount/reconnect) must not stack another
+    // close/error listener pair on it.
+    if (subscribers.has(socket)) return;
     subscribers.add(socket);
+    if (options.attachSocketListeners === false) return;
     socket.on("close", () => remove(socket));
     socket.on("error", () => remove(socket));
   }
@@ -88,6 +103,7 @@ export function createBroadcastChannel<TEvent>(
 
   return {
     subscribe,
+    unsubscribe: remove,
     broadcast,
     getSubscriberCountForTests: () => subscribers.size,
     clearSubscribersForTests: () => subscribers.clear(),
@@ -107,6 +123,9 @@ export interface KeyedBroadcastChannel<TEvent, TKey> {
 
 export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChannel<TEvent, TKey> {
   const channels = new Map<TKey, BroadcastChannel<TEvent>>();
+  // Keys each socket is subscribed to. Its presence also means the socket's
+  // single close/error listener pair is already attached.
+  const socketKeys = new WeakMap<WebSocket, Set<TKey>>();
 
   function getOrCreate(key: TKey): BroadcastChannel<TEvent> {
     let channel = channels.get(key);
@@ -131,6 +150,7 @@ export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChann
       // onEmpty firing after a NEW channel has been installed at this key
       // would delete that new one's live entry out from under it.
       const thisChannel: BroadcastChannel<TEvent> = createBroadcastChannel<TEvent>({
+        attachSocketListeners: false,
         onEmpty: () => {
           if (channels.get(key) === thisChannel) channels.delete(key);
         },
@@ -143,6 +163,20 @@ export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChann
 
   function subscribe(key: TKey, socket: WebSocket): void {
     getOrCreate(key).subscribe(socket);
+    let keys = socketKeys.get(socket);
+    if (!keys) {
+      const owned = new Set<TKey>();
+      keys = owned;
+      socketKeys.set(socket, owned);
+      const cleanup = (): void => {
+        for (const k of owned) channels.get(k)?.unsubscribe(socket);
+        owned.clear();
+        socketKeys.delete(socket);
+      };
+      socket.on("close", cleanup);
+      socket.on("error", cleanup);
+    }
+    keys.add(key);
   }
 
   function broadcast(key: TKey, event: TEvent): void {
