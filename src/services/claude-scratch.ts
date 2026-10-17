@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
@@ -218,16 +219,31 @@ export async function loadLiveSessions(
   return live;
 }
 
-/** A `*.pid` file naming a process that is still running (or one we can't read). */
+/**
+ * A `*.pid` file naming a process that is still running (or one we can't
+ * read). Opened once, without following a link, and judged from that same
+ * handle, so what is checked is what is read: a path swapped for something else
+ * between a stat and a read can't change the answer.
+ */
 export async function isLivePidFile(file: string): Promise<boolean> {
   if (!file.endsWith(".pid")) return false;
+  let handle;
   try {
-    if (!(await fs.lstat(file)).isFile()) return false;
-    const pid = Number((await fs.readFile(file, "utf8")).trim());
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+    );
+    if (!(await handle.stat()).isFile()) return false;
+    const { buffer, bytesRead } = await handle.read(Buffer.alloc(64), 0, 64, 0);
+    const pid = Number(buffer.subarray(0, bytesRead).toString("utf8").trim());
     if (!Number.isInteger(pid) || pid <= 0) return false;
     return (await procStartTime(pid)) !== null;
-  } catch {
+  } catch (error) {
+    // A link isn't a pid file (and is removed as the link it is, never followed).
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") return false;
     return true; // can't tell: leave it
+  } finally {
+    await handle?.close();
   }
 }
 

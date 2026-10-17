@@ -225,6 +225,11 @@ describe("claude-scratch", () => {
     expect(await isLivePidFile(path.join(base, "dead.pid"))).toBe(false);
     expect(await isLivePidFile(path.join(base, "junk.pid"))).toBe(false);
     expect(await isLivePidFile(path.join(base, "live.log"))).toBe(false);
+    // A link or a directory is not a pid file, however it is named.
+    await fs.symlink(path.join(base, "live.pid"), path.join(base, "link.pid"));
+    await fs.mkdir(path.join(base, "dir.pid"));
+    expect(await isLivePidFile(path.join(base, "link.pid"))).toBe(false);
+    expect(await isLivePidFile(path.join(base, "dir.pid"))).toBe(false);
     // Unreadable or missing: can't tell, so leave it.
     expect(await isLivePidFile(path.join(base, "missing.pid"))).toBe(true);
   });
