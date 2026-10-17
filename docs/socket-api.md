@@ -123,54 +123,55 @@ ops. A composite CLI/MCP surface that drives more than one op internally
 is marked with a dagger (†) and explained below the table, rather than
 split across two cells.
 
-| Op                        | Scope           | REST equivalent                                          | CLI                                                                 | MCP                                        |
-| ------------------------- | --------------- | -------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------ |
-| `ping`                    | full, session   | — (answered in-process, no REST call)                    | `config` (reachability probe)                                       | —                                          |
-| `sessions.list`           | full            | `GET /api/sessions`                                      | `session list` (alias `ps`)                                         | `list_sessions`                            |
-| `sessions.get`            | full, session   | `GET /api/sessions/:id`                                  | `session get`                                                       | —                                          |
-| `sessions.children`       | full, session   | `GET /api/sessions?parentSessionId=:id`                  | `session children`                                                  | `list_child_sessions`                      |
-| `sessions.create`         | full            | `POST /api/sessions`                                     | `session create`; `dock start`†                                     | `start_dock_session`†                      |
-| `sessions.spawn_child`    | full, session   | `POST /api/sessions`                                     | `session spawn-child`                                               | `spawn_child_session`                      |
-| `sessions.wait`           | full, session§  | — (server-side wait over `GET /api/sessions/:id`)        | `session wait`                                                      | `wait_for_session`                         |
-| `sessions.prompt`         | full, session§  | — (types into the child's PTY)                           | `session prompt`                                                    | `prompt_session`                           |
-| `sessions.kill`           | full, session‡  | `DELETE /api/sessions/:id`                               | `session kill` (alias `kill`); `dock stop`†                         | `stop_dock_session`†, `kill_child_session` |
-| `sessions.rename`         | full, session   | `PATCH /api/sessions/:id`                                | `session rename`                                                    | —                                          |
-| `sessions.scrollback`     | full, session   | `GET /api/sessions/:id/scrollback`                       | `session logs` (alias `logs`)                                       | `get_scrollback`                           |
-| `reviews.request`         | full, session   | `POST /api/sessions/:id/review-request`                  | `review [--pr <n>]`                                                 | `request_review`                           |
-| `sessions.attach`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
-| `sessions.input`          | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
-| `sessions.resize`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
-| `sessions.detach`         | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
-| `events.subscribe`        | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
-| `events.seen`             | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
-| `events.unsubscribe`      | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
-| `events.query`            | full, session   | `GET /api/events`                                        | `history`                                                           | —                                          |
-| `browser.action`          | full, session   | `POST /api/sessions/:id/browser`                         | `browser <subcommand>`                                              | — (see `browser_action`, hook socket)      |
-| `browser.find`            | full, session   | `POST /api/sessions/:id/browser/find`                    | `browser find`                                                      | — (see `browser_action`, hook socket)      |
-| `browser.bindings`        | full, session   | `GET /api/sessions/:id/browser`                          | —                                                                   | —                                          |
-| `device.list`             | full, session   | `GET /api/devices`                                       | `device list`                                                       | `list_devices`                             |
-| `device.get`              | full, session   | `GET /api/devices/:id`                                   | —                                                                   | —                                          |
-| `device.create`           | full, session\* | `POST /api/devices`                                      | `device create`; `device connect` (see \* below)                    | — (no MCP wrapper)                         |
-| `device.action`           | full, session   | `POST /api/devices/:id/action`                           | `device screenshot`/`tap`/`swipe`/`text`/`key`/`logcat`/`clipboard` | `use_device` (alias `device_action`)       |
-| `device.start`            | full, session   | `POST /api/devices/:id/start`                            | `device start`                                                      | `start_device`                             |
-| `device.terminate`        | full, session   | `POST /api/devices/:id/stop`                             | `device stop`                                                       | `stop_device`                              |
-| `device.delete`           | full            | `DELETE /api/devices/:id`                                | `device delete`                                                     | `delete_device`                            |
-| `device.pair`             | full            | `POST /api/devices/pair`                                 | `device pair`                                                       | — (no MCP wrapper)                         |
-| `device.pair-and-connect` | full            | `POST /api/devices/pair-and-connect`                     | `device pair-and-connect`                                           | — (no MCP wrapper)                         |
-| `device.discovered`       | full, session   | `GET /api/devices/discovered`                            | `device discovered`                                                 | —                                          |
-| `projects.list`           | full            | `GET /api/projects`                                      | `project list`                                                      | `list_projects`                            |
-| `projects.actions`        | full, session   | `GET /api/projects/:id/actions`                          | `project actions`                                                   | `list_actions`                             |
-| `projects.dock`           | full            | `GET /api/projects/:id/dock`                             | `project dock`; `dock start`†                                       | `start_dock_session`†                      |
-| `projects.get_tooling`    | full, session   | `GET /api/projects/:id/tooling`                          | `project tooling <id>` (read)                                       | `get_project_tooling`                      |
-| `projects.set_tooling`    | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` | `project tooling <id> --briefing/--skill/--reviewer`                | `set_project_tooling`                      |
-| `previews.create`         | full            | `POST /api/previews`                                     | `preview create`                                                    | `create_preview`                           |
-| `previews.get`            | full            | `GET /api/previews/:slug`                                | `preview get`                                                       | —                                          |
-| `previews.delete`         | full            | `DELETE /api/previews/:slug`                             | `preview delete`                                                    | `delete_preview`                           |
-| `previews.list`           | full            | `GET /api/previews`                                      | `preview list`                                                      | `list_previews`                            |
-| `agents.list`             | full            | `GET /api/agents`                                        | — (no CLI wrapper yet)                                              | — (no MCP wrapper yet)                     |
-| `bundle.status`           | full            | `GET /api/bundle-sync/status`                            | `bundle status`                                                     | — (no MCP wrapper)                         |
-| `bundle.resync`           | full            | `POST /api/bundle-sync/resync`                           | `bundle resync`                                                     | — (no MCP wrapper)                         |
-| `bundle.remove`           | full            | `POST /api/bundle-sync/remove`                           | `bundle remove`                                                     | — (no MCP wrapper)                         |
+| Op                         | Scope           | REST equivalent                                          | CLI                                                                 | MCP                                        |
+| -------------------------- | --------------- | -------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------ |
+| `ping`                     | full, session   | — (answered in-process, no REST call)                    | `config` (reachability probe)                                       | —                                          |
+| `sessions.list`            | full            | `GET /api/sessions`                                      | `session list` (alias `ps`)                                         | `list_sessions`                            |
+| `sessions.get`             | full, session   | `GET /api/sessions/:id`                                  | `session get`                                                       | —                                          |
+| `sessions.children`        | full, session   | `GET /api/sessions?parentSessionId=:id`                  | `session children`                                                  | `list_child_sessions`                      |
+| `sessions.create`          | full            | `POST /api/sessions`                                     | `session create`; `dock start`†                                     | `start_dock_session`†                      |
+| `sessions.spawn_child`     | full, session   | `POST /api/sessions`                                     | `session spawn-child`                                               | `spawn_child_session`                      |
+| `sessions.wait`            | full, session§  | — (server-side wait over `GET /api/sessions/:id`)        | `session wait`                                                      | `wait_for_session`                         |
+| `sessions.wait_for_output` | full, session§  | — (server-side wait over the child's PTY output)         | `session wait-output`                                               | `wait_for_output`                          |
+| `sessions.prompt`          | full, session§  | — (types into the child's PTY)                           | `session prompt`                                                    | `prompt_session`                           |
+| `sessions.kill`            | full, session‡  | `DELETE /api/sessions/:id`                               | `session kill` (alias `kill`); `dock stop`†                         | `stop_dock_session`†, `kill_child_session` |
+| `sessions.rename`          | full, session   | `PATCH /api/sessions/:id`                                | `session rename`                                                    | —                                          |
+| `sessions.scrollback`      | full, session   | `GET /api/sessions/:id/scrollback`                       | `session logs` (alias `logs`)                                       | `get_scrollback`                           |
+| `reviews.request`          | full, session   | `POST /api/sessions/:id/review-request`                  | `review [--pr <n>]`                                                 | `request_review`                           |
+| `sessions.attach`          | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
+| `sessions.input`           | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
+| `sessions.resize`          | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
+| `sessions.detach`          | full, session   | stream — see below                                       | `session exec` (alias `exec`)                                       | —                                          |
+| `events.subscribe`         | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
+| `events.seen`              | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
+| `events.unsubscribe`       | full, session   | stream — see below                                       | `events tail`                                                       | —                                          |
+| `events.query`             | full, session   | `GET /api/events`                                        | `history`                                                           | —                                          |
+| `browser.action`           | full, session   | `POST /api/sessions/:id/browser`                         | `browser <subcommand>`                                              | — (see `browser_action`, hook socket)      |
+| `browser.find`             | full, session   | `POST /api/sessions/:id/browser/find`                    | `browser find`                                                      | — (see `browser_action`, hook socket)      |
+| `browser.bindings`         | full, session   | `GET /api/sessions/:id/browser`                          | —                                                                   | —                                          |
+| `device.list`              | full, session   | `GET /api/devices`                                       | `device list`                                                       | `list_devices`                             |
+| `device.get`               | full, session   | `GET /api/devices/:id`                                   | —                                                                   | —                                          |
+| `device.create`            | full, session\* | `POST /api/devices`                                      | `device create`; `device connect` (see \* below)                    | — (no MCP wrapper)                         |
+| `device.action`            | full, session   | `POST /api/devices/:id/action`                           | `device screenshot`/`tap`/`swipe`/`text`/`key`/`logcat`/`clipboard` | `use_device` (alias `device_action`)       |
+| `device.start`             | full, session   | `POST /api/devices/:id/start`                            | `device start`                                                      | `start_device`                             |
+| `device.terminate`         | full, session   | `POST /api/devices/:id/stop`                             | `device stop`                                                       | `stop_device`                              |
+| `device.delete`            | full            | `DELETE /api/devices/:id`                                | `device delete`                                                     | `delete_device`                            |
+| `device.pair`              | full            | `POST /api/devices/pair`                                 | `device pair`                                                       | — (no MCP wrapper)                         |
+| `device.pair-and-connect`  | full            | `POST /api/devices/pair-and-connect`                     | `device pair-and-connect`                                           | — (no MCP wrapper)                         |
+| `device.discovered`        | full, session   | `GET /api/devices/discovered`                            | `device discovered`                                                 | —                                          |
+| `projects.list`            | full            | `GET /api/projects`                                      | `project list`                                                      | `list_projects`                            |
+| `projects.actions`         | full, session   | `GET /api/projects/:id/actions`                          | `project actions`                                                   | `list_actions`                             |
+| `projects.dock`            | full            | `GET /api/projects/:id/dock`                             | `project dock`; `dock start`†                                       | `start_dock_session`†                      |
+| `projects.get_tooling`     | full, session   | `GET /api/projects/:id/tooling`                          | `project tooling <id>` (read)                                       | `get_project_tooling`                      |
+| `projects.set_tooling`     | full            | `PUT /api/projects/:id/tooling[/{skill,reviewer-agent}]` | `project tooling <id> --briefing/--skill/--reviewer`                | `set_project_tooling`                      |
+| `previews.create`          | full            | `POST /api/previews`                                     | `preview create`                                                    | `create_preview`                           |
+| `previews.get`             | full            | `GET /api/previews/:slug`                                | `preview get`                                                       | —                                          |
+| `previews.delete`          | full            | `DELETE /api/previews/:slug`                             | `preview delete`                                                    | `delete_preview`                           |
+| `previews.list`            | full            | `GET /api/previews`                                      | `preview list`                                                      | `list_previews`                            |
+| `agents.list`              | full            | `GET /api/agents`                                        | — (no CLI wrapper yet)                                              | — (no MCP wrapper yet)                     |
+| `bundle.status`            | full            | `GET /api/bundle-sync/status`                            | `bundle status`                                                     | — (no MCP wrapper)                         |
+| `bundle.resync`            | full            | `POST /api/bundle-sync/resync`                           | `bundle resync`                                                     | — (no MCP wrapper)                         |
+| `bundle.remove`            | full            | `POST /api/bundle-sync/remove`                           | `bundle remove`                                                     | — (no MCP wrapper)                         |
 
 † **`dock start`/`start_dock_session`** look up the requested control via
 `projects.dock`, then call `sessions.create` with that control's own
@@ -288,7 +289,7 @@ optional `body.status` filter) with their derived `sessionStatus`; full scope
 names the parent via `body.sessionId`. `sessions.rename`, `attach`/`input`
 and `browser.*` remain self-only.
 
-§ `sessions.wait` and `sessions.prompt` at session scope may target **a child
+§ `sessions.wait`, `sessions.wait_for_output` and `sessions.prompt` at session scope may target **a child
 only** (waiting on yourself could only time out; prompting yourself is
 meaningless) — see below.
 
@@ -321,13 +322,38 @@ failing the wait. Its reliability tracks the hook coverage of the child's agent
 CLI (`docs/agent-hooks.md`). Clients must raise their own request timeout above
 `timeoutMs` — the `mullion` CLI and MCP client do.
 
+**`sessions.wait_for_output`** blocks _server-side_ until a child prints some
+text (issue #1625) — the output-content sibling of `sessions.wait`. Body:
+`sessionId` (required; a child at session scope), `match` (required, max 256
+chars), `regex` (default `false`: `match` is a literal substring), `timeoutMs`
+(default 10 min, clamped to 1 h) and `afterOffset`. Matching runs over the last
+16 KiB of the child's **ANSI-stripped** output. Reply: `{matched:true, text,
+line, outputOffset}`, `{matched:false, timedOut:true, outputOffset}` or
+`{matched:false, gone:true, outputOffset}` (the child exited; the buffer is
+checked one last time first).
+
+- **Only new output counts by default** — output printed before the wait
+  starts is ignored. To also count output a prompt just provoked, pass the
+  `outputOffset` that `sessions.prompt` returned as `afterOffset`: output
+  produced since then (as much as the scrollback ring still holds) is checked
+  first, so there is no prompt → wait race. An `afterOffset` from before a
+  server restart is ahead of the counter and simply contributes nothing.
+- **Regex is opt-in and guarded**: Node regexes have no timeout, so with
+  `regex: true` the pattern must be <= 256 chars, contain no backreferences or
+  lookarounds, and have star height <= 1 (`safe-regex2`); anything else is a
+  `400`. Flags are fixed (`m`). A worker-isolated, unrestricted regex is
+  tracked in #1653.
+- Same per-connection wait cap (`429`), abort-on-socket-close and
+  caller-must-stay-active rules as `sessions.wait`. Local sessions only: a
+  child on a remote host is `409` (#1627).
+
 **`sessions.prompt`** types a prompt into a _running_ child agent and
 submits it as a new turn — the follow-up primitive after `sessions.spawn_child`
 (whose first-turn `seedPrompt` only works at launch). Body: `sessionId` (a
 child at session scope), `text` (required, max 32 KB), `submit` (default
 `true`; `false` pastes without pressing Enter), `wait` (`true`, or
 `{until?, timeoutMs?}` with the same meaning as `sessions.wait`; requires
-`submit`). Reply: `{delivered, submitted}` plus, with `wait`, a `wait` object
+`submit`). Reply: `{delivered, submitted, outputOffset}` (`outputOffset` is the output watermark captured just before typing — feed it to `sessions.wait_for_output`'s `afterOffset`) plus, with `wait`, a `wait` object
 (the `sessions.wait` result, or `{error, status}` if the wait itself failed —
 the prompt _was_ delivered either way).
 

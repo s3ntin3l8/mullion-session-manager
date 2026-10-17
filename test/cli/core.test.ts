@@ -2444,6 +2444,53 @@ describe("runCommand", () => {
     });
   });
 
+  describe("session wait-output (issue #1625)", () => {
+    it("sends match/regex/offset and stretches the socket timeout past the wait", async () => {
+      const request = vi.fn(async () => ({ matched: true }));
+      const client = fakeClient({ request });
+      const io = fakeIo();
+      const code = await runCommand(
+        [
+          "session",
+          "wait-output",
+          "7",
+          "tests",
+          "passed",
+          "--regex",
+          "--timeout",
+          "30",
+          "--after-offset",
+          "99",
+        ],
+        { client, io },
+      );
+      expect(code).toBe(0);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.wait_for_output",
+        { sessionId: "7", match: "tests passed", regex: true, timeoutMs: 30_000, afterOffset: 99 },
+        { timeoutMs: 45_000 },
+      );
+    });
+
+    it("with --session, every positional is the text", async () => {
+      const request = vi.fn(async () => ({ matched: true }));
+      const code = await runCommand(["--session", "7", "session", "wait-output", "a", "b"], {
+        client: fakeClient({ request }),
+        io: fakeIo(),
+      });
+      expect(code).toBe(0);
+      expect(request.mock.calls[0][1]).toMatchObject({ sessionId: "7", match: "a b" });
+    });
+
+    it("usage errors: missing id, missing text, bad offset", async () => {
+      const run = (args: string[]) =>
+        runCommand(["session", "wait-output", ...args], { client: fakeClient(), io: fakeIo() });
+      expect(await run([])).toBe(2);
+      expect(await run(["7"])).toBe(2);
+      expect(await run(["7", "x", "--after-offset", "-1"])).toBe(2);
+    });
+  });
+
   describe("status (issue #1623)", () => {
     it("rejects a missing or unknown state with a usage error", async () => {
       expect(await runCommand(["status"], { client: fakeClient(), io: fakeIo() })).toBe(2);

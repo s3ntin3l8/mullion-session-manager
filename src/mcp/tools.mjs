@@ -430,6 +430,64 @@ const waitForSession = {
   },
 };
 
+const waitForOutput = {
+  name: "wait_for_output",
+  description:
+    "Block (server-side) until a child session you spawned prints some text, or the timeout. " +
+    "Returns {matched, text, line, outputOffset} on a match, {matched:false, timedOut:true} or " +
+    "{matched:false, gone:true} (the child exited). `match` is a literal substring unless " +
+    "regex:true (then no backreferences/lookarounds or nested quantifiers; max 256 chars). It " +
+    "matches ANSI-stripped output (last 16 KiB window). To catch output a prompt_session just " +
+    "provoked, pass that call's outputOffset as afterOffset — otherwise only output from now on " +
+    "counts. Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
+    "wait on its own children.",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId", "match"],
+    properties: {
+      sessionId: { type: "string", description: "The child session id to watch." },
+      match: { type: "string", description: "Text to wait for (max 256 chars)." },
+      regex: { type: "boolean", description: "Treat `match` as a regular expression." },
+      afterOffset: {
+        type: "number",
+        description: "A previous prompt_session/wait_for_output outputOffset to start from.",
+      },
+      timeoutSeconds: {
+        type: "number",
+        description: "Max seconds to wait (default 50, max 3600).",
+      },
+    },
+  },
+  async handler(args, client) {
+    if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
+      throw new Error("sessionId is required");
+    }
+    if (typeof args.match !== "string" || args.match.length === 0) {
+      throw new Error("match is required");
+    }
+    if (args.regex !== undefined && typeof args.regex !== "boolean") {
+      throw new Error("regex must be a boolean");
+    }
+    if (
+      args.afterOffset !== undefined &&
+      (typeof args.afterOffset !== "number" ||
+        !Number.isInteger(args.afterOffset) ||
+        args.afterOffset < 0)
+    ) {
+      throw new Error("afterOffset must be a non-negative integer");
+    }
+    const { timeoutMs } = normalizeWaitArgs(args);
+    const result = await client.waitForOutput({
+      sessionId: args.sessionId,
+      match: args.match,
+      regex: args.regex,
+      timeoutMs,
+      afterOffset: args.afterOffset,
+    });
+    return JSON.stringify(result);
+  },
+};
+
 const promptSession = {
   name: "prompt_session",
   description:
@@ -937,6 +995,7 @@ export const TOOLS = [
   spawnChildSession,
   listChildSessions,
   waitForSession,
+  waitForOutput,
   promptSession,
   killChildSession,
   stopDockSession,

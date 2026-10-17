@@ -2810,6 +2810,23 @@ export class Session {
     return this.scrollbackBuffer.tail(maxBytes);
   }
 
+  /** Total PTY output bytes ever produced — a monotonic watermark (it keeps
+   * counting through scrollback eviction). Pair with getOutputSince(). */
+  get outputOffset(): number {
+    return this.scrollbackBuffer.totalBytesEverPushed();
+  }
+
+  /** The output produced after `offset` (a prior `outputOffset` reading) that
+   * the scrollback ring still holds — everything, if the ring evicted part of
+   * it. Used by sessions.wait_for_output to cover the prompt → wait gap. */
+  getOutputSince(offset: number): Buffer {
+    const produced = this.outputOffset - offset;
+    if (produced <= 0) return Buffer.alloc(0);
+    return this.scrollbackBuffer.tail(
+      Math.min(produced, this.scrollbackBuffer.totalBufferedBytes()),
+    );
+  }
+
   /**
    * Writes browser/control-socket input into the pty. B9 — routes/terminal.ts's
    * `message` handler (and control-socket.ts's `sessions.input` op, which

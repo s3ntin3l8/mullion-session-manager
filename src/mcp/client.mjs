@@ -485,6 +485,20 @@ export class MullionClient {
     );
   }
 
+  /** Server-side wait for a child to print `match` (sessions.wait_for_output).
+   * The socket timeout outlasts the wait, as in waitForSession. */
+  async waitForOutput({ sessionId, match, regex, timeoutMs, afterOffset }) {
+    const body = { sessionId, match };
+    if (regex !== undefined) body.regex = regex;
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    if (afterOffset !== undefined) body.afterOffset = afterOffset;
+    return this.controlRequest(
+      "sessions.wait_for_output",
+      body,
+      (timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    );
+  }
+
   /** Types a prompt into a child agent (sessions.prompt), optionally waiting
    * for its turn to end. The socket timeout outlasts the wait, as in
    * waitForSession. */

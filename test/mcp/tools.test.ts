@@ -28,6 +28,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "spawn_child_session",
       "list_child_sessions",
       "wait_for_session",
+      "wait_for_output",
       "prompt_session",
       "kill_child_session",
       "stop_dock_session",
@@ -641,5 +642,38 @@ describe("report_status (issue #1623)", () => {
     const client = { reportStatus: vi.fn() };
     await expect(tool.handler({ state: "napping" }, client)).rejects.toThrow(/state must be/);
     expect(client.reportStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("wait_for_output", () => {
+  const tool = TOOLS.find((t) => t.name === "wait_for_output")!;
+
+  it("forwards the match, regex, offset and a seconds->ms timeout", async () => {
+    const client = { waitForOutput: vi.fn().mockResolvedValue({ matched: true }) };
+    const out = await tool.handler(
+      { sessionId: "9", match: "PASS", regex: true, afterOffset: 42, timeoutSeconds: 20 },
+      client,
+    );
+    expect(client.waitForOutput).toHaveBeenCalledWith({
+      sessionId: "9",
+      match: "PASS",
+      regex: true,
+      afterOffset: 42,
+      timeoutMs: 20_000,
+    });
+    expect(out).toBe(JSON.stringify({ matched: true }));
+  });
+
+  it("validates arguments before calling the client", async () => {
+    const client = { waitForOutput: vi.fn() };
+    await expect(tool.handler({ match: "x" }, client)).rejects.toThrow(/sessionId/);
+    await expect(tool.handler({ sessionId: "1" }, client)).rejects.toThrow(/match/);
+    await expect(tool.handler({ sessionId: "1", match: "x", regex: "y" }, client)).rejects.toThrow(
+      /regex/,
+    );
+    await expect(
+      tool.handler({ sessionId: "1", match: "x", afterOffset: -2 }, client),
+    ).rejects.toThrow(/afterOffset/);
+    expect(client.waitForOutput).not.toHaveBeenCalled();
   });
 });
