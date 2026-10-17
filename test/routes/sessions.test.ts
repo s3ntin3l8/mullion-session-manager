@@ -1312,32 +1312,42 @@ describe("sessions route", () => {
       await app.close();
     });
 
-    it("prunes stale uploads in the session's cwd when one lands (primary retention wiring, issue #1637)", async () => {
-      const app = await buildApp();
-      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-prune-"));
-      const projectId = await createProjectWithCwd(app, cwd);
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash" },
-      });
-      const stale = path.join(cwd, ".mullion-uploads", "stale-uuid");
-      fs.mkdirSync(stale, { recursive: true });
-      const old = new Date(Date.now() - 30 * 86_400_000);
-      fs.utimesSync(stale, old, old);
-
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/sessions/${created.json().id}/uploads`,
+    it.each([
+      {
+        kind: "generic file",
         headers: { "content-type": "application/octet-stream", "x-upload-filename": "a.txt" },
         payload: Buffer.from("data"),
-      });
+      },
+      { kind: "image", headers: { "content-type": "image/png" }, payload: PNG_BYTES },
+    ])(
+      "prunes stale uploads in the session's cwd when a $kind lands (primary retention wiring, issue #1637)",
+      async ({ headers, payload }) => {
+        const app = await buildApp();
+        const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-upload-prune-"));
+        const projectId = await createProjectWithCwd(app, cwd);
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const stale = path.join(cwd, ".mullion-uploads", "stale-uuid");
+        fs.mkdirSync(stale, { recursive: true });
+        const old = new Date(Date.now() - 30 * 86_400_000);
+        fs.utimesSync(stale, old, old);
 
-      expect(res.statusCode).toBe(200);
-      expect(fs.existsSync(stale)).toBe(false);
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/sessions/${created.json().id}/uploads`,
+          headers,
+          payload,
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(fs.existsSync(stale)).toBe(false);
+        fs.rmSync(cwd, { recursive: true, force: true });
+        await app.close();
+      },
+    );
 
     it("400s a mismatched image with the UPLOAD_IMAGE_MISMATCH code (issue #1637)", async () => {
       const app = await buildApp();
@@ -1424,6 +1434,14 @@ describe("sessions route", () => {
       }
       expect(statuses.slice(0, 120).every((c) => c === 404)).toBe(true);
       expect(statuses[120]).toBe(429);
+      // The bucket is route-scoped: uploads must not drain the shared /api
+      // budget the rest of the dashboard draws on.
+      const sibling = await app.inject({ method: "GET", url: "/api/projects" });
+      expect(sibling.statusCode).toBe(200);
+      expect(sibling.headers["x-ratelimit-limit"]).toBe(String(app.config.RATE_LIMIT_MAX));
+      expect(Number(sibling.headers["x-ratelimit-remaining"])).toBeGreaterThan(
+        app.config.RATE_LIMIT_MAX - 10,
+      );
       await app.close();
     });
 
