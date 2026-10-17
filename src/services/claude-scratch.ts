@@ -63,7 +63,12 @@ async function ownPidNamespace(): Promise<string | null> {
   }
 }
 
-const isEnoent = (error: unknown) => (error as NodeJS.ErrnoException).code === "ENOENT";
+// A registry dir that is gone, or not a directory at all (a stale
+// CLAUDE_CONFIG_DIR pointing at a file), has nothing registered in it.
+const isNoRegistry = (error: unknown) => {
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+};
 
 export interface LiveSessions {
   /** Session ids of every Claude Code session still running. */
@@ -139,7 +144,8 @@ export interface LoadLiveSessionsOptions {
  * own and must be readable: a Claude Code too old to keep a registry looks
  * exactly like a missing one, and "no registry" must not read as "nothing is
  * running". Any later dir (a `CLAUDE_CONFIG_DIR` some session once used) may
- * be gone, which just means nothing registers there.
+ * be gone or not a directory, which just means nothing registers there; one
+ * that exists but can't be read (permissions) is unknown, so it blocks.
  *
  * One unparseable registry file doesn't disable everything when its name is
  * `<pid>.json` and that pid is gone: it is skipped with a warning. Otherwise it
@@ -165,7 +171,7 @@ export async function loadLiveSessions(
     try {
       names = await fs.readdir(dir);
     } catch (error) {
-      if (index > 0 && isEnoent(error)) continue;
+      if (index > 0 && isNoRegistry(error)) continue;
       return blocked(`cannot read the Claude session registry ${dir}`);
     }
     for (const name of names) {

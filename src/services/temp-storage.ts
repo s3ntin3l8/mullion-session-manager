@@ -175,18 +175,20 @@ async function listCandidates(
   return { entries, names, rootDev };
 }
 
-type TargetKind = "temp" | "session" | "bundled" | "empty-project" | "loose";
-
-interface Target {
-  entry: Candidate;
-  kind: TargetKind;
-  /** Set for Claude session directories; liveness is re-checked before removal. */
-  sessionId?: string;
-  /** Set for `bundled-skills/<version>`; liveness is re-checked before removal. */
-  version?: string;
+interface TargetWindows {
   safeMs: number;
   aggressiveMs: number;
 }
+
+/** What a removable entry is; the first two are re-checked against liveness before removal. */
+type TargetSpec = TargetWindows &
+  (
+    | { kind: "session"; sessionId: string }
+    | { kind: "bundled"; version: string }
+    | { kind: "temp" | "empty-project" | "loose" }
+  );
+
+type Target = TargetSpec & { entry: Candidate };
 
 const windowFor = (target: Target, mode: TempPruneMode) =>
   mode === "aggressive" ? target.aggressiveMs : target.safeMs;
@@ -218,17 +220,14 @@ async function gatherTargets(
   // the per-removal re-check in pruneTempStorage reads it again on purpose.
   const registryDirs = options.claudeSessionsDirs ?? [defaultClaudeSessionsDir()];
   let live: Awaited<ReturnType<typeof loadLiveSessions>> | undefined;
-  const offer = async (
-    fullPath: string,
-    rest: Pick<Target, "kind" | "safeMs" | "aggressiveMs"> & Partial<Target>,
-  ) => {
+  const offer = async (fullPath: string, spec: TargetSpec) => {
     const entry = await evaluateEntry(
       path.dirname(fullPath),
       rootDev,
       uid,
       path.basename(fullPath),
     );
-    if (entry) targets.push({ ...rest, entry });
+    if (entry) targets.push({ ...spec, entry });
   };
   for (const name of names) {
     if (!/^claude-/.test(name)) continue;
@@ -404,10 +403,10 @@ export async function pruneTempStorage(
           includeBinaries: target.kind === "bundled",
         });
         if (live.blocked) continue;
-        if (target.kind === "session" && live.ids.has(target.sessionId ?? "")) continue;
+        if (target.kind === "session" && live.ids.has(target.sessionId)) continue;
         if (
           target.kind === "bundled" &&
-          (!live.versionsComplete || live.versions.has(target.version ?? ""))
+          (!live.versionsComplete || live.versions.has(target.version))
         ) {
           continue;
         }

@@ -39,7 +39,10 @@ cross-checked against `/proc`:
   own config dir while the tmp dir is shared. The server's own registry
   must exist: a Claude Code too old to keep one looks the same as a missing
   one, and "no registry" must not read as "nothing is running". An extra
-  dir that has gone away just means nothing registers there.
+  dir that has gone away (or isn't a directory) just means nothing registers
+  there. A config dir set any other way, such as inline in a session's launch
+  command, isn't visible to Mullion; such a session is protected by the grace
+  window alone.
 - **Unknown means hands off.** If liveness can't be established (no `/proc`,
   an unreadable registry, an unparseable registry file whose process might
   still be running), the whole `claude-<uid>` tree is skipped, and the

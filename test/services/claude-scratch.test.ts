@@ -116,7 +116,9 @@ describe("claude-scratch", () => {
     await fs.writeFile(path.join(a, "1.json"), entry("in-a"));
     await fs.writeFile(path.join(b, "1.json"), entry("in-b"));
     const gone = path.join(base, "gone");
-    expect((await loadLiveSessions([a, b, gone])).ids).toEqual(new Set(["in-a", "in-b"]));
+    const notADir = path.join(base, "file");
+    await fs.writeFile(notADir, "x");
+    expect((await loadLiveSessions([a, b, gone, notADir])).ids).toEqual(new Set(["in-a", "in-b"]));
     // A missing first dir (an old Claude Code with no registry at all) blocks...
     expect((await loadLiveSessions([gone, a])).blocked).toBeDefined();
     // ...and a bad file in a later dir is just as unknown as in the first.
