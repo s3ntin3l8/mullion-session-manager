@@ -39,8 +39,6 @@ function git(cwd: string, args: string[]) {
 function initRepo(cwd: string) {
   fs.mkdirSync(cwd, { recursive: true });
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
 }
 
 function commitAll(cwd: string, message: string) {

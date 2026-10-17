@@ -19,8 +19,6 @@ function git(cwd: string, args: string[]) {
 function initRepo(cwd: string) {
   fs.mkdirSync(cwd, { recursive: true });
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
 }
 
 function commitAll(cwd: string, message: string) {
@@ -184,8 +182,6 @@ describe("getGitStatus", () => {
 
     const workdir = path.join(tmpDir, "workdir");
     git(tmpDir, ["clone", source, workdir]);
-    git(workdir, ["config", "user.email", "test@example.com"]);
-    git(workdir, ["config", "user.name", "Test"]);
 
     // Ahead by one: a local commit not yet pushed anywhere.
     fs.writeFileSync(path.join(workdir, "b.txt"), "b");

@@ -98,8 +98,6 @@ export function computeZorbLatency(zorbEpochMs: number): number {
 function initFixtureRepo(cwd: string) {
   fs.mkdirSync(cwd, { recursive: true });
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
   fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
   fs.writeFileSync(path.join(cwd, "src", "marker.ts"), FIXTURE_SOURCE);
   fs.writeFileSync(

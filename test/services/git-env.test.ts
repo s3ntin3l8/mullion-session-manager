@@ -38,4 +38,15 @@ describe("gitEnv (issue #442)", () => {
       delete process.env.GIT_DIR;
     }
   });
+
+  // Issue #1649: with git 2.43, GIT_CONFIG=<a>/.git/config redirects
+  // `git -C <b> config …` writes into repo a.
+  it("strips GIT_CONFIG so a leaked value can't redirect config writes", () => {
+    process.env.GIT_CONFIG = "/tmp/should-be-stripped/config";
+    try {
+      expect(gitEnv().GIT_CONFIG).toBeUndefined();
+    } finally {
+      delete process.env.GIT_CONFIG;
+    }
+  });
 });

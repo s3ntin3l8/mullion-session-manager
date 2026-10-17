@@ -5,6 +5,9 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: ["./test/setup.ts"],
+    // Tripwire (issues #1602, #1649): fails the run if it changed the
+    // checkout's own .git/config.
+    globalSetup: ["./test/global-setup.ts"],
     // `frontend/` is its own npm workspace with its own vitest.config.ts
     // (run via `cd frontend && npm run test`, see README.md's Commands
     // section) — without this, Vitest's default broad `**/*.test.*` include

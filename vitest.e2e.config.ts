@@ -24,6 +24,9 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: ["./test/setup.ts"],
+    // Same checkout-config tripwire as vitest.config.ts (issues #1602, #1649):
+    // these real-process tests drive git against real directories too.
+    globalSetup: ["./test/global-setup.ts"],
     include: ["test/e2e/**/*.e2e.test.ts"],
     // `include` is unanchored, so without these excludes a live worktree
     // checked out under one of these paths (a `.wt/` dev workspace, a

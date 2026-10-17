@@ -601,8 +601,6 @@ describe("session-lifecycle.ts — scaffold gate checks the session's own worktr
   beforeAll(() => {
     repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "scaffold-gate-worktree-"));
     git(repoDir, ["init", "-b", "main"]);
-    git(repoDir, ["config", "user.email", "test@example.com"]);
-    git(repoDir, ["config", "user.name", "Test"]);
     fs.writeFileSync(path.join(repoDir, "README.md"), "# repo\n");
     git(repoDir, ["add", "-A"]);
     git(repoDir, ["commit", "-m", "initial commit", "--no-verify"]);

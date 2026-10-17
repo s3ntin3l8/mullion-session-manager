@@ -78,8 +78,6 @@ function git(cwd: string, args: string[]) {
 function createMatchingGitRepo(owner: string, repo: string): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "webhooks-route-test-repo-"));
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
   git(cwd, ["remote", "add", "origin", `https://github.com/${owner}/${repo}.git`]);
   fs.writeFileSync(path.join(cwd, "a.txt"), "a");
   git(cwd, ["add", "-A"]);

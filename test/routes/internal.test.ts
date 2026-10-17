@@ -1401,12 +1401,6 @@ describe("internal routes (agent role, issue #26)", () => {
     const cwd = path.join(repoRoot, "real-repo");
     fs.mkdirSync(cwd, { recursive: true });
     execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
-    execFileSync("git", ["config", "user.email", "test@example.com"], {
-      cwd,
-      stdio: "pipe",
-      env: gitEnv(),
-    });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
     execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
     execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -1516,12 +1510,6 @@ describe("internal routes (agent role, issue #26)", () => {
     const cwd = path.join(repoRoot, "real-repo");
     fs.mkdirSync(cwd, { recursive: true });
     execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
-    execFileSync("git", ["config", "user.email", "test@example.com"], {
-      cwd,
-      stdio: "pipe",
-      env: gitEnv(),
-    });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
     fs.writeFileSync(path.join(cwd, "a.txt"), "one\n");
     execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
     execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -1599,12 +1587,6 @@ describe("internal routes (agent role, issue #26)", () => {
     const cwd = path.join(repoRoot, "real-repo");
     fs.mkdirSync(cwd, { recursive: true });
     execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
-    execFileSync("git", ["config", "user.email", "test@example.com"], {
-      cwd,
-      stdio: "pipe",
-      env: gitEnv(),
-    });
-    execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
     execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
     execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -1649,8 +1631,6 @@ describe("internal routes (agent role, issue #26)", () => {
     const run = (args: string[]) =>
       execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
     run(["init", "-b", "main"]);
-    run(["config", "user.email", "test@example.com"]);
-    run(["config", "user.name", "Test"]);
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
     run(["add", "-A"]);
     run(["commit", "-m", "initial", "--no-verify"]);
@@ -1720,8 +1700,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[], runCwd = cwd) =>
         execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -1893,8 +1871,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[], runCwd = cwd) =>
         execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -1914,8 +1890,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -1961,8 +1935,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -2265,8 +2237,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "README.md"), "# real repo\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3021,8 +2991,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[], runCwd = cwd) =>
         execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3194,8 +3162,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[], runCwd = cwd) =>
         execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3360,8 +3326,6 @@ describe("internal routes (agent role, issue #26)", () => {
       const run = (args: string[], runCwd = cwd) =>
         execFileSync("git", args, { cwd: runCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);

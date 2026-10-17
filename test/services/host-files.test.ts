@@ -57,8 +57,6 @@ const fakeApp = { config: {} } as never;
 
 function initRepo(cwd: string) {
   execFileSync("git", ["init", "-b", "main"], { cwd, env: gitEnv() });
-  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd, env: gitEnv() });
-  execFileSync("git", ["config", "user.name", "Test"], { cwd, env: gitEnv() });
 }
 
 function gitStatusPorcelain(cwd: string): string {

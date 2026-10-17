@@ -71,8 +71,6 @@ function git(cwd: string, args: string[]) {
 function initRepo(cwd: string) {
   fs.mkdirSync(cwd, { recursive: true });
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
   fs.writeFileSync(path.join(cwd, "README.md"), "# test repo\n");
   git(cwd, ["add", "-A"]);
   git(cwd, ["commit", "-m", "initial commit", "--no-verify"]);

@@ -460,8 +460,6 @@ describe("task-github-sync", () => {
       const git = (args: string[]) =>
         execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
       git(["init", "-b", "main"]);
-      git(["config", "user.email", "test@example.com"]);
-      git(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
       git(["add", "-A"]);
       git(["commit", "-m", "initial", "--no-verify"]);

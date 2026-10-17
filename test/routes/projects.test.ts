@@ -2224,16 +2224,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -2291,16 +2281,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-status-transient-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -2477,16 +2457,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-mix-repo-"));
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: repoDir,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: repoDir,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(repoDir, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -2529,16 +2499,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-project-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -2625,16 +2585,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -2699,16 +2649,6 @@ describe("projects route", () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-badlive-project-"));
       const { execFileSync } = await import("node:child_process");
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -2799,16 +2739,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -2821,16 +2751,6 @@ describe("projects route", () => {
       // accept, but not reachable from `git worktree list` on projectCwd.
       const foreignRepo = fs.mkdtempSync(path.join(os.tmpdir(), "batch-session-foreign-repo-"));
       execFileSync("git", ["init", "-b", "unrelated-branch"], {
-        cwd: foreignRepo,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: foreignRepo,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: foreignRepo,
         stdio: "pipe",
         env: gitEnv(),
@@ -2901,16 +2821,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-real-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -3071,16 +2981,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "batch-git-refs-mix-"));
       execFileSync("git", ["init", "-b", "main"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: repoDir,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: repoDir,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(repoDir, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -3162,16 +3062,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -3207,16 +3097,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-status-fresh-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -3298,16 +3178,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -3372,16 +3242,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -3439,8 +3299,6 @@ describe("projects route", () => {
 
       run(remoteDir, ["init", "--bare", "-b", "main"]);
       run(projectCwd, ["init", "-b", "main"]);
-      run(projectCwd, ["config", "user.email", "test@example.com"]);
-      run(projectCwd, ["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       run(projectCwd, ["add", "-A"]);
       run(projectCwd, ["commit", "-m", "initial", "--no-verify"]);
@@ -3473,8 +3331,6 @@ describe("projects route", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3673,8 +3529,6 @@ describe("projects route", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3814,8 +3668,6 @@ describe("projects route", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd: remoteCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(remoteCwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -3881,8 +3733,6 @@ describe("projects route", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -4078,8 +3928,6 @@ describe("projects route", () => {
       const run = (args: string[]) =>
         execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       run(["init", "-b", "main"]);
-      run(["config", "user.email", "test@example.com"]);
-      run(["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "a");
       run(["add", "-A"]);
       run(["commit", "-m", "initial", "--no-verify"]);
@@ -4141,16 +3989,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-project-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -4225,16 +4063,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "diff-stats-clean-"));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -4320,16 +4148,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -4408,16 +4226,6 @@ describe("projects route", () => {
         stdio: "pipe",
         env: gitEnv(),
       });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
       fs.writeFileSync(path.join(projectCwd, "a.txt"), "one\ntwo\nthree\n");
       execFileSync("git", ["add", "-A"], { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["commit", "-m", "initial", "--no-verify"], {
@@ -4492,16 +4300,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), `${name}-`));
       execFileSync("git", ["init", "-b", "main"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd: projectCwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], {
         cwd: projectCwd,
         stdio: "pipe",
         env: gitEnv(),
@@ -4928,12 +4726,6 @@ describe("projects route", () => {
       const { execFileSync } = await import("node:child_process");
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "webhook-wiring-test-repo-"));
       execFileSync("git", ["init", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
-      execFileSync("git", ["config", "user.email", "test@example.com"], {
-        cwd,
-        stdio: "pipe",
-        env: gitEnv(),
-      });
-      execFileSync("git", ["config", "user.name", "Test"], { cwd, stdio: "pipe", env: gitEnv() });
       execFileSync("git", ["remote", "add", "origin", `https://github.com/${owner}/${repo}.git`], {
         cwd,
         stdio: "pipe",

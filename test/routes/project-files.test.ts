@@ -171,13 +171,7 @@ describe("project-files routes", () => {
       execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
         cwd,
         stdio: "ignore",
-        env: {
-          ...gitEnv(),
-          GIT_AUTHOR_NAME: "t",
-          GIT_AUTHOR_EMAIL: "t@t",
-          GIT_COMMITTER_NAME: "t",
-          GIT_COMMITTER_EMAIL: "t@t",
-        },
+        env: gitEnv(),
       });
 
     it("lists, reads and writes in a session cwd inside the project, not the project root", async () => {
