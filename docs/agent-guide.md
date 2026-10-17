@@ -181,7 +181,7 @@ Pick based on how you're working:
 mcp_servers.mullion.*` overrides for Codex, its own `mcp.<name>` config
   keys for opencode, and `~/.gemini/config/mcp_config.json` for agy). Prefer
   this for `get_scrollback`, `list_actions`, `browser_action`, `use_browser`,
-  `promote_to_worktree`, `spawn_child_session`, `list_devices`,
+  `promote_to_worktree`, `report_status`, `spawn_child_session`, `list_devices`,
   `start_device`/`stop_device`, and `use_device`/`device_action` — the ops
   actually reachable at session scope.
 - **`mullion` CLI** — better when you need to reason about `--json` output
@@ -337,6 +337,24 @@ from inside a session, and deliberately can't target a _different_ session
 (the hook token pins you to your own). Use this to surface progress on a
 long-running task rather than relying on the human to be watching your
 scrollback live.
+
+## Reporting your own status
+
+If your CLI has no Mullion hook adapter (a plain shell script, an unsupported
+agent), tell Mullion what you are doing so a parent's `wait_for_session` /
+`session wait` and the dashboard can tell:
+
+```bash
+mullion status working                         # starting a task (clears a previous "done")
+mullion status done --message "tests pass"     # finished (a waiting parent wakes up)
+mullion status needs_input --message "approve the deploy?"
+```
+
+`--message` is ignored for `working` and cut at 200 chars. `needs_input` also clears an earlier `done`. The MCP equivalent is `report_status {state, message?}`. It writes the same
+hook messages a real adapter would (`turn_start`, `progress: done`,
+`notification`) to your own hook socket, so it only works from inside a
+session. Agents with a hook adapter (Claude Code, Codex, opencode, agy) don't
+need this.
 
 ## Auto-injection
 

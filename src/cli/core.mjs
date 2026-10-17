@@ -8,14 +8,17 @@
 // real process-level wiring lives in mullion.mjs.
 
 import fs from "node:fs";
-import net from "node:net";
 import {
   MullionSocketError,
+  SELF_REPORT_STATES,
   WAIT_DEFAULT_TIMEOUT_MS,
   WAIT_MAX_TIMEOUT_MS,
   WAIT_SOCKET_SLACK_MS,
   isMissingIdError,
   resolveOwnSessionId,
+  sendHookMessage,
+  statusHookMessages,
+  statusTruncationNote,
 } from "./client.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
@@ -131,7 +134,7 @@ const TOP_LEVEL_ALIASES = {
 // resolve verb="--kind" -> "unknown command" if it were a NOUNS entry
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
-const STANDALONE_COMMANDS = new Set(["notify", "mcp", "config", "history", "review"]);
+const STANDALONE_COMMANDS = new Set(["notify", "status", "mcp", "config", "history", "review"]);
 const NOUNS = new Set([
   "session",
   "browser",
@@ -531,47 +534,12 @@ export function formatError(err, client) {
 // session" over this channel.
 // ---------------------------------------------------------------------------
 
-const NOTIFY_TIMEOUT_MS = 5_000;
-
 export function sendHookNotification({ hookSocketPath, hookToken, title, body }) {
-  return new Promise((resolve, reject) => {
-    if (!hookSocketPath || !hookToken) {
-      reject(
-        new Error(
-          "MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN are not set — 'mullion notify' only works from inside a Mullion session",
-        ),
-      );
-      return;
-    }
-    const socket = net.createConnection(hookSocketPath);
-    let settled = false;
-    const finish = (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      socket.destroy();
-      if (err) reject(err);
-      else resolve();
-    };
-    const timer = setTimeout(
-      () => finish(new Error("timed out sending notification")),
-      NOTIFY_TIMEOUT_MS,
-    );
-    socket.once("error", (err) => finish(err));
-    socket.once("connect", () => {
-      socket.write(`${JSON.stringify({ token: hookToken })}\n`);
-      socket.write(`${JSON.stringify({ kind: "notification", title, body })}\n`);
-      // Fire-and-forget, same posture as forwarder.mjs's ordinary hooks —
-      // hooks.ts never replies to a notification message, so there is
-      // nothing to wait for beyond the write landing on the wire. This
-      // resolves before the OS confirms the write is flushed, so a socket
-      // error occurring after this point is silently lost (Hermes review,
-      // PR #402) — an accepted tradeoff, not an oversight: `notify` has no
-      // delivery-confirmation contract to begin with (hooks.ts never acks),
-      // so there's nothing meaningful to report back even if it were
-      // awaited.
-      finish(null);
-    });
+  return sendHookMessage({
+    hookSocketPath,
+    hookToken,
+    message: { kind: "notification", title, body },
+    what: "mullion notify",
   });
 }
 
@@ -1427,6 +1395,24 @@ async function runNotify(client, args, opts, io) {
   return { text: "notification sent" };
 }
 
+// status — self-reported state for CLIs without a hook adapter (issue #1623).
+// Same hook-socket channel as `notify`; see statusHookMessages in client.mjs.
+async function runStatus(client, args, opts, io) {
+  const { flags, rest } = extractFlags(args, { message: "string" });
+  const state = rest[0];
+  if (rest.length !== 1 || !SELF_REPORT_STATES.includes(state)) {
+    throw new CliUsageError(`usage: status <${SELF_REPORT_STATES.join("|")}> [--message <text>]`);
+  }
+  await sendHookMessage({
+    hookSocketPath: io.env.MULLION_HOOK_SOCKET,
+    hookToken: io.env.MULLION_HOOK_TOKEN,
+    message: statusHookMessages(state, flags.message),
+    what: "mullion status",
+  });
+  const note = state === "working" ? "" : statusTruncationNote(flags.message);
+  return { text: `status reported: ${state}${note}` };
+}
+
 // reviews.request does several sequential network calls server-side (GitHub
 // PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
 // client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
@@ -1526,6 +1512,7 @@ export const COMMANDS = {
   device: deviceCommands,
   events: eventsCommands,
   notify: runNotify,
+  status: runStatus,
   review: runReview,
   config: runConfig,
   history: runHistory,
@@ -1547,6 +1534,7 @@ Commands:
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
+  status <working|done|needs_input> [--message <text>]   (--message is ignored for working)
   review [--pr <n>]
   mcp
   config

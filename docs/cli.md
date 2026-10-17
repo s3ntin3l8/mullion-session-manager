@@ -69,6 +69,7 @@ mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
                 [--limit <n>] [--cursor <c>]
 mullion notify --message "..." [--title "..."]
+mullion status <working|done|needs_input> [--message "..."]   # --message ignored for working
 mullion mcp
 mullion config
 ```
@@ -398,6 +399,15 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   to whichever session's token was presented, so there is no way to notify a
   _different_ session over this channel.
 
+### status
+
+- `status <working|done|needs_input> [--message <text>]` — self-reports this
+  session's state for CLIs without a hook adapter (issue #1623). Maps onto the
+  existing hook messages (`turn_start`, `progress: done`, `notification`) over
+  the hook socket, so `session wait` / `sessions.wait` see it. `--message` is
+  ignored for `working`, and cut at 200 chars (the output says so).
+  `needs_input` also clears a prior `done`. Only works from inside a session.
+
 ### review
 
 - `review [--pr <n>]` — asks the Mullion server to relay a Hermes review
@@ -420,10 +430,10 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   `MULLION_AUTH_TOKEN` set) is a separate, full-scope use of the same
   binary.
 
-21 tools total (`src/mcp/tools.mjs`'s `TOOLS` array). Three
-(`promote_to_worktree`, `use_browser`, `browser_action`) are **hook-socket**
+27 tools total (`src/mcp/tools.mjs`'s `TOOLS` array). Four
+(`promote_to_worktree`, `report_status`, `use_browser`, `browser_action`) are **hook-socket**
 tools, a different transport — see [`docs/agent-hooks.md`](agent-hooks.md).
-The other 18 each thinly wrap a control-socket op —
+The other 23 each thinly wrap a control-socket op —
 [`docs/socket-api.md`](socket-api.md#ops)'s canonical Ops table is the
 single list of which op each one wraps and at which scope, rather than
 duplicating that list here. Two of those 18
