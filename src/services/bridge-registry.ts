@@ -195,10 +195,10 @@ export function issuePairingCode(app: FastifyInstance): PairingCode {
   return { bridgeId: id, code, expiresAt };
 }
 
-// Split out from issueSession() so redeemPairingCode() below can generate
-// and encrypt a session's fields WITHOUT writing to the DB itself — it
-// writes them as part of the same transaction that clears the pairing
-// code, rather than issueSession()'s own separate, self-contained update.
+// Generates and encrypts a session's fields WITHOUT writing to the DB
+// itself, so each caller persists them in its own write: redeemPairingCode()
+// below in the same transaction that clears the pairing code, and
+// rotateBridgeSession() in the update that also stashes the superseded id.
 // Pure (no DB access), so it's safe to call from inside or outside a
 // transaction either way.
 function buildSession(

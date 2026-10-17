@@ -521,9 +521,9 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
         ws.close();
         return reply.type;
       };
-      expect(await authWith(session_id)).not.toBe("error");
+      expect(await authWith(session_id)).toBe("ready");
       // Using the rotated id retires the old one.
-      expect(await authWith(first.session_id)).not.toBe("error");
+      expect(await authWith(first.session_id)).toBe("ready");
       expect(await authWith(session_id)).toBe("error");
       expect((await renew(session_id)).status).toBe(401);
     });
