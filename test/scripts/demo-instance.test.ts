@@ -1,4 +1,5 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -47,7 +48,19 @@ const demoDirs = () =>
   new Set(readdirSync("/tmp").filter((name) => name.startsWith("mullion-demo-")));
 
 let demo: typeof DemoModule;
+const realPath = process.env.PATH;
 beforeAll(async () => {
+  // Teardown asks systemd for the demo's session scopes. Tests must not reach
+  // the host's user bus (CONTRIBUTING.md), so shadow systemctl with one that
+  // reports no bus, which stopDemoScopes treats as "nothing to stop".
+  const fakeBin = path.join(fixtures, "fake-bin");
+  mkdirSync(fakeBin);
+  writeFileSync(
+    path.join(fakeBin, "systemctl"),
+    '#!/bin/sh\necho "Failed to connect to bus: No such file or directory" >&2\nexit 1\n',
+    { mode: 0o755 },
+  );
+  process.env.PATH = `${fakeBin}:${realPath}`;
   // The ports are read at import time, so pick free ones before importing:
   // a real `make demo` on this host must not make the test fail.
   process.env.DEMO_BACKEND_PORT = await freePort();
@@ -55,6 +68,7 @@ beforeAll(async () => {
   demo = await import("../../scripts/demo/instance.mjs");
 });
 afterAll(() => {
+  process.env.PATH = realPath;
   delete process.env.DEMO_BACKEND_PORT;
   delete process.env.DEMO_FRONTEND_PORT;
 });

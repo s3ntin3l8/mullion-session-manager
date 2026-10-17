@@ -85,7 +85,9 @@ async function killGroup(child, graceMs = 5_000) {
   };
   if (!signal("SIGTERM")) return;
   const deadline = Date.now() + graceMs;
-  const alive = () => child.exitCode === null || signal(0);
+  // A child killed by a signal keeps exitCode null and sets signalCode.
+  const exited = () => child.exitCode !== null || child.signalCode !== null;
+  const alive = () => !exited() || signal(0);
   while (Date.now() < deadline && alive()) await new Promise((r) => setTimeout(r, 100));
   signal("SIGKILL");
 }
