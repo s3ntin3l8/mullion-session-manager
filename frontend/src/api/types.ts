@@ -102,7 +102,8 @@ export interface CacheStorageStatus {
 
 export type DockerPruneMode = "safe" | "aggressive";
 
-export interface DockerPruneResult {
+/** What any cleanup tier (Docker, temp, caches, opencode database) reports back. */
+export interface PruneResult {
   output: string;
   reclaimedBytes: number;
   error?: string;
@@ -119,6 +120,26 @@ export interface TempStorageStatus {
     /** Session registry files that were skipped without stopping the rest. */
     warnings: string[];
   };
+  error?: string;
+}
+
+export interface OpencodeStorageStatus {
+  /** False when opencode has no database on this host (or it couldn't be read). */
+  available: boolean;
+  path: string;
+  /** The database plus its write-ahead log, as on disk. */
+  fileBytes: number;
+  /** Free pages a VACUUM would return; exact, not an estimate. */
+  reclaimableBytes: number;
+  liveBytes: number;
+  /** Another process has it open, so compacting it is skipped. */
+  inUse: boolean;
+  /** Couldn't tell who has it open; skipped just the same. */
+  holdersUnknown: boolean;
+  /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */
+  holdersUnknownReason?: string;
+  /** A compaction is running right now (it can take minutes). */
+  compacting: boolean;
   error?: string;
 }
 

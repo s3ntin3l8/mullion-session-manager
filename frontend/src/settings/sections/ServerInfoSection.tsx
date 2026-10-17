@@ -7,6 +7,7 @@ import type {
   SystemStats,
   TempStorageStatus,
   CacheStorageStatus,
+  OpencodeStorageStatus,
 } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
@@ -34,10 +35,12 @@ export function ServerInfoSection() {
   const [resourceError, setResourceError] = useState<string | null>(null);
   const [temp, setTemp] = useState<TempStorageStatus | null>(null);
   const [caches, setCaches] = useState<CacheStorageStatus | null>(null);
+  const [opencode, setOpencode] = useState<OpencodeStorageStatus | null>(null);
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
   const hasCaches = !!caches?.available && caches.caches.some((c) => c.exists);
+  const hasOpencode = !!opencode?.available && opencode.reclaimableBytes > 0;
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
   const visibleCaches = (caches?.caches ?? []).filter(
@@ -53,12 +56,14 @@ export function ServerInfoSection() {
       api.getDockerStorage(),
       api.getTempStorage().catch(() => null),
       api.getCacheStorage().catch(() => null),
+      api.getOpencodeStorage().catch(() => null),
     ])
-      .then(([nextStats, nextDocker, nextTemp, nextCaches]) => {
+      .then(([nextStats, nextDocker, nextTemp, nextCaches, nextOpencode]) => {
         setStats(nextStats);
         setDocker(nextDocker);
         setTemp(nextTemp);
         setCaches(nextCaches);
+        setOpencode(nextOpencode);
         setResourceError(null);
       })
       .catch((error: unknown) => {
@@ -104,10 +109,24 @@ export function ServerInfoSection() {
           mode === "aggressive" && caches?.available && selectedCaches.length > 0
             ? await settle("Cache cleanup failed.", () => api.pruneCacheStorage(selectedCaches))
             : null;
+        // Aggressive-only, and only while opencode isn't running (the server
+        // re-checks, so a session that started since this loaded is still safe).
+        const opencodeResult =
+          mode === "aggressive" &&
+          hasOpencode &&
+          !opencode?.inUse &&
+          !opencode?.holdersUnknown &&
+          !opencode?.compacting
+            ? await settle(
+                "The request ended before opencode's database cleanup reported back; it may still be running.",
+                () => api.pruneOpencodeStorage(),
+              )
+            : null;
         const parts = [
           ["Docker", dockerResult],
           ["temp files", tempResult],
           ["caches", cacheResult],
+          ["opencode database", opencodeResult],
         ].filter((part): part is [string, NonNullable<typeof dockerResult>] => part[1] !== null);
         const total = parts.reduce((sum, [, result]) => sum + result.reclaimedBytes, 0);
         const errors = parts
@@ -300,6 +319,34 @@ export function ServerInfoSection() {
           )}
         </>
       )}
+      {opencode?.available && (
+        <>
+          <div className="settings-stat-grid">
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">opencode database</div>
+              <div className="settings-stat-value">{formatBytes(opencode.fileBytes)}</div>
+            </div>
+            <div className="settings-stat-card">
+              <div className="settings-stat-label">opencode database: aggressive frees</div>
+              <div className="settings-stat-value">{formatBytes(opencode.reclaimableBytes)}</div>
+            </div>
+          </div>
+          <div className="settings-footer-note">
+            <code>{opencode.path}</code> keeps the space of every session it has deleted. Aggressive
+            cleanup compacts it (<code>VACUUM</code>), which loses no session data and returns the
+            exact figure shown.{" "}
+            {opencode.compacting
+              ? "It is being compacted right now, which can take several minutes; the figures above are from before it started."
+              : opencode.inUse
+                ? "opencode is running right now, so this is skipped until it is closed."
+                : opencode.holdersUnknown
+                  ? `Mullion couldn't tell whether opencode is running${
+                      opencode.holdersUnknownReason ? ` (${opencode.holdersUnknownReason})` : ""
+                    }, so this is skipped.`
+                  : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
+          </div>
+        </>
+      )}
       {caches?.available && visibleCaches.length > 0 && (
         <>
           <div className="settings-info-table">
@@ -338,7 +385,7 @@ export function ServerInfoSection() {
           </div>
         </>
       )}
-      {(docker?.available || temp?.available || hasCaches) && (
+      {(docker?.available || temp?.available || hasCaches || hasOpencode) && (
         <>
           {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
           <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
@@ -355,7 +402,7 @@ export function ServerInfoSection() {
               <ConfirmButton
                 variant="danger"
                 armedLabel="Confirm aggressive cleanup"
-                title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, and the npm cache"
+                title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, and free space inside opencode's database"
                 disabled={pruning}
                 onConfirm={() => runPrune("aggressive")}
               >

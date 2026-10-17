@@ -17,7 +17,8 @@ import type {
   DockerPruneMode,
   TempStorageStatus,
   CacheStorageStatus,
-  DockerPruneResult,
+  OpencodeStorageStatus,
+  PruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
 
@@ -80,14 +81,14 @@ export const systemApi = {
   getSystemStats: () => request<SystemStats>("/api/system-stats"),
   getDockerStorage: () => request<DockerStorageStatus>("/api/storage/docker"),
   pruneDockerStorage: (mode: DockerPruneMode = "safe") =>
-    request<DockerPruneResult>("/api/storage/docker/prune", {
+    request<PruneResult>("/api/storage/docker/prune", {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),
 
   getTempStorage: () => request<TempStorageStatus>("/api/storage/temp"),
   pruneTempStorage: (mode: DockerPruneMode = "safe") =>
-    request<DockerPruneResult>("/api/storage/temp/prune", {
+    request<PruneResult>("/api/storage/temp/prune", {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),
@@ -96,10 +97,16 @@ export const systemApi = {
   // The server empties only ids that are in this list AND in its saved
   // settings.diskCleanup.cacheDirs (see the route for why both).
   pruneCacheStorage: (cacheDirs: string[]) =>
-    request<DockerPruneResult>("/api/storage/caches/prune", {
+    request<PruneResult>("/api/storage/caches/prune", {
       method: "POST",
       body: JSON.stringify({ cacheDirs }),
     }),
+
+  getOpencodeStorage: () => request<OpencodeStorageStatus>("/api/storage/opencode"),
+  // Nothing to choose: the server compacts its own opencode database, and only
+  // while opencode isn't running.
+  pruneOpencodeStorage: () =>
+    request<PruneResult>("/api/storage/opencode/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

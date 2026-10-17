@@ -7,6 +7,7 @@ import {
   type DockerStorageStatus,
   type ServerInfo,
   type SystemStats,
+  type OpencodeStorageStatus,
   type TempStorageStatus,
   type CacheStorageStatus,
 } from "../../api/index.js";
@@ -69,6 +70,17 @@ const tempUnavailable: TempStorageStatus = {
   claudeScratch: { warnings: [] },
 };
 
+const noOpencode: OpencodeStorageStatus = {
+  available: false,
+  path: "/home/me/.local/share/opencode/opencode.db",
+  fileBytes: 0,
+  reclaimableBytes: 0,
+  liveBytes: 0,
+  inUse: false,
+  holdersUnknown: false,
+  compacting: false,
+};
+
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
 
 function setup(
@@ -76,10 +88,12 @@ function setup(
     docker?: DockerStorageStatus;
     temp?: TempStorageStatus;
     caches?: CacheStorageStatus;
+    opencode?: OpencodeStorageStatus;
   } = {},
 ) {
   useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
   vi.spyOn(api, "getCacheStorage").mockResolvedValue(overrides.caches ?? noCaches);
+  vi.spyOn(api, "getOpencodeStorage").mockResolvedValue(overrides.opencode ?? noOpencode);
   vi.spyOn(api, "getServerInfo").mockResolvedValue(info);
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(overrides.docker ?? docker);
@@ -247,6 +261,112 @@ describe("Settings -> Server info resources", () => {
       "x.json is unparseable and its process may be running",
     );
     expect(screen.getByText(/9\.json is unparseable; skipped/)).toBeInTheDocument();
+  });
+
+  describe("opencode database compaction (#1604)", () => {
+    const opencode: OpencodeStorageStatus = {
+      available: true,
+      path: "/home/me/.local/share/opencode/opencode.db",
+      fileBytes: 17 * GIB,
+      reclaimableBytes: 15 * GIB,
+      liveBytes: 2 * GIB,
+      inUse: false,
+      holdersUnknown: false,
+      compacting: false,
+    };
+
+    it("shows the file size and what compacting returns, and nothing when opencode is absent", async () => {
+      setup({ opencode });
+      const { unmount } = render(<ServerInfoSection />);
+      expect(await screen.findByText("17 GiB")).toBeInTheDocument();
+      expect(screen.getByText("15 GiB")).toBeInTheDocument();
+      expect(screen.getByText(/skipped whenever opencode is running/)).toBeInTheDocument();
+      unmount();
+      vi.restoreAllMocks();
+      setup();
+      render(<ServerInfoSection />);
+      await screen.findByText("Disk cleanup");
+      expect(screen.queryByText("opencode database")).not.toBeInTheDocument();
+    });
+
+    it("compacts only in aggressive mode and reports it", async () => {
+      setup({ opencode });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneTempStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({
+        output: "Compacted opencode.db.",
+        reclaimedBytes: 15 * GIB,
+      });
+      render(<ServerInfoSection />);
+      const safe = await screen.findByRole("button", { name: "Clean up (safe)…" });
+      await userEvent.click(safe);
+      await userEvent.click(safe);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(await screen.findByText(/opencode database 15 GiB/)).toBeInTheDocument();
+      expect(api.pruneOpencodeStorage).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't try when it can't tell whether opencode is running, and says why", async () => {
+      setup({
+        opencode: {
+          ...opencode,
+          holdersUnknown: true,
+          holdersUnknownReason: "cannot list /proc/1234/fd (EACCES)",
+        },
+      });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      render(<ServerInfoSection />);
+      expect(
+        await screen.findByText(/couldn't tell whether opencode is running/),
+      ).toHaveTextContent("(cannot list /proc/1234/fd (EACCES))");
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+    });
+
+    it("shows a compaction in progress and doesn't start another", async () => {
+      setup({ opencode: { ...opencode, compacting: true } });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      render(<ServerInfoSection />);
+      expect(await screen.findByText(/being compacted right now/)).toBeInTheDocument();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+    });
+
+    it("tells you a dropped connection doesn't mean the compaction failed", async () => {
+      setup({ opencode });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockRejectedValue(new Error("network"));
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(await screen.findByText(/it may still be running/)).toBeInTheDocument();
+    });
+
+    it("doesn't try while opencode is running, and says why", async () => {
+      setup({ opencode: { ...opencode, inUse: true } });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      render(<ServerInfoSection />);
+      expect(await screen.findByText(/opencode is running right now/)).toBeInTheDocument();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+    });
   });
 
   describe("opt-in ~/.cache cleanup (#1606)", () => {
