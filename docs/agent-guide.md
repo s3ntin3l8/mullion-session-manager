@@ -281,7 +281,8 @@ Settings → Sessions if you hit it); `cwd`, if you override it, must stay
 inside the project directory — or be another registered git worktree of the
 project's own repo (`git worktree list`), e.g. a sibling `repo-pr408` checkout.
 Any other outside path is rejected (400 `cwd-outside-project`). A spawned child's panel does not open on its
-own unless a human has separately turned on "Auto-open child session panels"
+own unless the spawn carries `open: "right"|"below"` (CLI `--open`; only a hint —
+dropped if your panel isn't open in the human's current workspace within about a minute) or a human has separately turned on "Auto-open child session panels"
 (`settings.sessions.autoOpenChildPanels`, Settings → Sessions, default off) —
 either way, the child always shows in the sidebar.
 This is a genuine child session — it survives if you're later killed

@@ -155,6 +155,7 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "model",
   "smallModel",
   "seedPrompt",
+  "open",
 ];
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {

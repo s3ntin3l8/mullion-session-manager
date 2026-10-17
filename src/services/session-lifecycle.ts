@@ -131,6 +131,9 @@ export interface CreateSessionBody {
   // explicitly (see createSessionRecord's validation below) — the socket op
   // is the narrow, session-scoped path to the same outcome, not the only one.
   parentSessionId?: number;
+  // Issue #1624 — advisory placement hint for the frontend (see
+  // sessions.openHint in db/schema.ts). Only meaningful with parentSessionId.
+  open?: "right" | "below";
   // Issue #822 — extra env vars for this session's launch, on top of
   // whatever a dock control (project-config.ts's normalizeRawControl) or
   // direct caller supplies. Persisted to sessions.env (schema.ts) so a
@@ -1029,8 +1032,18 @@ function insertRow(
   parentId: number | null,
   maxChildren: number,
 ): Step<{ row: SessionRow }> {
-  const { projectId, command, name, nameLocked, kind, skipPermissions, env, model, smallModel } =
-    params;
+  const {
+    projectId,
+    command,
+    name,
+    nameLocked,
+    kind,
+    skipPermissions,
+    env,
+    model,
+    smallModel,
+    open,
+  } = params;
   let inserted;
   try {
     inserted = app.db.transaction((tx) => {
@@ -1053,6 +1066,7 @@ function insertRow(
           ...(nameLocked !== undefined ? { nameLocked } : {}),
           ...(skipPermissions !== undefined ? { skipPermissions } : {}),
           ...(parentId !== null ? { parentSessionId: parentId } : {}),
+          ...(parentId !== null && open !== undefined ? { openHint: open } : {}),
           ...(env !== undefined ? { env: JSON.stringify(env) } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(smallModel !== undefined ? { smallModel } : {}),

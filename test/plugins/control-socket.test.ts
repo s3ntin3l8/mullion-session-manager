@@ -1327,6 +1327,24 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("session scope: forwards the advisory `open` hint and stores it on the child (#1624)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", open: "below" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect((reply.result as { openHint: unknown }).openHint).toBe("below");
+        socket.destroy();
+      });
+
       it("session scope: a parent whose row is no longer active cannot spawn children (#1518)", async () => {
         app = await buildApp();
         await app.ready();

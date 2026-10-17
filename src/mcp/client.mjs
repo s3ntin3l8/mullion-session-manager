@@ -418,6 +418,7 @@ export class MullionClient {
     parentSessionId,
     model,
     smallModel,
+    open,
   } = {}) {
     const body = { command };
     if (name !== undefined) body.name = name;
@@ -438,6 +439,7 @@ export class MullionClient {
     if (parentSessionId !== undefined) body.parentSessionId = parentSessionId;
     if (model !== undefined) body.model = model;
     if (smallModel !== undefined) body.smallModel = smallModel;
+    if (open !== undefined) body.open = open;
     try {
       return await this.controlRequest("sessions.spawn_child", body);
     } catch (err) {

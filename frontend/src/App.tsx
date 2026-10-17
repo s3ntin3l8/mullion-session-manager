@@ -36,8 +36,9 @@ import {
   openSessionPanel,
   attentionTransitionPanelIds,
   focusPanelForTier,
-  newChildSessionIds,
   childPanelPosition,
+  planAutoOpenChildren,
+  freshHintedChildIds,
   shouldAutoOpenChildPanels,
   isTiledPanel,
   canLaunchTerminal,
@@ -698,7 +699,12 @@ export function App() {
       shouldAutoOpenChildPanels({
         workspaceRestored,
         hasDockviewApi: dockviewApi !== null,
-        autoOpenChildPanels: settings.sessions.autoOpenChildPanels,
+        // A spawn-time `open` hint opens its own child even with the setting
+        // off, so the gate must let the effect run when any child carries one
+        // (the per-child decision is childWantsAutoOpen below).
+        autoOpenChildPanels:
+          settings.sessions.autoOpenChildPanels ||
+          freshHintedChildIds(sessions, Date.now()).size > 0,
         sessionsLoaded,
         restoring: restoringRef.current,
       })
@@ -708,51 +714,34 @@ export function App() {
       // doesn't propagate through the helper call — assert it once here so
       // every use below stays non-nullable without a redundant local check.
       const api = dockviewApi!;
-      if (!hasSeededChildSessionsRef.current) {
-        hasSeededChildSessionsRef.current = true;
-      } else {
-        for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
-          const child = sessions.find((s) => s.id === childId);
-          if (!child || child.parentSessionId === null) continue;
-          const panelId = `session-${child.id}`;
-          if (api.getPanel(panelId)) continue;
-          const position = childPanelPosition(api, child.parentSessionId);
-          // Independent review finding #2 (PR #430) — skip entirely rather
-          // than falling back to a position-less addPanel() when the
-          // parent's own panel isn't part of the CURRENT dockview instance
-          // (different/inactive workspace, or the parent was simply never
-          // opened). A bare addPanel() with no position lands in whichever
-          // group is currently active, silently injecting an unrelated
-          // session's terminal into whatever the user happens to be
-          // looking at right now — and onDidLayoutChange then persists it
-          // into that (wrong) workspace's saved layout. The child still
-          // shows in the sidebar regardless (this effect only ever governs
-          // whether its panel auto-opens); the user can open it manually.
-          if (!position) continue;
-          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
-          api.addPanel({
-            id: panelId,
-            component: "terminal",
-            tabComponent: "terminal",
-            title: initialPaneTitle(child, projectName),
-            params: { sessionId: child.id },
-            position,
-          });
-        }
+      const plan = planAutoOpenChildren({
+        sessions,
+        previouslySeen: seenChildSessionIdsRef.current,
+        seeded: hasSeededChildSessionsRef.current,
+        autoOpenChildPanels: settings.sessions.autoOpenChildPanels,
+        now: Date.now(),
+        hasPanel: (panelId) => Boolean(api.getPanel(panelId)),
+        positionFor: (child) =>
+          childPanelPosition(api, child.parentSessionId!, child.openHint ?? "right"),
+      });
+      hasSeededChildSessionsRef.current = true;
+      for (const { child, position } of plan.toOpen) {
+        const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+        api.addPanel({
+          id: `session-${child.id}`,
+          component: "terminal",
+          tabComponent: "terminal",
+          title: initialPaneTitle(child, projectName),
+          params: { sessionId: child.id },
+          position,
+        });
       }
       // Hermes review finding (PR #430) — only advance the "seen" set when
       // this tick actually evaluated the current sessions against the gate
-      // above. Updating it unconditionally (the previous version of this
-      // effect did, on every render regardless of the gate) would mark a
-      // child that arrived while the gate was transiently down (workspace
-      // mid-restore, dockviewApi not yet ready, or the setting itself off)
-      // as already "seen" without ever having been considered — so once the
-      // gate later became true, `newChildSessionIds` would no longer see it
-      // as new and its panel would never open, permanently, until a manual
-      // open. Leaving the ref stale while the gate is down means a child
-      // that arrived during that window is still correctly detected as new
-      // the next time the gate is true.
-      seenChildSessionIdsRef.current = new Set(sessions.map((s) => s.id));
+      // above, so a child that arrived while the gate was down is still
+      // detected as new once it opens. planAutoOpenChildren also leaves
+      // fresh hinted children it didn't open out of the set (retry).
+      seenChildSessionIdsRef.current = plan.nextSeen;
     }
   }, [
     sessions,

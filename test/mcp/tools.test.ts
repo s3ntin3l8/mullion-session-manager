@@ -177,6 +177,16 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ id: 7, parentSessionId: 3 });
   });
 
+  it("spawn_child_session forwards a valid `open` hint and rejects an invalid one (#1624)", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });
+    await tool.handler({ command: "bash", open: "right" }, { spawnChildSession });
+    expect(spawnChildSession).toHaveBeenCalledWith(expect.objectContaining({ open: "right" }));
+    await expect(
+      tool.handler({ command: "bash", open: "left" }, { spawnChildSession }),
+    ).rejects.toThrow(/open must be/);
+  });
+
   // Issue #1291 — parentSessionId wasn't in this tool's schema at all
   // before this fix, so it could never reach client.spawnChildSession's
   // own (already-supported) explicit-override param.

@@ -4429,6 +4429,49 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("stores the advisory open hint on a child and returns it (issue #1624)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const parentId = await createActiveSession(app, projectId);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", parentSessionId: parentId, open: "below" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().openHint).toBe("below");
+
+      // Reaches the list the frontend polls, via the row spread.
+      const list = await app.inject({ method: "GET", url: "/api/sessions" });
+      const listed = list.json().find((s: { id: number }) => s.id === res.json().id);
+      expect(listed.openHint).toBe("below");
+
+      await app.close();
+    });
+
+    it("ignores `open` on a session with no parent, and rejects an invalid value", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+
+      const noParent = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", open: "right" },
+      });
+      expect(noParent.statusCode).toBe(201);
+      expect(noParent.json().openHint).toBeNull();
+
+      const invalid = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", open: "left" },
+      });
+      expect(invalid.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     it("400s an unknown parentSessionId", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);

@@ -423,9 +423,94 @@ export function newChildSessionIds(
 export function childPanelPosition(
   api: DockviewApi,
   parentSessionId: number,
-): { referencePanel: IDockviewPanel; direction: "right" } | undefined {
+  direction: "right" | "below" = "right",
+): { referencePanel: IDockviewPanel; direction: "right" | "below" } | undefined {
   const referencePanel = api.getPanel(`session-${parentSessionId}`);
-  return referencePanel ? { referencePanel, direction: "right" } : undefined;
+  return referencePanel ? { referencePanel, direction } : undefined;
+}
+
+// Issue #1624 — whether a newly appeared child's panel should auto-open: the
+// global setting opts every child in, and a spawn-time `open` hint (the
+// agent's explicit request, carried on the child's row) opts that one child
+// in even when the setting is off.
+export function childWantsAutoOpen(
+  child: Pick<Session, "openHint" | "createdAt">,
+  autoOpenChildPanels: boolean,
+  now: number,
+): boolean {
+  // The hint is only actionable inside its freshness window, checked here at
+  // the decision point so a stale never-opened child can't be re-armed by a
+  // later hint widening the gate.
+  return autoOpenChildPanels || (Boolean(child.openHint) && isFreshHint(child.createdAt, now));
+}
+
+// How long a spawn-time `open` hint stays actionable. The hint is never
+// cleared server-side, so without a bound an active hinted child whose parent
+// panel isn't open would be retried (and could pop open) for the tab's whole
+// lifetime, and a page reload would replay every old hint.
+export const FRESH_HINT_WINDOW_MS = 60_000;
+
+function isFreshHint(createdAt: string, now: number): boolean {
+  // max(0, …): a server clock ahead of the client reads as "just spawned".
+  return Math.max(0, now - Date.parse(createdAt)) < FRESH_HINT_WINDOW_MS;
+}
+
+/** Ids of active, hinted children spawned within FRESH_HINT_WINDOW_MS — the
+ * ones the auto-open effect must keep "unseen" so a later tick still opens
+ * them (seeding tick, parent panel not open yet). */
+export function freshHintedChildIds(
+  sessions: ReadonlyArray<Pick<Session, "id" | "openHint" | "status" | "createdAt">>,
+  now: number,
+): Set<number> {
+  const ids = new Set<number>();
+  for (const s of sessions) {
+    if (
+      s.openHint &&
+      s.status === "active" &&
+      now - Date.parse(s.createdAt) < FRESH_HINT_WINDOW_MS
+    ) {
+      ids.add(s.id);
+    }
+  }
+  return ids;
+}
+
+type ChildPosition = NonNullable<ReturnType<typeof childPanelPosition>>;
+
+/** One tick of the auto-open-child-panel effect (App.tsx), as a pure function
+ * so the seed / retry / opened bookkeeping is unit-tested instead of probed.
+ * `toOpen` are the panels to add; `nextSeen` is the seen set to store —
+ * fresh hinted children that were NOT opened this tick (seeding tick, or the
+ * parent's panel isn't open yet) stay out of it so a later tick retries them. */
+export function planAutoOpenChildren(opts: {
+  sessions: Session[];
+  previouslySeen: ReadonlySet<number>;
+  seeded: boolean;
+  autoOpenChildPanels: boolean;
+  now: number;
+  hasPanel: (panelId: string) => boolean;
+  positionFor: (child: Session) => ChildPosition | undefined;
+}): { toOpen: { child: Session; position: ChildPosition }[]; nextSeen: Set<number> } {
+  const retry = freshHintedChildIds(opts.sessions, opts.now);
+  const toOpen: { child: Session; position: ChildPosition }[] = [];
+  if (opts.seeded) {
+    for (const childId of newChildSessionIds(opts.sessions, opts.previouslySeen)) {
+      const child = opts.sessions.find((s) => s.id === childId);
+      if (!child || child.parentSessionId === null) continue;
+      if (opts.hasPanel(`session-${child.id}`)) continue;
+      if (!childWantsAutoOpen(child, opts.autoOpenChildPanels, opts.now)) continue;
+      // No position = the parent's panel isn't in the current dockview (PR
+      // #430): skip rather than add a position-less panel to a random group.
+      const position = opts.positionFor(child);
+      if (!position) continue;
+      toOpen.push({ child, position });
+      retry.delete(child.id);
+    }
+  }
+  return {
+    toOpen,
+    nextSeen: new Set(opts.sessions.filter((s) => !retry.has(s.id)).map((s) => s.id)),
+  };
 }
 
 // Pure gate for the auto-open-child-panel effect (App.tsx) — pulled out so

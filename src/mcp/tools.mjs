@@ -294,9 +294,21 @@ const spawnChildSession = {
           "and parentSessionId is set, inherits the parent session's smallModel. Only " +
           "honored when command resolves to an opencode adapter; ignored otherwise.",
       },
+      open: {
+        type: "string",
+        enum: ["right", "below"],
+        description:
+          "Ask the dashboard to open the child's terminal panel next to yours ('right' of, " +
+          "or 'below', your panel) so the human sees it without hunting. Only a hint: it " +
+          "takes effect when the human has your panel open in their current workspace, and " +
+          "is dropped otherwise (about a minute after the spawn).",
+      },
     },
   },
   async handler(args, client) {
+    if (args?.open !== undefined && args.open !== "right" && args.open !== "below") {
+      throw new Error("open must be 'right' or 'below'");
+    }
     const result = await client.spawnChildSession({
       command: args?.command,
       name: args?.name,
@@ -307,6 +319,7 @@ const spawnChildSession = {
       parentSessionId: args?.parentSessionId,
       model: args?.model,
       smallModel: args?.smallModel,
+      open: args?.open,
     });
     return JSON.stringify(result);
   },

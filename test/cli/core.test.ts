@@ -1272,6 +1272,26 @@ describe("runCommand", () => {
         expect(calls).toBe(2);
       });
 
+      it("session spawn-child sends --open and rejects other values (#1624)", async () => {
+        const request = vi.fn(async () => ({ id: 5 }));
+        const code = await runCommand(
+          ["session", "spawn-child", "--command", "bash", "--parent", "3", "--open", "below"],
+          { client: fakeClient({ request }), io: fakeIo() },
+        );
+        expect(code).toBe(0);
+        expect(request).toHaveBeenCalledWith("sessions.spawn_child", {
+          command: "bash",
+          parentSessionId: "3",
+          open: "below",
+        });
+        expect(
+          await runCommand(
+            ["session", "spawn-child", "--command", "bash", "--parent", "3", "--open", "left"],
+            { client: fakeClient({ request }), io: fakeIo() },
+          ),
+        ).toBe(2);
+      });
+
       it("session spawn-child does not retry when --parent/--session was already given", async () => {
         const client = fakeClient({ request: vi.fn(async () => ({ id: 5 })) });
         const io = fakeIo();

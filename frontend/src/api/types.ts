@@ -541,6 +541,9 @@ export interface Session {
   // DB column, so it reaches REST automatically via withLiveInfo's `...row`
   // spread — no SessionInfo/LiveInfoKey change needed on the backend).
   parentSessionId: number | null;
+  // Issue #1624 — advisory placement hint from spawn_child's `open`: open this
+  // child's panel beside its parent even when the auto-open setting is off.
+  openHint?: "right" | "below" | null;
   name: string | null;
   // True once the user has explicitly renamed this session (PATCH
   // /api/sessions/:id) — false for a launch-time name pattern (see

@@ -19,6 +19,9 @@ raise `settings.sessions.maxChildSessionsPerParent` if you hit it); `cwd`,
 if overridden, must stay inside the project directory or be another registered
 git worktree of the project's repo (`git worktree list`, e.g. a sibling
 `repo-pr408` checkout); any other outside path is rejected.
+Pass `open: "right"|"below"` (CLI `--open right|below`) to have the dashboard
+open the child's panel beside yours, so the human sees it without hunting —
+only a hint: dropped if your panel isn't open in their current workspace within about a minute of the spawn.
 
 Once spawned, you can supervise your children without full scope:
 `mullion session children` / `list_child_sessions` shows each child's derived

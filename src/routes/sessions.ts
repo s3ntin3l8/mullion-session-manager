@@ -95,6 +95,9 @@ const createSessionSchema = {
       worktreeRefresh: { type: "boolean" },
       skipPermissions: { type: "boolean" },
       parentSessionId: { type: "integer" },
+      // Issue #1624 — where the frontend should open this session's panel
+      // relative to its parent (spawn_child's `open`). Advisory only.
+      open: { type: "string", enum: ["right", "below"] },
       env: {
         type: "object",
         maxProperties: MAX_SESSION_ENV_ENTRIES,
