@@ -206,7 +206,10 @@ function buildSession(
   bridgeId: string,
 ): {
   session: BridgeSession;
-  row: Pick<BridgeRow, "sessionIdEnc" | "sessionSecretEnc" | "sessionExpiresAt">;
+  row: Pick<
+    BridgeRow,
+    "sessionIdEnc" | "sessionSecretEnc" | "sessionExpiresAt" | "prevSessionIdEnc"
+  >;
 } {
   const sessionId = crypto.randomBytes(32).toString("hex");
   const sessionSecret = crypto.randomBytes(32).toString("hex");
@@ -217,14 +220,9 @@ function buildSession(
       sessionIdEnc: app.encryption.encryptString(sessionId),
       sessionSecretEnc: app.encryption.encryptString(sessionSecret),
       sessionExpiresAt: expiresAt,
+      prevSessionIdEnc: null,
     },
   };
-}
-
-function issueSession(app: FastifyInstance, bridgeId: string): BridgeSession {
-  const { session, row } = buildSession(app, bridgeId);
-  app.db.update(bridges).set(row).where(eq(bridges.id, bridgeId)).run();
-  return session;
 }
 
 export interface RedeemPairingInput {
@@ -307,23 +305,32 @@ export function redeemPairingCode(
   return session;
 }
 
-// Shared by rotateBridgeSession and verifyBridgeSession — the read-only
-// "does this bridgeId+sessionId match a live, unexpired session" check,
-// with no side effects. Mirrors host-registry.ts's findLiveSession
-// exactly.
+// Shared by rotateBridgeSession, extendBridgeSession and verifyBridgeSession —
+// the read-only "does this bridgeId+sessionId match a live, unexpired
+// session" check, with no side effects. Matches either the CURRENT id or the
+// PREVIOUS one a renewal just superseded (mullion-helper#76: a renewal reply
+// can be lost in transit, and the helper would otherwise be locked out with
+// the id it still holds). Both comparisons always run so timing doesn't
+// reveal which one matched (when no previous id is stored, only the current
+// comparison does real work). The expiry check applies to both.
+type SessionMatch = { row: BridgeRow; matched: "current" | "previous" };
+
 function findLiveSession(
   app: FastifyInstance,
   bridgeId: string,
   presentedSessionId: string,
-): BridgeRow | null {
+): SessionMatch | null {
   const row = getBridgeRow(app, bridgeId);
   if (!row || !row.sessionIdEnc) return null;
-  const decrypted = app.encryption.decryptString(row.sessionIdEnc);
+  const current = app.encryption.decryptString(row.sessionIdEnc);
+  const previous = row.prevSessionIdEnc ? app.encryption.decryptString(row.prevSessionIdEnc) : "";
   // Issue #1059 — both sides are fixed-length (server-issued sessionId vs
   // inbound bearer); same assumption as the pairing-secret check above.
-  if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
+  const isCurrent = timingSafeTokenMatch(presentedSessionId, current);
+  const isPrevious = previous !== "" && timingSafeTokenMatch(presentedSessionId, previous);
+  if (!isCurrent && !isPrevious) return null;
   if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
-  return row;
+  return { row, matched: isCurrent ? "current" : "previous" };
 }
 
 /** Renewal — the helper re-authenticates with its own CURRENT session id
@@ -333,15 +340,35 @@ function findLiveSession(
  * rotateSession's own null case (401), so the helper's retry logic can
  * fall back to prompting for a fresh pairing code — there's no bootstrap
  * credential left to silently fall back to once a session is lost, unlike
- * an agent host's MULLION_AGENT_TOKEN. */
+ * an agent host's MULLION_AGENT_TOKEN.
+ *
+ * Presenting the current id rotates it and keeps the superseded id valid
+ * (as `prevSessionIdEnc`) until the new one is first used. Presenting the
+ * PREVIOUS id — a retry after a lost reply — is idempotent: nothing
+ * rotates, and the already-issued current id and expiry are returned. */
 export function rotateBridgeSession(
   app: FastifyInstance,
   bridgeId: string,
   presentedSessionId: string,
 ): BridgeSession | null {
-  const row = findLiveSession(app, bridgeId, presentedSessionId);
-  if (!row) return null;
-  return issueSession(app, bridgeId);
+  const found = findLiveSession(app, bridgeId, presentedSessionId);
+  if (!found) return null;
+  const { row, matched } = found;
+  if (matched === "previous") {
+    return {
+      bridgeId,
+      sessionId: app.encryption.decryptString(row.sessionIdEnc!),
+      sessionSecret: row.sessionSecretEnc ? app.encryption.decryptString(row.sessionSecretEnc) : "",
+      expiresAt: row.sessionExpiresAt!,
+    };
+  }
+  const { session, row: sessionRow } = buildSession(app, bridgeId);
+  app.db
+    .update(bridges)
+    .set({ ...sessionRow, prevSessionIdEnc: row.sessionIdEnc })
+    .where(eq(bridges.id, bridgeId))
+    .run();
+  return session;
 }
 
 /** Slides a live session's expiry forward to a full TTL from now WITHOUT
@@ -356,9 +383,22 @@ export function extendBridgeSession(
   bridgeId: string,
   presentedSessionId: string,
 ): Date | null {
-  if (!findLiveSession(app, bridgeId, presentedSessionId)) return null;
+  const found = findLiveSession(app, bridgeId, presentedSessionId);
+  if (!found) return null;
+  if (found.matched === "previous") {
+    // The previous id is only a recovery path for a lost renewal reply: it
+    // must not extend the session, so a leaked superseded id cannot keep the
+    // session alive. The caller still gets the (unchanged) expiry.
+    return found.row.sessionExpiresAt!;
+  }
   const expiresAt = sessionExpiryFromNow();
-  app.db.update(bridges).set({ sessionExpiresAt: expiresAt }).where(eq(bridges.id, bridgeId)).run();
+  // First use of the current (rotated) id proves the helper received it, so
+  // the superseded id is retired.
+  app.db
+    .update(bridges)
+    .set({ sessionExpiresAt: expiresAt, prevSessionIdEnc: null })
+    .where(eq(bridges.id, bridgeId))
+    .run();
   return expiresAt;
 }
 
@@ -383,7 +423,12 @@ export function verifyBridgeSession(
 export function clearBridgeSession(app: FastifyInstance, bridgeId: string): void {
   app.db
     .update(bridges)
-    .set({ sessionIdEnc: null, sessionSecretEnc: null, sessionExpiresAt: null })
+    .set({
+      sessionIdEnc: null,
+      sessionSecretEnc: null,
+      sessionExpiresAt: null,
+      prevSessionIdEnc: null,
+    })
     .where(eq(bridges.id, bridgeId))
     .run();
 }

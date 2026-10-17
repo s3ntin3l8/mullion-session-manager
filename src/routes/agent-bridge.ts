@@ -383,7 +383,9 @@ export async function agentBridgeRoute(app: FastifyInstance) {
   // connection and its credential's lifecycle are independent concerns, so
   // renewing never has to touch (or risk disrupting) a connection that may
   // be mid-forward. `rotateBridgeSession` (bridge-registry.ts) already does
-  // exactly this — this route is the "none exists yet" wire path its own
+  // exactly this (the previous id stays valid until the rotated one is first
+  // used, and renewing with it is idempotent, so a lost reply is
+  // recoverable) — this route is the "none exists yet" wire path its own
   // doc comment has been flagging since PR #860. session_secret is
   // deliberately NOT returned here (see the "pair" reply above, which also
   // dropped it this round) — the "auth" WS handshake and this route both
@@ -504,7 +506,9 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           return;
         }
 
-        // parsed.type === "auth" — a plain, non-rotating verify. Round 3
+        // parsed.type === "auth" — a plain, non-rotating verify (it accepts
+        // the previous id a renewal just superseded too, and retires that
+        // id once the current one is presented). Round 3
         // (session renewal) deliberately does NOT fold rotation in here:
         // rotating on every reconnect would mean a reconnect immediately
         // following one that JUST rotated (a flappy connection, or this
