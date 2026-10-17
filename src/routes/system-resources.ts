@@ -18,6 +18,7 @@ import {
   type TempPruneMode,
 } from "../services/temp-storage.js";
 import { inspectCacheStorage, pruneCacheStorage } from "../services/cache-storage.js";
+import { inspectOpencodeStorage, pruneOpencodeStorage } from "../services/opencode-storage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 
 const STATS_CACHE_MS = 10_000;
@@ -155,6 +156,40 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         }
         return reply.internalServerError(
           error instanceof Error ? error.message : "Temp file cleanup failed",
+        );
+      }
+    },
+  );
+
+  let opencodeCached: {
+    expiresAt: number;
+    value: Promise<Awaited<ReturnType<typeof inspectOpencodeStorage>>>;
+  } | null = null;
+
+  app.get("/api/storage/opencode", async () => {
+    if (opencodeCached && opencodeCached.expiresAt > Date.now()) return opencodeCached.value;
+    const value = inspectOpencodeStorage();
+    opencodeCached = { expiresAt: Date.now() + DOCKER_STORAGE_CACHE_MS, value };
+    return value;
+  });
+
+  // No body: there is nothing a client can choose. The path is fixed server-side
+  // and the VACUUM is skipped whenever opencode has the database open.
+  app.post(
+    "/api/storage/opencode/prune",
+    { config: { rateLimit: DOCKER_PRUNE_RATE_LIMIT } },
+    async (_request, reply) => {
+      try {
+        const result = await pruneOpencodeStorage();
+        cached = null;
+        opencodeCached = null;
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message === "OPENCODE_PRUNE_IN_PROGRESS") {
+          return reply.conflict("opencode database cleanup is already running");
+        }
+        return reply.internalServerError(
+          error instanceof Error ? error.message : "opencode database cleanup failed",
         );
       }
     },

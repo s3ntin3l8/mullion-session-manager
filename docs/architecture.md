@@ -170,7 +170,9 @@ way as a namespaced one.
   surface — CPU/memory/disk sampling plus the Docker, host temp-file
   (`services/temp-storage.ts`, with Claude scratch in
   `services/claude-scratch.ts`) and opt-in `~/.cache`
-  (`services/cache-storage.ts`) cleanup tiers; see `docs/disk-cleanup.md`),
+  (`services/cache-storage.ts`) cleanup tiers, plus a guarded `VACUUM` of
+  opencode's own database (`services/opencode-storage.ts`); see
+  `docs/disk-cleanup.md`),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals

@@ -122,6 +122,20 @@ export interface TempStorageStatus {
   error?: string;
 }
 
+export interface OpencodeStorageStatus {
+  /** False when opencode has no database on this host (or it couldn't be read). */
+  available: boolean;
+  path: string;
+  /** The database plus its write-ahead log, as on disk. */
+  fileBytes: number;
+  /** Free pages a VACUUM would return; exact, not an estimate. */
+  reclaimableBytes: number;
+  liveBytes: number;
+  /** Another process has it open, so compacting it is skipped. */
+  inUse: boolean;
+  error?: string;
+}
+
 export interface Project {
   id: number;
   name: string;
