@@ -11,6 +11,7 @@ import {
   deleteBridge,
   decodePairingPayload,
   encodePairingPayload,
+  extendBridgeSession,
   getBridgeRow,
   issuePairingCode,
   listBridges,
@@ -314,6 +315,67 @@ describe("bridge-registry", () => {
         ).toString("base64url");
         expect(decodePairingPayload(malformed)).toBeNull();
       }
+    });
+  });
+
+  describe("session expiry precision", () => {
+    it("the expiry returned from redeem and rotate equals the stored row value (whole seconds)", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const session = redeemPairingCode(app, pairing.code, { name: "laptop" })!;
+      expect(session.expiresAt.getTime() % 1000).toBe(0);
+      expect(getBridgeRow(app, session.bridgeId)!.sessionExpiresAt!.getTime()).toBe(
+        session.expiresAt.getTime(),
+      );
+      const rotated = rotateBridgeSession(app, session.bridgeId, session.sessionId)!;
+      expect(getBridgeRow(app, session.bridgeId)!.sessionExpiresAt!.getTime()).toBe(
+        rotated.expiresAt.getTime(),
+      );
+      await app.close();
+    });
+  });
+
+  describe("extendBridgeSession", () => {
+    it("slides the expiry forward without changing the session id", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const session = redeemPairingCode(app, pairing.code, { name: "laptop" })!;
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const soon = new Date(Date.now() + 60 * 1000);
+      app.db
+        .update(bridges)
+        .set({ sessionExpiresAt: soon })
+        .where(eq(bridges.id, session.bridgeId))
+        .run();
+      const before = getBridgeRow(app, session.bridgeId)!;
+
+      const expiresAt = extendBridgeSession(app, session.bridgeId, session.sessionId);
+
+      expect(expiresAt!.getTime()).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1000);
+      const after = getBridgeRow(app, session.bridgeId)!;
+      expect(after.sessionExpiresAt!.getTime()).toBe(expiresAt!.getTime());
+      expect(after.sessionIdEnc).toBe(before.sessionIdEnc);
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("refuses a wrong id, an expired session, and an unknown bridge", async () => {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const session = redeemPairingCode(app, pairing.code, { name: "laptop" })!;
+      expect(extendBridgeSession(app, session.bridgeId, "wrong")).toBeNull();
+      expect(extendBridgeSession(app, "no-such-bridge", session.sessionId)).toBeNull();
+
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(bridges)
+        .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(bridges.id, session.bridgeId))
+        .run();
+      expect(extendBridgeSession(app, session.bridgeId, session.sessionId)).toBeNull();
+      await app.close();
     });
   });
 

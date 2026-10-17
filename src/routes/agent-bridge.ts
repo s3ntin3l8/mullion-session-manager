@@ -3,6 +3,7 @@ import type { WebSocket as NodeWebSocket, RawData } from "ws";
 import {
   deleteBridge,
   encodePairingPayload,
+  extendBridgeSession,
   getBridgeRow,
   issuePairingCode,
   listBridgeIds,
@@ -11,7 +12,6 @@ import {
   reorderBridges,
   rotateBridgeSession,
   touchBridgeLastSeen,
-  verifyBridgeSession,
 } from "../services/bridge-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import { requestScheme } from "../services/request-scheme.js";
@@ -174,7 +174,22 @@ function isClientHandshake(value: unknown): value is ClientHandshake {
   return false;
 }
 
-function sendError(socket: NodeWebSocket, message: string): void {
+// Every rejected handshake is logged with its reason: before this, a
+// reject left only the generic "incoming request" line, so "the helper
+// connected but never showed up" was undiagnosable from the journal.
+function sendError(
+  app: FastifyInstance,
+  socket: NodeWebSocket,
+  message: string,
+  context: { handshakeType?: string; bridgeId?: string } = {},
+): void {
+  // bridge_id is client-supplied and unauthenticated here — cap it so a
+  // peer can't write arbitrarily large log lines.
+  const bridgeId = context.bridgeId?.slice(0, 64);
+  app.log.warn(
+    { ...context, ...(bridgeId === undefined ? {} : { bridgeId }), reason: message },
+    "agent-bridge handshake rejected",
+  );
   if (socket.readyState !== socket.OPEN) return;
   socket.send(JSON.stringify({ type: "error", message }));
   socket.close();
@@ -244,7 +259,7 @@ function trackBridge(
   // which code/reason). This is the one place every such teardown for this
   // bridge funnels through.
   mux.onClose((reason) => {
-    app.log.debug({ bridgeId, reason }, "ssh-agent bridge connection closed");
+    app.log.info({ bridgeId, reason }, "ssh-agent bridge connection closed");
   });
   // A bridge going from zero-connected to one-connected (or a genuinely
   // new bridge arriving) changes ssh-agent-fanout.ts's own desired set —
@@ -326,12 +341,12 @@ export async function agentBridgeRoute(app: FastifyInstance) {
   // MuxConnection (and any channels ssh-agent-fanout.ts has paired through
   // it) completely unaffected, since nothing on that live connection's own
   // path re-checks the `bridges` table once a session is established
-  // (verifyBridgeSession only runs at handshake time).
+  // (the auth handshake's extendBridgeSession only runs at handshake time).
   //
   // Order — DELETE the row FIRST, THEN close the mux (issue #1053, the
   // TOCTOU gap fix). The two calls are both synchronous against the
   // better-sqlite3 driver, so a reconnecting helper's auth handshake
-  // (`verifyBridgeSession`, reading the row) cannot land between them:
+  // (`extendBridgeSession`, reading the row) cannot land between them:
   // any concurrent verify that runs after this DELETE returns sees no
   // row and rejects the credential, instead of succeeding against a row
   // that is then immediately deleted out from under it and silently
@@ -421,18 +436,21 @@ export async function agentBridgeRoute(app: FastifyInstance) {
         handshakeComplete = true;
 
         if (isBinary) {
-          sendError(socket, "first frame must be JSON, not binary");
+          sendError(app, socket, "first frame must be JSON, not binary");
           return;
         }
         let parsed: unknown;
         try {
           parsed = JSON.parse(data.toString("utf8"));
         } catch {
-          sendError(socket, "first frame must be valid JSON");
+          sendError(app, socket, "first frame must be valid JSON");
           return;
         }
         if (!isClientHandshake(parsed)) {
-          sendError(socket, "unrecognized handshake — expected {type:'pair'|'auth', ...}");
+          const claimed = (parsed as { type?: unknown } | null)?.type;
+          sendError(app, socket, "unrecognized handshake — expected {type:'pair'|'auth', ...}", {
+            handshakeType: typeof claimed === "string" ? claimed.slice(0, 32) : typeof claimed,
+          });
           return;
         }
 
@@ -442,7 +460,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
             platform: parsed.platform,
           });
           if (!session) {
-            sendError(socket, "invalid or expired pairing code");
+            sendError(app, socket, "invalid or expired pairing code", { handshakeType: "pair" });
             return;
           }
           // A freshly-paired bridge has no explicit order yet —
@@ -450,6 +468,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
           // (the row was just created by issuePairingCode with the
           // column default), so 0 here matches what a fresh row already
           // has rather than requiring a second read.
+          app.log.info({ bridgeId: session.bridgeId }, "agent-bridge pair accepted");
           trackBridge(app, session.bridgeId, socket, 0);
           socket.send(
             JSON.stringify({
@@ -474,33 +493,43 @@ export async function agentBridgeRoute(app: FastifyInstance) {
         // renewal on its own route below (POST /api/bridges/renew) means
         // reconnecting can never itself invalidate the credential a moment
         // earlier still-in-flight code was relying on.
-        if (!verifyBridgeSession(app, parsed.bridge_id, parsed.session_id)) {
-          sendError(socket, "invalid session credential");
+        //
+        // It does slide the expiry forward (extendBridgeSession) without
+        // changing the id: a helper whose own renewal timer never fired
+        // (the laptop slept through it) would otherwise reach its original
+        // expiry despite reconnecting regularly, and a lapsed session can
+        // only be recovered by re-pairing.
+        const expiresAt = extendBridgeSession(app, parsed.bridge_id, parsed.session_id);
+        if (expiresAt === null) {
+          sendError(app, socket, "invalid session credential", {
+            handshakeType: "auth",
+            bridgeId: parsed.bridge_id,
+          });
           return;
         }
-        // Round 3 — the reply now also carries the CURRENT session's
-        // expiry, read fresh off the row rather than trusted from whatever
-        // this client last persisted. This is what lets the client's own
-        // worker renewal timer arm itself
-        // from an authoritative value on every successful connect, instead
-        // of either guessing a legacy file's missing expiresAt or racing a
-        // pre-armed timer against the very first handshake that establishes
-        // the connection it's meant to run alongside.
+        // The reply carries the CURRENT session's (freshly extended)
+        // expiry, so the client's own renewal logic works from an
+        // authoritative value on every successful connect rather than
+        // guessing from what it last persisted.
         const row = getBridgeRow(app, parsed.bridge_id);
-        if (!row || !row.sessionExpiresAt) {
+        if (!row) {
           // Vanishingly unlikely (revoked in the instant between the check
           // above and this read) — must not crash or send a malformed
           // reply if it somehow happens.
-          sendError(socket, "invalid session credential");
+          sendError(app, socket, "invalid session credential", {
+            handshakeType: "auth",
+            bridgeId: parsed.bridge_id,
+          });
           return;
         }
         touchBridgeLastSeen(app, parsed.bridge_id);
+        app.log.info({ bridgeId: parsed.bridge_id }, "agent-bridge auth accepted");
         trackBridge(app, parsed.bridge_id, socket, row.priority);
         socket.send(
           JSON.stringify({
             type: "ready",
             bridge_id: parsed.bridge_id,
-            expires_at: row.sessionExpiresAt.toISOString(),
+            expires_at: expiresAt.toISOString(),
           }),
         );
       }

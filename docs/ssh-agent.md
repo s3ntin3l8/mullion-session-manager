@@ -107,9 +107,17 @@ agent protocol. Primary-local sessions are not filtered at this trust
 boundary; restricting those is tracked in
 [mullion-session-manager#873](https://github.com/s3ntin3l8/mullion-session-manager/issues/873).
 
-Treat the helper credential as a long-lived bearer token. It renews while the
-helper can reach the primary. Revoke the bridge in Mullion if the laptop or
-credential may be compromised.
+Treat the helper credential as a long-lived bearer token. A paired session is
+valid for 7 days; the helper renews it while it is awake and connected, and
+every successful reconnect extends the expiry to a full 7 days again (a
+reconnect keeps the session id, whereas a renewal rotates it, which is what
+invalidates a leaked copy). A laptop that stays asleep, offline, or quit for
+longer than that must be paired again, since the primary keeps no bootstrap
+credential for it. The extension has no absolute ceiling: a session id that
+reconnects at least once every 7 days stays valid indefinitely (the id is the
+credential, and the legitimate helper keeps working the same way an attacker
+holding a copy would). Revoke the bridge in Mullion if the laptop or credential
+may be compromised; revocation takes effect immediately.
 
 If pairing is redirected to an SSO login page, a forward-auth proxy is
 intercepting `/ws/agent-bridge` before it reaches Mullion. See the

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -267,6 +267,48 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       ws.close();
     });
 
+    it("slides the session expiry forward on auth without rotating the id", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+      await waitUntil(() => !app.connectedBridges.has(bridge_id));
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      const soon = new Date(Date.now() + 60 * 1000);
+      app.db.update(bridges).set({ sessionExpiresAt: soon }).where(eq(bridges.id, bridge_id)).run();
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      const reply = await replyPromise;
+
+      expect(reply.type).toBe("ready");
+      const extended = new Date(reply.expires_at!).getTime();
+      expect(extended).toBeGreaterThan(Date.now() + 6 * 24 * 60 * 60 * 1000);
+      const row = app.db.select().from(bridges).where(eq(bridges.id, bridge_id)).all()[0];
+      expect(row.sessionExpiresAt!.getTime()).toBe(extended);
+      ws.close();
+    });
+
+    it("rejects auth for a session that already lapsed, even if the row still exists", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id, session_id } = await pairFreshBridge(port);
+      await waitUntil(() => !app.connectedBridges.has(bridge_id));
+      const { bridges } = await import("../../src/db/schema.js");
+      const { eq } = await import("drizzle-orm");
+      app.db
+        .update(bridges)
+        .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(bridges.id, bridge_id))
+        .run();
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
+      expect((await replyPromise).type).toBe("error");
+    });
+
     // Issue #1313 — trackBridge's "auth" call site passes `row.priority`
     // (read a few lines above, in this same handshake handler) rather than
     // hardcoding 0 the way the "pair" call site correctly does for a
@@ -346,6 +388,48 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       await closePromise;
     });
 
+    it("logs the reason, handshake type and bridge id when it rejects a handshake", async () => {
+      const { app, port } = await buildAndListen();
+      const { bridge_id } = await pairFreshBridge(port);
+      const warn = vi.spyOn(app.log, "warn");
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id: "wrong" }));
+      await replyPromise;
+
+      expect(warn).toHaveBeenCalledWith(
+        { handshakeType: "auth", bridgeId: bridge_id, reason: "invalid session credential" },
+        "agent-bridge handshake rejected",
+      );
+    });
+
+    it("caps an oversized client-supplied bridge_id and labels an unrecognized handshake type in the reject log", async () => {
+      const { app, port } = await buildAndListen();
+      const warn = vi.spyOn(app.log, "warn");
+
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws);
+      const replyPromise = waitForMessage(ws);
+      ws.send(JSON.stringify({ type: "auth", bridge_id: "x".repeat(200), session_id: "wrong" }));
+      await replyPromise;
+      expect(warn).toHaveBeenCalledWith(
+        { handshakeType: "auth", bridgeId: "x".repeat(64), reason: "invalid session credential" },
+        "agent-bridge handshake rejected",
+      );
+
+      const ws2 = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+      await waitForOpen(ws2);
+      const reply2 = waitForMessage(ws2);
+      ws2.send(JSON.stringify({ type: "paire", code: "x" }));
+      await reply2;
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({ handshakeType: "paire" }),
+        "agent-bridge handshake rejected",
+      );
+    });
+
     it("rejects auth against an unknown bridge id", async () => {
       const { port } = await buildAndListen();
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
@@ -387,10 +471,13 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       const body = (await res.json()) as { session_id: string; expires_at: string };
       expect(typeof body.session_id).toBe("string");
       expect(body.session_id).not.toBe(session_id);
-      // A fresh session gets a fresh 24h deadline, not the same instant as
-      // the one just replaced — confirms this is a real rotation, not an
-      // echo of the row's unchanged expiry.
-      expect(new Date(body.expires_at).getTime()).toBeGreaterThan(new Date(expires_at).getTime());
+      // Rotation is proven by the new session id above; the expiry is stored
+      // in whole seconds, so a renew landing in the same second as the pair
+      // can legitimately carry an identical deadline — it must never move
+      // backwards.
+      expect(new Date(body.expires_at).getTime()).toBeGreaterThanOrEqual(
+        new Date(expires_at).getTime(),
+      );
     });
 
     it("invalidates the OLD session id — a later auth with it is rejected", async () => {
