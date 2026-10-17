@@ -114,7 +114,7 @@ reconnect keeps the session id, whereas a renewal rotates it, which is what
 invalidates a leaked copy). A renewal keeps the previous id valid until the
 new id is first presented (or the session expires), so a renewal reply lost in
 transit does not strand the helper; renewing again with the previous id is
-idempotent and returns the id already issued. A laptop that stays asleep, offline, or quit for
+idempotent and returns the id already issued. This makes the invalidation of a leaked copy time-bounded: until the new id is first presented, a leaked superseded id can still be exchanged for the current one via `/api/bridges/renew`, though it can never extend the session. A laptop that stays asleep, offline, or quit for
 longer than that must be paired again, since the primary keeps no bootstrap
 credential for it. The extension has no absolute ceiling: a session id that
 reconnects at least once every 7 days stays valid indefinitely (the id is the
