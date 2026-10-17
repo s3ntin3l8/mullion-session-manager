@@ -1509,10 +1509,11 @@ export const OPS: Record<string, OpSpec> = {
             reply({ ok: false, status: 403, error: "this session is no longer active" });
             return;
           }
+          const ownId = Number(conn.sessionId);
           attachLocalEventsSocket(app, channel, {
-            sessionFilter: ownAndChildSessionFilter(app, Number(conn.sessionId)),
+            sessionFilter: ownAndChildSessionFilter(app, ownId),
             // Receiving a child's events is not writing its read cursor.
-            seenFilter: (sessionId) => sessionId === Number(conn.sessionId),
+            seenFilter: (sessionId) => sessionId === ownId,
           });
         } else {
           attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });
