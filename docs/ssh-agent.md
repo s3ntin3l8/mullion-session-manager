@@ -109,8 +109,9 @@ boundary; restricting those is tracked in
 
 Treat the helper credential as a long-lived bearer token. A paired session is
 valid for 7 days; the helper renews it while it is awake and connected, and
-every successful reconnect extends the expiry to a full 7 days again (the
-session id does not change). A laptop that stays asleep, offline, or quit for
+every successful reconnect extends the expiry to a full 7 days again (a
+reconnect keeps the session id, whereas a renewal rotates it, which is what
+invalidates a leaked copy). A laptop that stays asleep, offline, or quit for
 longer than that must be paired again, since the primary keeps no bootstrap
 credential for it. The extension has no absolute ceiling: a session id that
 reconnects at least once every 7 days stays valid indefinitely (the id is the

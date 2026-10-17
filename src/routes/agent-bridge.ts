@@ -341,12 +341,12 @@ export async function agentBridgeRoute(app: FastifyInstance) {
   // MuxConnection (and any channels ssh-agent-fanout.ts has paired through
   // it) completely unaffected, since nothing on that live connection's own
   // path re-checks the `bridges` table once a session is established
-  // (verifyBridgeSession only runs at handshake time).
+  // (the auth handshake's extendBridgeSession only runs at handshake time).
   //
   // Order — DELETE the row FIRST, THEN close the mux (issue #1053, the
   // TOCTOU gap fix). The two calls are both synchronous against the
   // better-sqlite3 driver, so a reconnecting helper's auth handshake
-  // (`verifyBridgeSession`, reading the row) cannot land between them:
+  // (`extendBridgeSession`, reading the row) cannot land between them:
   // any concurrent verify that runs after this DELETE returns sees no
   // row and rejects the credential, instead of succeeding against a row
   // that is then immediately deleted out from under it and silently

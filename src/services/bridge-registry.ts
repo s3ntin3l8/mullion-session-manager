@@ -362,6 +362,9 @@ export function extendBridgeSession(
   return expiresAt;
 }
 
+// Test/diagnostic helper: a pure liveness check with no side effects. The
+// /ws/agent-bridge "auth" handshake no longer calls this -- it uses
+// extendBridgeSession, which performs the same check and slides the expiry.
 export function verifyBridgeSession(
   app: FastifyInstance,
   bridgeId: string,
