@@ -91,6 +91,7 @@ export interface LaunchPlanSession {
   readonly hookToken: string;
   readonly hookSocketPath: string;
   readonly controlSocketPath: string;
+  readonly controlUnavailable?: boolean;
   readonly sessionsDir: string;
   /** MULLION_SSH_AUTH_SOCK (src/plugins/env.ts) — the path injected as this
    * session's SSH_AUTH_SOCK, or "" (the default) to leave whatever value the
@@ -246,6 +247,10 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // reasoning as the hook socket/token above. MULLION_SESSION_ID has no
   // other existing purpose to collide with (session-env.ts).
   sessionEnv.MULLION_SOCKET_PATH = session.controlSocketPath;
+  // Agent-role host (#1627): nothing listens on that path. The var stays (the
+  // adapters and skills key off it) and this marker tells the CLI/MCP client
+  // to fail with an explanation instead of a connect error.
+  if (session.controlUnavailable) sessionEnv.MULLION_CONTROL_UNAVAILABLE = "remote-host";
   sessionEnv.MULLION_SESSION_ID = session.id;
   // MULLION_FORWARDER_PATH/MULLION_FORWARDER_NODE — issue: host-global agy/
   // Codex hook configs (~/.gemini/config/hooks.json, ~/.codex/hooks.json)

@@ -19,6 +19,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 // DEFAULT_WAIT_TIMEOUT_MS / MAX_WAIT_TIMEOUT_MS — test/services/session-wait.test.ts
 // pins these to them) plus the slack added to the SOCKET request timeout so it
 // always outlasts the server-side wait. Shared by the CLI and the MCP client.
+export const CONTROL_UNAVAILABLE_MESSAGE =
+  "control ops are not available from a session on a remote host: parent→child control " +
+  "needs the primary's control socket, which agent-host sessions cannot reach yet (#1627)";
 export const WAIT_DEFAULT_TIMEOUT_MS = 600_000;
 export const WAIT_MAX_TIMEOUT_MS = 3_600_000;
 export const WAIT_SOCKET_SLACK_MS = 15_000;
@@ -105,6 +108,8 @@ export class MullionSocketClient extends EventEmitter {
     this.token = opts.token ?? resolved.token;
     this.tokenSource = opts.token ? "explicit" : resolved.source;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // An agent-role host has no control socket (#1627); say so up front.
+    this.controlUnavailable = !opts.socketPath && env.MULLION_CONTROL_UNAVAILABLE === "remote-host";
 
     this.socket = null;
     this.buffer = "";
@@ -133,6 +138,11 @@ export class MullionSocketClient extends EventEmitter {
    * in-flight/completed connection. */
   connect() {
     if (this._connectPromise) return this._connectPromise;
+    if (this.controlUnavailable) {
+      this._connectPromise = Promise.reject(new Error(CONTROL_UNAVAILABLE_MESSAGE));
+      this._connectPromise.catch(() => {});
+      return this._connectPromise;
+    }
     this._connectPromise = new Promise((resolve, reject) => {
       const socket = net.createConnection(this.socketPath);
       const failBeforeConnect = (err) => {

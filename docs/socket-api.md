@@ -36,6 +36,11 @@ alongside the existing hook socket (`<SESSIONS_DIR>/hooks.sock` — see
 `./data/sessions` in a dev checkout and is overridden to an absolute path by
 a versioned install (`deploy/install.sh`).
 
+**Remote-host sessions.** Sessions on an agent host have no reachable control
+socket (it is primary-only); their env carries
+`MULLION_CONTROL_UNAVAILABLE=remote-host` and the CLI/MCP client refuse
+up front. See [`multi-host.md`](multi-host.md#current-limitations) (#1627).
+
 ## Wire protocol
 
 Newline-delimited JSON, UTF-8 encoded, 2 MiB max per line (large enough for a

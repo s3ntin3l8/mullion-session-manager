@@ -421,6 +421,10 @@ export class Session {
   // (src/cli/) run from inside this session can reach the control socket
   // and default its own session-targeting to this session with no flags.
   readonly controlSocketPath: string;
+  // True on an "agent"-role host (#1627): the control socket is primary-only,
+  // so this session's env carries MULLION_CONTROL_UNAVAILABLE=remote-host and
+  // the CLI/MCP report that instead of failing to connect to a dead path.
+  readonly controlUnavailable: boolean;
   // The manager-level sessions directory (SESSIONS_DIR) — needed here only
   // for applyShellIntegrationEnv's ZDOTDIR shim directory (bootstrapMaster
   // below); passed in the same way as hookSocketPath above rather than
@@ -901,6 +905,7 @@ export class Session {
     rows: number;
     hookSocketPath: string;
     controlSocketPath: string;
+    controlUnavailable?: boolean;
     sessionsDir: string;
     instanceId: string;
     sshAuthSock?: string;
@@ -940,6 +945,7 @@ export class Session {
     this.createdAt = Date.now();
     this.hookSocketPath = opts.hookSocketPath;
     this.controlSocketPath = opts.controlSocketPath;
+    this.controlUnavailable = opts.controlUnavailable === true;
     this.sessionsDir = opts.sessionsDir;
     this.instanceId = opts.instanceId;
     this.sshAuthSock = opts.sshAuthSock ?? "";
@@ -1451,6 +1457,7 @@ export class Session {
       hookToken: this.hookToken,
       hookSocketPath: this.hookSocketPath,
       controlSocketPath: this.controlSocketPath,
+      controlUnavailable: this.controlUnavailable,
       sessionsDir: this.sessionsDir,
       sshAuthSock: this.sshAuthSock,
       authEnabled: this.authEnabled,
@@ -3567,6 +3574,8 @@ export class PtyManager {
   // Defaults alongside hookSocketPath in the same sessionsDir unless
   // MULLION_SOCKET_PATH overrides it (src/plugins/pty.ts).
   readonly controlSocketPath: string;
+  // See Session.controlUnavailable — set once at boot for the agent role.
+  readonly controlUnavailable: boolean;
   // Manager-level fan-out (issue #166) — mirrors dataListeners/onData()'s
   // Set<listener> + unsubscribe-closure shape, just one layer up: each
   // Session emits to its OWN eventListeners set (above), and getOrCreate()
@@ -3624,6 +3633,7 @@ export class PtyManager {
     sshAuthSock?: string;
     authEnabled?: boolean;
     controlSocketPath?: string;
+    controlUnavailable?: boolean;
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
     getInjectMullionBundle?: () => boolean;
@@ -3650,6 +3660,7 @@ export class PtyManager {
     // exceeds the 108-byte sun_path limit, control-socket.ts's listen()
     // fails loudly at boot rather than silently relocating a path the
     // operator asked for by name.
+    this.controlUnavailable = opts.controlUnavailable === true;
     this.controlSocketPath = opts.controlSocketPath
       ? path.resolve(opts.controlSocketPath)
       : path.join(this.sessionsDir, "mullion.sock");
@@ -3720,6 +3731,7 @@ export class PtyManager {
         rows: opts.rows,
         hookSocketPath: this.hookSocketPath,
         controlSocketPath: this.controlSocketPath,
+        controlUnavailable: this.controlUnavailable,
         sessionsDir: this.sessionsDir,
         instanceId: this.instanceId,
         sshAuthSock: this.sshAuthSock,

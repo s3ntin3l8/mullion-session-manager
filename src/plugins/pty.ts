@@ -328,6 +328,9 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // derived, not DB-backed settings).
     authEnabled: isAuthEnabled(app.config),
     controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
+    // The control socket is primary-only (control-socket.ts no-ops here), so
+    // tell the sessions rather than leave them a dead path (#1627).
+    controlUnavailable: app.config.MULLION_ROLE === "agent",
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),
     getInjectMullionBundle: () => readInjectMullionBundle(app),

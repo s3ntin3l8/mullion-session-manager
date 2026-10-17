@@ -407,6 +407,12 @@ function ownAndChildSessionFilter(
   };
 }
 
+/** 409 text for ops that need the live PTY when it is not on this host — a
+ * remote-host child looks exactly like a dead local one from here (#1627). */
+const NOT_LOCAL_MESSAGE =
+  "the session is not running on this host (if it is a remote-host session, " +
+  "prompting and output-waiting it are not supported yet — #1627)";
+
 /**
  * Like resolveTargetSessionId, but a session-scoped connection may ALSO name
  * a child it spawned (`sessions.parent_session_id === its pinned id`) — the
@@ -1110,7 +1116,7 @@ export const OPS: Record<string, OpSpec> = {
         // Also what a remote-host session looks like from here (its PTY lives
         // on another host's PtyManager) — prompting those is not supported
         // yet (#1627).
-        reply(bad(409, "the session is not running on this host"));
+        reply(bad(409, NOT_LOCAL_MESSAGE));
         return;
       }
 
@@ -1123,7 +1129,7 @@ export const OPS: Record<string, OpSpec> = {
         async (): Promise<ReplyPayload | { afterSeq: number }> => {
           const session = app.pty.get(id);
           if (session !== initial || !session.isAlive) {
-            return bad(409, "the session is not running on this host");
+            return bad(409, NOT_LOCAL_MESSAGE);
           }
           const refusal = await refuseIfBlockedOrGone(app, id, { refuseBusy: waitOpts !== null });
           if (refusal) return refusal;
