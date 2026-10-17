@@ -895,8 +895,9 @@ const reportStatus = {
   description:
     "Report this session's own state to Mullion — for agents whose CLI has no Mullion hook " +
     "adapter, so a parent's wait_for_session and the dashboard can tell when you are working, " +
-    "done, or need a human. `working` when you start a task, `done` when you finish it, " +
-    "`needs_input` when you are blocked on a person.",
+    "done, or need a human. `working` when you start a task (clears a previous `done`; it is a " +
+    "one-shot signal, not a sticky state), `done` when you finish it, `needs_input` when you are " +
+    "blocked on a person.",
   inputSchema: {
     type: "object",
     required: ["state"],
@@ -915,7 +916,8 @@ const reportStatus = {
       throw new Error(`state must be one of ${SELF_REPORT_STATES.join(", ")}`);
     }
     await client.reportStatus(state, typeof args?.message === "string" ? args.message : undefined);
-    return `status reported: ${state}${statusTruncationNote(args?.message)}`;
+    // `working` ignores the message, so there is nothing to have truncated.
+    return `status reported: ${state}${state === "working" ? "" : statusTruncationNote(args?.message)}`;
   },
 };
 

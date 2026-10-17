@@ -446,6 +446,13 @@ export function sendHookMessage({ hookSocketPath, hookToken, message, what = "me
     socket.once("error", (err) => finish(err));
     socket.once("connect", () => {
       const lines = [{ token: hookToken }, ...messages].map((m) => `${JSON.stringify(m)}\n`);
+      // Fire-and-forget, same posture as forwarder.mjs's ordinary hooks —
+      // hooks.ts never acks a notification/progress/turn_start line, so there
+      // is nothing to wait for beyond the write being flushed. The write
+      // callback resolves once the OS has taken the bytes; a socket error
+      // after that point is silently lost (Hermes review, PR #402) — an
+      // accepted tradeoff, not an oversight: this channel has no
+      // delivery-confirmation contract to begin with.
       socket.write(lines.join(""), () => finish(null));
     });
   });

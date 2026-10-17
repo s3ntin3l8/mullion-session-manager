@@ -116,8 +116,8 @@ particular).
 **CLI** names the `mullion <command>` (see [`docs/cli.md`](cli.md)) that
 wraps this op, if any. **MCP** names the `mcp__mullion__<tool>` (see
 `src/mcp/tools.mjs`) that wraps it, if any — `promote_to_worktree`/
-`use_browser`/`browser_action` are NOT in this column even though they
-sound related: those three are hook-socket tools, a different transport
+`report_status`/`use_browser`/`browser_action` are NOT in this column even though they
+sound related: those four are hook-socket tools, a different transport
 entirely (see [`docs/agent-hooks.md`](agent-hooks.md)), not control-socket
 ops. A composite CLI/MCP surface that drives more than one op internally
 is marked with a dagger (†) and explained below the table, rather than

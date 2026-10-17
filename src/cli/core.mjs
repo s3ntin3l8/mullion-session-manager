@@ -1409,7 +1409,8 @@ async function runStatus(client, args, opts, io) {
     message: statusHookMessages(state, flags.message),
     what: "mullion status",
   });
-  return { text: `status reported: ${state}${statusTruncationNote(flags.message)}` };
+  const note = state === "working" ? "" : statusTruncationNote(flags.message);
+  return { text: `status reported: ${state}${note}` };
 }
 
 // reviews.request does several sequential network calls server-side (GitHub

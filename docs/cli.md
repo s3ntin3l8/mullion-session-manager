@@ -430,10 +430,10 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   `MULLION_AUTH_TOKEN` set) is a separate, full-scope use of the same
   binary.
 
-21 tools total (`src/mcp/tools.mjs`'s `TOOLS` array). Three
-(`promote_to_worktree`, `use_browser`, `browser_action`) are **hook-socket**
+27 tools total (`src/mcp/tools.mjs`'s `TOOLS` array). Four
+(`promote_to_worktree`, `report_status`, `use_browser`, `browser_action`) are **hook-socket**
 tools, a different transport — see [`docs/agent-hooks.md`](agent-hooks.md).
-The other 18 each thinly wrap a control-socket op —
+The other 23 each thinly wrap a control-socket op —
 [`docs/socket-api.md`](socket-api.md#ops)'s canonical Ops table is the
 single list of which op each one wraps and at which scope, rather than
 duplicating that list here. Two of those 18
