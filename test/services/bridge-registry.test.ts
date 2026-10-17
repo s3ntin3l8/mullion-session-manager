@@ -156,12 +156,91 @@ describe("bridge-registry", () => {
     expect(rotated).not.toBeNull();
     expect(rotated!.sessionId).not.toBe(session.sessionId);
 
-    // The OLD session id must no longer verify after rotation.
-    expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(false);
+    // The OLD id stays valid until the rotated one is first used (helper#76).
+    expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(true);
     expect(verifyBridgeSession(app, session.bridgeId, rotated!.sessionId)).toBe(true);
 
     expect(rotateBridgeSession(app, session.bridgeId, "wrong-session-id")).toBeNull();
     await app.close();
+  });
+
+  describe("previous session id after rotation (helper#76)", () => {
+    async function pairedAndRotated() {
+      const app = await buildApp();
+      const pairing = issuePairingCode(app);
+      const session = redeemPairingCode(app, pairing.code, {})!;
+      const rotated = rotateBridgeSession(app, session.bridgeId, session.sessionId)!;
+      return { app, session, rotated };
+    }
+
+    it("a renew with the previous id is idempotent: same current id, no rotation", async () => {
+      const { app, session, rotated } = await pairedAndRotated();
+      const again = rotateBridgeSession(app, session.bridgeId, session.sessionId)!;
+      expect(again.sessionId).toBe(rotated.sessionId);
+      expect(again.expiresAt.getTime()).toBe(rotated.expiresAt.getTime());
+      // The current id is still the one stored, and the old id still works.
+      expect(verifyBridgeSession(app, session.bridgeId, rotated.sessionId)).toBe(true);
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("presenting the previous id (auth) does not retire it", async () => {
+      const { app, session } = await pairedAndRotated();
+      const before = getBridgeRow(app, session.bridgeId)!.sessionExpiresAt!;
+      const extended = extendBridgeSession(app, session.bridgeId, session.sessionId);
+      // The previous id neither slides the expiry nor retires itself.
+      expect(extended!.getTime()).toBe(before.getTime());
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("once the rotated id is used, the previous id is rejected", async () => {
+      const { app, session, rotated } = await pairedAndRotated();
+      expect(extendBridgeSession(app, session.bridgeId, rotated.sessionId)).not.toBeNull();
+      expect(getBridgeRow(app, session.bridgeId)!.prevSessionIdEnc).toBeNull();
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(false);
+      expect(rotateBridgeSession(app, session.bridgeId, session.sessionId)).toBeNull();
+      await app.close();
+    });
+
+    it("a second rotation drops the id from two renewals ago", async () => {
+      const { app, session, rotated } = await pairedAndRotated();
+      const third = rotateBridgeSession(app, session.bridgeId, rotated.sessionId)!;
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(false);
+      expect(verifyBridgeSession(app, session.bridgeId, rotated.sessionId)).toBe(true);
+      expect(verifyBridgeSession(app, session.bridgeId, third.sessionId)).toBe(true);
+      await app.close();
+    });
+
+    it("a freshly redeemed session starts with no previous id", async () => {
+      const { app, session } = await pairedAndRotated();
+      expect(getBridgeRow(app, session.bridgeId)!.prevSessionIdEnc).not.toBeNull();
+      const repaired = redeemPairingCode(app, issuePairingCode(app).code, {})!;
+      expect(getBridgeRow(app, repaired.bridgeId)!.prevSessionIdEnc).toBeNull();
+      await app.close();
+    });
+
+    it("revoke clears the previous id", async () => {
+      const { app, session } = await pairedAndRotated();
+      clearBridgeSession(app, session.bridgeId);
+      expect(getBridgeRow(app, session.bridgeId)!.prevSessionIdEnc).toBeNull();
+      expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(false);
+      await app.close();
+    });
+
+    it("an expired session rejects both ids", async () => {
+      const { app, session, rotated } = await pairedAndRotated();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.now() + 8 * 24 * 60 * 60 * 1000);
+        expect(verifyBridgeSession(app, session.bridgeId, session.sessionId)).toBe(false);
+        expect(verifyBridgeSession(app, session.bridgeId, rotated.sessionId)).toBe(false);
+        expect(rotateBridgeSession(app, session.bridgeId, session.sessionId)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+      await app.close();
+    });
   });
 
   it("verifyBridgeSession returns false for an unknown bridge id", async () => {

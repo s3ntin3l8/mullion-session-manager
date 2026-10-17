@@ -512,6 +512,13 @@
       "when": 1789738645304,
       "tag": "0072_short_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1792222586765,
+      "tag": "0073_puzzling_slapstick",
+      "breakpoints": true
     }
   ]
 }

@@ -106,6 +106,11 @@ export const bridges = sqliteTable("bridges", {
   sessionIdEnc: text("session_id_enc"),
   sessionSecretEnc: text("session_secret_enc"),
   sessionExpiresAt: integer("session_expires_at", { mode: "timestamp" }),
+  // The session id a renewal just superseded. Stays valid (until the session
+  // expiry) until the rotated id is first presented, so a renewal reply lost
+  // in transit does not strand the helper (mullion-helper#76). Nulled on
+  // first use of the current id, on pair, and on revoke.
+  prevSessionIdEnc: text("prev_session_id_enc"),
   // Free-form, helper-reported ("darwin" | "win32" | ...) — informational
   // only, same non-enforced posture as hosts.agentMetadata.
   platform: text("platform"),

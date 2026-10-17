@@ -498,23 +498,34 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       );
     });
 
-    it("invalidates the OLD session id — a later auth with it is rejected", async () => {
+    it("keeps the OLD session id valid until the rotated one is used", async () => {
       const { port } = await buildAndListen();
       const { bridge_id, session_id } = await pairFreshBridge(port);
+      const renew = (id: string) =>
+        fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ bridge_id, session_id: id }),
+        });
+      const first = (await (await renew(session_id)).json()) as { session_id: string };
+      // A retry after a lost reply (old id again) is idempotent.
+      const retry = (await (await renew(session_id)).json()) as { session_id: string };
+      expect(retry.session_id).toBe(first.session_id);
 
-      await fetch(`http://127.0.0.1:${port}/api/bridges/renew`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ bridge_id, session_id }),
-      });
-
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
-      await waitForOpen(ws);
-      const replyPromise = waitForMessage(ws);
-      const closePromise = waitForClose(ws);
-      ws.send(JSON.stringify({ type: "auth", bridge_id, session_id }));
-      expect((await replyPromise).type).toBe("error");
-      await closePromise;
+      const authWith = async (id: string) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/agent-bridge`);
+        await waitForOpen(ws);
+        const replyPromise = waitForMessage(ws);
+        ws.send(JSON.stringify({ type: "auth", bridge_id, session_id: id }));
+        const reply = await replyPromise;
+        ws.close();
+        return reply.type;
+      };
+      expect(await authWith(session_id)).toBe("ready");
+      // Using the rotated id retires the old one.
+      expect(await authWith(first.session_id)).toBe("ready");
+      expect(await authWith(session_id)).toBe("error");
+      expect((await renew(session_id)).status).toBe(401);
     });
 
     it("a renewed session id DOES authenticate a later auth handshake", async () => {
