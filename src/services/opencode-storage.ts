@@ -1,7 +1,11 @@
 import Database from "better-sqlite3";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
 
 // opencode keeps every session in one SQLite file, `<data home>/opencode/
 // opencode.db`, and never gives freed pages back: `auto_vacuum` is off, so after
@@ -15,10 +19,31 @@ import path from "node:path";
 // stops opencode, and never changes the schema or any pragma of the file.
 
 const BUSY_TIMEOUT_MS = 5_000;
-// In WAL mode VACUUM writes the compacted copy into the WAL before it is
-// checkpointed back, so the volume needs roughly the live size free, plus
-// slack for the copy's own overhead.
-const SPACE_MARGIN = 1.2;
+// A VACUUM builds the compacted copy in a temporary file, and in WAL mode then
+// writes it into the WAL before it is checkpointed back: two live-size copies
+// at the peak, both kept on the database's own volume (see `runVacuum`), plus
+// slack for their overhead.
+const SPACE_FACTOR = 2 * 1.2;
+// The rebuild of a large database takes minutes; this only bounds a hung one.
+// Killing it midway is safe: a VACUUM that doesn't commit changes nothing.
+const VACUUM_TIMEOUT_MS = 30 * 60_000;
+// Runs in a child process: better-sqlite3 is synchronous, so in this process a
+// VACUUM would freeze every terminal and request for as long as it takes.
+const VACUUM_SCRIPT = `
+const [moduleFile, dbFile, busyMs] = process.argv.slice(1);
+try {
+  const db = new (require(moduleFile))(dbFile, { fileMustExist: true, timeout: Number(busyMs) });
+  try {
+    db.exec("VACUUM");
+    db.pragma("wal_checkpoint(TRUNCATE)");
+  } finally {
+    db.close();
+  }
+} catch (error) {
+  console.error(error && error.message ? error.message : String(error));
+  process.exit(1);
+}
+`;
 
 export interface OpencodeStorageOptions {
   /** Defaults to `<XDG_DATA_HOME or ~/.local/share>/opencode/opencode.db`. */
@@ -29,6 +54,8 @@ export interface OpencodeStorageOptions {
   freeBytes?: (dir: string) => Promise<number>;
   /** How long VACUUM waits for the write lock before giving up. */
   busyTimeoutMs?: number;
+  /** Test seam: how long the whole VACUUM may run. */
+  vacuumTimeoutMs?: number;
 }
 
 export interface OpencodeStorageStatus {
@@ -73,7 +100,10 @@ async function sizeOf(file: string): Promise<number> {
  * own processes — which is every process that could be opencode.
  */
 export async function findHolders(dbPath: string, procDir = "/proc"): Promise<number[]> {
-  const watched = new Set([dbPath, ...sidecars(dbPath)]);
+  // /proc reports resolved paths, so a data dir reached through a symlink (or a
+  // bind mount) would otherwise hide a running opencode.
+  const real = await fs.realpath(dbPath).catch(() => dbPath);
+  const watched = new Set([dbPath, ...sidecars(dbPath), real, ...sidecars(real)]);
   let pids: string[];
   try {
     pids = await fs.readdir(procDir);
@@ -147,6 +177,36 @@ export async function inspectOpencodeStorage(
   }
 }
 
+function runVacuum(dbPath: string, busyTimeoutMs: number, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // SQLITE_TMPDIR keeps the temporary copy on the volume the space check
+    // looked at, not whatever small or RAM-backed /tmp the host has.
+    const child = spawn(
+      process.execPath,
+      ["-e", VACUUM_SCRIPT, require.resolve("better-sqlite3"), dbPath, String(busyTimeoutMs)],
+      { env: { SQLITE_TMPDIR: path.dirname(dbPath) }, stdio: ["ignore", "ignore", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderr.length < 4096) stderr += chunk.toString("utf8");
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Compacting the opencode database timed out"));
+    }, timeoutMs);
+    timer.unref();
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `VACUUM exited with code ${String(code)}`));
+    });
+  });
+}
+
 const defaultFreeBytes = async (dir: string) => {
   const stats = await fs.statfs(dir);
   return stats.bavail * stats.bsize;
@@ -182,7 +242,7 @@ export async function pruneOpencodeStorage(
       return { output: "The opencode database has nothing to reclaim.", reclaimedBytes: 0 };
     }
     const dir = path.dirname(status.path);
-    const needed = Math.ceil(status.liveBytes * SPACE_MARGIN);
+    const needed = Math.ceil(status.liveBytes * SPACE_FACTOR);
     const free = await (options.freeBytes ?? defaultFreeBytes)(dir);
     if (free < needed) {
       return {
@@ -196,17 +256,11 @@ export async function pruneOpencodeStorage(
       return { output: "opencode started; its database was skipped.", reclaimedBytes: 0 };
     }
     try {
-      const db = new Database(status.path, {
-        fileMustExist: true,
-        timeout: options.busyTimeoutMs ?? BUSY_TIMEOUT_MS,
-      });
-      try {
-        db.exec("VACUUM");
-        // Without this the freed pages stay in the file until the next checkpoint.
-        db.pragma("wal_checkpoint(TRUNCATE)");
-      } finally {
-        db.close();
-      }
+      await runVacuum(
+        status.path,
+        options.busyTimeoutMs ?? BUSY_TIMEOUT_MS,
+        options.vacuumTimeoutMs ?? VACUUM_TIMEOUT_MS,
+      );
     } catch (error) {
       return {
         output: "",

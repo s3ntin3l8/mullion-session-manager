@@ -117,6 +117,15 @@ describe("opencode-storage", () => {
   });
 
   describe("findHolders", () => {
+    it("sees a holder through a symlinked data dir, since /proc reports resolved paths", async () => {
+      const real = path.join(base, "real");
+      await fs.mkdir(real);
+      await fs.writeFile(path.join(real, "opencode.db"), "");
+      await fs.symlink(real, path.join(base, "link"));
+      await holdOpen(21, path.join(real, "opencode.db"));
+      expect(await findHolders(path.join(base, "link", "opencode.db"), procDir)).toEqual([21]);
+    });
+
     it("ignores unrelated descriptors and unreadable or missing proc entries", async () => {
       await holdOpen(11, path.join(base, "other.db"));
       await fs.mkdir(path.join(procDir, "12")); // no fd dir: not ours to read
@@ -215,6 +224,42 @@ describe("opencode-storage", () => {
       }
       expect(await sizeOnDisk()).toBe(before);
       expect(rows()).toBe(20);
+    });
+
+    it("gives up on a VACUUM that runs too long, leaving the database intact", async () => {
+      makeDb();
+      const before = await sizeOnDisk();
+      const writer = new Database(dbPath);
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        // Waiting for the lock far longer than the whole run may last.
+        const result = await pruneOpencodeStorage({
+          ...opts(),
+          busyTimeoutMs: 60_000,
+          vacuumTimeoutMs: 300,
+        });
+        expect(result.error).toContain("timed out");
+        expect(result.reclaimedBytes).toBe(0);
+      } finally {
+        writer.exec("ROLLBACK");
+        writer.close();
+      }
+      expect(await sizeOnDisk()).toBe(before);
+      expect(rows()).toBe(20);
+    });
+
+    it("keeps this process free while the VACUUM runs", async () => {
+      makeDb({ keep: 20, drop: 4000 });
+      let ticks = 0;
+      const timer = setInterval(() => ticks++, 5);
+      try {
+        const result = await pruneOpencodeStorage(opts());
+        expect(result.error).toBeUndefined();
+      } finally {
+        clearInterval(timer);
+      }
+      // A synchronous VACUUM in this process would have starved the timer.
+      expect(ticks).toBeGreaterThan(3);
     });
 
     it("refuses a second prune while one is running", async () => {
