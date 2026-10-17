@@ -8,7 +8,9 @@ import { stripTerminalEscapes } from "./terminal-text.js";
 /** Longest `match` accepted, literal or regex. */
 export const MAX_MATCH_LENGTH = 256;
 /** Matching only ever looks at this much trailing ANSI-stripped text, so the
- * cost of one test is bounded however much the child prints. */
+ * cost of one test is bounded however much the child prints. Best-effort
+ * under a flood: >64 KiB of output inside one debounce can scroll a match out
+ * of the raw window, and ANSI-heavy output strips to far fewer chars. */
 export const OUTPUT_WINDOW_CHARS = 16 * 1024;
 /** Raw bytes kept to rebuild the window (escape sequences inflate raw output). */
 const RAW_WINDOW_BYTES = 64 * 1024;

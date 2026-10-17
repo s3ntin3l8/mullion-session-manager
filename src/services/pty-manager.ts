@@ -2817,8 +2817,8 @@ export class Session {
   }
 
   /** The output produced after `offset` (a prior `outputOffset` reading) that
-   * the scrollback ring still holds — everything, if the ring evicted part of
-   * it. Used by sessions.wait_for_output to cover the prompt → wait gap. */
+   * the scrollback ring still holds — the newest bytes of it if the ring
+   * evicted part of the gap. Used by sessions.wait_for_output to cover the prompt → wait gap. */
   getOutputSince(offset: number): Buffer {
     const produced = this.outputOffset - offset;
     if (produced <= 0) return Buffer.alloc(0);
