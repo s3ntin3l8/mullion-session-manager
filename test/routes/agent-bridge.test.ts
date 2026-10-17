@@ -388,6 +388,24 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       await closePromise;
     });
 
+    it("logs a warn when a request to /ws/agent-bridge is answered without an upgrade (#1641)", async () => {
+      const { app } = await buildAndListen();
+      const warn = vi.spyOn(app.log, "warn");
+
+      const res = await app.inject({ method: "GET", url: "/ws/agent-bridge?x=1" });
+
+      expect(res.statusCode).toBe(404);
+      expect(warn).toHaveBeenCalledWith(
+        {
+          url: "/ws/agent-bridge",
+          statusCode: 404,
+          hasUpgradeHeader: false,
+          hasOrigin: false,
+        },
+        "agent-bridge websocket upgrade rejected",
+      );
+    });
+
     it("logs the reason, handshake type and bridge id when it rejects a handshake", async () => {
       const { app, port } = await buildAndListen();
       const { bridge_id } = await pairFreshBridge(port);

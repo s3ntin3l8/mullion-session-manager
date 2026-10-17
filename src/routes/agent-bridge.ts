@@ -411,7 +411,30 @@ export async function agentBridgeRoute(app: FastifyInstance) {
 
   app.get(
     "/ws/agent-bridge",
-    { websocket: true, config: { rateLimit: BRIDGE_CONNECT_RATE_LIMIT } },
+    {
+      websocket: true,
+      config: { rateLimit: BRIDGE_CONNECT_RATE_LIMIT },
+      // Issue #1641 — a successful upgrade hijacks the reply, so this only
+      // fires when the request was answered as plain HTTP: 429 (rate limit,
+      // one 20/min bucket shared by every client behind a proxy), 403 (Origin
+      // hook) or 404 (no `Upgrade` header). Previously none of these left a
+      // warn-level line, so "did not complete the WebSocket upgrade" on the
+      // helper could not be told apart from a request that never reached us.
+      onResponse: (request, reply, done) => {
+        if (reply.statusCode !== 101) {
+          app.log.warn(
+            {
+              url: request.url.split("?")[0],
+              statusCode: reply.statusCode,
+              hasUpgradeHeader: typeof request.headers.upgrade === "string",
+              hasOrigin: typeof request.headers.origin === "string",
+            },
+            "agent-bridge websocket upgrade rejected",
+          );
+        }
+        done();
+      },
+    },
     (socket: NodeWebSocket) => {
       let handshakeComplete = false;
 
