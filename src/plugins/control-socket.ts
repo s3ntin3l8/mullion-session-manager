@@ -391,6 +391,7 @@ function ownAndChildSessionFilter(
   pinnedId: number,
 ): (sessionId: number) => boolean {
   const known = new Map<number, boolean>([[pinnedId, true]]);
+  const missedOnce = new Set<number>();
   return (sessionId) => {
     let isOwn = known.get(sessionId);
     if (isOwn === undefined) {
@@ -400,9 +401,11 @@ function ownAndChildSessionFilter(
         .where(eq(sessions.id, sessionId))
         .get();
       isOwn = row?.parentSessionId === pinnedId;
-      // A row that doesn't exist (yet) is not cached: the event could race
-      // the INSERT.
-      if (row) known.set(sessionId, isOwn);
+      // A missing row could be an event racing the INSERT, so the first miss
+      // is not cached; a second miss means the row is not coming (an id that
+      // never gets a row would otherwise re-run this SELECT on every event).
+      if (row || missedOnce.has(sessionId)) known.set(sessionId, isOwn);
+      else missedOnce.add(sessionId);
     }
     return isOwn;
   };
@@ -1506,8 +1509,11 @@ export const OPS: Record<string, OpSpec> = {
             reply({ ok: false, status: 403, error: "this session is no longer active" });
             return;
           }
+          const ownId = Number(conn.sessionId);
           attachLocalEventsSocket(app, channel, {
-            sessionFilter: ownAndChildSessionFilter(app, Number(conn.sessionId)),
+            sessionFilter: ownAndChildSessionFilter(app, ownId),
+            // Receiving a child's events is not writing its read cursor.
+            seenFilter: (sessionId) => sessionId === ownId,
           });
         } else {
           attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });

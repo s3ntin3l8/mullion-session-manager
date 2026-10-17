@@ -916,6 +916,19 @@ describe("runSessionExec", () => {
   });
 });
 
+describe("events tail command mapping", () => {
+  it("--children on `events tail` reaches the subscribe body", async () => {
+    const stream = new FakeStream();
+    const client = { ...fakeClient(), openStream: vi.fn(async () => stream) };
+    const io = fakeIo();
+    const run = runCommand(["events", "tail", "--children"], { client, io });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(client.openStream).toHaveBeenCalledWith("events.subscribe", { includeChildren: true });
+    io.interruptHandlers[0]();
+    await run;
+  });
+});
+
 describe("runEventsTail", () => {
   it("--children opts the subscription into the caller's children", async () => {
     const stream = new FakeStream();
