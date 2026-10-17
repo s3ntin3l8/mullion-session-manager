@@ -308,6 +308,9 @@ export function App() {
   // and get its panel force-opened. Seeds the baseline on that first
   // qualifying tick without acting; only a transition AFTER that counts.
   const hasSeededChildSessionsRef = useRef(false);
+  // Children this effect already opened: they have nothing left to retry, so
+  // a human closing the panel isn't undone on the next tick.
+  const openedHintedChildIdsRef = useRef(new Set<number>());
 
   // deepLinkHandledRef/deepLinkRetryTick used to be declared here — Issue
   // #95 prerequisite bookkeeping for the `?session=<id>` deep-link effect —
@@ -705,7 +708,7 @@ export function App() {
         // (the per-child decision is childWantsAutoOpen below).
         autoOpenChildPanels:
           settings.sessions.autoOpenChildPanels ||
-          sessions.some((s) => Boolean(s.openHint) && s.status === "active"),
+          freshHintedChildIds(sessions, Date.now()).size > 0,
         sessionsLoaded,
         restoring: restoringRef.current,
       })
@@ -721,6 +724,7 @@ export function App() {
       // isn't open yet. Bounded by the freshness window, so an old hint
       // (reload, or a parent panel opened hours later) never replays.
       const retryChildIds = freshHintedChildIds(sessions, Date.now());
+      for (const id of openedHintedChildIdsRef.current) retryChildIds.delete(id);
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
       } else {
@@ -748,6 +752,7 @@ export function App() {
           // whether its panel auto-opens); the user can open it manually.
           if (!position) continue;
           const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+          openedHintedChildIdsRef.current.add(child.id);
           api.addPanel({
             id: panelId,
             component: "terminal",

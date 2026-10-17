@@ -301,7 +301,7 @@ const spawnChildSession = {
           "Ask the dashboard to open the child's terminal panel next to yours ('right' of, " +
           "or 'below', your panel) so the human sees it without hunting. Only a hint: it " +
           "takes effect when the human has your panel open in their current workspace, and " +
-          "is skipped otherwise.",
+          "is dropped otherwise (about a minute after the spawn).",
       },
     },
   },
