@@ -107,6 +107,12 @@ describe("opencode-storage", () => {
       expect(status.fileBytes).toBeGreaterThanOrEqual(await sizeOnDisk());
     });
 
+    it("reports holdersUnknown, not inUse, when it can't tell who has it open", async () => {
+      makeDb();
+      const status = await inspectOpencodeStorage({ dbPath, procDir: path.join(base, "no-proc") });
+      expect(status).toMatchObject({ available: true, inUse: false, holdersUnknown: true });
+    });
+
     it("sees a process holding the database or its WAL open, but not this one", async () => {
       makeDb();
       await holdOpen(process.pid, dbPath);
@@ -132,7 +138,22 @@ describe("opencode-storage", () => {
       await fs.mkdir(path.join(procDir, "self"));
       await holdOpen(13, `${dbPath}-shm`);
       expect(await findHolders(dbPath, procDir)).toEqual([13]);
-      expect(await findHolders(dbPath, path.join(base, "no-proc"))).toEqual([]);
+    });
+
+    it("can't tell, rather than saying nobody, when /proc is unreadable", async () => {
+      expect(await findHolders(dbPath, path.join(base, "no-proc"))).toBeNull();
+    });
+
+    it("can't tell when one of this user's own processes can't be looked into", async () => {
+      if (process.getuid?.() === 0) return; // root reads everything
+      await holdOpen(31, path.join(base, "other.db"));
+      const fdDir = path.join(procDir, "31", "fd");
+      await fs.chmod(fdDir, 0o000);
+      try {
+        expect(await findHolders(dbPath, procDir)).toBeNull();
+      } finally {
+        await fs.chmod(fdDir, 0o700);
+      }
     });
   });
 
@@ -178,6 +199,49 @@ describe("opencode-storage", () => {
       });
       expect(result.output).toContain("opencode started");
       expect(await sizeOnDisk()).toBe(before);
+    });
+
+    it("skips when it can't tell whether opencode is running", async () => {
+      makeDb();
+      const before = await sizeOnDisk();
+      const result = await pruneOpencodeStorage({ dbPath, procDir: path.join(base, "no-proc") });
+      expect(result.output).toContain("Couldn't tell whether opencode is running");
+      expect(result.reclaimedBytes).toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(await sizeOnDisk()).toBe(before);
+    });
+
+    it("skips when /proc becomes unreadable between the preview and the lock", async () => {
+      makeDb();
+      const before = await sizeOnDisk();
+      const result = await pruneOpencodeStorage({
+        ...opts(),
+        freeBytes: async () => {
+          await fs.rm(procDir, { recursive: true });
+          return Number.MAX_SAFE_INTEGER;
+        },
+      });
+      expect(result.output).toContain("Couldn't tell whether opencode is running");
+      expect(await sizeOnDisk()).toBe(before);
+      expect(rows()).toBe(20);
+    });
+
+    it("says when the write-ahead log couldn't be fully truncated", async () => {
+      makeDb();
+      // A reader on an open snapshot (in this process, so the gate can't see it)
+      // keeps the checkpoint from truncating the WAL.
+      const reader = new Database(dbPath);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT COUNT(*) FROM part").get();
+      try {
+        const result = await pruneOpencodeStorage({ ...opts(), busyTimeoutMs: 50 });
+        expect(result.error).toBeUndefined();
+        expect(result.output).toContain("couldn't be fully truncated");
+      } finally {
+        reader.exec("ROLLBACK");
+        reader.close();
+      }
+      expect(rows()).toBe(20);
     });
 
     it("says so when there is no database or nothing to reclaim", async () => {

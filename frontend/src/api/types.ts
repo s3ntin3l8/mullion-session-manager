@@ -133,6 +133,8 @@ export interface OpencodeStorageStatus {
   liveBytes: number;
   /** Another process has it open, so compacting it is skipped. */
   inUse: boolean;
+  /** Couldn't tell who has it open; skipped just the same. */
+  holdersUnknown: boolean;
   error?: string;
 }
 

@@ -95,11 +95,15 @@ so it is deliberately narrow:
 
 - **Only while opencode isn't running.** `VACUUM` holds the write lock for the
   whole rebuild (a minute or so for a large file), which would make opencode's
-  own writes fail. Before and again right before taking the lock, Mullion looks
-  for any process (of the server's user) with the database, its `-wal` or its
-  `-shm` open (by resolved path, so a symlinked data dir is seen too), and skips, without error, if it finds one. It never starts or
-  stops opencode. Stop opencode (or its background service) and run the cleanup
-  again.
+  own writes fail. Mullion looks for any process (of the server's user) with the
+  database, its `-wal` or its `-shm` open (by resolved path, so a symlinked data
+  dir is seen too), and skips, without error, if it finds one. It never starts
+  or stops opencode. The last look is taken just before the lock: the child
+  process is started first and only told to go once that check is clear, so
+  nothing but a pipe write separates the two. If it can't tell (no readable
+  `/proc`, or one of the user's own processes can't be listed), that counts as
+  "running", never as "nobody": the Settings page says it couldn't tell. Stop
+  opencode (or its background service) and run the cleanup again.
 - **Room to work.** A `VACUUM` builds the compacted copy in a temporary file
   and, in WAL mode, then writes it through the WAL, so the volume needs about
   twice the live size free (with 20% slack). The temporary file is kept on the
@@ -113,7 +117,9 @@ so it is deliberately narrow:
   finishes.
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
-  checkpointed and truncated afterwards so the file actually shrinks. A failed
+  checkpointed and truncated afterwards so the file actually shrinks (if a
+  reader still holds the WAL the result says so, and it shrinks at its next
+  checkpoint). A failed
   `VACUUM` is atomic and leaves the database as it was.
 - **Not retention.** This reclaims free pages only. Deleting old sessions is
   opencode's to do (it has no bulk or age-based command yet); see #1664.

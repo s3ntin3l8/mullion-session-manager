@@ -112,7 +112,7 @@ export function ServerInfoSection() {
         // Aggressive-only, and only while opencode isn't running (the server
         // re-checks, so a session that started since this loaded is still safe).
         const opencodeResult =
-          mode === "aggressive" && hasOpencode && !opencode?.inUse
+          mode === "aggressive" && hasOpencode && !opencode?.inUse && !opencode?.holdersUnknown
             ? await settle("opencode database cleanup failed.", () => api.pruneOpencodeStorage())
             : null;
         const parts = [
@@ -330,7 +330,9 @@ export function ServerInfoSection() {
             exact figure shown.{" "}
             {opencode.inUse
               ? "opencode is running right now, so this is skipped until it is closed."
-              : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
+              : opencode.holdersUnknown
+                ? "Mullion couldn't tell whether opencode is running, so this is skipped."
+                : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
           </div>
         </>
       )}

@@ -28,21 +28,40 @@ const SPACE_FACTOR = 2 * 1.2;
 // Killing it midway is safe: a VACUUM that doesn't commit changes nothing.
 const VACUUM_TIMEOUT_MS = 30 * 60_000;
 // Runs in a child process: better-sqlite3 is synchronous, so in this process a
-// VACUUM would freeze every terminal and request for as long as it takes.
+// VACUUM would freeze every terminal and request for as long as it takes. It
+// boots, then waits to be told "go" on stdin: the parent's last look at who has
+// the database open happens just before that, so nothing but a pipe write
+// separates that check from the VACUUM taking the write lock. Stdin closing
+// without a "go" means the parent decided against it (exit 4).
+const EXIT_NOT_STARTED = 4;
 const VACUUM_SCRIPT = `
 const [moduleFile, dbFile, busyMs] = process.argv.slice(1);
-try {
-  const db = new (require(moduleFile))(dbFile, { fileMustExist: true, timeout: Number(busyMs) });
+let started = false;
+function run() {
+  if (started) return;
+  started = true;
   try {
-    db.exec("VACUUM");
-    db.pragma("wal_checkpoint(TRUNCATE)");
-  } finally {
-    db.close();
+    const db = new (require(moduleFile))(dbFile, { fileMustExist: true, timeout: Number(busyMs) });
+    try {
+      db.exec("VACUUM");
+      const [checkpoint] = db.pragma("wal_checkpoint(TRUNCATE)");
+      if (checkpoint && checkpoint.busy) console.log("WAL_BUSY");
+    } finally {
+      db.close();
+    }
+    process.exit(0);
+  } catch (error) {
+    console.error(error && error.message ? error.message : String(error));
+    process.exit(1);
   }
-} catch (error) {
-  console.error(error && error.message ? error.message : String(error));
-  process.exit(1);
 }
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  if (chunk.includes("go")) run();
+});
+process.stdin.on("end", () => {
+  if (!started) process.exit(${EXIT_NOT_STARTED});
+});
 `;
 
 export interface OpencodeStorageOptions {
@@ -70,6 +89,12 @@ export interface OpencodeStorageStatus {
   liveBytes: number;
   /** Some other process has it open; a VACUUM would lock it out, so it is skipped. */
   inUse: boolean;
+  /**
+   * Who has it open couldn't be established (no readable /proc, or one of this
+   * user's own processes can't be looked into). Unknown is not "nobody": it is
+   * skipped just like `inUse`.
+   */
+  holdersUnknown: boolean;
   error?: string;
 }
 
@@ -96,10 +121,11 @@ async function sizeOf(file: string): Promise<number> {
 
 /**
  * Pids (other than this process) with the database, its WAL or its shared-memory
- * file open. Only descriptors we are allowed to read are seen, i.e. this user's
- * own processes — which is every process that could be opencode.
+ * file open, or `null` when that can't be established: no readable /proc, or a
+ * process of this same user whose descriptors can't be listed. Another user's
+ * processes can't be opencode (it runs as the server's user) and are skipped.
  */
-export async function findHolders(dbPath: string, procDir = "/proc"): Promise<number[]> {
+export async function findHolders(dbPath: string, procDir = "/proc"): Promise<number[] | null> {
   // /proc reports resolved paths, so a data dir reached through a symlink (or a
   // bind mount) would otherwise hide a running opencode.
   const real = await fs.realpath(dbPath).catch(() => dbPath);
@@ -108,7 +134,7 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<nu
   try {
     pids = await fs.readdir(procDir);
   } catch {
-    return [];
+    return null;
   }
   const holders: number[] = [];
   for (const pid of pids) {
@@ -117,8 +143,14 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<nu
     let fds: string[];
     try {
       fds = await fs.readdir(fdDir);
-    } catch {
-      continue; // another user's process, or gone
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; // gone
+      const owner = await fs.stat(path.join(procDir, pid)).then(
+        (st) => st.uid,
+        () => null,
+      );
+      if (owner !== null && owner === process.getuid?.()) return null;
+      continue; // another user's process
     }
     for (const fd of fds) {
       const target = await fs.readlink(path.join(fdDir, fd)).catch(() => null);
@@ -142,6 +174,7 @@ export async function inspectOpencodeStorage(
     reclaimableBytes: 0,
     liveBytes: 0,
     inUse: false,
+    holdersUnknown: false,
   };
   try {
     if (!(await fs.stat(dbPath)).isFile()) return unavailable;
@@ -164,7 +197,8 @@ export async function inspectOpencodeStorage(
         fileBytes: (await sizeOf(dbPath)) + (await sizeOf(`${dbPath}-wal`)),
         reclaimableBytes: free * pageSize,
         liveBytes: (pageCount - free) * pageSize,
-        inUse: holders.length > 0,
+        inUse: (holders?.length ?? 0) > 0,
+        holdersUnknown: holders === null,
       };
     } finally {
       db.close();
@@ -177,15 +211,40 @@ export async function inspectOpencodeStorage(
   }
 }
 
-function runVacuum(dbPath: string, busyTimeoutMs: number, timeoutMs: number): Promise<void> {
+interface VacuumOutcome {
+  /** The gate said no, so the child exited without touching the database. */
+  skipped: boolean;
+  /** The checkpoint couldn't truncate the WAL (a reader was still on it). */
+  walBusy: boolean;
+}
+
+/**
+ * Starts the child, then lets `proceed` have the last word: it runs while the
+ * child boots, and the VACUUM only starts once it resolves true.
+ */
+function runVacuum(
+  dbPath: string,
+  busyTimeoutMs: number,
+  timeoutMs: number,
+  proceed: () => Promise<boolean>,
+): Promise<VacuumOutcome> {
   return new Promise((resolve, reject) => {
     // SQLITE_TMPDIR keeps the temporary copy on the volume the space check
     // looked at, not whatever small or RAM-backed /tmp the host has.
     const child = spawn(
       process.execPath,
       ["-e", VACUUM_SCRIPT, require.resolve("better-sqlite3"), dbPath, String(busyTimeoutMs)],
-      { env: { SQLITE_TMPDIR: path.dirname(dbPath) }, stdio: ["ignore", "ignore", "pipe"] },
+      { env: { SQLITE_TMPDIR: path.dirname(dbPath) }, stdio: ["pipe", "pipe", "pipe"] },
     );
+    child.stdin.on("error", () => undefined); // the child may already be gone
+    void proceed().then(
+      (go) => child.stdin.end(go ? "go\n" : undefined),
+      () => child.stdin.end(),
+    );
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (stdout.length < 256) stdout += chunk.toString("utf8");
+    });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
       if (stderr.length < 4096) stderr += chunk.toString("utf8");
@@ -201,7 +260,8 @@ function runVacuum(dbPath: string, busyTimeoutMs: number, timeoutMs: number): Pr
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve();
+      if (code === 0) resolve({ skipped: false, walBusy: stdout.includes("WAL_BUSY") });
+      else if (code === EXIT_NOT_STARTED) resolve({ skipped: true, walBusy: false });
       else reject(new Error(stderr.trim() || `VACUUM exited with code ${String(code)}`));
     });
   });
@@ -211,6 +271,9 @@ const defaultFreeBytes = async (dir: string) => {
   const stats = await fs.statfs(dir);
   return stats.bavail * stats.bsize;
 };
+
+const UNKNOWN_HOLDERS_OUTPUT =
+  "Couldn't tell whether opencode is running; its database was skipped.";
 
 let pruneRunning = false;
 
@@ -232,6 +295,9 @@ export async function pruneOpencodeStorage(
         ? { output: "", reclaimedBytes: 0, error: status.error }
         : { output: "No opencode database found.", reclaimedBytes: 0 };
     }
+    if (status.holdersUnknown) {
+      return { output: UNKNOWN_HOLDERS_OUTPUT, reclaimedBytes: 0 };
+    }
     if (status.inUse) {
       return {
         output: "opencode is running; its database was skipped. Close it and run again.",
@@ -251,15 +317,20 @@ export async function pruneOpencodeStorage(
         error: `Not enough free space to compact the opencode database (needs about ${String(needed)} bytes, ${String(free)} free).`,
       };
     }
-    // Another look right before taking the write lock.
-    if ((await findHolders(status.path, options.procDir)).length > 0) {
-      return { output: "opencode started; its database was skipped.", reclaimedBytes: 0 };
-    }
+    let outcome: VacuumOutcome;
+    const lastLook = { value: "clear" as "clear" | "running" | "unknown" };
     try {
-      await runVacuum(
+      outcome = await runVacuum(
         status.path,
         options.busyTimeoutMs ?? BUSY_TIMEOUT_MS,
         options.vacuumTimeoutMs ?? VACUUM_TIMEOUT_MS,
+        // The last look, taken while the child boots and acted on a pipe write
+        // before it takes the write lock.
+        async () => {
+          const holders = await findHolders(status.path, options.procDir);
+          lastLook.value = holders === null ? "unknown" : holders.length > 0 ? "running" : "clear";
+          return lastLook.value === "clear";
+        },
       );
     } catch (error) {
       return {
@@ -268,9 +339,24 @@ export async function pruneOpencodeStorage(
         error: error instanceof Error ? error.message : "Compacting the opencode database failed",
       };
     }
+    if (outcome.skipped) {
+      return {
+        output:
+          lastLook.value === "unknown"
+            ? UNKNOWN_HOLDERS_OUTPUT
+            : "opencode started; its database was skipped.",
+        reclaimedBytes: 0,
+      };
+    }
     const after = (await sizeOf(status.path)) + (await sizeOf(`${status.path}-wal`));
     const reclaimedBytes = Math.max(0, status.fileBytes - after);
-    return { output: `Compacted ${path.basename(status.path)}.`, reclaimedBytes };
+    const name = path.basename(status.path);
+    return {
+      output: outcome.walBusy
+        ? `Compacted ${name}; its write-ahead log couldn't be fully truncated and will shrink at its next checkpoint.`
+        : `Compacted ${name}.`,
+      reclaimedBytes,
+    };
   } finally {
     pruneRunning = false;
   }

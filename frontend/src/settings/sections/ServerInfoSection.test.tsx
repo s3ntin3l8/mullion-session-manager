@@ -77,6 +77,7 @@ const noOpencode: OpencodeStorageStatus = {
   reclaimableBytes: 0,
   liveBytes: 0,
   inUse: false,
+  holdersUnknown: false,
 };
 
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
@@ -269,6 +270,7 @@ describe("Settings -> Server info resources", () => {
       reclaimableBytes: 15 * GIB,
       liveBytes: 2 * GIB,
       inUse: false,
+      holdersUnknown: false,
     };
 
     it("shows the file size and what compacting returns, and nothing when opencode is absent", async () => {
@@ -304,6 +306,21 @@ describe("Settings -> Server info resources", () => {
       await userEvent.click(aggressive);
       expect(await screen.findByText(/opencode database 15 GiB/)).toBeInTheDocument();
       expect(api.pruneOpencodeStorage).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't try when it can't tell whether opencode is running, and says why", async () => {
+      setup({ opencode: { ...opencode, holdersUnknown: true } });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      render(<ServerInfoSection />);
+      expect(
+        await screen.findByText(/couldn't tell whether opencode is running/),
+      ).toBeInTheDocument();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
     });
 
     it("doesn't try while opencode is running, and says why", async () => {
