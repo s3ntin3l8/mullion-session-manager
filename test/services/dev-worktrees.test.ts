@@ -19,20 +19,9 @@ let origin: string;
 let repo: string;
 let project: DevWorktreeProject;
 
+// Commit identity comes from test/setup.ts's GIT_AUTHOR_*/GIT_COMMITTER_* env.
 function git(cwd: string, args: string[]): string {
-  return execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.com",
-      "-c",
-      "commit.gpgsign=false",
-      ...args,
-    ],
-    { cwd, stdio: "pipe", env: gitEnv() },
-  ).toString();
+  return execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() }).toString();
 }
 
 function commit(cwd: string, file: string, message: string) {
