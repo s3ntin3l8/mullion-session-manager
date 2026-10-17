@@ -1001,7 +1001,7 @@ export const OPS: Record<string, OpSpec> = {
       }
       const session = app.pty.get(target.id);
       if (!session || !session.isAlive) {
-        reply(bad(409, "the session is not running on this host"));
+        reply(bad(409, NOT_LOCAL_MESSAGE));
         return;
       }
       if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
