@@ -106,6 +106,11 @@ describe("claude-scratch", () => {
     }
   });
 
+  it("treats a relative registry path as unknown rather than guessing where it points", async () => {
+    const live = await loadLiveSessions([base, path.join("relative", "sessions")]);
+    expect(live.blocked).toContain("relative path");
+  });
+
   it("unions several registries; only the first must exist", async () => {
     const [a, b] = [path.join(base, "a"), path.join(base, "b")];
     await fs.mkdir(a);
@@ -253,6 +258,7 @@ describe("claude-scratch", () => {
       defaultClaudeSessionsDir(),
       path.join("/work/claude", "sessions"),
       path.join("/other", "sessions"),
+      path.join("relative/dir", "sessions"),
     ]);
     expect(claudeSessionsDirsFor([])).toEqual([defaultClaudeSessionsDir()]);
   });

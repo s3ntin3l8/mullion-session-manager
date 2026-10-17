@@ -23,7 +23,9 @@ export const defaultClaudeSessionsDir = () => path.join(resolveClaudeConfigDir()
  * Registry dirs to consult: the server's own first (its registry must exist,
  * see `loadLiveSessions`), then one per distinct `CLAUDE_CONFIG_DIR` found in
  * the persisted env of sessions (`sessions.env`, a JSON object). A relative
- * value is ignored: it would resolve against whatever cwd Mullion runs in.
+ * value is kept as is: it resolves against that session's own cwd, which isn't
+ * known here, so `loadLiveSessions` treats it as unknown rather than guessing.
+ * (An empty value is Claude Code's "unset", as in `resolveClaudeConfigDir`.)
  */
 export function claudeSessionsDirsFor(envColumns: ReadonlyArray<string | null>): string[] {
   const dirs = [defaultClaudeSessionsDir()];
@@ -35,7 +37,7 @@ export function claudeSessionsDirsFor(envColumns: ReadonlyArray<string | null>):
     } catch {
       continue; // one corrupt column must not hide the rest
     }
-    if (typeof configDir !== "string" || !path.isAbsolute(configDir)) continue;
+    if (typeof configDir !== "string" || configDir === "") continue;
     const sessionsDir = path.join(configDir.normalize("NFC"), "sessions");
     if (!dirs.includes(sessionsDir)) dirs.push(sessionsDir);
   }
@@ -168,6 +170,8 @@ export async function loadLiveSessions(
   if (ownNamespace === null) return blocked("this process's PID namespace is unknown");
 
   for (const [index, dir] of registryDirs.entries()) {
+    if (!path.isAbsolute(dir))
+      return blocked(`the Claude session registry ${dir} is a relative path`);
     let names: string[];
     try {
       names = await fs.readdir(dir);

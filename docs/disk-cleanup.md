@@ -45,7 +45,7 @@ cross-checked against `/proc`:
   window alone.
 - **Unknown means hands off.** If liveness can't be established (no `/proc`,
   an unreadable registry, an unparseable registry file whose process might
-  still be running), the whole `claude-<uid>` tree is skipped, and the
+  still be running, a session whose `CLAUDE_CONFIG_DIR` is a relative path), the whole `claude-<uid>` tree is skipped, and the
   Settings page says why. An unparseable file named `<pid>.json` whose pid is
   gone is only skipped, with a warning listing the file, and the rest is
   cleaned as usual.
