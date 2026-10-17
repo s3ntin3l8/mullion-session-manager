@@ -20,7 +20,11 @@ import {
   CliUsageError,
   USAGE,
 } from "../../src/cli/core.mjs";
-import { MullionSocketError } from "../../src/cli/client.mjs";
+import {
+  MullionSocketError,
+  statusHookMessages,
+  statusTruncationNote,
+} from "../../src/cli/client.mjs";
 
 // ---------------------------------------------------------------------------
 // extractFlags / parseGlobalFlags
@@ -2437,6 +2441,93 @@ describe("runCommand", () => {
     it("requires --message", async () => {
       const io = fakeIo();
       expect(await runCommand(["notify"], { client: fakeClient(), io })).toBe(2);
+    });
+  });
+
+  describe("status (issue #1623)", () => {
+    it("rejects a missing or unknown state with a usage error", async () => {
+      expect(await runCommand(["status"], { client: fakeClient(), io: fakeIo() })).toBe(2);
+      expect(await runCommand(["status", "sleeping"], { client: fakeClient(), io: fakeIo() })).toBe(
+        2,
+      );
+    });
+
+    it("sends the mapped hook message over the session's hook socket", async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-status-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      const received: unknown[] = [];
+      const server = net.createServer((socket) => {
+        let buffer = "";
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let idx = buffer.indexOf("\n");
+          while (idx !== -1) {
+            received.push(JSON.parse(buffer.slice(0, idx)));
+            buffer = buffer.slice(idx + 1);
+            idx = buffer.indexOf("\n");
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const io = fakeIo();
+        io.env = { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok" };
+        expect(
+          await runCommand(["status", "done", "--message", "tests pass"], {
+            client: fakeClient(),
+            io,
+          }),
+        ).toBe(0);
+        await vi.waitFor(() => expect(received).toHaveLength(2));
+        expect(received).toEqual([
+          { token: "tok" },
+          { kind: "progress", phase: "done", lastAssistantMessage: "tests pass" },
+        ]);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails clearly outside a session (no hook socket env)", async () => {
+      const io = fakeIo();
+      io.env = {};
+      expect(await runCommand(["status", "working"], { client: fakeClient(), io })).toBe(1);
+    });
+  });
+
+  describe("statusHookMessages", () => {
+    it("maps each state onto existing hook messages, in send order", () => {
+      expect(statusHookMessages("working", "ignored")).toEqual([{ kind: "turn_start" }]);
+      expect(statusHookMessages("done")).toEqual([{ kind: "progress", phase: "done" }]);
+      // needs_input leads with turn_start so a latched `finished` from an
+      // earlier `done` is cleared (finished outranks needs_input).
+      expect(statusHookMessages("needs_input", "approve the deploy")).toEqual([
+        { kind: "turn_start" },
+        { kind: "notification", title: "mullion", body: "approve the deploy" },
+      ]);
+      expect(statusHookMessages("needs_input")).toMatchObject([
+        { kind: "turn_start" },
+        { body: "needs input" },
+      ]);
+      expect(statusHookMessages("nope")).toBeNull();
+    });
+
+    it("caps the message at 200 chars and says so", () => {
+      const [msg] = statusHookMessages("done", "x".repeat(500)) as [
+        { lastAssistantMessage: string },
+      ];
+      expect(msg.lastAssistantMessage).toHaveLength(200);
+      expect(statusTruncationNote("x".repeat(500))).toContain("truncated to 200");
+      expect(statusTruncationNote("short")).toBe("");
+      expect(statusTruncationNote(undefined)).toBe("");
+    });
+
+    it("sendHookMessage refuses a non-object message instead of writing garbage", async () => {
+      const { sendHookMessage } = await import("../../src/cli/client.mjs");
+      await expect(
+        sendHookMessage({ hookSocketPath: "/x", hookToken: "t", message: null, what: "t" }),
+      ).rejects.toThrow(/invalid/);
     });
   });
 

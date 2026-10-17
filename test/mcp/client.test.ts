@@ -33,6 +33,36 @@ describe("MullionClient (issue #271)", () => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
+  describe("reportStatus (issue #1623)", () => {
+    it("writes the handshake and the mapped hook message to the hook socket", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-mcp-status-"));
+      const socketPath = path.join(dir, "hooks.sock");
+      server = await listen(socketPath);
+      const received: string[] = [];
+      server.on("connection", (socket) => {
+        let buffer = "";
+        socket.on("data", (chunk) => {
+          buffer += chunk.toString("utf8");
+          received.splice(0, received.length, ...buffer.split("\n").filter(Boolean));
+        });
+      });
+      const client = new MullionClient({
+        MULLION_HOOK_SOCKET: socketPath,
+        MULLION_HOOK_TOKEN: "tok",
+      });
+      await client.reportStatus("working");
+      await vi.waitFor(() => expect(received).toHaveLength(2));
+      expect(received.map((l) => JSON.parse(l))).toEqual([
+        { token: "tok" },
+        { kind: "turn_start" },
+      ]);
+    });
+
+    it("rejects when not running inside a session", async () => {
+      await expect(new MullionClient({}).reportStatus("done")).rejects.toThrow(/MULLION_HOOK/);
+    });
+  });
+
   describe("isConfigured", () => {
     it("is false when the hook socket env vars are absent", () => {
       expect(new MullionClient({}).isConfigured()).toBe(false);

@@ -351,3 +351,109 @@ class ControlStream extends EventEmitter {
     this.client.streams.delete(this.id);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Self-reported status (issue #1623) — for CLIs without a hook adapter. An
+// agent inside a session says what it is doing by writing the SAME hook
+// messages a real adapter would to the session's own hook socket
+// (MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN), so every existing latch,
+// persistence path, remote-host relay and `sessions.wait` rule applies
+// unchanged — there is deliberately no new status state or protocol kind.
+// ---------------------------------------------------------------------------
+
+export const SELF_REPORT_STATES = ["working", "done", "needs_input"];
+export const SELF_REPORT_MESSAGE_MAX = 200;
+
+/** Suffix for the caller-facing result when `message` will be cut by
+ * statusHookMessages, so a truncation is never silent. */
+export function statusTruncationNote(message) {
+  return typeof message === "string" && message.length > SELF_REPORT_MESSAGE_MAX
+    ? ` (message truncated to ${SELF_REPORT_MESSAGE_MAX} chars)`
+    : "";
+}
+
+/**
+ * Maps a self-reported state onto the existing hook messages, in send order:
+ *  - working     -> turn_start (clears the `finished` / awaiting_* latches;
+ *                   `message` is ignored)
+ *  - done        -> progress {phase:"done"} (latches `finished`)
+ *  - needs_input -> turn_start, then notification. The leading turn_start
+ *                   clears a latched `finished` from an earlier `done` —
+ *                   deriveSessionStatus ranks `finished` above `needs_input`,
+ *                   so without it a blocked child would keep reading as done.
+ * Returns null for an unknown state.
+ */
+export function statusHookMessages(state, message) {
+  const text =
+    typeof message === "string" && message.length > 0
+      ? message.slice(0, SELF_REPORT_MESSAGE_MAX)
+      : undefined;
+  switch (state) {
+    case "working":
+      return [{ kind: "turn_start" }];
+    case "done":
+      return [
+        text === undefined
+          ? { kind: "progress", phase: "done" }
+          : { kind: "progress", phase: "done", lastAssistantMessage: text },
+      ];
+    case "needs_input":
+      return [
+        { kind: "turn_start" },
+        { kind: "notification", title: "mullion", body: text ?? "needs input" },
+      ];
+    default:
+      return null;
+  }
+}
+
+const HOOK_MESSAGE_TIMEOUT_MS = 5_000;
+
+/** Fire-and-forget write of hook message(s) (after the token handshake) to the
+ * session's own hook socket — the one hook sender `notify`, `status` and the
+ * MCP `report_status` tool all share. Rejects on missing env, a non-object
+ * message, connect error or timeout; hooks.ts never replies, so success means
+ * "flushed to the wire". */
+export function sendHookMessage({ hookSocketPath, hookToken, message, what = "message" }) {
+  const messages = Array.isArray(message) ? message : [message];
+  return new Promise((resolve, reject) => {
+    if (messages.length === 0 || messages.some((m) => m === null || typeof m !== "object")) {
+      reject(new Error(`internal error: invalid ${what} hook message`));
+      return;
+    }
+    if (!hookSocketPath || !hookToken) {
+      reject(
+        new Error(
+          `MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN are not set — '${what}' only works from inside a Mullion session`,
+        ),
+      );
+      return;
+    }
+    const socket = net.createConnection(hookSocketPath);
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(
+      () => finish(new Error(`timed out sending ${what}`)),
+      HOOK_MESSAGE_TIMEOUT_MS,
+    );
+    socket.once("error", (err) => finish(err));
+    socket.once("connect", () => {
+      const lines = [{ token: hookToken }, ...messages].map((m) => `${JSON.stringify(m)}\n`);
+      // Fire-and-forget, same posture as forwarder.mjs's ordinary hooks —
+      // hooks.ts never acks a notification/progress/turn_start line, so there
+      // is nothing to wait for beyond the write being flushed. The write
+      // callback resolves once the OS has taken the bytes; a socket error
+      // after that point is silently lost (Hermes review, PR #402) — an
+      // accepted tradeoff, not an oversight: this channel has no
+      // delivery-confirmation contract to begin with.
+      socket.write(lines.join(""), () => finish(null));
+    });
+  });
+}

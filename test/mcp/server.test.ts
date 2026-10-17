@@ -134,6 +134,7 @@ describe("mcp/server.mjs (issue #271)", () => {
     const tools = (response.result as { tools: Array<{ name: string }> }).tools;
     expect(tools.map((t) => t.name)).toEqual([
       "promote_to_worktree",
+      "report_status",
       "use_browser",
       "browser_action",
       "list_devices",

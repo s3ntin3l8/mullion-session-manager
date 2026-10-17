@@ -5148,6 +5148,34 @@ describe("PtyManager", () => {
       });
     });
 
+    it("self-reported status (issue #1623): needs_input after done clears the finished latch and raises attention", async () => {
+      const { statusHookMessages } = await import("../../src/cli/client.mjs");
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      for (const m of statusHookMessages("done", "finished the task") ?? []) {
+        session.emitHookEvent(m);
+      }
+      expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+
+      for (const m of statusHookMessages("needs_input", "approve the deploy") ?? []) {
+        session.emitHookEvent(m);
+      }
+      const info = session.toInfo();
+      expect(info.lastTurnEndedAt).toBeNull();
+      expect(info.attention).toBe(true);
+
+      // `working` after that clears attention again and leaves no finished latch.
+      for (const m of statusHookMessages("working") ?? []) session.emitHookEvent(m);
+      expect(session.toInfo().lastTurnEndedAt).toBeNull();
+    });
+
     it("turn_start: releases permissionState/planState/elicitationState/errorState and the finished latch", async () => {
       const session = manager.getOrCreate({
         id: "1",

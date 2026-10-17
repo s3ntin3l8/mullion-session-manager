@@ -12,12 +12,12 @@ applies. Nothing here works, or is needed, outside a Mullion-hosted session.
 
 ## The four env vars you were spawned with
 
-| Variable              | Unlocks                                                                                      |
-| --------------------- | -------------------------------------------------------------------------------------------- |
-| `MULLION_HOOK_SOCKET` | Structured notifications — `mullion notify` — and the hook channel your launcher wired up.   |
-| `MULLION_HOOK_TOKEN`  | Authenticates both the hook socket above AND the control socket below, at **session scope**. |
-| `MULLION_SOCKET_PATH` | Where the control socket lives — lets `mullion`/`mullion mcp`, run with no flags, find it.   |
-| `MULLION_SESSION_ID`  | Which session you are — lets `mullion`/`mullion mcp` default every op to yourself.           |
+| Variable              | Unlocks                                                                                                      |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `MULLION_HOOK_SOCKET` | Structured notifications — `mullion notify`, `mullion status` — and the hook channel your launcher wired up. |
+| `MULLION_HOOK_TOKEN`  | Authenticates both the hook socket above AND the control socket below, at **session scope**.                 |
+| `MULLION_SOCKET_PATH` | Where the control socket lives — lets `mullion`/`mullion mcp`, run with no flags, find it.                   |
+| `MULLION_SESSION_ID`  | Which session you are — lets `mullion`/`mullion mcp` default every op to yourself.                           |
 
 That's the entire surface you need — no config file to read, and nothing
 else grants you anything. Omit `--session`/`sessionId` everywhere below; it
@@ -60,7 +60,7 @@ the same way `--mcp-config` is for Claude Code.
 
 - **MCP tool** — lower overhead for a tool-calling model, no subprocess
   spawn. Prefer for `get_scrollback`, `list_actions`, `request_review`,
-  `browser_action`, `use_browser`, `promote_to_worktree`, `spawn_child_session`,
+  `browser_action`, `use_browser`, `promote_to_worktree`, `report_status`, `spawn_child_session`,
   `list_devices`, `use_device`/`device_action`, and `start_device`/
   `stop_device` — the ops actually reachable at session scope.
 - **`mullion` CLI** — better for `--json` in a shell pipeline, an
