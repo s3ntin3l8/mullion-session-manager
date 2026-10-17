@@ -428,7 +428,7 @@ from, the connection's own pinned session. Full scope must instead pass
 `body.parentSessionId` explicitly (there's no pinned session to default to).
 `body.projectId` is never read from the caller in either scope — it's always
 derived server-side from the resolved parent session's own project, via a
-real `GET /api/sessions/:id`, never trusted from the request. The rest of
+real `GET /api/sessions/:id`, never trusted from the request. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
 `env`/`seedPrompt`/`model`/`smallModel`) maps onto `POST /api/sessions`;
 `worktree`/`worktreeRefresh` are stripped even if present, since a child

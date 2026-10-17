@@ -32,6 +32,7 @@ import {
   attentionTransitionPanelIds,
   newChildSessionIds,
   childPanelPosition,
+  childWantsAutoOpen,
   shouldAutoOpenChildPanels,
   extractSessionIds,
   canLaunchTerminal,
@@ -2174,6 +2175,20 @@ describe("newChildSessionIds", () => {
   });
 });
 
+describe("childWantsAutoOpen (issue #1624)", () => {
+  it("opens every child when the setting is on", () => {
+    expect(childWantsAutoOpen({ openHint: null }, true)).toBe(true);
+    expect(childWantsAutoOpen({}, true)).toBe(true);
+  });
+
+  it("opens only a hinted child when the setting is off", () => {
+    expect(childWantsAutoOpen({ openHint: "below" }, false)).toBe(true);
+    expect(childWantsAutoOpen({ openHint: "right" }, false)).toBe(true);
+    expect(childWantsAutoOpen({ openHint: null }, false)).toBe(false);
+    expect(childWantsAutoOpen({}, false)).toBe(false);
+  });
+});
+
 describe("childPanelPosition", () => {
   it("positions the child next to its parent's open panel", () => {
     const api = mockDockviewApi();
@@ -2183,6 +2198,10 @@ describe("childPanelPosition", () => {
       params: { sessionId: 1 },
     });
     expect(childPanelPosition(api, 1)).toEqual({ referencePanel: parentPanel, direction: "right" });
+    expect(childPanelPosition(api, 1, "below")).toEqual({
+      referencePanel: parentPanel,
+      direction: "below",
+    });
   });
 
   it("returns undefined when the parent's panel isn't open", () => {

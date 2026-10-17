@@ -38,6 +38,7 @@ import {
   focusPanelForTier,
   newChildSessionIds,
   childPanelPosition,
+  childWantsAutoOpen,
   shouldAutoOpenChildPanels,
   isTiledPanel,
   canLaunchTerminal,
@@ -698,7 +699,11 @@ export function App() {
       shouldAutoOpenChildPanels({
         workspaceRestored,
         hasDockviewApi: dockviewApi !== null,
-        autoOpenChildPanels: settings.sessions.autoOpenChildPanels,
+        // A spawn-time `open` hint opens its own child even with the setting
+        // off, so the gate must let the effect run when any child carries one
+        // (the per-child decision is childWantsAutoOpen below).
+        autoOpenChildPanels:
+          settings.sessions.autoOpenChildPanels || sessions.some((s) => Boolean(s.openHint)),
         sessionsLoaded,
         restoring: restoringRef.current,
       })
@@ -716,7 +721,12 @@ export function App() {
           if (!child || child.parentSessionId === null) continue;
           const panelId = `session-${child.id}`;
           if (api.getPanel(panelId)) continue;
-          const position = childPanelPosition(api, child.parentSessionId);
+          if (!childWantsAutoOpen(child, settings.sessions.autoOpenChildPanels)) continue;
+          const position = childPanelPosition(
+            api,
+            child.parentSessionId,
+            child.openHint ?? "right",
+          );
           // Independent review finding #2 (PR #430) — skip entirely rather
           // than falling back to a position-less addPanel() when the
           // parent's own panel isn't part of the CURRENT dockview instance

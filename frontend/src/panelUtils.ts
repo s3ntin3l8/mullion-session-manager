@@ -423,9 +423,21 @@ export function newChildSessionIds(
 export function childPanelPosition(
   api: DockviewApi,
   parentSessionId: number,
-): { referencePanel: IDockviewPanel; direction: "right" } | undefined {
+  direction: "right" | "below" = "right",
+): { referencePanel: IDockviewPanel; direction: "right" | "below" } | undefined {
   const referencePanel = api.getPanel(`session-${parentSessionId}`);
-  return referencePanel ? { referencePanel, direction: "right" } : undefined;
+  return referencePanel ? { referencePanel, direction } : undefined;
+}
+
+// Issue #1624 — whether a newly appeared child's panel should auto-open: the
+// global setting opts every child in, and a spawn-time `open` hint (the
+// agent's explicit request, carried on the child's row) opts that one child
+// in even when the setting is off.
+export function childWantsAutoOpen(
+  child: Pick<Session, "openHint">,
+  autoOpenChildPanels: boolean,
+): boolean {
+  return autoOpenChildPanels || Boolean(child.openHint);
 }
 
 // Pure gate for the auto-open-child-panel effect (App.tsx) — pulled out so

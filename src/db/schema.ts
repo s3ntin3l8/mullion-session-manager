@@ -452,6 +452,13 @@ export const sessions = sqliteTable(
     // "documented hand-edit for a drizzle-kit/SQLite limitation" precedent
     // as `0008_lovely_xavin.sql`.
     parentSessionId: integer("parent_session_id"),
+    // Issue #1624 — a one-shot UI placement hint set at creation by
+    // sessions.spawn_child's `open` option: "open this session's panel to the
+    // right of / below its parent". Purely advisory — the backend never
+    // touches workspaces.layout; the frontend consumes it the first time it
+    // sees the (live) child. A stale value on an old row is harmless, since
+    // only newly appearing children are ever acted on.
+    openHint: text("open_hint", { enum: ["right", "below"] }),
     // JSON-encoded `Record<string, string>` (issue #822) — extra env vars
     // injected into this session at spawn, on top of whatever a dock
     // control or direct API caller set at creation. Persisted (not just

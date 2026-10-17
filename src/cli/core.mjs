@@ -672,6 +672,7 @@ const SESSION_CREATE_SPEC = {
 // the parent session (either the pinned connection or `--parent`), never
 // from a caller-supplied id.
 const SESSION_SPAWN_CHILD_SPEC = {
+  open: "string",
   parent: "string",
   command: "string",
   name: "string",
@@ -931,6 +932,12 @@ const sessionCommands = {
     if (flags.kind !== undefined) body.kind = flags.kind;
     if (flags["skip-permissions"] === true) body.skipPermissions = true;
     if (flags["initial-prompt"] !== undefined) body.seedPrompt = flags["initial-prompt"];
+    if (flags.open !== undefined) {
+      if (flags.open !== "right" && flags.open !== "below") {
+        throw new CliUsageError("--open must be 'right' or 'below'");
+      }
+      body.open = flags.open;
+    }
     if (parentId !== undefined) {
       const result = await client.request("sessions.spawn_child", body);
       return { json: result };
