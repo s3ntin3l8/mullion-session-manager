@@ -97,12 +97,20 @@ so it is deliberately narrow:
   whole rebuild (a minute or so for a large file), which would make opencode's
   own writes fail. Before and again right before taking the lock, Mullion looks
   for any process (of the server's user) with the database, its `-wal` or its
-  `-shm` open, and skips, without error, if it finds one. It never starts or
+  `-shm` open (by resolved path, so a symlinked data dir is seen too), and skips, without error, if it finds one. It never starts or
   stops opencode. Stop opencode (or its background service) and run the cleanup
   again.
-- **Room to work.** In WAL mode the compacted copy is written to the WAL before
-  it is checkpointed back, so the volume must have about the live size free
-  (with 20% slack); otherwise it refuses and says how much it needed.
+- **Room to work.** A `VACUUM` builds the compacted copy in a temporary file
+  and, in WAL mode, then writes it through the WAL, so the volume needs about
+  twice the live size free (with 20% slack). The temporary file is kept on the
+  database's own volume (`SQLITE_TMPDIR`) so that check is the right one;
+  otherwise it refuses and says how much it needed.
+- **The server keeps serving.** The `VACUUM` runs in a child `node` process,
+  not in the server's own: `better-sqlite3` is synchronous, so doing it in
+  process would freeze every terminal and request for the minutes it takes. It
+  is killed if it runs past 30 minutes, which is safe since a `VACUUM` that
+  doesn't commit changes nothing. The request itself stays open until it
+  finishes.
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
   checkpointed and truncated afterwards so the file actually shrinks. A failed
