@@ -239,8 +239,11 @@ const declinePromoteSchema = {
 
 // Issue #1637: a drop is capped at 20 files, so this allows ~6 full drops a
 // minute (~3 if every file is a mislabelled image, which retries as generic
-// and costs two requests). Must differ from RATE_LIMIT_MAX (checked at boot,
-// issue #1006).
+// and costs two requests). With no keyGenerator and trustProxy off this keys
+// on the raw TCP peer, so behind a reverse proxy every user shares the one
+// bucket (the same documented trade-off as LOGIN_RATE_LIMIT, security.ts) —
+// concurrent large drops can 429 each other. Must differ from RATE_LIMIT_MAX
+// (checked at boot, issue #1006).
 const UPLOAD_RATE_LIMIT = { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } };
 
 export async function sessionsRoute(app: FastifyInstance) {
