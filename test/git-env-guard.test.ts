@@ -44,9 +44,17 @@ describe("git child processes scrub the ambient git environment", () => {
       .toString()
       .split("\n")
       .filter((f) => /\.(ts|mjs|js)$/.test(f) && f !== "test/git-env-guard.test.ts");
-    const offenders = files.filter((f) =>
-      /"config",\s*"user\.(name|email)"/.test(readFileSync(path.join(ROOT, f), "utf8")),
-    );
+    // File-level and quote-agnostic, so `git('config', 'user.name', …)`, a
+    // template literal, a single string or `-c user.name=…` can't dodge it.
+    // Comments are stripped first: they may legitimately mention the keys.
+    const IDENTITY_WRITE = /(config|-c)[\s\S]{0,40}?user\.(name|email)/;
+    const offenders = files.filter((f) => {
+      const code = readFileSync(path.join(ROOT, f), "utf8")
+        .split("\n")
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .join("\n");
+      return IDENTITY_WRITE.test(code);
+    });
     expect(offenders).toEqual([]);
   });
 });
