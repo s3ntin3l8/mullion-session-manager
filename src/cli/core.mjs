@@ -689,6 +689,7 @@ const SESSION_SPAWN_CHILD_SPEC = {
 const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
 const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
+const SESSION_WAIT_OUTPUT_SPEC = { regex: "boolean", timeout: "string", "after-offset": "string" };
 const SESSION_PROMPT_SPEC = {
   wait: "boolean",
   "no-submit": "boolean",
@@ -818,6 +819,32 @@ const sessionCommands = {
       body.afterSeq = seq;
     }
     const result = await client.request("sessions.wait", body, {
+      timeoutMs: (body.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    });
+    return { json: result };
+  },
+  // Server-side wait for a child to print some text. `<text>` is the remaining
+  // positionals joined by spaces (a literal substring unless --regex). With
+  // --after-offset (a `session prompt` reply's outputOffset) output printed
+  // since then counts too. --timeout is in SECONDS (default 600, max 3600).
+  async "wait-output"(client, args, opts) {
+    const { flags, rest } = extractFlags(args, SESSION_WAIT_OUTPUT_SPEC);
+    const id = opts.session ?? rest[0];
+    const words = opts.session !== undefined ? rest : rest.slice(1);
+    if (id === undefined) throw new CliUsageError("session id is required");
+    const match = words.join(" ");
+    if (match.length === 0) throw new CliUsageError("text to wait for is required");
+    const body = { sessionId: id, match };
+    if (flags.regex === true) body.regex = true;
+    Object.assign(body, parseWaitFlags({ timeout: flags.timeout }));
+    if (flags["after-offset"] !== undefined) {
+      const offset = Number(flags["after-offset"]);
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new CliUsageError("--after-offset must be a non-negative integer");
+      }
+      body.afterOffset = offset;
+    }
+    const result = await client.request("sessions.wait_for_output", body, {
       timeoutMs: (body.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
     });
     return { json: result };

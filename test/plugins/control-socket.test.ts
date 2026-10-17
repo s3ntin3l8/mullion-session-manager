@@ -2082,6 +2082,125 @@ describe("controlSocketPlugin (issue #185)", () => {
         full.destroy();
       });
 
+      describe("sessions.wait_for_output", () => {
+        const lastPty = () => fakePtyChildren[fakePtyChildren.length - 1];
+
+        async function childWithSocket() {
+          const parent = await createRealSession();
+          const { childId } = await spawnChildOf(parent.hookToken);
+          const pty = lastPty();
+          const socket = await sessionScopeSocket(parent.hookToken);
+          return { ...parent, childId, pty, socket };
+        }
+
+        it("resolves with the matching line when the child prints the text", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await childWithSocket();
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.wait_for_output", body: { sessionId: childId, match: "Tests: 5 passed" } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          pty.emitData("\u001b[32mTests: 5 passed\u001b[0m (1.2s)\r\n");
+          const reply = await waitForReply(socket);
+          expect(reply).toMatchObject({
+            ok: true,
+            status: 200,
+            result: { matched: true, text: "Tests: 5 passed", line: "Tests: 5 passed (1.2s)" },
+          });
+          socket.destroy();
+        });
+
+        it("afterOffset covers output printed between the prompt and the wait", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await childWithSocket();
+          const offset = app.pty.get(String(childId))!.outputOffset;
+          pty.emitData("early DONE marker\r\n"); // before the wait starts
+          const reply = await ask(socket, "sessions.wait_for_output", {
+            sessionId: childId,
+            match: "DONE",
+            afterOffset: offset,
+          });
+          expect(reply).toMatchObject({ ok: true, result: { matched: true, text: "DONE" } });
+          // Without afterOffset the same earlier output does NOT count.
+          const timedOut = await ask(socket, "sessions.wait_for_output", {
+            sessionId: childId,
+            match: "DONE",
+            timeoutMs: 50,
+          });
+          expect(timedOut).toMatchObject({ ok: true, result: { matched: false, timedOut: true } });
+          socket.destroy();
+        });
+
+        it("sessions.prompt returns the outputOffset to chain into the wait", async () => {
+          app = await buildApp();
+          await app.ready();
+          const parent = await createRealSession();
+          const { childId } = await spawnChildOf(parent.hookToken, "opencode");
+          const socket = await sessionScopeSocket(parent.hookToken);
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "hi" });
+          expect(typeof (reply.result as { outputOffset: unknown }).outputOffset).toBe("number");
+          socket.destroy();
+        });
+
+        it("validates its arguments and rejects unsafe regexes", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await childWithSocket();
+          const bad = (body: Record<string, unknown>) =>
+            ask(socket, "sessions.wait_for_output", { sessionId: childId, ...body });
+          expect(await bad({})).toMatchObject({ ok: false, status: 400 });
+          expect(await bad({ match: "x".repeat(300) })).toMatchObject({ ok: false, status: 400 });
+          expect(await bad({ match: "x", timeoutMs: -1 })).toMatchObject({
+            ok: false,
+            status: 400,
+          });
+          expect(await bad({ match: "x", afterOffset: -1 })).toMatchObject({
+            ok: false,
+            status: 400,
+          });
+          for (const match of ["(a+)+$", "(a)\\1", "(?=a)b", "("]) {
+            expect(await bad({ match, regex: true })).toMatchObject({ ok: false, status: 400 });
+          }
+          socket.destroy();
+        });
+
+        it("is children-only: self, a stranger and a missing target are all 403", async () => {
+          app = await buildApp();
+          await app.ready();
+          const mine = await createRealSession();
+          const stranger = await createRealSession();
+          const socket = await sessionScopeSocket(mine.hookToken);
+          for (const body of [
+            {},
+            { sessionId: mine.sessionId },
+            { sessionId: stranger.sessionId },
+          ]) {
+            expect(
+              await ask(socket, "sessions.wait_for_output", { ...body, match: "x" }),
+            ).toMatchObject({ ok: false, status: 403 });
+          }
+          socket.destroy();
+        });
+
+        it("aborts and releases its slot when the socket closes mid-wait", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, pty, socket } = await childWithSocket();
+          const listenersBefore = pty.dataListeners.length;
+          socket.write(
+            `${JSON.stringify({ id: 1, op: "sessions.wait_for_output", body: { sessionId: childId, match: "never" } })}\n`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          socket.destroy();
+          // The engine unsubscribed (Session.onData's dispose), so a later chunk is a no-op.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          expect(() => pty.emitData("never")).not.toThrow();
+          expect(listenersBefore).toBeGreaterThan(0);
+        });
+      });
+
       describe("sessions.prompt", () => {
         /** The FakePty of the most recently spawned session (the child just created). */
         const lastPty = () => fakePtyChildren[fakePtyChildren.length - 1];
@@ -2154,7 +2273,11 @@ describe("controlSocketPlugin (issue #185)", () => {
             text: "draft",
             submit: false,
           });
-          expect(reply.result).toEqual({ delivered: true, submitted: false });
+          expect(reply.result).toEqual({
+            delivered: true,
+            submitted: false,
+            outputOffset: expect.any(Number),
+          });
           expect(writes(pty)).toEqual([`${PASTE}draft${PASTE_END}`]);
           socket.destroy();
         });

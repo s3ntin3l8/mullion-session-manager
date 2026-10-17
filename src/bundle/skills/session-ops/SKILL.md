@@ -33,6 +33,14 @@ or exits (or on timeout, `timedOut: true` — just call it again). Pass the
 previous result's `eventSeq` as `--after-seq`/`afterSeq` to ignore a status
 you've already seen.
 
+To block until a child _prints_ something (a test summary, a marker you asked
+it to emit) use `mullion session wait-output <childId> "<text>"` /
+`wait_for_output`. It matches ANSI-stripped output and only counts output
+printed from now on — so to catch what a prompt just provoked, pass the
+`outputOffset` that `session prompt` / `prompt_session` returned as
+`--after-offset` / `afterOffset`. `--regex` / `regex: true` is available but
+guarded (no backreferences, lookarounds or nested quantifiers).
+
 To give a running child a follow-up, use `mullion session prompt <childId>
 "<text>" --wait` / `prompt_session` (`wait: true`): it types the prompt into the
 child's terminal, submits it, and waits for the turn to end. It works for

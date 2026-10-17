@@ -23,6 +23,7 @@ import { reclaimSocketPath } from "../services/unix-socket.js";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
+import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import {
   parseWaitTimeout,
   parseWaitUntil,
@@ -955,6 +956,80 @@ export const OPS: Record<string, OpSpec> = {
       if (result) reply(result);
     },
   },
+  // Waits until a CHILD prints some text (issue #1625) — the output-content
+  // sibling of sessions.wait. Body: `sessionId` (a child), `match` (<= 256
+  // chars; a literal substring unless `regex: true`, in which case it must
+  // have no backreferences/lookarounds and star height <= 1 — see
+  // services/output-wait.ts), `timeoutMs` (default 10 min, clamped to 1 h) and
+  // `afterOffset` (a `sessions.prompt` reply's `outputOffset`: output printed
+  // since then still counts, so there is no prompt -> wait race; omitted means
+  // only output from now on). Matches against the last 16 KiB of ANSI-stripped
+  // output. Local sessions only (409 otherwise, like sessions.prompt, #1627).
+  // Resolves `{matched, text, line}`, `{timedOut:true}` or `{gone:true}`.
+  // A raw OpSpec like sessions.wait, so it does its own pinning FIRST.
+  "sessions.wait_for_output": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+      if (!target.ok) {
+        reply(target.reply);
+        return;
+      }
+      const matcher = compileOutputMatcher(body?.match, body?.regex);
+      if (!matcher.ok) {
+        reply(bad(400, matcher.error));
+        return;
+      }
+      const timeout = parseWaitTimeout(body?.timeoutMs);
+      if (!timeout.ok) {
+        reply(bad(400, timeout.error));
+        return;
+      }
+      const afterOffset = body?.afterOffset;
+      if (
+        afterOffset !== undefined &&
+        (typeof afterOffset !== "number" || !Number.isInteger(afterOffset) || afterOffset < 0)
+      ) {
+        reply(bad(400, "'afterOffset' must be a non-negative integer"));
+        return;
+      }
+      const session = app.pty.get(target.id);
+      if (!session || !session.isAlive) {
+        reply(bad(409, "the session is not running on this host"));
+        return;
+      }
+      if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+        reply(bad(429, "too many pending waits on this connection"));
+        return;
+      }
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      conn.socket.once("close", onClose);
+      conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+      try {
+        const callerActive = () =>
+          conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
+        const result = await waitForOutput(matcher, timeout.timeoutMs, {
+          signal: controller.signal,
+          onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
+          // A cursor from before a restart can be AHEAD of the counter; treat
+          // that as "no gap output" rather than an error (like afterSeq).
+          ...(afterOffset !== undefined ? { seed: session.getOutputSince(afterOffset) } : {}),
+          // The caller must stay active for the whole wait, same as sessions.wait.
+          alive: () => session.isAlive && callerActive(),
+        });
+        if ("aborted" in result) return;
+        if ("gone" in result && !callerActive()) {
+          reply(bad(403, "this session is no longer active"));
+          return;
+        }
+        reply({ ok: true, status: 200, result: { ...result, outputOffset: session.outputOffset } });
+      } finally {
+        conn.activeWaits -= 1;
+        conn.socket.off("close", onClose);
+      }
+    },
+  },
   // Types a prompt into a running CHILD agent and (optionally) waits for its
   // turn to end — the "lead agent drives a worker" primitive. Body:
   // `sessionId` (a child at session scope), `text` (<= 32 KB), `submit`
@@ -1042,6 +1117,7 @@ export const OPS: Record<string, OpSpec> = {
       // One prompt at a time per session: two concurrent prompts would
       // interleave (body A, body B, Enter A, Enter B) into one merged prompt
       // and a stray empty submit.
+      let outputOffset = 0;
       const delivery = await withPromptLock(
         initial,
         async (): Promise<ReplyPayload | { afterSeq: number }> => {
@@ -1057,6 +1133,9 @@ export const OPS: Record<string, OpSpec> = {
           if (framing === null) {
             return bad(501, "prompt delivery is not supported for this session's agent");
           }
+          // Captured BEFORE writing, so a following wait_for_output can cover
+          // everything the child printed in response (the prompt -> wait gap).
+          outputOffset = session.outputOffset;
           if (!session.writeAgentInput(framing.body)) {
             return bad(503, "the prompt was not delivered (write backpressure or no live process)");
           }
@@ -1091,7 +1170,7 @@ export const OPS: Record<string, OpSpec> = {
       }
       const { afterSeq } = delivery;
 
-      const delivered = { delivered: true, submitted: shouldSubmit };
+      const delivered = { delivered: true, submitted: shouldSubmit, outputOffset };
       if (waitOpts === null) {
         reply({ ok: true, status: 200, result: delivered });
         return;

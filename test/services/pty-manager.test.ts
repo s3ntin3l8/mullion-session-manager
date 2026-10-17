@@ -5148,6 +5148,23 @@ describe("PtyManager", () => {
       });
     });
 
+    it("outputOffset / getOutputSince (issue #1625): returns exactly the output produced after a watermark", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      const before = session.outputOffset;
+      expect(session.getOutputSince(before).length).toBe(0);
+      fakePtyChildren[fakePtyChildren.length - 1].emitData("hello world");
+      expect(session.getOutputSince(before).toString("utf8")).toBe("hello world");
+      // A watermark from the future (e.g. a pre-restart cursor) is simply empty.
+      expect(session.getOutputSince(session.outputOffset + 1000).length).toBe(0);
+    });
+
     it("self-reported status (issue #1623): needs_input after done clears the finished latch and raises attention", async () => {
       const { statusHookMessages } = await import("../../src/cli/client.mjs");
       const session = manager.getOrCreate({
