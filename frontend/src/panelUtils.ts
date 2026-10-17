@@ -434,10 +434,17 @@ export function childPanelPosition(
 // agent's explicit request, carried on the child's row) opts that one child
 // in even when the setting is off.
 export function childWantsAutoOpen(
-  child: Pick<Session, "openHint">,
+  child: Pick<Session, "openHint" | "createdAt">,
   autoOpenChildPanels: boolean,
+  now: number,
 ): boolean {
-  return autoOpenChildPanels || Boolean(child.openHint);
+  // The hint is only actionable inside its freshness window, checked here at
+  // the decision point so a stale never-opened child can't be re-armed by a
+  // later hint widening the gate.
+  return (
+    autoOpenChildPanels ||
+    (Boolean(child.openHint) && now - Date.parse(child.createdAt) < FRESH_HINT_WINDOW_MS)
+  );
 }
 
 // How long a spawn-time `open` hint stays actionable. The hint is never

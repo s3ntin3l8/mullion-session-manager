@@ -732,7 +732,8 @@ export function App() {
           if (!child || child.parentSessionId === null) continue;
           const panelId = `session-${child.id}`;
           if (api.getPanel(panelId)) continue;
-          if (!childWantsAutoOpen(child, settings.sessions.autoOpenChildPanels)) continue;
+          if (!childWantsAutoOpen(child, settings.sessions.autoOpenChildPanels, Date.now()))
+            continue;
           const position = childPanelPosition(
             api,
             child.parentSessionId,
@@ -779,6 +780,8 @@ export function App() {
       seenChildSessionIdsRef.current = new Set(
         sessions.filter((s) => !retryChildIds.has(s.id)).map((s) => s.id),
       );
+      // Only meaningful on the tick the panel opened (now in the seen set).
+      openedHintedChildIdsRef.current.clear();
     }
   }, [
     sessions,

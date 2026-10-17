@@ -2177,16 +2177,22 @@ describe("newChildSessionIds", () => {
 });
 
 describe("childWantsAutoOpen (issue #1624)", () => {
+  const now = Date.parse("2026-01-01T00:01:00Z");
+  const fresh = "2026-01-01T00:00:30Z";
+  const stale = "2026-01-01T00:00:00Z";
+
   it("opens every child when the setting is on", () => {
-    expect(childWantsAutoOpen({ openHint: null }, true)).toBe(true);
-    expect(childWantsAutoOpen({}, true)).toBe(true);
+    expect(childWantsAutoOpen({ openHint: null, createdAt: stale }, true, now)).toBe(true);
   });
 
-  it("opens only a hinted child when the setting is off", () => {
-    expect(childWantsAutoOpen({ openHint: "below" }, false)).toBe(true);
-    expect(childWantsAutoOpen({ openHint: "right" }, false)).toBe(true);
-    expect(childWantsAutoOpen({ openHint: null }, false)).toBe(false);
-    expect(childWantsAutoOpen({}, false)).toBe(false);
+  it("opens only a fresh hinted child when the setting is off", () => {
+    expect(childWantsAutoOpen({ openHint: "below", createdAt: fresh }, false, now)).toBe(true);
+    expect(childWantsAutoOpen({ openHint: "right", createdAt: fresh }, false, now)).toBe(true);
+    expect(childWantsAutoOpen({ openHint: null, createdAt: fresh }, false, now)).toBe(false);
+  });
+
+  it("drops a hint older than the freshness window", () => {
+    expect(childWantsAutoOpen({ openHint: "right", createdAt: stale }, false, now)).toBe(false);
   });
 });
 
