@@ -168,6 +168,15 @@ export const schema = {
       default: 30,
       minimum: 0,
     },
+    // Issue #1637 — age (days) after which entries in a project's
+    // `.mullion-uploads/` (drag & drop / paste uploads) are pruned, checked
+    // whenever an upload lands there. An env var rather than a Setting so
+    // agents (which have no DB) honour it too. 0 disables pruning.
+    MULLION_UPLOAD_RETENTION_DAYS: {
+      type: "number",
+      default: 7,
+      minimum: 0,
+    },
     // Issue #245 / roadmap 7.1 — agent-initiated registration. Six new vars,
     // split by which role reads them (an agent has no use for the two
     // primary-only ones and vice versa — see src/app.ts's role split).
@@ -946,6 +955,7 @@ declare module "fastify" {
       MULLION_ROLE: "primary" | "agent";
       MULLION_AGENT_TOKEN: string;
       HOST_HEARTBEAT_INTERVAL_SECONDS: number;
+      MULLION_UPLOAD_RETENTION_DAYS: number;
       MULLION_PRIMARY_URL: string;
       MULLION_ENROLLMENT_TOKEN: string;
       MULLION_AGENT_ADVERTISE_URL: string;
