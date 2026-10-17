@@ -724,7 +724,6 @@ export function App() {
       // isn't open yet. Bounded by the freshness window, so an old hint
       // (reload, or a parent panel opened hours later) never replays.
       const retryChildIds = freshHintedChildIds(sessions, Date.now());
-      for (const id of openedHintedChildIdsRef.current) retryChildIds.delete(id);
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
       } else {
@@ -775,6 +774,8 @@ export function App() {
       // open. Leaving the ref stale while the gate is down means a child
       // that arrived during that window is still correctly detected as new
       // the next time the gate is true.
+      // After the loop, so a child opened this very tick is seen immediately.
+      for (const id of openedHintedChildIdsRef.current) retryChildIds.delete(id);
       seenChildSessionIdsRef.current = new Set(
         sessions.filter((s) => !retryChildIds.has(s.id)).map((s) => s.id),
       );
