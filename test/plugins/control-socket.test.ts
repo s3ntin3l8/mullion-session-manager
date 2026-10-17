@@ -1921,6 +1921,30 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       }, 15_000);
 
+      it("events.subscribe includeChildren does not let the parent advance a child's read cursor (events.seen stays pinned to its own id)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const { childId } = await spawnChildOf(hookToken);
+        const markEventsSeenSpy = vi.spyOn(app.pty, "markEventsSeen");
+        const socket = await sessionScopeSocket(hookToken);
+        const frames = collectFrames(socket);
+        socket.write(
+          `${JSON.stringify({ id: 7, op: "events.subscribe", body: { includeChildren: true } })}\n`,
+        );
+        await waitUntil(() => frames.some((f) => f.ok === true));
+        socket.write(
+          `${JSON.stringify({ id: 7, op: "events.seen", body: { sessionId: childId, seq: 5 } })}\n`,
+        );
+        socket.write(
+          `${JSON.stringify({ id: 7, op: "events.seen", body: { sessionId: Number(sessionId), seq: 2 } })}\n`,
+        );
+        await waitUntil(() => markEventsSeenSpy.mock.calls.length > 0);
+        expect(markEventsSeenSpy).toHaveBeenCalledTimes(1);
+        expect(markEventsSeenSpy).toHaveBeenCalledWith(String(sessionId), 2);
+        socket.destroy();
+      });
+
       it("events.subscribe includeChildren is refused (403) once the caller's own row is no longer active", async () => {
         app = await buildApp();
         await app.ready();

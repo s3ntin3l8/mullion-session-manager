@@ -579,7 +579,8 @@ pushing new ones live, exactly like the WS route.
 { "id": 11, "ok": true, "status": 200 }
 ```
 
-- **`events.subscribe`** takes no `body`. **Unlike `sessions.attach`, this
+- **`events.subscribe`** takes an optional `body` (`includeChildren`, session
+  scope only — see below). **Unlike `sessions.attach`, this
   DOES send an explicit `{"ok":true,"status":200}` ack** — a
   `sessions.attach` success is implied by its scrollback replay frame, which
   is unconditionally non-empty; an events replay batch can genuinely be
@@ -611,15 +612,16 @@ pushing new ones live, exactly like the WS route.
 **Session scope is filtered, full scope is the full aggregate.** A
 session-scoped connection's `events.subscribe` only ever replays/streams
 events belonging to its own pinned session, and an `events.seen` naming a
-different session is silently ignored (there is nothing to have corrupted,
-since that other session's events were never delivered to this connection
-in the first place) — the same isolation `resolveTargetSessionId` gives the
-request/response ops. Pass `body.includeChildren: true` to also receive the
-events of the caller's own children (replayed and live, including children
-spawned after the subscribe — each id is classified on its first event with
-one DB lookup). The caller's row must be active when subscribing (else 403);
-unlike `events.query`, the stream is not re-checked afterwards and lasts until
-the socket closes. Siblings and unrelated sessions are never delivered. A full-scope `events.subscribe` gets the complete,
+different session is silently ignored — the same isolation
+`resolveTargetSessionId` gives the request/response ops. Pass
+`body.includeChildren: true` to also receive the events of the caller's own
+children (replayed and live, including children spawned after the subscribe —
+each id is classified on its first event with one DB lookup). This only widens
+what is _received_: an `events.seen` naming a child is still ignored, so a
+parent can't advance its child's read cursor. The caller's row must be active
+when subscribing (else 403); unlike `events.query`, the stream is not
+re-checked afterwards and lasts until the socket closes. Siblings and
+unrelated sessions are never delivered. A full-scope `events.subscribe` gets the complete,
 unfiltered aggregate across every session, local and remote-hosted alike
 (the same multi-host relay `/ws/events` itself uses) — there is currently no
 way for a full-scope connection to filter down to one session's events via

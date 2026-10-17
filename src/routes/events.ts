@@ -97,6 +97,13 @@ export interface AttachLocalEventsOptions {
    */
   sessionFilter?: (sessionId: number) => boolean;
   /**
+   * Overrides the predicate an incoming "seen" message must satisfy (default:
+   * the same filters as the event stream). A connection that may RECEIVE a
+   * child's events still must not WRITE the child's read cursor, so the
+   * includeChildren subscribe pins this to its own id.
+   */
+  seenFilter?: (sessionId: number) => boolean;
+  /**
    * Called whenever an incoming "seen" message genuinely advances a
    * session's read cursor (`PtyManager.markEventsSeen`'s own return value) —
    * issue #1427's cross-client read-state sync. Wired by
@@ -192,7 +199,10 @@ export function attachLocalEventsSocket(
       app.log.warn("dropped malformed events control message");
       return;
     }
-    if (isSeenMessage(parsed) && matchesFilter(parsed.sessionId)) {
+    if (
+      isSeenMessage(parsed) &&
+      (opts?.seenFilter ? opts.seenFilter(parsed.sessionId) : matchesFilter(parsed.sessionId))
+    ) {
       const advanced = app.pty.markEventsSeen(String(parsed.sessionId), parsed.seq);
       if (advanced) opts?.onSeenAdvanced?.(parsed.sessionId, parsed.seq);
     }
