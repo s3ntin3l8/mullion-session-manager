@@ -215,6 +215,10 @@ export async function startDemo({ quiet = false, keep = false, seed = true, bins
     assertDemoEnv(backendEnv, demoDir, { cwd: runDir });
     assertDemoEnv(frontendEnv, demoDir, { cwd: path.join(REPO_ROOT, "frontend") });
     console.log(`[demo] scratch dir ${demoDir} (instance ${instanceId})`);
+    // Startup may have lost the race while awaiting the fs work above; teardown
+    // has then already read backend/frontend, so spawning now would orphan the
+    // servers. Both spawns below are synchronous, so one check covers them.
+    if (aborted.signal.aborted) throw new Error("[demo] startup aborted");
     backend = spawnServer(
       "backend",
       bins.tsx,
