@@ -95,6 +95,13 @@ export interface OpencodeStorageStatus {
    * skipped just like `inUse`.
    */
   holdersUnknown: boolean;
+  /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */
+  holdersUnknownReason?: string;
+  /**
+   * A compaction is running right now. Its child process has the database open,
+   * so the holder scan is skipped meanwhile rather than reporting opencode.
+   */
+  compacting: boolean;
   error?: string;
 }
 
@@ -109,6 +116,12 @@ export function defaultOpencodeDbPath(): string {
   return path.join(dataHome, "opencode", "opencode.db");
 }
 
+const errnoOf = (error: unknown) => (error as NodeJS.ErrnoException).code ?? "unknown error";
+
+// True while the VACUUM child exists. It has the database open, so a holder
+// scan taken meanwhile would report it as opencode.
+let childRunning = false;
+
 const sidecars = (dbPath: string) => [`${dbPath}-wal`, `${dbPath}-shm`];
 
 async function sizeOf(file: string): Promise<number> {
@@ -121,11 +134,17 @@ async function sizeOf(file: string): Promise<number> {
 
 /**
  * Pids (other than this process) with the database, its WAL or its shared-memory
- * file open, or `null` when that can't be established: no readable /proc, or a
- * process of this same user whose descriptors can't be listed. Another user's
- * processes can't be opencode (it runs as the server's user) and are skipped.
+ * file open. `unknown` is set, with what couldn't be looked into, when that
+ * can't be fully established: no readable /proc, or a process of this same user
+ * whose descriptors can't be listed. Another user's processes can't be opencode
+ * (it runs as the server's user) and are skipped.
  */
-export async function findHolders(dbPath: string, procDir = "/proc"): Promise<number[] | null> {
+export interface HolderScan {
+  holders: number[];
+  unknown?: string;
+}
+
+export async function findHolders(dbPath: string, procDir = "/proc"): Promise<HolderScan> {
   // /proc reports resolved paths, so a data dir reached through a symlink (or a
   // bind mount) would otherwise hide a running opencode.
   const real = await fs.realpath(dbPath).catch(() => dbPath);
@@ -133,8 +152,8 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<nu
   let pids: string[];
   try {
     pids = await fs.readdir(procDir);
-  } catch {
-    return null;
+  } catch (error) {
+    return { holders: [], unknown: `cannot read ${procDir} (${errnoOf(error)})` };
   }
   const holders: number[] = [];
   for (const pid of pids) {
@@ -149,7 +168,9 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<nu
         (st) => st.uid,
         () => null,
       );
-      if (owner !== null && owner === process.getuid?.()) return null;
+      if (owner !== null && owner === process.getuid?.()) {
+        return { holders, unknown: `cannot list ${fdDir} (${errnoOf(error)})` };
+      }
       continue; // another user's process
     }
     for (const fd of fds) {
@@ -160,7 +181,7 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<nu
       }
     }
   }
-  return holders;
+  return { holders };
 }
 
 export async function inspectOpencodeStorage(
@@ -175,6 +196,7 @@ export async function inspectOpencodeStorage(
     liveBytes: 0,
     inUse: false,
     holdersUnknown: false,
+    compacting: false,
   };
   try {
     if (!(await fs.stat(dbPath)).isFile()) return unavailable;
@@ -185,7 +207,10 @@ export async function inspectOpencodeStorage(
   }
   try {
     // Checked before this process opens the file itself.
-    const holders = await findHolders(dbPath, options.procDir);
+    const compacting = childRunning;
+    const scan: HolderScan = compacting
+      ? { holders: [] }
+      : await findHolders(dbPath, options.procDir);
     const db = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       const pageSize = db.pragma("page_size", { simple: true }) as number;
@@ -197,8 +222,10 @@ export async function inspectOpencodeStorage(
         fileBytes: (await sizeOf(dbPath)) + (await sizeOf(`${dbPath}-wal`)),
         reclaimableBytes: free * pageSize,
         liveBytes: (pageCount - free) * pageSize,
-        inUse: (holders?.length ?? 0) > 0,
-        holdersUnknown: holders === null,
+        inUse: scan.holders.length > 0,
+        holdersUnknown: scan.unknown !== undefined,
+        ...(scan.unknown === undefined ? {} : { holdersUnknownReason: scan.unknown }),
+        compacting,
       };
     } finally {
       db.close();
@@ -209,6 +236,18 @@ export async function inspectOpencodeStorage(
       error: error instanceof Error ? error.message : "Could not read the opencode database",
     };
   }
+}
+
+// Not the server's whole environment: `NODE_OPTIONS` could carry a loader meant
+// for the server, and nothing else in it is wanted. These are what resolving
+// node and the native binding can need.
+function childEnv(dbPath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { SQLITE_TMPDIR: path.dirname(dbPath) };
+  for (const key of ["PATH", "HOME", "LD_LIBRARY_PATH"]) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
 }
 
 interface VacuumOutcome {
@@ -234,8 +273,9 @@ function runVacuum(
     const child = spawn(
       process.execPath,
       ["-e", VACUUM_SCRIPT, require.resolve("better-sqlite3"), dbPath, String(busyTimeoutMs)],
-      { env: { SQLITE_TMPDIR: path.dirname(dbPath) }, stdio: ["pipe", "pipe", "pipe"] },
+      { env: childEnv(dbPath), stdio: ["pipe", "pipe", "pipe"] },
     );
+    childRunning = true;
     child.stdin.on("error", () => undefined); // the child may already be gone
     void proceed().then(
       (go) => child.stdin.end(go ? "go\n" : undefined),
@@ -251,15 +291,18 @@ function runVacuum(
     });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
+      childRunning = false;
       reject(new Error("Compacting the opencode database timed out"));
     }, timeoutMs);
     timer.unref();
     child.on("error", (error) => {
       clearTimeout(timer);
+      childRunning = false;
       reject(error);
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      childRunning = false;
       if (code === 0) resolve({ skipped: false, walBusy: stdout.includes("WAL_BUSY") });
       else if (code === EXIT_NOT_STARTED) resolve({ skipped: true, walBusy: false });
       else reject(new Error(stderr.trim() || `VACUUM exited with code ${String(code)}`));
@@ -272,8 +315,8 @@ const defaultFreeBytes = async (dir: string) => {
   return stats.bavail * stats.bsize;
 };
 
-const UNKNOWN_HOLDERS_OUTPUT =
-  "Couldn't tell whether opencode is running; its database was skipped.";
+const unknownHoldersOutput = (reason?: string) =>
+  `Couldn't tell whether opencode is running${reason ? ` (${reason})` : ""}; its database was skipped.`;
 
 let pruneRunning = false;
 
@@ -296,7 +339,7 @@ export async function pruneOpencodeStorage(
         : { output: "No opencode database found.", reclaimedBytes: 0 };
     }
     if (status.holdersUnknown) {
-      return { output: UNKNOWN_HOLDERS_OUTPUT, reclaimedBytes: 0 };
+      return { output: unknownHoldersOutput(status.holdersUnknownReason), reclaimedBytes: 0 };
     }
     if (status.inUse) {
       return {
@@ -318,7 +361,10 @@ export async function pruneOpencodeStorage(
       };
     }
     let outcome: VacuumOutcome;
-    const lastLook = { value: "clear" as "clear" | "running" | "unknown" };
+    const lastLook = {
+      value: "clear" as "clear" | "running" | "unknown",
+      reason: undefined as string | undefined,
+    };
     try {
       outcome = await runVacuum(
         status.path,
@@ -327,8 +373,10 @@ export async function pruneOpencodeStorage(
         // The last look, taken while the child boots and acted on a pipe write
         // before it takes the write lock.
         async () => {
-          const holders = await findHolders(status.path, options.procDir);
-          lastLook.value = holders === null ? "unknown" : holders.length > 0 ? "running" : "clear";
+          const scan = await findHolders(status.path, options.procDir);
+          lastLook.reason = scan.unknown;
+          lastLook.value =
+            scan.unknown !== undefined ? "unknown" : scan.holders.length > 0 ? "running" : "clear";
           return lastLook.value === "clear";
         },
       );
@@ -343,7 +391,7 @@ export async function pruneOpencodeStorage(
       return {
         output:
           lastLook.value === "unknown"
-            ? UNKNOWN_HOLDERS_OUTPUT
+            ? unknownHoldersOutput(lastLook.reason)
             : "opencode started; its database was skipped.",
         reclaimedBytes: 0,
       };

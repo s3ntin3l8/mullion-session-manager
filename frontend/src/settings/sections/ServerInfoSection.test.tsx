@@ -78,6 +78,7 @@ const noOpencode: OpencodeStorageStatus = {
   liveBytes: 0,
   inUse: false,
   holdersUnknown: false,
+  compacting: false,
 };
 
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
@@ -271,6 +272,7 @@ describe("Settings -> Server info resources", () => {
       liveBytes: 2 * GIB,
       inUse: false,
       holdersUnknown: false,
+      compacting: false,
     };
 
     it("shows the file size and what compacting returns, and nothing when opencode is absent", async () => {
@@ -309,18 +311,48 @@ describe("Settings -> Server info resources", () => {
     });
 
     it("doesn't try when it can't tell whether opencode is running, and says why", async () => {
-      setup({ opencode: { ...opencode, holdersUnknown: true } });
+      setup({
+        opencode: {
+          ...opencode,
+          holdersUnknown: true,
+          holdersUnknownReason: "cannot list /proc/1234/fd (EACCES)",
+        },
+      });
       vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
       vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
       render(<ServerInfoSection />);
       expect(
         await screen.findByText(/couldn't tell whether opencode is running/),
-      ).toBeInTheDocument();
+      ).toHaveTextContent("(cannot list /proc/1234/fd (EACCES))");
       const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
       await userEvent.click(aggressive);
       await userEvent.click(aggressive);
       await screen.findByText(/Freed/);
       expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+    });
+
+    it("shows a compaction in progress and doesn't start another", async () => {
+      setup({ opencode: { ...opencode, compacting: true } });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      render(<ServerInfoSection />);
+      expect(await screen.findByText(/being compacted right now/)).toBeInTheDocument();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneOpencodeStorage).not.toHaveBeenCalled();
+    });
+
+    it("tells you a dropped connection doesn't mean the compaction failed", async () => {
+      setup({ opencode });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneOpencodeStorage").mockRejectedValue(new Error("network"));
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(await screen.findByText(/it may still be running/)).toBeInTheDocument();
     });
 
     it("doesn't try while opencode is running, and says why", async () => {

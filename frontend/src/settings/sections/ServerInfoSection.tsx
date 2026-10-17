@@ -112,8 +112,15 @@ export function ServerInfoSection() {
         // Aggressive-only, and only while opencode isn't running (the server
         // re-checks, so a session that started since this loaded is still safe).
         const opencodeResult =
-          mode === "aggressive" && hasOpencode && !opencode?.inUse && !opencode?.holdersUnknown
-            ? await settle("opencode database cleanup failed.", () => api.pruneOpencodeStorage())
+          mode === "aggressive" &&
+          hasOpencode &&
+          !opencode?.inUse &&
+          !opencode?.holdersUnknown &&
+          !opencode?.compacting
+            ? await settle(
+                "The request ended before opencode's database cleanup reported back; it may still be running.",
+                () => api.pruneOpencodeStorage(),
+              )
             : null;
         const parts = [
           ["Docker", dockerResult],
@@ -328,11 +335,15 @@ export function ServerInfoSection() {
             <code>{opencode.path}</code> keeps the space of every session it has deleted. Aggressive
             cleanup compacts it (<code>VACUUM</code>), which loses no session data and returns the
             exact figure shown.{" "}
-            {opencode.inUse
-              ? "opencode is running right now, so this is skipped until it is closed."
-              : opencode.holdersUnknown
-                ? "Mullion couldn't tell whether opencode is running, so this is skipped."
-                : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
+            {opencode.compacting
+              ? "It is being compacted right now, which can take several minutes; the figures above are from before it started."
+              : opencode.inUse
+                ? "opencode is running right now, so this is skipped until it is closed."
+                : opencode.holdersUnknown
+                  ? `Mullion couldn't tell whether opencode is running${
+                      opencode.holdersUnknownReason ? ` (${opencode.holdersUnknownReason})` : ""
+                    }, so this is skipped.`
+                  : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
           </div>
         </>
       )}

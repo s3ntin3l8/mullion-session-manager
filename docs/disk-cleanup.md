@@ -102,7 +102,10 @@ so it is deliberately narrow:
   process is started first and only told to go once that check is clear, so
   nothing but a pipe write separates the two. If it can't tell (no readable
   `/proc`, or one of the user's own processes can't be listed), that counts as
-  "running", never as "nobody": the Settings page says it couldn't tell. Stop
+  "running", never as "nobody": the Settings page says it couldn't tell and
+  what it couldn't look into (for example `cannot list /proc/1234/fd
+(EACCES)`), so a host where one process is unreadable (`hidepid`, a sandbox)
+  can be diagnosed. Stop
   opencode (or its background service) and run the cleanup again.
 - **Room to work.** A `VACUUM` builds the compacted copy in a temporary file
   and, in WAL mode, then writes it through the WAL, so the volume needs about
@@ -113,8 +116,18 @@ so it is deliberately narrow:
   not in the server's own: `better-sqlite3` is synchronous, so doing it in
   process would freeze every terminal and request for the minutes it takes. It
   is killed if it runs past 30 minutes, which is safe since a `VACUUM` that
-  doesn't commit changes nothing. The request itself stays open until it
-  finishes.
+  doesn't commit changes nothing. The child gets only `PATH`, `HOME`,
+  `LD_LIBRARY_PATH` and its temp dir, not the server's whole environment (a
+  `NODE_OPTIONS` loader meant for the server shouldn't follow it).
+- **A long request.** The cleanup request stays open until the `VACUUM`
+  finishes, which can be minutes on a large database. A reverse proxy with a
+  short read timeout (nginx's `proxy_read_timeout` defaults to 60 s) will cut
+  the response while the compaction carries on; Settings then says the
+  request ended and that it may still be running. Raise that timeout for
+  `/api/storage/opencode/prune`, or just reload the page: while it runs, the
+  database card shows "being compacted right now" (the compaction's own child
+  process is not mistaken for opencode). Running it as a background job that
+  the page polls is tracked in #1667.
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
   checkpointed and truncated afterwards so the file actually shrinks (if a

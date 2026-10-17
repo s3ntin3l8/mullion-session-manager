@@ -102,7 +102,8 @@ export interface CacheStorageStatus {
 
 export type DockerPruneMode = "safe" | "aggressive";
 
-export interface DockerPruneResult {
+/** What any cleanup tier (Docker, temp, caches, opencode database) reports back. */
+export interface PruneResult {
   output: string;
   reclaimedBytes: number;
   error?: string;
@@ -135,6 +136,10 @@ export interface OpencodeStorageStatus {
   inUse: boolean;
   /** Couldn't tell who has it open; skipped just the same. */
   holdersUnknown: boolean;
+  /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */
+  holdersUnknownReason?: string;
+  /** A compaction is running right now (it can take minutes). */
+  compacting: boolean;
   error?: string;
 }
 

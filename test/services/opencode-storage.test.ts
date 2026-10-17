@@ -111,6 +111,28 @@ describe("opencode-storage", () => {
       makeDb();
       const status = await inspectOpencodeStorage({ dbPath, procDir: path.join(base, "no-proc") });
       expect(status).toMatchObject({ available: true, inUse: false, holdersUnknown: true });
+      expect(status.holdersUnknownReason).toContain("no-proc");
+    });
+
+    it("reports compacting, and skips the holder scan, while its own VACUUM child has the database open", async () => {
+      makeDb();
+      // A write lock held here keeps the child waiting, so it is around long
+      // enough to look at; in this process, so the gate doesn't see it.
+      const writer = new Database(dbPath);
+      writer.exec("BEGIN IMMEDIATE");
+      const prune = pruneOpencodeStorage({ ...opts(), busyTimeoutMs: 5_000 });
+      // A /proc that doesn't exist: scanning it would say holdersUnknown.
+      const unscannable = { dbPath, procDir: path.join(base, "no-proc") };
+      let during = await inspectOpencodeStorage(unscannable);
+      for (let i = 0; i < 400 && !during.compacting; i++) {
+        await new Promise((r) => setTimeout(r, 5));
+        during = await inspectOpencodeStorage(unscannable);
+      }
+      expect(during).toMatchObject({ compacting: true, inUse: false, holdersUnknown: false });
+      writer.exec("ROLLBACK");
+      writer.close();
+      expect((await prune).error).toBeUndefined();
+      expect((await inspectOpencodeStorage(unscannable)).compacting).toBe(false);
     });
 
     it("sees a process holding the database or its WAL open, but not this one", async () => {
@@ -129,7 +151,9 @@ describe("opencode-storage", () => {
       await fs.writeFile(path.join(real, "opencode.db"), "");
       await fs.symlink(real, path.join(base, "link"));
       await holdOpen(21, path.join(real, "opencode.db"));
-      expect(await findHolders(path.join(base, "link", "opencode.db"), procDir)).toEqual([21]);
+      expect(await findHolders(path.join(base, "link", "opencode.db"), procDir)).toEqual({
+        holders: [21],
+      });
     });
 
     it("ignores unrelated descriptors and unreadable or missing proc entries", async () => {
@@ -137,11 +161,13 @@ describe("opencode-storage", () => {
       await fs.mkdir(path.join(procDir, "12")); // no fd dir: not ours to read
       await fs.mkdir(path.join(procDir, "self"));
       await holdOpen(13, `${dbPath}-shm`);
-      expect(await findHolders(dbPath, procDir)).toEqual([13]);
+      expect(await findHolders(dbPath, procDir)).toEqual({ holders: [13] });
     });
 
     it("can't tell, rather than saying nobody, when /proc is unreadable", async () => {
-      expect(await findHolders(dbPath, path.join(base, "no-proc"))).toBeNull();
+      const scan = await findHolders(dbPath, path.join(base, "no-proc"));
+      expect(scan.holders).toEqual([]);
+      expect(scan.unknown).toMatch(/cannot read .*no-proc \(ENOENT\)/);
     });
 
     it("can't tell when one of this user's own processes can't be looked into", async () => {
@@ -150,7 +176,9 @@ describe("opencode-storage", () => {
       const fdDir = path.join(procDir, "31", "fd");
       await fs.chmod(fdDir, 0o000);
       try {
-        expect(await findHolders(dbPath, procDir)).toBeNull();
+        const scan = await findHolders(dbPath, procDir);
+        // Names the process and the errno, so the state is diagnosable.
+        expect(scan.unknown).toMatch(/cannot list .*31.fd \(EACCES\)/);
       } finally {
         await fs.chmod(fdDir, 0o700);
       }
@@ -206,6 +234,7 @@ describe("opencode-storage", () => {
       const before = await sizeOnDisk();
       const result = await pruneOpencodeStorage({ dbPath, procDir: path.join(base, "no-proc") });
       expect(result.output).toContain("Couldn't tell whether opencode is running");
+      expect(result.output).toContain("no-proc");
       expect(result.reclaimedBytes).toBe(0);
       expect(result.error).toBeUndefined();
       expect(await sizeOnDisk()).toBe(before);

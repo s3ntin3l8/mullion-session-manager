@@ -92,7 +92,7 @@ export type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
-  DockerPruneResult,
+  PruneResult,
   Project,
   CreateProjectDirOptions,
   CreateProjectResult,
