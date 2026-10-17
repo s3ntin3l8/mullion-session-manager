@@ -147,7 +147,11 @@ export function ReviewRelaySection() {
           { value: "hermes", label: "Hermes" },
         ]}
         value={relay.provider}
-        onChange={(v) => updateSettings({ reviewRelay: { provider: v } })}
+        onChange={(v) => {
+          setError(null);
+          setTestResult(null);
+          updateSettings({ reviewRelay: { provider: v } });
+        }}
       />
     </Row>
   );

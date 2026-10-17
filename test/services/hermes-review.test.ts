@@ -12,6 +12,7 @@ import {
   setHermesKey,
 } from "../../src/services/hermes-integration.js";
 import {
+  assertReviewerConfigured,
   buildReviewMessage,
   BUILTIN_REVIEW_PROMPT,
   HermesAuthError,
@@ -214,6 +215,17 @@ describe("hermes review relay", () => {
       );
       const content = JSON.parse(String(post![1].body)).messages[0].content as string;
       expect(content).toContain(BUILTIN_REVIEW_PROMPT);
+    });
+
+    it("assertReviewerConfigured says no reviewer for provider none, and returns the key otherwise", () => {
+      expect(assertReviewerConfigured(app)).toBe("sekret-key"); // pragma: allowlist secret
+      applySettingsPatch(app, { reviewRelay: { provider: "none" } });
+      expect(() => assertReviewerConfigured(app)).toThrow(/No reviewer is configured/);
+    });
+
+    it("pins the review body shape in the built-in prompt", () => {
+      expect(BUILTIN_REVIEW_PROMPT).toContain("**Verdict:**");
+      expect(BUILTIN_REVIEW_PROMPT).toContain("### Critical");
     });
 
     describe("configuration", () => {

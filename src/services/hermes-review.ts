@@ -81,10 +81,18 @@ export function buildReviewMessage(
 // hermes-review-prompt.md.
 export const BUILTIN_REVIEW_PROMPT = `Review the pull request named above using your github-code-review skill.
 
+Procedure:
+1. Read the PR's title, description, head SHA and base branch (gh pr view).
+2. Clone the repository, fetch the base and head, and read each changed file in full context plus its diff.
+3. Review for correctness, security, code quality, tests and docs.
+
 Constraints:
 - Read-only: never git push, commit, modify files, merge or close the PR.
 - Submitting a formal review with event APPROVE or REQUEST_CHANGES is expected.
 - Post exactly one review (inline comments plus a summary); no duplicate top-level comment.
+- Pin the review to the head SHA you reviewed (commit_id).
+- Review body shape: "## Review", then "**Verdict:** ...", then the sections "### Critical", "### Warnings", "### Suggestions", "### Looks Good" (omit empty ones).
+- Reply with a single line: "<N> issues, verdict=<...>".
 - Cite only real file:line locations you can see in the diff. Never invent APIs or paths.
 
 Verdict:
@@ -212,6 +220,28 @@ export interface HermesReviewRequest {
 }
 
 /**
+ * Cheap configuration gate (settings + key lookups only): the route calls it
+ * before any GitHub work so an unconfigured install reports "No reviewer is
+ * configured" rather than an unrelated remote/credentials error. Returns the
+ * key for the dispatch.
+ */
+export function assertReviewerConfigured(app: FastifyInstance): string {
+  const { provider, apiUrl } = getStoredSettings(app.db).reviewRelay;
+  if (provider !== "hermes") {
+    throw new HermesNotConfiguredError(
+      "No reviewer is configured for this Mullion — use the repository's own review process",
+    );
+  }
+  const key = getHermesKey(app);
+  if (!apiUrl || !key) {
+    throw new HermesNotConfiguredError(
+      "The Hermes review relay is not configured — choose Hermes and set the API URL and key in Settings → Integrations",
+    );
+  }
+  return key;
+}
+
+/**
  * Asks hermes-01 to review a PR. Resolves once the request is accepted (the
  * agent runs asynchronously and posts the review to GitHub itself); never
  * waits for the review to finish.
@@ -220,20 +250,10 @@ export async function requestHermesReview(
   app: FastifyInstance,
   { owner, repo, prNumber }: HermesReviewRequest,
 ): Promise<void> {
-  const { provider, apiUrl, model, promptRepo, promptPath, cooldownMinutes } = getStoredSettings(
+  const { apiUrl, model, promptRepo, promptPath, cooldownMinutes } = getStoredSettings(
     app.db,
   ).reviewRelay;
-  const key = getHermesKey(app);
-  if (provider !== "hermes") {
-    throw new HermesNotConfiguredError(
-      "No reviewer is configured for this Mullion — use the repository's own review process",
-    );
-  }
-  if (!apiUrl || !key) {
-    throw new HermesNotConfiguredError(
-      "The Hermes review relay is not configured — choose Hermes and set the API URL and key in Settings → Integrations",
-    );
-  }
+  const key = assertReviewerConfigured(app);
   if (promptRepo && !isValidPromptLocation(promptRepo, promptPath)) {
     throw new HermesNotConfiguredError(
       "The prompt repository/path in Settings is invalid — use owner/repo and a plain relative path",
