@@ -34,6 +34,7 @@ import {
   childPanelPosition,
   childWantsAutoOpen,
   freshHintedChildIds,
+  planAutoOpenChildren,
   shouldAutoOpenChildPanels,
   extractSessionIds,
   canLaunchTerminal,
@@ -2587,5 +2588,84 @@ describe("freshHintedChildIds", () => {
       now,
     );
     expect([...ids]).toEqual([1]);
+  });
+});
+
+describe("planAutoOpenChildren (issue #1624)", () => {
+  const now = Date.parse("2026-01-01T00:01:00Z");
+  const fresh = "2026-01-01T00:00:50Z";
+  const stale = "2026-01-01T00:00:00Z";
+  type S = Parameters<typeof planAutoOpenChildren>[0]["sessions"][number];
+  const row = (id: number, over: Partial<S> = {}) =>
+    ({
+      id,
+      parentSessionId: 1,
+      status: "active",
+      openHint: "right",
+      createdAt: fresh,
+      projectId: 1,
+      ...over,
+    }) as S;
+  const pos = { referencePanel: {}, direction: "right" } as never;
+  const plan = (over: Partial<Parameters<typeof planAutoOpenChildren>[0]> = {}) =>
+    planAutoOpenChildren({
+      sessions: [row(1, { parentSessionId: null, openHint: null }), row(2)],
+      previouslySeen: new Set([1]),
+      seeded: true,
+      autoOpenChildPanels: false,
+      now,
+      hasPanel: () => false,
+      positionFor: () => pos,
+      ...over,
+    });
+
+  it("opens a fresh hinted child and marks it seen at once", () => {
+    const r = plan();
+    expect(r.toOpen.map((o) => o.child.id)).toEqual([2]);
+    expect([...r.nextSeen].sort()).toEqual([1, 2]);
+  });
+
+  it("the seeding tick opens nothing but keeps a fresh hinted child unseen", () => {
+    const r = plan({ seeded: false, previouslySeen: new Set() });
+    expect(r.toOpen).toEqual([]);
+    expect([...r.nextSeen]).toEqual([1]);
+  });
+
+  it("an old hinted row is seeded as seen (no replay on reload)", () => {
+    const r = plan({
+      seeded: false,
+      previouslySeen: new Set(),
+      sessions: [row(2, { createdAt: stale })],
+    });
+    expect([...r.nextSeen]).toEqual([2]);
+  });
+
+  it("keeps the child unseen when the parent's panel isn't open (retry)", () => {
+    const r = plan({ positionFor: () => undefined });
+    expect(r.toOpen).toEqual([]);
+    expect([...r.nextSeen]).toEqual([1]);
+  });
+
+  it("skips a child whose panel already exists", () => {
+    expect(plan({ hasPanel: () => true }).toOpen).toEqual([]);
+  });
+
+  it("never opens an unhinted child with the setting off, nor a stale hint", () => {
+    expect(plan({ sessions: [row(2, { openHint: null })] }).toOpen).toEqual([]);
+    expect(plan({ sessions: [row(2, { createdAt: stale })] }).toOpen).toEqual([]);
+  });
+
+  it("with the setting on opens an unhinted child; a parentless row is ignored", () => {
+    const r = plan({
+      autoOpenChildPanels: true,
+      sessions: [row(2, { openHint: null }), row(3, { parentSessionId: null })],
+    });
+    expect(r.toOpen.map((o) => o.child.id)).toEqual([2]);
+  });
+
+  it("treats a server clock ahead of the client as just spawned", () => {
+    expect(freshHintedChildIds([row(2, { createdAt: "2026-01-01T00:05:00Z" })], now).has(2)).toBe(
+      true,
+    );
   });
 });

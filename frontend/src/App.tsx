@@ -36,9 +36,8 @@ import {
   openSessionPanel,
   attentionTransitionPanelIds,
   focusPanelForTier,
-  newChildSessionIds,
   childPanelPosition,
-  childWantsAutoOpen,
+  planAutoOpenChildren,
   freshHintedChildIds,
   shouldAutoOpenChildPanels,
   isTiledPanel,
@@ -308,9 +307,6 @@ export function App() {
   // and get its panel force-opened. Seeds the baseline on that first
   // qualifying tick without acting; only a transition AFTER that counts.
   const hasSeededChildSessionsRef = useRef(false);
-  // Children this effect already opened: they have nothing left to retry, so
-  // a human closing the panel isn't undone on the next tick.
-  const openedHintedChildIdsRef = useRef(new Set<number>());
 
   // deepLinkHandledRef/deepLinkRetryTick used to be declared here — Issue
   // #95 prerequisite bookkeeping for the `?session=<id>` deep-link effect —
@@ -718,70 +714,34 @@ export function App() {
       // doesn't propagate through the helper call — assert it once here so
       // every use below stays non-nullable without a redundant local check.
       const api = dockviewApi!;
-      // Fresh hinted children that must stay "new" (left out of the seen set
-      // below): on the seeding tick — with the setting off that is also the
-      // tick the hint itself opened the gate — and when the parent's panel
-      // isn't open yet. Bounded by the freshness window, so an old hint
-      // (reload, or a parent panel opened hours later) never replays.
-      const retryChildIds = freshHintedChildIds(sessions, Date.now());
-      if (!hasSeededChildSessionsRef.current) {
-        hasSeededChildSessionsRef.current = true;
-      } else {
-        for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
-          const child = sessions.find((s) => s.id === childId);
-          if (!child || child.parentSessionId === null) continue;
-          const panelId = `session-${child.id}`;
-          if (api.getPanel(panelId)) continue;
-          if (!childWantsAutoOpen(child, settings.sessions.autoOpenChildPanels, Date.now()))
-            continue;
-          const position = childPanelPosition(
-            api,
-            child.parentSessionId,
-            child.openHint ?? "right",
-          );
-          // Independent review finding #2 (PR #430) — skip entirely rather
-          // than falling back to a position-less addPanel() when the
-          // parent's own panel isn't part of the CURRENT dockview instance
-          // (different/inactive workspace, or the parent was simply never
-          // opened). A bare addPanel() with no position lands in whichever
-          // group is currently active, silently injecting an unrelated
-          // session's terminal into whatever the user happens to be
-          // looking at right now — and onDidLayoutChange then persists it
-          // into that (wrong) workspace's saved layout. The child still
-          // shows in the sidebar regardless (this effect only ever governs
-          // whether its panel auto-opens); the user can open it manually.
-          if (!position) continue;
-          const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
-          openedHintedChildIdsRef.current.add(child.id);
-          api.addPanel({
-            id: panelId,
-            component: "terminal",
-            tabComponent: "terminal",
-            title: initialPaneTitle(child, projectName),
-            params: { sessionId: child.id },
-            position,
-          });
-        }
+      const plan = planAutoOpenChildren({
+        sessions,
+        previouslySeen: seenChildSessionIdsRef.current,
+        seeded: hasSeededChildSessionsRef.current,
+        autoOpenChildPanels: settings.sessions.autoOpenChildPanels,
+        now: Date.now(),
+        hasPanel: (panelId) => Boolean(api.getPanel(panelId)),
+        positionFor: (child) =>
+          childPanelPosition(api, child.parentSessionId!, child.openHint ?? "right"),
+      });
+      hasSeededChildSessionsRef.current = true;
+      for (const { child, position } of plan.toOpen) {
+        const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
+        api.addPanel({
+          id: `session-${child.id}`,
+          component: "terminal",
+          tabComponent: "terminal",
+          title: initialPaneTitle(child, projectName),
+          params: { sessionId: child.id },
+          position,
+        });
       }
       // Hermes review finding (PR #430) — only advance the "seen" set when
       // this tick actually evaluated the current sessions against the gate
-      // above. Updating it unconditionally (the previous version of this
-      // effect did, on every render regardless of the gate) would mark a
-      // child that arrived while the gate was transiently down (workspace
-      // mid-restore, dockviewApi not yet ready, or the setting itself off)
-      // as already "seen" without ever having been considered — so once the
-      // gate later became true, `newChildSessionIds` would no longer see it
-      // as new and its panel would never open, permanently, until a manual
-      // open. Leaving the ref stale while the gate is down means a child
-      // that arrived during that window is still correctly detected as new
-      // the next time the gate is true.
-      // After the loop, so a child opened this very tick is seen immediately.
-      for (const id of openedHintedChildIdsRef.current) retryChildIds.delete(id);
-      seenChildSessionIdsRef.current = new Set(
-        sessions.filter((s) => !retryChildIds.has(s.id)).map((s) => s.id),
-      );
-      // Only meaningful on the tick the panel opened (now in the seen set).
-      openedHintedChildIdsRef.current.clear();
+      // above, so a child that arrived while the gate was down is still
+      // detected as new once it opens. planAutoOpenChildren also leaves
+      // fresh hinted children it didn't open out of the set (retry).
+      seenChildSessionIdsRef.current = plan.nextSeen;
     }
   }, [
     sessions,

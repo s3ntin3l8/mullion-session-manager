@@ -441,10 +441,7 @@ export function childWantsAutoOpen(
   // The hint is only actionable inside its freshness window, checked here at
   // the decision point so a stale never-opened child can't be re-armed by a
   // later hint widening the gate.
-  return (
-    autoOpenChildPanels ||
-    (Boolean(child.openHint) && now - Date.parse(child.createdAt) < FRESH_HINT_WINDOW_MS)
-  );
+  return autoOpenChildPanels || (Boolean(child.openHint) && isFreshHint(child.createdAt, now));
 }
 
 // How long a spawn-time `open` hint stays actionable. The hint is never
@@ -452,6 +449,11 @@ export function childWantsAutoOpen(
 // panel isn't open would be retried (and could pop open) for the tab's whole
 // lifetime, and a page reload would replay every old hint.
 export const FRESH_HINT_WINDOW_MS = 60_000;
+
+function isFreshHint(createdAt: string, now: number): boolean {
+  // max(0, …): a server clock ahead of the client reads as "just spawned".
+  return Math.max(0, now - Date.parse(createdAt)) < FRESH_HINT_WINDOW_MS;
+}
 
 /** Ids of active, hinted children spawned within FRESH_HINT_WINDOW_MS — the
  * ones the auto-open effect must keep "unseen" so a later tick still opens
@@ -471,6 +473,44 @@ export function freshHintedChildIds(
     }
   }
   return ids;
+}
+
+type ChildPosition = NonNullable<ReturnType<typeof childPanelPosition>>;
+
+/** One tick of the auto-open-child-panel effect (App.tsx), as a pure function
+ * so the seed / retry / opened bookkeeping is unit-tested instead of probed.
+ * `toOpen` are the panels to add; `nextSeen` is the seen set to store —
+ * fresh hinted children that were NOT opened this tick (seeding tick, or the
+ * parent's panel isn't open yet) stay out of it so a later tick retries them. */
+export function planAutoOpenChildren(opts: {
+  sessions: Session[];
+  previouslySeen: ReadonlySet<number>;
+  seeded: boolean;
+  autoOpenChildPanels: boolean;
+  now: number;
+  hasPanel: (panelId: string) => boolean;
+  positionFor: (child: Session) => ChildPosition | undefined;
+}): { toOpen: { child: Session; position: ChildPosition }[]; nextSeen: Set<number> } {
+  const retry = freshHintedChildIds(opts.sessions, opts.now);
+  const toOpen: { child: Session; position: ChildPosition }[] = [];
+  if (opts.seeded) {
+    for (const childId of newChildSessionIds(opts.sessions, opts.previouslySeen)) {
+      const child = opts.sessions.find((s) => s.id === childId);
+      if (!child || child.parentSessionId === null) continue;
+      if (opts.hasPanel(`session-${child.id}`)) continue;
+      if (!childWantsAutoOpen(child, opts.autoOpenChildPanels, opts.now)) continue;
+      // No position = the parent's panel isn't in the current dockview (PR
+      // #430): skip rather than add a position-less panel to a random group.
+      const position = opts.positionFor(child);
+      if (!position) continue;
+      toOpen.push({ child, position });
+      retry.delete(child.id);
+    }
+  }
+  return {
+    toOpen,
+    nextSeen: new Set(opts.sessions.filter((s) => !retry.has(s.id)).map((s) => s.id)),
+  };
 }
 
 // Pure gate for the auto-open-child-panel effect (App.tsx) — pulled out so
