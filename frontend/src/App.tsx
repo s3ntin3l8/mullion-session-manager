@@ -703,7 +703,8 @@ export function App() {
         // off, so the gate must let the effect run when any child carries one
         // (the per-child decision is childWantsAutoOpen below).
         autoOpenChildPanels:
-          settings.sessions.autoOpenChildPanels || sessions.some((s) => Boolean(s.openHint)),
+          settings.sessions.autoOpenChildPanels ||
+          sessions.some((s) => Boolean(s.openHint) && s.status === "active"),
         sessionsLoaded,
         restoring: restoringRef.current,
       })
@@ -713,6 +714,9 @@ export function App() {
       // doesn't propagate through the helper call — assert it once here so
       // every use below stays non-nullable without a redundant local check.
       const api = dockviewApi!;
+      // Hinted children skipped only because the parent's panel isn't open
+      // yet: left out of the seen set below so a later tick retries them.
+      const retryChildIds = new Set<number>();
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
       } else {
@@ -738,7 +742,10 @@ export function App() {
           // into that (wrong) workspace's saved layout. The child still
           // shows in the sidebar regardless (this effect only ever governs
           // whether its panel auto-opens); the user can open it manually.
-          if (!position) continue;
+          if (!position) {
+            if (child.openHint && child.status === "active") retryChildIds.add(child.id);
+            continue;
+          }
           const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
           api.addPanel({
             id: panelId,
@@ -762,7 +769,9 @@ export function App() {
       // open. Leaving the ref stale while the gate is down means a child
       // that arrived during that window is still correctly detected as new
       // the next time the gate is true.
-      seenChildSessionIdsRef.current = new Set(sessions.map((s) => s.id));
+      seenChildSessionIdsRef.current = new Set(
+        sessions.filter((s) => !retryChildIds.has(s.id)).map((s) => s.id),
+      );
     }
   }, [
     sessions,
