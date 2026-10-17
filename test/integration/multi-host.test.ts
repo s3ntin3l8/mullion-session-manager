@@ -8,6 +8,7 @@ import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket } from "ws";
+import { overrideDefaultRequestTimeoutForTests } from "../../src/services/remote-host-client.js";
 import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
@@ -136,6 +137,18 @@ const primaryDb = path.join(
   os.tmpdir(),
   `multi-host-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`,
 );
+
+// Issue #1634 — every describe below makes real loopback round trips through
+// RemoteHostClient, whose 5s default budget a fully parallel local run's
+// event-loop lag can blow through (transient 503s). Widen the default for this
+// file only; the production constant is untouched.
+let restoreRequestTimeout: (() => void) | undefined;
+beforeAll(() => {
+  restoreRequestTimeout = overrideDefaultRequestTimeoutForTests(15_000);
+});
+afterAll(() => {
+  restoreRequestTimeout?.();
+});
 
 async function waitUntil(check: () => boolean | Promise<boolean>, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
@@ -346,29 +359,10 @@ describe("multi-host proxy (issue #26)", () => {
   });
 
   it("discovers this agent's own PROJECTS_ROOTS through the primary's proxy", async () => {
-    // This route's handler (src/routes/projects.ts's GET /api/projects/discover)
-    // makes a REAL loopback HTTP round trip to the agent
-    // (getRemoteHostClient's discover(), REQUEST_TIMEOUT_MS = 5_000 at
-    // src/services/remote-host-client.ts:107) — under a fully parallel CI
-    // run (many concurrent real Fastify servers across test files),
-    // event-loop lag can occasionally push that one round trip past the
-    // timeout, surfacing as a transient 503 ("host unreachable") that has
-    // nothing to do with this test's actual claim (the proxy correctly
-    // relays a successful discover call). Retried a few times here rather
-    // than loosening REQUEST_TIMEOUT_MS itself — that constant is a real
-    // user-facing "how long before an unreachable host is reported as such"
-    // budget, not something to widen for CI noise. Safe to retry: this
-    // route's own `config.rateLimit: { max: 10, timeWindow: "1 minute" }`
-    // (src/routes/projects.ts) isn't touched by any other test in this
-    // describe block, so a couple of extra calls can't starve it.
-    let res!: Awaited<ReturnType<typeof primary.app.inject>>;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      res = await primary.app.inject({
-        method: "GET",
-        url: `/api/projects/discover?hostId=${hostId}`,
-      });
-      if (res.statusCode === 200) break;
-    }
+    const res = await primary.app.inject({
+      method: "GET",
+      url: `/api/projects/discover?hostId=${hostId}`,
+    });
     expect(res.statusCode).toBe(200);
     expect(Array.isArray(res.json())).toBe(true);
   });

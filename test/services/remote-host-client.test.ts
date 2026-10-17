@@ -24,8 +24,12 @@ vi.mock("ws", () => ({
   },
 }));
 
-const { RemoteHostClient, HostUnreachableError, HostRequestError } =
-  await import("../../src/services/remote-host-client.js");
+const {
+  RemoteHostClient,
+  HostUnreachableError,
+  HostRequestError,
+  overrideDefaultRequestTimeoutForTests,
+} = await import("../../src/services/remote-host-client.js");
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -66,6 +70,40 @@ describe("RemoteHostClient", () => {
       sessionSecret,
     });
   }
+
+  describe("overrideDefaultRequestTimeoutForTests (issue #1634)", () => {
+    it("widens the default request budget, restores 5s, and nests cleanly", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(async () => jsonResponse(200, []));
+      const restores: Array<() => void> = [];
+      try {
+        await client().discover();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(5_000);
+        restores.push(overrideDefaultRequestTimeoutForTests(15_000));
+        restores.push(overrideDefaultRequestTimeoutForTests(20_000));
+        await client().discover();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(20_000);
+        restores.pop()!();
+        await client().discover();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(15_000);
+        restores.pop()!();
+        await client().discover();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(5_000);
+      } finally {
+        // Unwind in reverse so a failed assertion can't leak a widened
+        // budget into later tests.
+        while (restores.length > 0) restores.pop()!();
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY, 2 ** 31])(
+      "rejects the invalid value %s",
+      (ms) => {
+        expect(() => overrideDefaultRequestTimeoutForTests(ms)).toThrow(RangeError);
+      },
+    );
+  });
 
   it("sets the bearer token and strips a trailing slash from baseUrl", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, []));
