@@ -123,6 +123,9 @@ interface PaletteState {
   projectId: number | null;
 }
 
+/** A hinted child younger than this is treated as just-spawned on the seeding tick. */
+const FRESH_HINT_WINDOW_MS = 60_000;
+
 export function App() {
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
   // Only meaningful below the mobile breakpoint (see styles.css) — a no-op
@@ -719,6 +722,19 @@ export function App() {
       const retryChildIds = new Set<number>();
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
+        // With the setting off this is also the tick the hint itself first
+        // opened the gate, so a freshly hinted child must stay "new" for the
+        // next tick instead of being swallowed by the seed. Old hinted rows
+        // (page reload) are still seeded as seen and never replay.
+        for (const s of sessions) {
+          if (
+            s.openHint &&
+            s.status === "active" &&
+            Date.now() - Date.parse(s.createdAt) < FRESH_HINT_WINDOW_MS
+          ) {
+            retryChildIds.add(s.id);
+          }
+        }
       } else {
         for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
           const child = sessions.find((s) => s.id === childId);
