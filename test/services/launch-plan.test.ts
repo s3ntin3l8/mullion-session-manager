@@ -201,6 +201,13 @@ describe("buildLaunchPlan — the MULLION_* injections", () => {
     expect(plan.env.MULLION_SOCKET_PATH).toBe("/tmp/sessions/mullion.sock");
   });
 
+  it("marks control as unavailable on an agent-role host (#1627)", () => {
+    expect(buildLaunchPlan(baseSession({})).env.MULLION_CONTROL_UNAVAILABLE).toBeUndefined();
+    const plan = buildLaunchPlan(baseSession({ controlUnavailable: true }));
+    expect(plan.env.MULLION_CONTROL_UNAVAILABLE).toBe("remote-host");
+    expect(plan.env.MULLION_SOCKET_PATH).toBe("/tmp/sessions/mullion.sock");
+  });
+
   it("injects MULLION_SESSION_ID from session.id", () => {
     const plan = buildLaunchPlan(baseSession({ id: "777" }));
     expect(plan.env.MULLION_SESSION_ID).toBe("777");

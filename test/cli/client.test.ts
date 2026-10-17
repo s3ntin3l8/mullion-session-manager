@@ -96,6 +96,24 @@ describe("resolveToken", () => {
   });
 });
 
+describe("MullionSocketClient on a remote host (#1627)", () => {
+  it("rejects with the explanation instead of connecting to a dead path", async () => {
+    const client = new MullionSocketClient({
+      env: { MULLION_CONTROL_UNAVAILABLE: "remote-host", MULLION_SOCKET_PATH: "/nonexistent.sock" },
+    });
+    await expect(client.request("sessions.list", {})).rejects.toThrow(/remote host.*#1627/);
+    await expect(client.connect()).rejects.toThrow(/#1627/);
+  });
+
+  it("an explicit socketPath still connects as before", () => {
+    const client = new MullionSocketClient({
+      socketPath: "/x.sock",
+      env: { MULLION_CONTROL_UNAVAILABLE: "remote-host" },
+    });
+    expect(client.controlUnavailable).toBe(false);
+  });
+});
+
 describe("MullionSocketClient", () => {
   let dir: string;
   let server: net.Server | null = null;

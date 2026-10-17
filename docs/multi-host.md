@@ -380,6 +380,14 @@ alternative, and how the two compose.
   credential (plus, for a session credential, the signature described above
   in "Request signing"); put it behind the same network/VPN boundary you'd
   use for anything else with shell access.
+- **Parent→child control isn't available on remote hosts (#1627).** The control
+  socket (`mullion session …`, the MCP control tools) lives only on the
+  primary. A session running on an agent host gets
+  `MULLION_CONTROL_UNAVAILABLE=remote-host` in its env, and the `mullion` CLI /
+  MCP tools fail immediately with an explanation instead of a connect error.
+  From the primary, a local caller can still `wait`/`get`/read scrollback of a
+  remote child, but `prompt` (and `wait_for_output`) return a 409 because they
+  need the live PTY. The real agent→primary relay is tracked separately.
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it
