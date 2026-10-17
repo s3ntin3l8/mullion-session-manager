@@ -121,6 +121,12 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // value stays REQUEST_TIMEOUT_MS.
 let defaultRequestTimeoutMs = REQUEST_TIMEOUT_MS;
 export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
+  // AbortSignal.timeout throws on NaN/negative and a value above 2^31-1 only
+  // warns and clamps to 1ms (every request would abort instantly) — refuse
+  // both rather than invert the intent.
+  if (!Number.isFinite(ms) || ms <= 0 || ms > 2 ** 31 - 1) {
+    throw new RangeError(`request timeout override must be in (0, 2^31-1] ms, got ${ms}`);
+  }
   const previous = defaultRequestTimeoutMs;
   defaultRequestTimeoutMs = ms;
   return () => {

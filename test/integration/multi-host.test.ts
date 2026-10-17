@@ -144,7 +144,7 @@ const primaryDb = path.join(
 // file only; the production constant is untouched.
 let restoreRequestTimeout: (() => void) | undefined;
 beforeAll(() => {
-  restoreRequestTimeout = overrideDefaultRequestTimeoutForTests(30_000);
+  restoreRequestTimeout = overrideDefaultRequestTimeoutForTests(15_000);
 });
 afterAll(() => {
   restoreRequestTimeout?.();
