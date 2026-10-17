@@ -44,13 +44,12 @@ export const DEMO_FRONTEND_PORT = process.env.DEMO_FRONTEND_PORT ?? "3957";
 export function preflight(bins = demoBins()) {
   const missing = [
     [bins.tsx, "npm ci"],
-    [bins.vite, "cd frontend && npm ci"],
+    [bins.vite, "npm --prefix frontend ci"],
   ].filter(([bin]) => !existsSync(bin));
   if (missing.length === 0) return;
   throw new Error(
     `missing ${missing.map(([bin]) => bin).join(", ")}. ` +
-      `Install the dependencies first: ${missing.map(([, fix]) => fix).join(" and ")} ` +
-      "(or `make wt`, which runs both).",
+      `Install the dependencies first: ${missing.map(([, fix]) => fix).join(" && ")}.`,
   );
 }
 
@@ -169,18 +168,23 @@ export async function startDemo({ quiet = false, keep = false, seed = true, bins
     console.warn(`[demo] could not fully remove ${demoDir}`);
   };
 
-  // A spawn error during startup rejects this, which aborts the startup race
-  // below into the catch (teardown, rethrow). Once the demo is up, it tears
-  // down and exits instead: nothing is awaiting startup any more.
+  // A spawn error or a signal during startup rejects this, which ends the
+  // startup race below in the catch (teardown, rethrow). Without it, Ctrl-C
+  // mid-startup would kill only this process: the servers run in their own
+  // process groups and would outlive it, scratch dir and all.
   let started = false;
-  let failSpawn;
-  const spawnFailed = new Promise((_, reject) => (failSpawn = reject));
-  spawnFailed.catch(() => {});
+  let abortStartup;
+  const startupAborted = new Promise((_, reject) => (abortStartup = reject));
+  startupAborted.catch(() => {});
   const onSpawnError = (err) => {
-    if (!started) return failSpawn(err);
+    if (!started) return abortStartup(err);
+    // Not reachable today (spawn's 'error' fires on the next tick, long before
+    // startup resolves), and must not exit a library caller's process.
     console.error(`[demo] ${err.message}; stopping the demo`);
-    stop().finally(() => process.exit(1));
+    process.exitCode = 1;
+    void stop();
   };
+  const onSignal = (signal) => abortStartup(new Error(`interrupted by ${signal} during startup`));
 
   const api = async (pathname, options = {}) => {
     const res = await fetch(`${backendUrl}${pathname}`, {
@@ -236,13 +240,18 @@ export async function startDemo({ quiet = false, keep = false, seed = true, bins
   // Everything after mkdtemp runs inside the try, so any failure (a refused
   // env, a failed spawn, a timeout) still stops the servers and removes the
   // scratch dir.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   try {
-    const seeded = await Promise.race([startup(), spawnFailed]);
+    const seeded = await Promise.race([startup(), startupAborted]);
     started = true;
     return { demoDir, backendUrl, frontendUrl, instanceId, api, seeded, stop };
   } catch (err) {
     await stop();
     throw err;
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
   }
 }
 

@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
 import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type * as DemoModule from "../../scripts/demo/instance.mjs";
 
 // Issue #1642: a server that fails to spawn must not orphan the other one or
@@ -29,14 +30,14 @@ const freePort = () =>
     });
   });
 
-/** Live `sleep` processes (the fake backend) whose cwd matches. */
-const processesIn = (cwd: RegExp) =>
+/** Live `sleep` processes (the fake servers) running inside `dir`. */
+const processesIn = (dir: string) =>
   readdirSync("/proc")
     .filter((pid) => /^\d+$/.test(pid))
     .filter((pid) => {
       try {
         return (
-          cwd.test(readlinkSync(`/proc/${pid}/cwd`)) &&
+          readlinkSync(`/proc/${pid}/cwd`).startsWith(`${dir}/`) &&
           readFileSync(`/proc/${pid}/cmdline`, "utf8").includes("sleep")
         );
       } catch {
@@ -44,8 +45,40 @@ const processesIn = (cwd: RegExp) =>
       }
     });
 
+const isAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const demoDirs = () =>
   new Set(readdirSync("/tmp").filter((name) => name.startsWith("mullion-demo-")));
+
+/**
+ * Starts a demo and reports its own scratch dir (from its log line), so the
+ * assertions never look at another demo running on the same host.
+ */
+function startCapturingDir(opts: Parameters<typeof DemoModule.startDemo>[0]) {
+  let dir: string | undefined;
+  const log = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+    const m = /^\[demo\] scratch dir (\S+)/.exec(String(args[0]));
+    if (m) dir = m[1];
+  });
+  const started = demo.startDemo(opts).finally(() => log.mockRestore());
+  started.catch(() => {});
+  return { started, dir: () => dir };
+}
+
+const until = async (cond: () => boolean, timeoutMs = 15_000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
 
 let demo: typeof DemoModule;
 const realPath = process.env.PATH;
@@ -77,7 +110,7 @@ describe("preflight", () => {
   it("names the missing frontend deps and how to install them", () => {
     const bins = demo.demoBins(path.join(fixtures, "no-such-repo"));
     expect(() => demo.preflight({ ...bins, tsx: process.execPath })).toThrow(
-      /frontend\/node_modules\/\.bin\/vite.*cd frontend && npm ci.*make wt/,
+      /frontend\/node_modules\/\.bin\/vite.*npm --prefix frontend ci/,
     );
   });
 
@@ -85,42 +118,71 @@ describe("preflight", () => {
     const before = demoDirs();
     await expect(
       demo.startDemo({ quiet: true, bins: { tsx: process.execPath, vite: "/nonexistent/vite" } }),
-    ).rejects.toThrow(/cd frontend && npm ci/);
+    ).rejects.toThrow(/npm --prefix frontend ci/);
     expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
   });
 });
 
+const writeScript = (name: string, body: string, mode: number) => {
+  const file = path.join(fixtures, name);
+  writeFileSync(file, `#!/bin/sh\n${body}\n`, { mode });
+  return file;
+};
+
 describe("a server that fails to spawn", () => {
   it("tears down the started backend and removes the scratch dir", async () => {
     // Fake backend: stays up like a real server would.
-    const tsx = path.join(fixtures, "tsx");
-    writeFileSync(tsx, "#!/bin/sh\nexec sleep 60\n", { mode: 0o755 });
+    const tsx = writeScript("tsx", "exec sleep 60", 0o755);
     // Exists, so preflight passes, but is not executable: spawn fails with
     // EACCES, the same asynchronous 'error' as the ENOENT in the issue.
-    const vite = path.join(fixtures, "vite");
-    writeFileSync(vite, "#!/bin/sh\nexit 0\n", { mode: 0o644 });
+    const vite = writeScript("vite", "exit 0", 0o644);
 
-    const before = demoDirs();
-    await expect(demo.startDemo({ quiet: true, seed: false, bins: { tsx, vite } })).rejects.toThrow(
-      /frontend: could not run .*vite: EACCES/,
-    );
-    expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
-    // The backend ran with its cwd in the scratch dir's run/; nothing may be
-    // left running there.
-    expect(processesIn(/^\/tmp\/mullion-demo-[^/]+\/run\b/)).toEqual([]);
+    const run = startCapturingDir({ quiet: true, seed: false, bins: { tsx, vite } });
+    await expect(run.started).rejects.toThrow(/frontend: could not run .*vite: EACCES/);
+    const dir = run.dir();
+    expect(dir).toMatch(/^\/tmp\/mullion-demo-/);
+    expect(existsSync(dir!)).toBe(false);
+    expect(processesIn(dir!)).toEqual([]);
   });
 
   it("removes the scratch dir even when no server ever started", async () => {
-    const before = demoDirs();
-    const notExecutable = path.join(fixtures, "not-executable");
-    writeFileSync(notExecutable, "", { mode: 0o644 });
-    await expect(
-      demo.startDemo({
-        quiet: true,
-        seed: false,
-        bins: { tsx: notExecutable, vite: notExecutable },
-      }),
-    ).rejects.toThrow(/backend: could not run .*EACCES/);
-    expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
+    const notExecutable = writeScript("not-executable", "exit 0", 0o644);
+    const run = startCapturingDir({
+      quiet: true,
+      seed: false,
+      bins: { tsx: notExecutable, vite: notExecutable },
+    });
+    await expect(run.started).rejects.toThrow(/backend: could not run .*EACCES/);
+    expect(run.dir()).toMatch(/^\/tmp\/mullion-demo-/);
+    expect(existsSync(run.dir()!)).toBe(false);
+  });
+});
+
+describe("a signal during startup", () => {
+  it("stops both servers and removes the scratch dir", async () => {
+    // Both servers start but never answer HTTP, so startup stays in waitForHttp.
+    // The backend runs inside the scratch dir; the frontend runs in frontend/,
+    // so it records its pid instead.
+    const tsx = writeScript("server", "exec sleep 60", 0o755);
+    const vitePid = path.join(fixtures, "vite.pid");
+    const vite = writeScript("vite-up", `echo $$ > ${vitePid}\nexec sleep 60`, 0o755);
+    const before = process.listeners("SIGINT");
+    const run = startCapturingDir({ quiet: true, seed: false, bins: { tsx, vite } });
+    await until(
+      () => run.dir() !== undefined && processesIn(run.dir()!).length === 1 && existsSync(vitePid),
+    );
+    const frontendPid = Number(readFileSync(vitePid, "utf8"));
+    expect(isAlive(frontendPid)).toBe(true);
+
+    // Call startDemo's own handler rather than signalling the test worker.
+    const added = process.listeners("SIGINT").filter((l) => !before.includes(l));
+    expect(added).toHaveLength(1);
+    added[0]("SIGINT");
+
+    await expect(run.started).rejects.toThrow(/interrupted by SIGINT during startup/);
+    expect(existsSync(run.dir()!)).toBe(false);
+    expect(processesIn(run.dir()!)).toEqual([]);
+    expect(isAlive(frontendPid)).toBe(false);
+    expect(process.listeners("SIGINT")).toEqual(before);
   });
 });
