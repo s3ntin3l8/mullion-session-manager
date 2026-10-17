@@ -16,6 +16,9 @@ const AGGRESSIVE_AGE_MS = 24 * 60 * 60 * 1000;
 // skipping it is the conservative answer to "can't prove it's all stale".
 const WALK_ENTRY_CAP = 200_000;
 const NPM_TIMEOUT_MS = 120_000;
+// How long one look at the running claude binaries stands in for the next
+// bundled-skills dir's re-check within a single prune.
+const BINARY_RECHECK_MS = 5_000;
 // Claude session scratch (issue #1608): a session that is no longer running
 // only needs a day's grace in safe mode (long enough to --resume a crash with
 // its scratch intact); aggressive takes any dead session, but never a dir
@@ -381,6 +384,9 @@ export async function pruneTempStorage(
     const targets = gathered.targets.filter((t) => isDue(t, mode, now));
     const rootDev = gathered.rootDev;
     const registryDirs = options.claudeSessionsDirs ?? [defaultClaudeSessionsDir()];
+    // Which versions are running is one answer for every bundled-skills dir, but
+    // it costs a pass over /proc: reuse it for a few seconds rather than per dir.
+    let binaries: { at: number; live: Awaited<ReturnType<typeof loadLiveSessions>> } | undefined;
     let reclaimedBytes = 0;
     let removed = 0;
     const errors: string[] = [];
@@ -398,10 +404,17 @@ export async function pruneTempStorage(
       if (!fresh || now - fresh.newestMtimeMs <= windowFor(target, mode)) continue;
       if (target.kind === "session" || target.kind === "bundled") {
         // A session may have started since listing; ask the registries again.
-        const live = await loadLiveSessions(registryDirs, {
-          procDir: options.procDir,
-          includeBinaries: target.kind === "bundled",
-        });
+        if (target.kind === "bundled" && binaries && Date.now() - binaries.at > BINARY_RECHECK_MS) {
+          binaries = undefined;
+        }
+        const live =
+          target.kind === "bundled" && binaries
+            ? binaries.live
+            : await loadLiveSessions(registryDirs, {
+                procDir: options.procDir,
+                includeBinaries: target.kind === "bundled",
+              });
+        if (target.kind === "bundled") binaries ??= { at: Date.now(), live };
         if (live.blocked) continue;
         if (target.kind === "session" && live.ids.has(target.sessionId)) continue;
         if (

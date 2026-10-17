@@ -225,10 +225,14 @@ describe("claude-scratch", () => {
     await write("live.pid", `${String(process.pid)}\n`);
     await write("dead.pid", String(2 ** 22 + 12345));
     await write("junk.pid", "not a pid");
+    await write("noted.pid", `${String(process.pid)}\nstarted by the api script\n`);
+    await write("deadnoted.pid", `${String(2 ** 22 + 12345)} (stale)`);
     await write("live.log", String(process.pid));
     expect(await isLivePidFile(path.join(base, "live.pid"))).toBe(true);
     expect(await isLivePidFile(path.join(base, "dead.pid"))).toBe(false);
     expect(await isLivePidFile(path.join(base, "junk.pid"))).toBe(false);
+    expect(await isLivePidFile(path.join(base, "noted.pid"))).toBe(true);
+    expect(await isLivePidFile(path.join(base, "deadnoted.pid"))).toBe(false);
     expect(await isLivePidFile(path.join(base, "live.log"))).toBe(false);
     // A link or a directory is not a pid file, however it is named.
     await fs.symlink(path.join(base, "live.pid"), path.join(base, "link.pid"));

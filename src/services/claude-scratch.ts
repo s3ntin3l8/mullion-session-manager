@@ -239,7 +239,9 @@ export async function isLivePidFile(file: string): Promise<boolean> {
     );
     if (!(await handle.stat()).isFile()) return false;
     const { buffer, bytesRead } = await handle.read(Buffer.alloc(64), 0, 64, 0);
-    const pid = Number(buffer.subarray(0, bytesRead).toString("utf8").trim());
+    // The leading integer: tools append a newline, and some a trailing note.
+    const leading = /^\s*(\d+)/.exec(buffer.subarray(0, bytesRead).toString("utf8"))?.[1];
+    const pid = Number(leading);
     if (!Number.isInteger(pid) || pid <= 0) return false;
     return (await procStartTime(pid)) !== null;
   } catch (error) {
