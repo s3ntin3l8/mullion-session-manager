@@ -25,22 +25,56 @@ import { seedDemo } from "./seed.mjs";
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const BIN = (name) => path.join(REPO_ROOT, "node_modules", ".bin", name);
+
+/** The two server binaries; `startDemo({ bins })` overrides them in tests. */
+export const demoBins = (root = REPO_ROOT) => ({
+  tsx: path.join(root, "node_modules", ".bin", "tsx"),
+  vite: path.join(root, "frontend", "node_modules", ".bin", "vite"),
+});
 
 export const DEMO_BACKEND_PORT = process.env.DEMO_BACKEND_PORT ?? "3956";
 export const DEMO_FRONTEND_PORT = process.env.DEMO_FRONTEND_PORT ?? "3957";
 
-/** Own process group (`detached`) so teardown reaches every descendant. */
-function spawnServer(name, cmd, args, opts, quiet) {
+/**
+ * Refuses to start when a server binary is missing, before anything is
+ * spawned or created. `make install` installs only the root workspace; the
+ * frontend has its own `npm ci` (CONTRIBUTING.md), and a missing Vite used to
+ * surface as an unhandled spawn ENOENT that orphaned the backend (#1642).
+ */
+export function preflight(bins = demoBins()) {
+  const missing = [
+    [bins.tsx, "npm ci"],
+    [bins.vite, "cd frontend && npm ci"],
+  ].filter(([bin]) => !existsSync(bin));
+  if (missing.length === 0) return;
+  throw new Error(
+    `missing ${missing.map(([bin]) => bin).join(", ")}. ` +
+      `Install the dependencies first: ${missing.map(([, fix]) => fix).join(" and ")} ` +
+      "(or `make wt`, which runs both).",
+  );
+}
+
+/**
+ * Own process group (`detached`) so teardown reaches every descendant. A
+ * failed spawn (ENOENT, EACCES) emits `'error'` asynchronously, after the
+ * caller's try/catch has moved on, so it is routed to `onError` instead of
+ * crashing the process with teardown skipped (#1642).
+ */
+function spawnServer(name, cmd, args, opts, quiet, onError) {
   const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], detached: true, ...opts });
-  child.stdout.on("data", (d) => !quiet && process.stdout.write(`[${name}] ${d}`));
-  child.stderr.on("data", (d) => process.stderr.write(`[${name}] ${d}`));
+  child.once("error", (err) =>
+    onError(new Error(`${name}: could not run ${cmd}: ${err.code ?? err.message}`)),
+  );
+  child.stdout?.on("data", (d) => !quiet && process.stdout.write(`[${name}] ${d}`));
+  child.stderr?.on("data", (d) => process.stderr.write(`[${name}] ${d}`));
   return child;
 }
 
 /** SIGTERM the group, wait until the child and its group are gone, then SIGKILL. */
 async function killGroup(child, graceMs = 5_000) {
-  if (!child) return;
+  // A child that never spawned has no pid, and -pid must never become 0 or
+  // NaN: process.kill(0) would signal our own process group.
+  if (!child?.pid) return;
   const signal = (sig) => {
     try {
       process.kill(-child.pid, sig);
@@ -56,10 +90,11 @@ async function killGroup(child, graceMs = 5_000) {
   signal("SIGKILL");
 }
 
-async function waitForHttp(url, timeoutMs = 90_000) {
+async function waitForHttp(url, signal, timeoutMs = 90_000) {
   const start = Date.now();
   let lastError;
   while (Date.now() - start < timeoutMs) {
+    if (signal.aborted) throw new Error(`stopped waiting for ${url}`);
     try {
       const res = await fetch(url);
       if (res.status < 500) return;
@@ -71,7 +106,9 @@ async function waitForHttp(url, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
-export async function startDemo({ quiet = false, keep = false, seed = true } = {}) {
+export async function startDemo({ quiet = false, keep = false, seed = true, bins } = {}) {
+  bins ??= demoBins();
+  preflight(bins);
   await assertPortsFree([DEMO_BACKEND_PORT, DEMO_FRONTEND_PORT]);
 
   // /tmp keeps SESSIONS_DIR short: the backend silently relocates it when a
@@ -79,18 +116,6 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
   const demoDir = await mkdtemp("/tmp/mullion-demo-");
   const runDir = path.join(demoDir, "run"); // backend cwd: no .env, migrations via symlink
   const sessionsDir = path.join(demoDir, "s");
-  for (const dir of ["home", "tmp", "run", "s", "projects", "bin"])
-    await mkdir(path.join(demoDir, dir), { recursive: true });
-  // Shadow `docker` for the demo: Mullion's Dock probes the host's running
-  // compose stacks (read-only), which would reach real stacks and put their
-  // container names into public screenshots. The probe treats failure as
-  // "no Docker" and shows nothing.
-  await writeFile(
-    path.join(demoDir, "bin", "docker"),
-    '#!/bin/sh\necho "docker is disabled in the Mullion demo" >&2\nexit 1\n',
-    { mode: 0o755 },
-  );
-  await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
   const instanceId = instanceIdFor(sessionsDir);
 
   const backendUrl = `http://127.0.0.1:${DEMO_BACKEND_PORT}`;
@@ -117,7 +142,12 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
 
   let backend;
   let frontend;
-  const stop = async () => {
+  let stopping;
+  const aborted = new AbortController();
+  // Idempotent: a spawn error, Ctrl-C and the caller may all ask to stop.
+  const stop = () => (stopping ??= teardown());
+  const teardown = async () => {
+    aborted.abort();
     // Stop the sessions first: they live in systemd scopes, not in the
     // backend's process group, and would otherwise outlive it.
     const leaked = await stopDemoScopes(instanceId, sessionsDir);
@@ -137,6 +167,19 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
     console.warn(`[demo] could not fully remove ${demoDir}`);
   };
 
+  // A spawn error during startup rejects this, which aborts the startup race
+  // below into the catch (teardown, rethrow). Once the demo is up, it tears
+  // down and exits instead: nothing is awaiting startup any more.
+  let started = false;
+  let failSpawn;
+  const spawnFailed = new Promise((_, reject) => (failSpawn = reject));
+  spawnFailed.catch(() => {});
+  const onSpawnError = (err) => {
+    if (!started) return failSpawn(err);
+    console.error(`[demo] ${err.message}; stopping the demo`);
+    stop().finally(() => process.exit(1));
+  };
+
   const api = async (pathname, options = {}) => {
     const res = await fetch(`${backendUrl}${pathname}`, {
       headers: { "Content-Type": "application/json" },
@@ -150,29 +193,50 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
     return text ? JSON.parse(text) : undefined;
   };
 
-  try {
-    // Inside the try so a refusal still removes the scratch dir.
+  const startup = async () => {
+    for (const dir of ["home", "tmp", "run", "s", "projects", "bin"])
+      await mkdir(path.join(demoDir, dir), { recursive: true });
+    // Shadow `docker` for the demo: Mullion's Dock probes the host's running
+    // compose stacks (read-only), which would reach real stacks and put their
+    // container names into public screenshots. The probe treats failure as
+    // "no Docker" and shows nothing.
+    await writeFile(
+      path.join(demoDir, "bin", "docker"),
+      '#!/bin/sh\necho "docker is disabled in the Mullion demo" >&2\nexit 1\n',
+      { mode: 0o755 },
+    );
+    await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
     assertDemoEnv(backendEnv, demoDir, { cwd: runDir });
     assertDemoEnv(frontendEnv, demoDir, { cwd: path.join(REPO_ROOT, "frontend") });
     console.log(`[demo] scratch dir ${demoDir} (instance ${instanceId})`);
     backend = spawnServer(
       "backend",
-      BIN("tsx"),
+      bins.tsx,
       ["--tsconfig", path.join(REPO_ROOT, "tsconfig.json"), path.join(REPO_ROOT, "src/server.ts")],
       { cwd: runDir, env: backendEnv },
       quiet,
+      onSpawnError,
     );
     frontend = spawnServer(
       "frontend",
-      path.join(REPO_ROOT, "frontend", "node_modules", ".bin", "vite"),
+      bins.vite,
       ["--port", DEMO_FRONTEND_PORT, "--strictPort", "--host", "127.0.0.1"],
       { cwd: path.join(REPO_ROOT, "frontend"), env: frontendEnv },
       quiet,
+      onSpawnError,
     );
-    await waitForHttp(`${backendUrl}/api/sessions`);
-    await waitForHttp(frontendUrl);
+    await waitForHttp(`${backendUrl}/api/sessions`, aborted.signal);
+    await waitForHttp(frontendUrl, aborted.signal);
     await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme: "dark" }) });
-    const seeded = seed ? await seedDemo({ api, root: path.join(demoDir, "projects") }) : null;
+    return seed ? await seedDemo({ api, root: path.join(demoDir, "projects") }) : null;
+  };
+
+  // Everything after mkdtemp runs inside the try, so any failure (a refused
+  // env, a failed spawn, a timeout) still stops the servers and removes the
+  // scratch dir.
+  try {
+    const seeded = await Promise.race([startup(), spawnFailed]);
+    started = true;
     return { demoDir, backendUrl, frontendUrl, instanceId, api, seeded, stop };
   } catch (err) {
     await stop();
@@ -182,7 +246,10 @@ export async function startDemo({ quiet = false, keep = false, seed = true } = {
 
 const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
-  const demo = await startDemo({ keep: process.argv.includes("--keep") });
+  const demo = await startDemo({ keep: process.argv.includes("--keep") }).catch((err) => {
+    console.error(`[demo] failed to start: ${err.message}`);
+    process.exit(1);
+  });
   console.log(`
 [demo] Mullion demo is up: ${demo.frontendUrl}
 [demo] Loopback only, no login. Ctrl-C stops its sessions and deletes all demo data.`);
