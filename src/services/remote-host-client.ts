@@ -112,6 +112,22 @@ export class HostRequestError extends Error {
 // than returning a default/empty payload on network failure or timeout.
 const REQUEST_TIMEOUT_MS = 5_000;
 
+// Test-only knob (issue #1634): a full local `make test` runs hundreds of real
+// Fastify servers in parallel, and the multi-host integration tests make REAL
+// loopback round trips whose 5s budget the resulting event-loop lag can blow
+// through. This widens only the DEFAULT budget (not any call's own explicit
+// one) and returns a restore function; production code never calls it, so
+// the user-facing "how long before an unreachable host is reported as such"
+// value stays REQUEST_TIMEOUT_MS.
+let defaultRequestTimeoutMs = REQUEST_TIMEOUT_MS;
+export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
+  const previous = defaultRequestTimeoutMs;
+  defaultRequestTimeoutMs = ms;
+  return () => {
+    defaultRequestTimeoutMs = previous;
+  };
+}
+
 // Bulk live-status responses are reused for this long — see the plan's
 // "list performance" note: multiple browser tabs/poll cycles hitting
 // GET /api/sessions within the same short window shouldn't each cost this
@@ -522,7 +538,7 @@ export class RemoteHostClient {
   private async request<T>(
     path: string,
     init?: RequestInit,
-    timeoutMs: number = REQUEST_TIMEOUT_MS,
+    timeoutMs: number = defaultRequestTimeoutMs,
   ): Promise<T> {
     let res = await this.rawFetch(path, init, timeoutMs);
     // Retry-once-on-401 (issue #245 / roadmap 7.1): a session credential
@@ -1672,7 +1688,7 @@ export class RemoteHostClient {
   async ping(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/health`, {
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(defaultRequestTimeoutMs),
         // Same redirect-bypass reasoning as request() above — no bearer
         // token to leak here, but a followed redirect would still report
         // "online" based on an unvalidated target's response instead of
