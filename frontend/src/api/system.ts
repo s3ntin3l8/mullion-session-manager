@@ -17,6 +17,7 @@ import type {
   DockerPruneMode,
   TempStorageStatus,
   CacheStorageStatus,
+  OpencodeStorageStatus,
   DockerPruneResult,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
@@ -100,6 +101,12 @@ export const systemApi = {
       method: "POST",
       body: JSON.stringify({ cacheDirs }),
     }),
+
+  getOpencodeStorage: () => request<OpencodeStorageStatus>("/api/storage/opencode"),
+  // Nothing to choose: the server compacts its own opencode database, and only
+  // while opencode isn't running.
+  pruneOpencodeStorage: () =>
+    request<DockerPruneResult>("/api/storage/opencode/prune", { method: "POST" }),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

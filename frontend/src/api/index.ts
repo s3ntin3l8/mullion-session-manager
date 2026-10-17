@@ -91,6 +91,7 @@ export type {
   DockerPruneMode,
   TempStorageStatus,
   CacheStorageStatus,
+  OpencodeStorageStatus,
   DockerPruneResult,
   Project,
   CreateProjectDirOptions,

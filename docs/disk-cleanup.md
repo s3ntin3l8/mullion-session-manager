@@ -79,3 +79,41 @@ cross-checked against `/proc`:
 page and emptied in aggressive mode only. The server only empties ids that
 are both ticked in the stored settings and requested, so neither side can
 widen the other.
+
+## opencode's database
+
+`services/opencode-storage.ts`. opencode keeps every session in one SQLite
+file, `<XDG_DATA_HOME or ~/.local/share>/opencode/opencode.db`, with
+`auto_vacuum` off, so space freed by deleted or migrated sessions is never
+returned to the filesystem: the file can be many times larger than the data
+in it. Aggressive cleanup compacts it with `VACUUM`, which rewrites the same
+rows into a smaller file and loses nothing. The figure shown beforehand is
+exact (`freelist_count × page_size`), not an estimate.
+
+This is the one place Mullion opens a SQLite file it doesn't own for writing,
+so it is deliberately narrow:
+
+- **Only while opencode isn't running.** `VACUUM` holds the write lock for the
+  whole rebuild (a minute or so for a large file), which would make opencode's
+  own writes fail. Before and again right before taking the lock, Mullion looks
+  for any process (of the server's user) with the database, its `-wal` or its
+  `-shm` open (by resolved path, so a symlinked data dir is seen too), and skips, without error, if it finds one. It never starts or
+  stops opencode. Stop opencode (or its background service) and run the cleanup
+  again.
+- **Room to work.** A `VACUUM` builds the compacted copy in a temporary file
+  and, in WAL mode, then writes it through the WAL, so the volume needs about
+  twice the live size free (with 20% slack). The temporary file is kept on the
+  database's own volume (`SQLITE_TMPDIR`) so that check is the right one;
+  otherwise it refuses and says how much it needed.
+- **The server keeps serving.** The `VACUUM` runs in a child `node` process,
+  not in the server's own: `better-sqlite3` is synchronous, so doing it in
+  process would freeze every terminal and request for the minutes it takes. It
+  is killed if it runs past 30 minutes, which is safe since a `VACUUM` that
+  doesn't commit changes nothing. The request itself stays open until it
+  finishes.
+- **Nothing else is changed.** No schema, pragma or row is touched: the
+  database stays in WAL mode with `auto_vacuum` off, and the WAL is
+  checkpointed and truncated afterwards so the file actually shrinks. A failed
+  `VACUUM` is atomic and leaves the database as it was.
+- **Not retention.** This reclaims free pages only. Deleting old sessions is
+  opencode's to do (it has no bulk or age-based command yet); see #1664.
