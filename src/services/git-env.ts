@@ -11,9 +11,11 @@
 // flag. Stripping them here is what makes `-C cwd` actually authoritative.
 //
 // GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY /
-// GIT_COMMON_DIR / GIT_PREFIX / GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM can all
-// redirect a git invocation onto a different repo or config file than `cwd`
-// implies. GIT_CEILING_DIRECTORIES doesn't redirect anything — it only
+// GIT_COMMON_DIR / GIT_PREFIX / GIT_CONFIG / GIT_CONFIG_GLOBAL /
+// GIT_CONFIG_SYSTEM can all redirect a git invocation onto a different repo or
+// config file than `cwd` implies. GIT_CONFIG is the legacy one: git 2.43 still
+// honors it, so `GIT_CONFIG=<a>/.git/config git -C <b> config user.email x`
+// writes into repo a, not b (issue #1649). GIT_CEILING_DIRECTORIES doesn't redirect anything — it only
 // bounds parent-directory discovery — but is stripped too as harmless
 // belt-and-suspenders against the same class of leaked-hook-env surprise.
 //
@@ -44,6 +46,7 @@ export const GIT_ENV_KEYS_TO_STRIP = [
   "GIT_OBJECT_DIRECTORY",
   "GIT_COMMON_DIR",
   "GIT_PREFIX",
+  "GIT_CONFIG",
   "GIT_CONFIG_GLOBAL",
   "GIT_CONFIG_SYSTEM",
 ] as const;

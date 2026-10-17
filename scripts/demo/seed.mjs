@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { gitEnv } from "../git-env.mjs";
 
 /**
  * The demo dataset: scratch git repos, synthetic agent-transcript scripts,
@@ -12,15 +13,23 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+// Identity comes from the env, not `git config`: nothing is written to any
+// config file, so a leaked GIT_DIR/GIT_CONFIG can't make this pollute a real
+// checkout (issue #1649).
+const DEMO_IDENTITY = {
+  GIT_AUTHOR_NAME: "Demo",
+  GIT_AUTHOR_EMAIL: "demo@example.com",
+  GIT_COMMITTER_NAME: "Demo",
+  GIT_COMMITTER_EMAIL: "demo@example.com",
+};
+
 async function git(cwd, ...args) {
-  await execFileAsync("git", args, { cwd });
+  await execFileAsync("git", args, { cwd, env: { ...gitEnv(), ...DEMO_IDENTITY } });
 }
 
 async function seedGitRepo(dir, { readme, files, commitMessages }) {
   await mkdir(dir, { recursive: true });
   await git(dir, "init", "-q", "-b", "main");
-  await git(dir, "config", "user.email", "demo@example.com");
-  await git(dir, "config", "user.name", "Demo");
   await writeFile(path.join(dir, "README.md"), readme);
   await git(dir, "add", "-A");
   await git(dir, "commit", "-q", "-m", commitMessages[0]);

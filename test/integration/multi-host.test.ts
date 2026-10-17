@@ -739,8 +739,6 @@ describe("multi-host dock-preview worktrees (issue #345)", () => {
     const run = (args: string[]) =>
       execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
     run(["init", "-b", "main"]);
-    run(["config", "user.email", "test@example.com"]);
-    run(["config", "user.name", "Test"]);
     fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
     run(["add", "-A"]);
     run(["commit", "-m", "initial", "--no-verify"]);

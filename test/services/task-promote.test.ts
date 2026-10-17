@@ -99,8 +99,6 @@ function git(cwd: string, args: string[]) {
 function createGitRepoWithRemote(remotePath: string): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-promote-test-work-"));
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
   fs.writeFileSync(path.join(cwd, "a.txt"), "a");
   git(cwd, ["add", "-A"]);
   git(cwd, ["commit", "-m", "initial", "--no-verify"]);
@@ -416,8 +414,6 @@ describe("promoteTaskToPR", () => {
   it("refuses cleanly when the default base branch can't be determined at all — nothing pushed yet", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-promote-test-nobase-"));
     git(cwd, ["init", "-b", "main"]);
-    git(cwd, ["config", "user.email", "test@example.com"]);
-    git(cwd, ["config", "user.name", "Test"]);
     fs.writeFileSync(path.join(cwd, "a.txt"), "a");
     git(cwd, ["add", "-A"]);
     git(cwd, ["commit", "-m", "initial", "--no-verify"]);

@@ -90,8 +90,6 @@ function gitOutput(cwd: string, args: string[]): string {
 function createGitRepo(): string {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "tasks-route-test-repo-"));
   git(cwd, ["init", "-b", "main"]);
-  git(cwd, ["config", "user.email", "test@example.com"]);
-  git(cwd, ["config", "user.name", "Test"]);
   fs.writeFileSync(path.join(cwd, "a.txt"), "a");
   git(cwd, ["add", "-A"]);
   git(cwd, ["commit", "-m", "initial", "--no-verify"]);

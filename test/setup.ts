@@ -35,6 +35,16 @@ const tmpFrontendDist = path.join(
 // mismatching what tests assert (see server-info.test.ts) and silently
 // re-enabling .env loading for the whole suite.
 process.env.NODE_ENV = "test";
+
+// Commit identity for every git child the suite spawns (fixture repos and the
+// src code under test alike — gitEnv() copies process.env). Fixtures used to
+// `git config user.*` instead; a stray one of those ran against the real
+// checkout's .git/config and authored ~79 commits as "Test" (issue #1649).
+// Env identity never touches any config file, so it can't leak into one.
+process.env.GIT_AUTHOR_NAME = "Test";
+process.env.GIT_AUTHOR_EMAIL = "test@example.com";
+process.env.GIT_COMMITTER_NAME = "Test";
+process.env.GIT_COMMITTER_EMAIL = "test@example.com";
 process.env.DATABASE_URL = `file:${tmpDb}`;
 // Same reasoning as DATABASE_URL above: ptyPlugin constructs a PtyManager on
 // every buildApp() call (even in tests that have nothing to do with

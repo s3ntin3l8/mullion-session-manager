@@ -7,6 +7,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitEnv } from "./git-env.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -26,7 +27,11 @@ export function resolveBaseRef(explicitRef) {
   const candidates = ["origin/main", "main", "HEAD~1"];
   for (const ref of candidates) {
     try {
-      execFileSync("git", ["rev-parse", "--verify", ref], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["rev-parse", "--verify", ref], {
+        cwd: root,
+        stdio: "ignore",
+        env: gitEnv(),
+      });
       return ref;
     } catch {
       // try next
@@ -242,6 +247,7 @@ export function runPatchCoverageCheck(options = {}) {
         diffBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
           cwd: root,
           encoding: "utf8",
+          env: gitEnv(),
         }).trim();
       } catch {
         // merge-base can fail (e.g. when baseRef IS HEAD, or — the common
@@ -259,6 +265,7 @@ export function runPatchCoverageCheck(options = {}) {
       diffText = execFileSync("git", ["diff", "-U0", diffBase], {
         cwd: root,
         encoding: "utf8",
+        env: gitEnv(),
         maxBuffer: 10 * 1024 * 1024,
       });
     } catch (err) {

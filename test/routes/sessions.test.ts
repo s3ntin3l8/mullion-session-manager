@@ -2115,8 +2115,6 @@ describe("sessions route", () => {
     function createGitRepo(): string {
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "sessions-worktree-test-"));
       git(cwd, ["init", "-b", "main"]);
-      git(cwd, ["config", "user.email", "test@example.com"]);
-      git(cwd, ["config", "user.name", "Test"]);
       fs.writeFileSync(path.join(cwd, "a.txt"), "a");
       git(cwd, ["add", "-A"]);
       git(cwd, ["commit", "-m", "initial", "--no-verify"]);
