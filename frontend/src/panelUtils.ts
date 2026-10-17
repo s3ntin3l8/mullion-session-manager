@@ -440,6 +440,32 @@ export function childWantsAutoOpen(
   return autoOpenChildPanels || Boolean(child.openHint);
 }
 
+// How long a spawn-time `open` hint stays actionable. The hint is never
+// cleared server-side, so without a bound an active hinted child whose parent
+// panel isn't open would be retried (and could pop open) for the tab's whole
+// lifetime, and a page reload would replay every old hint.
+export const FRESH_HINT_WINDOW_MS = 60_000;
+
+/** Ids of active, hinted children spawned within FRESH_HINT_WINDOW_MS — the
+ * ones the auto-open effect must keep "unseen" so a later tick still opens
+ * them (seeding tick, parent panel not open yet). */
+export function freshHintedChildIds(
+  sessions: ReadonlyArray<Pick<Session, "id" | "openHint" | "status" | "createdAt">>,
+  now: number,
+): Set<number> {
+  const ids = new Set<number>();
+  for (const s of sessions) {
+    if (
+      s.openHint &&
+      s.status === "active" &&
+      now - Date.parse(s.createdAt) < FRESH_HINT_WINDOW_MS
+    ) {
+      ids.add(s.id);
+    }
+  }
+  return ids;
+}
+
 // Pure gate for the auto-open-child-panel effect (App.tsx) — pulled out so
 // each of its five independent conditions has its own unit test without a
 // live DockviewApi (there is no App.test.tsx in this codebase). `restoring`

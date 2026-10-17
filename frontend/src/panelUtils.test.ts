@@ -33,6 +33,7 @@ import {
   newChildSessionIds,
   childPanelPosition,
   childWantsAutoOpen,
+  freshHintedChildIds,
   shouldAutoOpenChildPanels,
   extractSessionIds,
   canLaunchTerminal,
@@ -2557,5 +2558,28 @@ describe("migrateLegacyProjectPanels", () => {
 
     expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(false);
     expect(api.addPanel).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("freshHintedChildIds", () => {
+  const now = Date.parse("2026-01-01T00:01:00Z");
+  const row = (id: number, over: Record<string, unknown> = {}) => ({
+    id,
+    openHint: "right" as const,
+    status: "active" as const,
+    createdAt: "2026-01-01T00:00:30Z",
+    ...over,
+  });
+  it("keeps only active, hinted, recent rows", () => {
+    const ids = freshHintedChildIds(
+      [
+        row(1),
+        row(2, { openHint: null }),
+        row(3, { status: "exited" }),
+        row(4, { createdAt: "2026-01-01T00:00:00Z" }),
+      ],
+      now,
+    );
+    expect([...ids]).toEqual([1]);
   });
 });

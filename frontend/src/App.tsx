@@ -39,6 +39,7 @@ import {
   newChildSessionIds,
   childPanelPosition,
   childWantsAutoOpen,
+  freshHintedChildIds,
   shouldAutoOpenChildPanels,
   isTiledPanel,
   canLaunchTerminal,
@@ -122,9 +123,6 @@ interface PaletteState {
   scope: "global" | "project";
   projectId: number | null;
 }
-
-/** A hinted child younger than this is treated as just-spawned on the seeding tick. */
-const FRESH_HINT_WINDOW_MS = 60_000;
 
 export function App() {
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
@@ -717,24 +715,14 @@ export function App() {
       // doesn't propagate through the helper call — assert it once here so
       // every use below stays non-nullable without a redundant local check.
       const api = dockviewApi!;
-      // Hinted children skipped only because the parent's panel isn't open
-      // yet: left out of the seen set below so a later tick retries them.
-      const retryChildIds = new Set<number>();
+      // Fresh hinted children that must stay "new" (left out of the seen set
+      // below): on the seeding tick — with the setting off that is also the
+      // tick the hint itself opened the gate — and when the parent's panel
+      // isn't open yet. Bounded by the freshness window, so an old hint
+      // (reload, or a parent panel opened hours later) never replays.
+      const retryChildIds = freshHintedChildIds(sessions, Date.now());
       if (!hasSeededChildSessionsRef.current) {
         hasSeededChildSessionsRef.current = true;
-        // With the setting off this is also the tick the hint itself first
-        // opened the gate, so a freshly hinted child must stay "new" for the
-        // next tick instead of being swallowed by the seed. Old hinted rows
-        // (page reload) are still seeded as seen and never replay.
-        for (const s of sessions) {
-          if (
-            s.openHint &&
-            s.status === "active" &&
-            Date.now() - Date.parse(s.createdAt) < FRESH_HINT_WINDOW_MS
-          ) {
-            retryChildIds.add(s.id);
-          }
-        }
       } else {
         for (const childId of newChildSessionIds(sessions, seenChildSessionIdsRef.current)) {
           const child = sessions.find((s) => s.id === childId);
@@ -758,10 +746,7 @@ export function App() {
           // into that (wrong) workspace's saved layout. The child still
           // shows in the sidebar regardless (this effect only ever governs
           // whether its panel auto-opens); the user can open it manually.
-          if (!position) {
-            if (child.openHint && child.status === "active") retryChildIds.add(child.id);
-            continue;
-          }
+          if (!position) continue;
           const projectName = projects.find((p) => p.id === child.projectId)?.name ?? undefined;
           api.addPanel({
             id: panelId,
