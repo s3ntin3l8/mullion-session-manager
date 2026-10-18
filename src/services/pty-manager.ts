@@ -3842,6 +3842,14 @@ export class PtyManager {
     return [...this.sessions.values()].map((s) => s.toInfo());
   }
 
+  /** Sessions of `projectId` that never reported a branch, with the directory
+   * to probe (OSC 7 cwd, else spawn cwd). */
+  sessionsWithoutBranch(projectId: number): { id: string; cwd: string }[] {
+    return [...this.sessions.values()]
+      .filter((s) => s.projectId === projectId && s.liveBranch === null)
+      .map((s) => ({ id: s.id, cwd: s.liveCwd ?? s.cwd }));
+  }
+
   /** Live local sessions of `projectId` that are on `branch` (hook-reported
    * liveBranch) — how a PR transition finds the session(s) to notify. */
   sessionIdsOnBranch(projectId: number, branch: string): string[] {

@@ -4762,6 +4762,17 @@ describe("PtyManager", () => {
 
       expect(manager.sessionIdsOnBranch(5, "feat/foo")).toEqual(["1"]);
       expect(manager.sessionIdsOnBranch(5, "feat/bar")).toEqual([]);
+      expect(manager.sessionsWithoutBranch(5)).toEqual([]);
+      const third = manager.getOrCreate({
+        id: "3",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        projectId: 5,
+      });
+      await waitForSpawn(third);
+      expect(manager.sessionsWithoutBranch(5)).toEqual([{ id: "3", cwd: "/tmp" }]);
     });
 
     it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {

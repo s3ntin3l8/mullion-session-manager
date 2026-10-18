@@ -255,6 +255,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       }));
     },
 
+    // Intentionally shared by every GitHubPanel host of a project (right
+    // sidebar and dock panel): the open drill-in is per project, so opening a
+    // PR from a session row also moves an open dock panel to that PR.
     setGithubOpenPr: (projectId, number) =>
       set((s) => ({ githubOpenPrByProject: { ...s.githubOpenPrByProject, [projectId]: number } })),
 

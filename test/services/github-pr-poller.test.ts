@@ -1,3 +1,7 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type * as SettingsModule from "../../src/services/settings.js";
@@ -393,6 +397,7 @@ describe("startGitHubPRPoller", () => {
           sessionIdsOnBranch: vi.fn((projectId: number, branch: string) =>
             projectId === 1 && branch === "feat-x" ? ["11"] : [],
           ),
+          sessionsWithoutBranch: vi.fn(() => []),
           get: vi.fn(() => ({ emitPrEvent })),
         },
       } as unknown as FastifyInstance;
@@ -459,6 +464,37 @@ describe("startGitHubPRPoller", () => {
       expect(closed).not.toHaveBeenCalled();
     });
 
+    it("reaches a session that never reported a branch, via its checkout's HEAD", async () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "poller-branch-"));
+      execFileSync("git", ["init", "-q", "-b", "feat-x", dir]);
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
+      mockGetRepoPRsStatus
+        .mockResolvedValueOnce(status(pr()))
+        .mockResolvedValue(status(pr({ ciStatus: "failure", prPhase: "ci_failing" })));
+      const { app, emitPrEvent } = appWithSessions();
+      (app as unknown as { pty: Record<string, unknown> }).pty.sessionIdsOnBranch = () => [];
+      (app as unknown as { pty: Record<string, unknown> }).pty.sessionsWithoutBranch = () => [
+        { id: "31", cwd: dir },
+        { id: "32", cwd: "/nonexistent-dir-for-poller-test" },
+      ];
+      const get = vi.fn(() => ({ emitPrEvent }));
+      (app as unknown as { pty: Record<string, unknown> }).pty.get = get;
+      vi.useFakeTimers();
+      const cleanup = startGitHubPRPoller(app);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(16_000);
+      cleanup();
+      vi.useRealTimers();
+      // git runs in a real subprocess, so let it finish.
+      await vi.waitFor(() =>
+        expect(emitPrEvent).toHaveBeenCalledWith("pr_ci_failed", expect.anything()),
+      );
+      expect(get).toHaveBeenCalledWith("31");
+      expect(get).not.toHaveBeenCalledWith("32");
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
     it("survives a failing emit without losing the poll's bookkeeping", async () => {
       mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockGetRepoPRsStatus
@@ -467,6 +503,7 @@ describe("startGitHubPRPoller", () => {
       const app = {
         ...mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]),
         pty: {
+          sessionsWithoutBranch: () => [],
           sessionIdsOnBranch: () => {
             throw new Error("boom");
           },

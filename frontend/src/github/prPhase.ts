@@ -12,7 +12,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
 };
 
 /** Phases that want the user's attention first, most urgent first. */
-const ATTENTION_ORDER: GitHubPrPhase[] = ["ci_failing", "changes_requested", "conflicts"];
+export const ATTENTION_ORDER: GitHubPrPhase[] = ["ci_failing", "changes_requested", "conflicts"];
 
 export function phaseTone(phase: GitHubPrPhase): "bad" | "warn" | "good" | "dim" {
   if (phase === "ci_failing" || phase === "changes_requested" || phase === "conflicts") {

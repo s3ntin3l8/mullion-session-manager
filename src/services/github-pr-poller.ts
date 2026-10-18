@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
@@ -19,6 +21,19 @@ import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
+
+const execFileAsync = promisify(execFile);
+
+async function checkoutBranch(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], {
+      timeout: 3_000,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
 
 interface PrMeta {
   number: number;
@@ -124,11 +139,11 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     if (changes.length > 0 && projectIds) {
       // Notifications are a side channel: they must never cost the poll its
       // activity bookkeeping or the default-branch refresh below.
-      try {
-        await emitSessionEvents(token, owner, repo, repoKey, projectIds, changes);
-      } catch (err) {
+      // Not awaited either: merge lookups and git probes are I/O the poll
+      // shouldn't wait on.
+      emitSessionEvents(token, owner, repo, repoKey, projectIds, changes).catch((err) => {
         app.log.warn({ err, owner, repo }, "[github-pr-poller] session event emit failed");
-      }
+      });
     }
     activityTracker.recordPollResult(repoKey, repoHasActivity(status));
     await refreshDefaultBranchCi(token, owner, repo);
@@ -191,34 +206,52 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     changes: PrChange[],
   ): Promise<void> {
     const metas = lastPrMeta.get(repoKey);
-    for (const change of changes) {
-      const meta = metas?.get(change.number);
-      let merged = false;
-      let title = meta?.title ?? "";
-      let url = meta?.htmlUrl ?? "";
-      if (change.kind === "closed") {
-        const state = await getPullRequestMergeState(token, owner, repo, change.number);
-        if (!state?.merged) continue;
-        merged = true;
-        title = state.title || title;
-        url = state.htmlUrl || url;
-      }
-      const events = derivePrEvents(change, { number: change.number, title, url }, merged);
-      if (events.length === 0) continue;
-      for (const projectId of projectIds) {
-        for (const id of sessionsForPr(projectId, change.number, meta?.headBranch)) {
-          const session = app.pty.get(id);
-          for (const ev of events) session?.emitPrEvent(ev.kind, ev.payload);
+    // Per-PR work is independent (a closed PR costs a merge lookup), so run it
+    // side by side; the caller doesn't await this at all.
+    await Promise.all(
+      changes.map(async (change) => {
+        const meta = metas?.get(change.number);
+        let merged = false;
+        let title = meta?.title ?? "";
+        let url = meta?.htmlUrl ?? "";
+        if (change.kind === "closed") {
+          const state = await getPullRequestMergeState(token, owner, repo, change.number);
+          if (!state?.merged) return;
+          merged = true;
+          title = state.title || title;
+          url = state.htmlUrl || url;
         }
-      }
-    }
+        const events = derivePrEvents(change, { number: change.number, title, url }, merged);
+        if (events.length === 0) return;
+        for (const projectId of projectIds) {
+          for (const id of await sessionsForPr(projectId, change.number, meta?.headBranch)) {
+            const session = app.pty.get(id);
+            for (const ev of events) session?.emitPrEvent(ev.kind, ev.payload);
+          }
+        }
+      }),
+    );
     // Closed PRs have had their one look at the carried-over metadata.
     for (const change of changes) if (change.kind === "closed") metas?.delete(change.number);
   }
 
-  function sessionsForPr(projectId: number, number: number, headBranch?: string): string[] {
+  // The session row matches on its displayBranch, which prefers polled git
+  // status over the hook-reported branch; a session that never sent a
+  // git_branch hook is resolved here from its own checkout instead.
+  async function sessionsForPr(
+    projectId: number,
+    number: number,
+    headBranch?: string,
+  ): Promise<string[]> {
     const ids = new Set<string>();
-    if (headBranch) for (const id of app.pty.sessionIdsOnBranch(projectId, headBranch)) ids.add(id);
+    if (headBranch) {
+      for (const id of app.pty.sessionIdsOnBranch(projectId, headBranch)) ids.add(id);
+      const unknown = app.pty.sessionsWithoutBranch(projectId);
+      const resolved = await Promise.all(
+        unknown.map(async (s) => ((await checkoutBranch(s.cwd)) === headBranch ? s.id : null)),
+      );
+      for (const id of resolved) if (id) ids.add(id);
+    }
     const rows = app.db
       .select({ sessionId: tasks.sessionId })
       .from(tasks)
