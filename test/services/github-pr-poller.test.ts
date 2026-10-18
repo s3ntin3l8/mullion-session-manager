@@ -211,6 +211,40 @@ describe("startGitHubPRPoller", () => {
     vi.useRealTimers();
   });
 
+  // Two projects on one repo: the initial per-project sweep may only have
+  // covered one of them, so it seeds a baseline but must never push.
+  it("never pushes from the initial sweep, even when projects share a repo", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    const prWith = (ciStatus: string) => ({
+      number: 7,
+      headSha: "abc",
+      isDraft: false,
+      ciStatus,
+      reviewDecision: null,
+      mergeable: null,
+      unresolvedThreads: null,
+      commentCount: null,
+      prPhase: "ready_to_merge",
+    });
+    mockGetRepoPRsStatus
+      .mockResolvedValueOnce({ prs: [prWith("success")], prSummary: { total: 1 } })
+      .mockResolvedValueOnce({ prs: [prWith("failure")], prSummary: { total: 1 } });
+    const app = mockApp([
+      { id: 1, cwd: "/tmp/one", hostId: "local" },
+      { id: 2, cwd: "/tmp/two", hostId: "local" },
+    ]);
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(2);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("sweepTimer fires after margin then sets up interval", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [

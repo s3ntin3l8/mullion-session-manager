@@ -147,6 +147,57 @@ describe("enrichPrsWithReviewState", () => {
     expect(prs[0].reviewDecision).toBeNull();
   });
 
+  it("reuses the last known review state when a later call fails (no flapping)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+      .mockResolvedValueOnce(threadsResponse({ 1: 2 }));
+    await enrichPrsWithReviewState("tok", "o", "stale-repo", [pr(1)]);
+
+    fetchMock.mockRejectedValueOnce(new Error("timeout"));
+    const again = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "stale-repo", again);
+    expect(again[0]).toMatchObject({
+      reviewDecision: "APPROVED",
+      unresolvedThreads: 2,
+      commentCount: 3,
+      prPhase: "ready_to_merge",
+    });
+  });
+
+  it("keeps the previous thread count when only the thread lookup fails", async () => {
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+      .mockResolvedValueOnce(threadsResponse({ 1: 3 }));
+    await enrichPrsWithReviewState("tok", "o", "thread-fail-repo", [pr(1)]);
+
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1, { updatedAt: "2026-10-18T12:00:00Z" })]))
+      .mockResolvedValueOnce(new Response("boom", { status: 500 }));
+    const again = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "thread-fail-repo", again);
+    expect(again[0].unresolvedThreads).toBe(3);
+  });
+
+  it("re-fetches thread counts after the cache max age even if updatedAt is unchanged", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 2 }));
+      await enrichPrsWithReviewState("tok", "o", "ttl-repo", [pr(1)]);
+
+      vi.advanceTimersByTime(6 * 60_000);
+      fetchMock
+        .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+      const again = [pr(1)];
+      await enrichPrsWithReviewState("tok", "o", "ttl-repo", again);
+      expect(again[0].unresolvedThreads).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("backs off GraphQL only — a 403 never trips the process-wide REST budget", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response("slow down", { status: 403, headers: { "retry-after": "120" } }),

@@ -99,7 +99,9 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     owner: string,
     repo: string,
     repoKey: string,
-    projectIds: number[],
+    // null = the initial per-project sweep: it may cover only one of several
+    // projects sharing this repo, so it may seed a baseline but never push.
+    projectIds: number[] | null,
   ): Promise<void> {
     const status = await getRepoPRsStatus(token, owner, repo);
     // Review state (GraphQL) is best-effort and never throws.
@@ -113,10 +115,14 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   function pushPrChanges(
     repoKey: string,
     prs: Parameters<typeof snapshotPr>[0][],
-    projectIds: number[],
+    projectIds: number[] | null,
   ): void {
     const next = prs.map(snapshotPr);
     const prev = lastSnapshots.get(repoKey);
+    if (projectIds === null) {
+      if (!prev) lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
+      return;
+    }
     lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
     if (!prev) return;
     const changes = diffPrSnapshots(prev, next);
@@ -229,7 +235,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
           const token = await resolveGitHubToken(app, repoRef, "read");
           if (!token) return;
           const repoKey = `${repoRef.owner}/${repoRef.repo}`;
-          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey, [row.id]);
+          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey, null);
         } catch (err) {
           app.log.warn(
             { err, hostId: row.hostId, cwd: row.cwd },

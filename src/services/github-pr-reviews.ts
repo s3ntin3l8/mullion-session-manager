@@ -31,14 +31,50 @@ let graphqlBackoffUntil = 0;
 export function resetGraphqlBackoffForTests(): void {
   graphqlBackoffUntil = 0;
   threadCache.clear();
+  lastKnown.clear();
 }
 
 export function graphqlBackoffRemainingMs(): number {
   return Math.max(0, graphqlBackoffUntil - Date.now());
 }
 
-// "owner/repo#number" → thread count as of `updatedAt`.
-const threadCache = new Map<string, { updatedAt: string; unresolved: number }>();
+// "owner/repo#number" → thread count as of `updatedAt`. Also expires on a
+// timer: resolving a thread doesn't reliably bump the PR's `updatedAt`, so
+// the count is re-fetched at least this often.
+const THREAD_CACHE_MAX_AGE_MS = 5 * 60_000;
+const threadCache = new Map<string, { updatedAt: string; unresolved: number; ts: number }>();
+
+type ReviewFields = Pick<
+  PROrWithChecks,
+  | "isDraft"
+  | "updatedAt"
+  | "reviewDecision"
+  | "mergeable"
+  | "mergeStateStatus"
+  | "reviewers"
+  | "requestedReviewers"
+  | "unresolvedThreads"
+  | "commentCount"
+>;
+
+// Last successfully fetched review fields per PR. A failed or backed-off
+// GraphQL call reuses these (stale but real) instead of resetting every PR to
+// "unknown", which would flip phases and push the browser for no real change.
+const lastKnown = new Map<string, ReviewFields>();
+
+function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
+  return {
+    isDraft: pr.isDraft,
+    updatedAt: pr.updatedAt,
+    reviewDecision: pr.reviewDecision,
+    mergeable: pr.mergeable,
+    mergeStateStatus: pr.mergeStateStatus,
+    reviewers: pr.reviewers,
+    requestedReviewers: pr.requestedReviewers,
+    unresolvedThreads: pr.unresolvedThreads,
+    commentCount: pr.commentCount,
+  };
+}
 
 interface RateLimitNode {
   cost: number;
@@ -154,12 +190,20 @@ export async function enrichPrsWithReviewState(
   prs: PROrWithChecks[],
 ): Promise<void> {
   if (prs.length === 0) return;
+  const keyFor = (n: number) => `${owner}/${repo}#${n}`;
+  const reuseLastKnown = () => {
+    for (const pr of prs) {
+      const known = lastKnown.get(keyFor(pr.number));
+      if (known) Object.assign(pr, known);
+      applyPrPhase(pr);
+    }
+  };
 
   const data = await graphql<{
     rateLimit?: RateLimitNode;
     repository: { pullRequests: { nodes: Array<GqlPrNode | null> } } | null;
   }>(token, PR_LIST_QUERY, { owner, repo });
-  if (!data?.repository) return;
+  if (!data?.repository) return reuseLastKnown();
   noteBudget(data.rateLimit);
 
   const byNumber = new Map<number, GqlPrNode>();
@@ -168,10 +212,14 @@ export async function enrichPrsWithReviewState(
   }
 
   const needThreads: number[] = [];
-  const keyFor = (n: number) => `${owner}/${repo}#${n}`;
   for (const pr of prs) {
     const node = byNumber.get(pr.number);
-    if (!node) continue;
+    if (!node) {
+      // Past the enriched page: keep whatever was last known for it.
+      const known = lastKnown.get(keyFor(pr.number));
+      if (known) Object.assign(pr, known);
+      continue;
+    }
     pr.isDraft = node.isDraft;
     pr.updatedAt = node.updatedAt;
     pr.reviewDecision = asDecision(node.reviewDecision);
@@ -186,7 +234,11 @@ export async function enrichPrsWithReviewState(
       .map((n) => ({ login: n.author!.login, state: n.state }));
 
     const cached = threadCache.get(keyFor(pr.number));
-    if (cached && cached.updatedAt === node.updatedAt) {
+    if (
+      cached &&
+      cached.updatedAt === node.updatedAt &&
+      Date.now() - cached.ts < THREAD_CACHE_MAX_AGE_MS
+    ) {
       pr.unresolvedThreads = cached.unresolved;
     } else {
       needThreads.push(pr.number);
@@ -223,17 +275,28 @@ export async function enrichPrsWithReviewState(
       const node = byNumber.get(n);
       if (!entry || !node) continue;
       const unresolved = entry.reviewThreads.nodes.filter((t) => t && !t.isResolved).length;
-      threadCache.set(keyFor(n), { updatedAt: node.updatedAt, unresolved });
+      threadCache.set(keyFor(n), { updatedAt: node.updatedAt, unresolved, ts: Date.now() });
       const pr = prs.find((p) => p.number === n);
       if (pr) pr.unresolvedThreads = unresolved;
     }
   }
 
-  // Bound the cache to this repo's currently open PRs.
+  // A thread lookup that failed leaves `unresolvedThreads` null for a PR we
+  // had a count for — keep the old one rather than flapping to "not fetched".
+  for (const pr of prs) {
+    if (pr.unresolvedThreads === null) {
+      pr.unresolvedThreads = lastKnown.get(keyFor(pr.number))?.unresolvedThreads ?? null;
+    }
+    if (byNumber.has(pr.number)) lastKnown.set(keyFor(pr.number), reviewFieldsOf(pr));
+  }
+
+  // Bound both caches to this repo's currently open PRs.
   const live = new Set(prs.map((p) => keyFor(p.number)));
   const prefix = `${owner}/${repo}#`;
-  for (const key of threadCache.keys()) {
-    if (key.startsWith(prefix) && !live.has(key)) threadCache.delete(key);
+  for (const cache of [threadCache, lastKnown] as Array<Map<string, unknown>>) {
+    for (const key of cache.keys()) {
+      if (key.startsWith(prefix) && !live.has(key)) cache.delete(key);
+    }
   }
 
   for (const pr of prs) applyPrPhase(pr);

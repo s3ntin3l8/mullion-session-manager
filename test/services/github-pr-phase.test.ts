@@ -14,6 +14,7 @@ const base: PrPhaseInput = {
   mergeStateStatus: "CLEAN",
   reviewDecision: "APPROVED",
   requestedReviewers: [],
+  reviewers: [],
   ciStatus: "success",
 };
 
@@ -51,6 +52,20 @@ describe("derivePrPhase", () => {
       "review_pending",
     );
     expect(derivePrPhase({ ...base, reviewDecision: null })).toBe("ready_to_merge");
+  });
+
+  it("sees a changes-requested review even when no review rule makes reviewDecision null", () => {
+    expect(
+      derivePrPhase({
+        ...base,
+        reviewDecision: null,
+        reviewers: [{ state: "APPROVED" }, { state: "CHANGES_REQUESTED" }],
+      }),
+    ).toBe("changes_requested");
+    // An APPROVED decision from GitHub's own rollup wins over stale reviewers.
+    expect(derivePrPhase({ ...base, reviewers: [{ state: "CHANGES_REQUESTED" }] })).toBe(
+      "ready_to_merge",
+    );
   });
 
   it("treats a BLOCKED merge state as review_pending unless CI is the blocker", () => {
@@ -91,6 +106,12 @@ function snap(number: number, over: Partial<PrSnapshot> = {}): PrSnapshot {
 describe("diffPrSnapshots", () => {
   it("reports nothing when nothing changed", () => {
     expect(diffPrSnapshots(new Map([[1, snap(1)]]), [snap(1)])).toEqual([]);
+  });
+
+  it("does not treat GitHub finishing its mergeability computation as a change", () => {
+    const prev = new Map([[1, snap(1, { mergeable: "UNKNOWN" })]]);
+    expect(diffPrSnapshots(prev, [snap(1, { mergeable: null })])).toEqual([]);
+    expect(diffPrSnapshots(prev, [snap(1, { mergeable: "CONFLICTING" })])).toHaveLength(1);
   });
 
   it("reports opened, updated and closed PRs in that order", () => {

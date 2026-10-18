@@ -38,6 +38,9 @@ export interface PrPhaseInput {
   mergeStateStatus: string | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: readonly string[];
+  /** Latest opinionated review per reviewer (`reviewDecision` is null on a
+   *  repo with no required-review rule even when someone asked for changes). */
+  reviewers: readonly { state: string }[];
   ciStatus: GitHubCiStatus;
 }
 
@@ -50,7 +53,12 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   }
   if (pr.mergeable === "CONFLICTING") return "conflicts";
   if (pr.ciStatus === "failure") return "ci_failing";
-  if (pr.reviewDecision === "CHANGES_REQUESTED") return "changes_requested";
+  if (
+    pr.reviewDecision === "CHANGES_REQUESTED" ||
+    (pr.reviewDecision === null && pr.reviewers.some((r) => r.state === "CHANGES_REQUESTED"))
+  ) {
+    return "changes_requested";
+  }
   if (pr.reviewDecision === "REVIEW_REQUIRED") return "review_pending";
   // No review requirement configured (decision is null) but someone was
   // asked, or branch protection still reports the PR as blocked.
@@ -94,7 +102,9 @@ export function snapshotPr(pr: PrSnapshot): PrSnapshot {
     isDraft: pr.isDraft,
     ciStatus: pr.ciStatus,
     reviewDecision: pr.reviewDecision,
-    mergeable: pr.mergeable,
+    // UNKNOWN is GitHub still computing mergeability (right after a push);
+    // it flips to MERGEABLE/CONFLICTING moments later, so it isn't a change.
+    mergeable: pr.mergeable === "UNKNOWN" ? null : pr.mergeable,
     unresolvedThreads: pr.unresolvedThreads,
     commentCount: pr.commentCount,
     prPhase: pr.prPhase,
