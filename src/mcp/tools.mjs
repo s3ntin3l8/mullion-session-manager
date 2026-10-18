@@ -645,11 +645,11 @@ const reviewStatus = {
   name: "review_status",
   description:
     "Troubleshoot a review requested with request_review: returns the run's Hermes status " +
-    "(queued, running, completed, failed, cancelled, interrupted, not_found), the review " +
+    "(queued, running, stopping, completed, failed, cancelled, interrupted, unknown, not_found), the review " +
     "bot's reply or error, and whether the bot's review actually landed on the PR. Use it " +
     "when a requested review has not appeared after several minutes — not to poll in a loop. " +
     "Omit pr_number to use the open PR for the session's current branch. not_found means " +
-    "this Mullion has no run for the PR (never requested here, or the server restarted).",
+    "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",
   inputSchema: {
     type: "object",
     properties: {

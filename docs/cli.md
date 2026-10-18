@@ -428,7 +428,8 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   confirmation names the run id.
 - `review status [--pr <n>]` — troubleshoots a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
-  `interrupted`, or `not_found`), the review bot's reply or error, and whether
+  `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes
+  answered with something unreadable — retry later — or `not_found`), the review bot's reply or error, and whether
   a review from a bot account actually landed on the PR after the request
   (Hermes can report `completed` for a run that posted nothing, e.g. when it
   had no App credentials). `not_found` means this Mullion has no run for the
@@ -438,7 +439,8 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   session's run is refused (403). Operators can stop any tracked run from
   Settings → Integrations → Review relay → Recent reviews.
 
-All three are Local-host-project only.
+`review` and `review status` are local-host-project only; `review stop` takes a run id and
+does not look at the project.
 
 ### mcp
 
