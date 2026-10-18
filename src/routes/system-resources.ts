@@ -7,16 +7,8 @@ import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
-import {
-  inspectDockerStorage,
-  pruneDockerStorage,
-  type DockerPruneMode,
-} from "../services/docker-storage.js";
-import {
-  inspectTempStorage,
-  pruneTempStorage,
-  type TempPruneMode,
-} from "../services/temp-storage.js";
+import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
+import { inspectTempStorage, pruneTempStorage } from "../services/temp-storage.js";
 import { inspectCacheStorage, pruneCacheStorage } from "../services/cache-storage.js";
 import { inspectOpencodeStorage, pruneOpencodeStorage } from "../services/opencode-storage.js";
 import {
@@ -30,6 +22,13 @@ import { resolveRepoRef } from "../services/host-git.js";
 import { worktreeInUse } from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 import { createMeasuredProbe } from "../services/measured-probe.js";
+import {
+  CLEANUP_IN_PROGRESS,
+  createCleanupRunner,
+  type CleanupMode,
+  type CleanupStepPlan,
+  type CleanupStepResult,
+} from "../services/disk-cleanup-job.js";
 
 const STATS_CACHE_MS = 10_000;
 // `docker system df -v` is quick enough to keep fresh.
@@ -44,6 +43,10 @@ const REFRESH_QUERY = {
   schema: { querystring: { type: "object", properties: { refresh: { type: "string" } } } },
 };
 const PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
+// A cleanup only skips a source on a measurement this fresh. An older one (a
+// daemon that has since come up, opencode that has since exited) is ignored and
+// the source simply runs: each prune re-checks its own safety.
+const SKIP_DECISION_MAX_AGE_MS = 60_000;
 
 function databaseDirectory(databaseUrl: string): string {
   const dbPath = databaseUrl.replace(/^file:/, "");
@@ -166,192 +169,188 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   const docker = createMeasuredProbe(() => inspectDockerStorage(), {
     ttlMs: DOCKER_INSPECT_CACHE_MS,
   });
-
-  app.get<{ Querystring: { refresh?: string } }>(
-    "/api/storage/docker",
-    REFRESH_QUERY,
-    async (request) => docker.read({ refresh: refreshRequested(request.query) }),
-  );
-
-  app.post<{ Body?: { mode?: DockerPruneMode } }>(
-    "/api/storage/docker/prune",
-    {
-      config: { rateLimit: PRUNE_RATE_LIMIT },
-      schema: {
-        body: {
-          type: ["object", "null"],
-          properties: { mode: { type: "string", enum: ["safe", "aggressive"] } },
-          additionalProperties: false,
-        },
-      },
-    },
-    async (request, reply) => {
-      try {
-        const result = await pruneDockerStorage(request.body?.mode ?? "safe");
-        cached = null;
-        docker.invalidate();
-        return result;
-      } catch (error) {
-        if (error instanceof Error && error.message === "DOCKER_PRUNE_IN_PROGRESS") {
-          return reply.conflict("Docker cleanup is already running");
-        }
-        return reply.internalServerError(
-          error instanceof Error ? error.message : "Docker cleanup failed",
-        );
-      }
-    },
-  );
-
   const temp = createMeasuredProbe(
     () => inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) }),
     { ttlMs: SLOW_INSPECT_CACHE_MS },
   );
-
-  app.get<{ Querystring: { refresh?: string } }>(
-    "/api/storage/temp",
-    REFRESH_QUERY,
-    async (request) => temp.read({ refresh: refreshRequested(request.query) }),
-  );
-
-  app.post<{ Body?: { mode?: TempPruneMode } }>(
-    "/api/storage/temp/prune",
-    {
-      config: { rateLimit: PRUNE_RATE_LIMIT },
-      schema: {
-        body: {
-          type: ["object", "null"],
-          properties: { mode: { type: "string", enum: ["safe", "aggressive"] } },
-          additionalProperties: false,
-        },
-      },
-    },
-    async (request, reply) => {
-      try {
-        const result = await pruneTempStorage(request.body?.mode ?? "safe", {
-          claudeSessionsDirs: claudeSessionsDirs(app),
-        });
-        cached = null;
-        temp.invalidate();
-        return result;
-      } catch (error) {
-        if (error instanceof Error && error.message === "TEMP_PRUNE_IN_PROGRESS") {
-          return reply.conflict("Temp file cleanup is already running");
-        }
-        return reply.internalServerError(
-          error instanceof Error ? error.message : "Temp file cleanup failed",
-        );
-      }
-    },
-  );
-
   const opencode = createMeasuredProbe(() => inspectOpencodeStorage(), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
   });
-
-  app.get<{ Querystring: { refresh?: string } }>(
-    "/api/storage/opencode",
-    REFRESH_QUERY,
-    async (request) => opencode.read({ refresh: refreshRequested(request.query) }),
-  );
-
-  // No body: there is nothing a client can choose. The path is fixed server-side
-  // and the VACUUM is skipped whenever opencode has the database open.
-  app.post(
-    "/api/storage/opencode/prune",
-    { config: { rateLimit: PRUNE_RATE_LIMIT } },
-    async (_request, reply) => {
-      try {
-        const result = await pruneOpencodeStorage();
-        cached = null;
-        opencode.invalidate();
-        return result;
-      } catch (error) {
-        if (error instanceof Error && error.message === "OPENCODE_PRUNE_IN_PROGRESS") {
-          return reply.conflict("opencode database cleanup is already running");
-        }
-        return reply.internalServerError(
-          error instanceof Error ? error.message : "opencode database cleanup failed",
-        );
-      }
-    },
-  );
-
   const worktrees = createMeasuredProbe(() => inspectDevWorktrees(devWorktreeOptions()), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
   });
-
-  app.get<{ Querystring: { refresh?: string } }>(
-    "/api/storage/worktrees",
-    REFRESH_QUERY,
-    async (request) => worktrees.read({ refresh: refreshRequested(request.query) }),
-  );
-
-  // No body: which worktrees are stale is decided here, from git and GitHub,
-  // never from the client.
-  app.post(
-    "/api/storage/worktrees/prune",
-    { config: { rateLimit: PRUNE_RATE_LIMIT } },
-    async (_request, reply) => {
-      try {
-        const result = await pruneDevWorktrees(devWorktreeOptions());
-        cached = null;
-        worktrees.invalidate();
-        return result;
-      } catch (error) {
-        if (error instanceof Error && error.message === "DEV_WORKTREE_PRUNE_IN_PROGRESS") {
-          return reply.conflict("Developer worktree cleanup is already running");
-        }
-        return reply.internalServerError(
-          error instanceof Error ? error.message : "Developer worktree cleanup failed",
-        );
-      }
-    },
-  );
-
   const caches = createMeasuredProbe(() => inspectCacheStorage(), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
   });
 
-  app.get<{ Querystring: { refresh?: string } }>(
-    "/api/storage/caches",
-    REFRESH_QUERY,
-    async (request) => caches.read({ refresh: refreshRequested(request.query) }),
-  );
+  const probeRoutes = [
+    ["docker", docker],
+    ["temp", temp],
+    ["opencode", opencode],
+    ["worktrees", worktrees],
+    ["caches", caches],
+  ] as const;
+  for (const [name, probe] of probeRoutes) {
+    app.get<{ Querystring: { refresh?: string } }>(
+      `/api/storage/${name}`,
+      REFRESH_QUERY,
+      async (request) => probe.read({ refresh: refreshRequested(request.query) }),
+    );
+  }
 
-  // Both sides must agree: the client sends the ids it is showing as ticked
-  // (settings are saved on a short debounce, so the stored set can briefly lag
-  // an untick), and only ids that are ALSO in the stored opt-in set are
-  // emptied. Neither a request nor a stale store can widen the other.
-  app.post<{ Body?: { cacheDirs?: string[] } | null }>(
-    "/api/storage/caches/prune",
+  // A source's own "already running" guard surfaces as a code, not a sentence.
+  const PRUNE_ERRORS: Record<string, string> = {
+    DOCKER_PRUNE_IN_PROGRESS: "Docker cleanup is already running",
+    TEMP_PRUNE_IN_PROGRESS: "Temp file cleanup is already running",
+    CACHE_PRUNE_IN_PROGRESS: "Cache cleanup is already running",
+    OPENCODE_PRUNE_IN_PROGRESS: "opencode database cleanup is already running",
+    DEV_WORKTREE_PRUNE_IN_PROGRESS: "Developer worktree cleanup is already running",
+  };
+
+  // Runs one source's prune and drops its measurement afterwards, success or
+  // not: the figures on screen are stale either way.
+  const step = (
+    probe: { invalidate(): void },
+    prune: () => Promise<CleanupStepResult>,
+  ): (() => Promise<CleanupStepResult>) => {
+    return async () => {
+      try {
+        return await prune();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Cleanup failed";
+        throw new Error(PRUNE_ERRORS[message] ?? message, { cause: error });
+      } finally {
+        probe.invalidate();
+      }
+    };
+  };
+
+  // Which sources take part, and why one doesn't, is decided here from what the
+  // server has already measured (never from the client, and never by starting a
+  // new measurement). A source nobody has measured yet still runs: each prune
+  // re-checks its own safety.
+  function cleanupPlans(mode: CleanupMode, requestedCacheDirs?: string[]): CleanupStepPlan[] {
+    const plans: CleanupStepPlan[] = [];
+    const dockerSeen = docker.peek(SKIP_DECISION_MAX_AGE_MS);
+    plans.push({
+      source: "docker",
+      label: "Docker",
+      skip:
+        dockerSeen && !dockerSeen.available
+          ? `Docker unavailable: ${dockerSeen.error ?? "not installed, or permission denied"}`
+          : null,
+      run: step(docker, () => pruneDockerStorage(mode)),
+    });
+    const tempSeen = temp.peek(SKIP_DECISION_MAX_AGE_MS);
+    plans.push({
+      source: "temp",
+      label: "Temp files",
+      skip:
+        tempSeen && !tempSeen.available ? `Temp files unavailable: ${tempSeen.error ?? ""}` : null,
+      run: step(temp, () =>
+        pruneTempStorage(mode, { claudeSessionsDirs: claudeSessionsDirs(app) }),
+      ),
+    });
+    if (mode !== "aggressive") return plans;
+
+    // Both sides must agree: the client sends the ids it is showing as ticked
+    // (settings are saved on a short debounce, so the stored set can briefly lag
+    // an untick), and only ids that are ALSO in the stored opt-in set are
+    // emptied. Neither a request nor a stale store can widen the other.
+    const stored = getStoredSettings(app.db).diskCleanup.cacheDirs;
+    const cacheIds =
+      requestedCacheDirs === undefined
+        ? stored
+        : stored.filter((id) => requestedCacheDirs.includes(id));
+    if (cacheIds.length > 0) {
+      plans.push({
+        source: "caches",
+        label: "Caches",
+        skip: null,
+        run: step(caches, () => pruneCacheStorage(cacheIds)),
+      });
+    }
+    // The VACUUM is skipped whenever opencode has the database open; the prune
+    // re-checks that itself, so this only decides what to tell the user.
+    const opencodeSeen = opencode.peek(SKIP_DECISION_MAX_AGE_MS);
+    if (!opencodeSeen || (opencodeSeen.available && opencodeSeen.reclaimableBytes > 0)) {
+      const blocked = !opencodeSeen
+        ? null
+        : opencodeSeen.compacting
+          ? "It is already being compacted"
+          : opencodeSeen.inUse
+            ? "opencode is running"
+            : opencodeSeen.holdersUnknown
+              ? "Can't tell whether opencode is running"
+              : null;
+      plans.push({
+        source: "opencode",
+        label: "opencode database",
+        skip: blocked,
+        // Freeing nothing with an explanation means it chose not to act (opencode
+        // is running, nothing to reclaim, ...): show that as the reason, not as
+        // a quiet "freed 0 B".
+        run: step(opencode, async () => {
+          const result = await pruneOpencodeStorage();
+          return result.reclaimedBytes === 0 && result.output && !result.error
+            ? { reclaimedBytes: 0, skipped: result.output }
+            : result;
+        }),
+      });
+    }
+    // Always, whatever the preview says: it may be loading, failed, or as of the
+    // last fetch, and fetching is the first thing the cleanup does. Which
+    // worktrees are stale is decided from git and GitHub, never by the client.
+    plans.push({
+      source: "worktrees",
+      label: "Developer worktrees",
+      skip: null,
+      run: step(worktrees, () => pruneDevWorktrees(devWorktreeOptions())),
+    });
+    return plans;
+  }
+
+  const cleanup = createCleanupRunner({
+    onFinished: () => {
+      // Free space changed whatever each source reported.
+      cached = null;
+    },
+  });
+
+  app.post<{ Body?: { mode?: CleanupMode; cacheDirs?: string[] } | null }>(
+    "/api/storage/cleanup",
     {
       config: { rateLimit: PRUNE_RATE_LIMIT },
       schema: {
         body: {
           type: ["object", "null"],
-          properties: { cacheDirs: { type: "array", items: { type: "string" }, maxItems: 20 } },
+          properties: {
+            mode: { type: "string", enum: ["safe", "aggressive"] },
+            cacheDirs: { type: "array", items: { type: "string" }, maxItems: 20 },
+          },
           additionalProperties: false,
         },
       },
     },
     async (request, reply) => {
+      // Before building the plan (settings reads, measurement lookups): a second
+      // click or tab shouldn't pay for work that is about to be refused.
+      if (cleanup.status().state === "running")
+        return reply.conflict("A cleanup is already running");
       try {
-        const stored = getStoredSettings(app.db).diskCleanup.cacheDirs;
-        const requested = request.body?.cacheDirs;
-        const ids =
-          requested === undefined ? stored : stored.filter((id) => requested.includes(id));
-        const result = await pruneCacheStorage(ids);
-        cached = null;
-        caches.invalidate();
-        return result;
-      } catch (error) {
-        if (error instanceof Error && error.message === "CACHE_PRUNE_IN_PROGRESS") {
-          return reply.conflict("Cache cleanup is already running");
-        }
-        return reply.internalServerError(
-          error instanceof Error ? error.message : "Cache cleanup failed",
+        const job = cleanup.start(
+          request.body?.mode ?? "safe",
+          cleanupPlans(request.body?.mode ?? "safe", request.body?.cacheDirs),
         );
+        return reply.code(202).send(job);
+      } catch (error) {
+        if (error instanceof Error && error.message === CLEANUP_IN_PROGRESS) {
+          return reply.conflict("A cleanup is already running");
+        }
+        throw error;
       }
     },
   );
+
+  app.get("/api/storage/cleanup", async () => cleanup.status());
 }

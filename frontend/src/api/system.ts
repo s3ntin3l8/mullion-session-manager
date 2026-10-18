@@ -20,7 +20,8 @@ import type {
   OpencodeStorageStatus,
   Measured,
   DevWorktreeStatus,
-  PruneResult,
+  CleanupJob,
+  CleanupStatus,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
 
@@ -87,42 +88,29 @@ export const systemApi = {
     request<SystemStats>(`/api/system-stats${refresh ? "?refresh=1" : ""}`),
   getDockerStorage: (refresh?: boolean) =>
     request<Measured<DockerStorageStatus>>(`/api/storage/docker${refresh ? "?refresh=1" : ""}`),
-  pruneDockerStorage: (mode: DockerPruneMode = "safe") =>
-    request<PruneResult>("/api/storage/docker/prune", {
-      method: "POST",
-      body: JSON.stringify({ mode }),
-    }),
 
   getTempStorage: (refresh?: boolean) =>
     request<Measured<TempStorageStatus>>(`/api/storage/temp${refresh ? "?refresh=1" : ""}`),
-  pruneTempStorage: (mode: DockerPruneMode = "safe") =>
-    request<PruneResult>("/api/storage/temp/prune", {
-      method: "POST",
-      body: JSON.stringify({ mode }),
-    }),
 
   getCacheStorage: (refresh?: boolean) =>
     request<Measured<CacheStorageStatus>>(`/api/storage/caches${refresh ? "?refresh=1" : ""}`),
-  // The server empties only ids that are in this list AND in its saved
-  // settings.diskCleanup.cacheDirs (see the route for why both).
-  pruneCacheStorage: (cacheDirs: string[]) =>
-    request<PruneResult>("/api/storage/caches/prune", {
-      method: "POST",
-      body: JSON.stringify({ cacheDirs }),
-    }),
 
   getOpencodeStorage: (refresh?: boolean) =>
     request<Measured<OpencodeStorageStatus>>(`/api/storage/opencode${refresh ? "?refresh=1" : ""}`),
-  // Nothing to choose: the server compacts its own opencode database, and only
-  // while opencode isn't running.
-  pruneOpencodeStorage: () =>
-    request<PruneResult>("/api/storage/opencode/prune", { method: "POST" }),
 
   getDevWorktrees: (refresh?: boolean) =>
     request<Measured<DevWorktreeStatus>>(`/api/storage/worktrees${refresh ? "?refresh=1" : ""}`),
-  // Nothing to choose: the server works out which worktrees are stale itself,
-  // and removes only clean, unused ones (their branches are kept).
-  pruneDevWorktrees: () => request<PruneResult>("/api/storage/worktrees/prune", { method: "POST" }),
+
+  // Starts a cleanup in the background and returns at once; the server decides
+  // which sources take part. Only the ticked cache ids that are ALSO in the
+  // saved settings are emptied (settings are saved on a short debounce, so the
+  // stored set can briefly lag an untick). 409 means one is already running.
+  startCleanup: (mode: DockerPruneMode, cacheDirs?: string[]) =>
+    request<CleanupJob>("/api/storage/cleanup", {
+      method: "POST",
+      body: JSON.stringify({ mode, ...(cacheDirs ? { cacheDirs } : {}) }),
+    }),
+  getCleanupStatus: () => request<CleanupStatus>("/api/storage/cleanup"),
 
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),

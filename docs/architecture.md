@@ -172,7 +172,8 @@ way as a namespaced one.
   `services/claude-scratch.ts`) and opt-in `~/.cache`
   (`services/cache-storage.ts`) cleanup tiers, plus a guarded `VACUUM` of
   opencode's own database (`services/opencode-storage.ts`) and stale developer
-  worktrees (`services/dev-worktrees.ts`); see `docs/disk-cleanup.md`),
+  worktrees (`services/dev-worktrees.ts`), all run as one background job
+  (`services/disk-cleanup-job.ts`) the page polls; see `docs/disk-cleanup.md`),
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals

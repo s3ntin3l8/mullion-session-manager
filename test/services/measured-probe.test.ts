@@ -110,6 +110,31 @@ describe("createMeasuredProbe", () => {
     expect(fn).toHaveBeenCalledTimes(1);
   });
 
+  it("peeks at held figures without starting or waiting for a run", async () => {
+    const fn = vi.fn<() => Promise<{ bytes: number }>>().mockResolvedValue({ bytes: 4 });
+    const probe = createMeasuredProbe(fn, { ttlMs: 1000 });
+    expect(probe.peek()).toBeUndefined();
+    expect(fn).not.toHaveBeenCalled();
+    await probe.read();
+    expect(probe.peek()).toEqual({ bytes: 4 });
+    probe.invalidate();
+    expect(probe.peek()).toBeUndefined();
+  });
+
+  it("ignores held figures older than the age a peek allows", async () => {
+    let clock = 0;
+    const probe = createMeasuredProbe(async () => ({ bytes: 4 }), {
+      ttlMs: 10_000,
+      now: () => clock,
+    });
+    await probe.read();
+    clock = 500;
+    expect(probe.peek(1000)).toEqual({ bytes: 4 });
+    clock = 1500;
+    expect(probe.peek(1000)).toBeUndefined();
+    expect(probe.peek()).toEqual({ bytes: 4 });
+  });
+
   it("reports a failed run, keeps earlier figures, and retries only after the TTL", async () => {
     let clock = 0;
     const fn = vi

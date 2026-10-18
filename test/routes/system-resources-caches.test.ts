@@ -15,71 +15,13 @@ vi.mock("../../src/services/cache-storage.js", async (importOriginal) => ({
 import { buildTestApp } from "../helpers/app.js";
 
 describe("/api/storage/caches", () => {
-  it("empties only ids that are both requested and saved, so neither side can widen the other", async () => {
-    const app = await buildTestApp();
-    await app.inject({
-      method: "PATCH",
-      url: "/api/settings",
-      payload: { diskCleanup: { cacheDirs: ["pip", "../../etc", "go-build"] } },
-    });
-    // The client just unticked go-build (its PATCH may still be debounced) and
-    // asks for pip plus a cache that was never opted in.
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/storage/caches/prune",
-      payload: { cacheDirs: ["pip", "huggingface"] },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip"]);
-    expect(res.json()).toEqual({ output: "", reclaimedBytes: 9 });
-
-    // No body at all: fall back to the saved set.
-    await app.inject({ method: "POST", url: "/api/storage/caches/prune" });
-    expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip", "go-build"]);
-  });
-
-  it("rejects an oversized prune body", async () => {
-    const app = await buildTestApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/storage/caches/prune",
-      payload: { cacheDirs: Array.from({ length: 21 }, () => "pip") },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
-  it("prunes nothing when nothing is opted in", async () => {
-    const app = await buildTestApp();
-    // The test DB is shared across tests in this file, so reset explicitly.
-    await app.inject({
-      method: "PATCH",
-      url: "/api/settings",
-      payload: { diskCleanup: { cacheDirs: [] } },
-    });
-    await app.inject({ method: "POST", url: "/api/storage/caches/prune" });
-    expect(pruneCacheStorage).toHaveBeenLastCalledWith([]);
-  });
-
-  it("caches inspection across polls and refreshes it after a prune", async () => {
+  it("caches inspection across polls, and re-measures on refresh", async () => {
     inspectCacheStorage.mockClear();
     const app = await buildTestApp();
     await app.inject({ method: "GET", url: "/api/storage/caches" });
     await app.inject({ method: "GET", url: "/api/storage/caches" });
     expect(inspectCacheStorage).toHaveBeenCalledTimes(1);
-    await app.inject({ method: "POST", url: "/api/storage/caches/prune" });
-    await app.inject({ method: "GET", url: "/api/storage/caches" });
+    await app.inject({ method: "GET", url: "/api/storage/caches?refresh=1" });
     expect(inspectCacheStorage).toHaveBeenCalledTimes(2);
-  });
-
-  it("maps an in-progress prune to 409 and other failures to 500", async () => {
-    const app = await buildTestApp();
-    pruneCacheStorage.mockRejectedValueOnce(new Error("CACHE_PRUNE_IN_PROGRESS"));
-    expect(
-      (await app.inject({ method: "POST", url: "/api/storage/caches/prune" })).statusCode,
-    ).toBe(409);
-    pruneCacheStorage.mockRejectedValueOnce(new Error("boom"));
-    expect(
-      (await app.inject({ method: "POST", url: "/api/storage/caches/prune" })).statusCode,
-    ).toBe(500);
   });
 });
