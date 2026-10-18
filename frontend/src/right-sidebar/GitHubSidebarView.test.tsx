@@ -37,6 +37,7 @@ const prsStatus = (prs: GitHubPROrWithChecks[]): GitHubPRsStatus => ({
 const status = (over: Partial<GitHubStatus> = {}): GitHubStatus => ({
   repo: { owner: "o", repo: "r", htmlUrl: "https://github.com/o/r" },
   openIssues: 3,
+  issuesHidden: false,
   openPRs: 1,
   pulls: [],
   issues: [],

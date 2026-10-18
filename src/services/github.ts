@@ -99,6 +99,10 @@ export interface GitHubRepoStatus {
   openPRs: number;
   pulls: GitHubIssueOrPr[];
   issues: GitHubIssueOrPr[];
+  // True when the repo has open issues but the `/issues` list returned none:
+  // the token can see PRs but not issues (a GitHub App token minted without
+  // the Issues permission), so the empty list must not read as "no issues".
+  issuesHidden: boolean;
   actionsRuns: GitHubActionsRun[];
   ciStatus: GitHubCiStatus;
 }
@@ -159,6 +163,8 @@ interface GitHubIssueApiItem {
 
 interface GitHubRepoApiResponse {
   default_branch?: string;
+  // Open issues AND open PRs combined — GitHub counts a PR as an issue here.
+  open_issues_count?: number;
 }
 
 interface GitHubWorkflowRunApiItem {
@@ -203,19 +209,35 @@ async function fetchActionsRuns(
   owner: string,
   repo: string,
 ): Promise<GitHubActionsRun[]> {
+  return (await fetchRepoInfoAndRuns(token, owner, repo)).runs;
+}
+
+/**
+ * `fetchActionsRuns`'s body, also surfacing the repo-info call's
+ * `open_issues_count` (issues + PRs combined) — the call is already made for
+ * `default_branch`, so the count costs nothing extra. `openIssuesAndPrs` is
+ * `null` when the repo-info lookup failed. Never throws.
+ */
+async function fetchRepoInfoAndRuns(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<{ runs: GitHubActionsRun[]; openIssuesAndPrs: number | null }> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
   };
+  let openIssuesAndPrs: number | null = null;
 
   try {
     const repoRes = await githubApiFetch(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
       { headers },
     );
-    if (!repoRes.ok) return [];
+    if (!repoRes.ok) return { runs: [], openIssuesAndPrs };
     const repoData = (await repoRes.json()) as GitHubRepoApiResponse;
+    openIssuesAndPrs = repoData.open_issues_count ?? null;
     const defaultBranch = repoData.default_branch;
-    if (!defaultBranch) return [];
+    if (!defaultBranch) return { runs: [], openIssuesAndPrs };
 
     // 100 is GitHub's own max per_page — a repo with more than 100 distinct
     // workflow names on its default branch would still undercount here, but
@@ -226,7 +248,7 @@ async function fetchActionsRuns(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?branch=${encodeURIComponent(defaultBranch)}&per_page=100`,
       { headers },
     );
-    if (!runsRes.ok) return [];
+    if (!runsRes.ok) return { runs: [], openIssuesAndPrs };
     const runsData = (await runsRes.json()) as { workflow_runs?: GitHubWorkflowRunApiItem[] };
 
     const seen = new Set<string>();
@@ -245,9 +267,9 @@ async function fetchActionsRuns(
         headSha: run.head_sha,
       });
     }
-    return latest;
+    return { runs: latest, openIssuesAndPrs };
   } catch {
-    return [];
+    return { runs: [], openIssuesAndPrs };
   }
 }
 
@@ -311,6 +333,34 @@ export function getCachedDefaultBranchCi(owner: string, repo: string): GitHubCiS
 }
 
 /**
+ * The authoritative issue count is the repo's `open_issues_count` minus the
+ * open PRs (GitHub counts a PR as an issue there), not the length of the
+ * `/issues` list: that list is capped at one page shared with PRs, and a
+ * token without the Issues permission gets only PRs back. Falls back to the
+ * list length when the count is unavailable — and, if that left no issues
+ * but PR entries did come back (the signature of an Issues-less token), flags
+ * `issuesHidden` rather than assert "No open issues" it can't verify.
+ */
+function countOpenIssues(
+  listed: GitHubIssueOrPr[],
+  openPRs: number,
+  openIssuesAndPrs: number | null,
+  listFull: boolean,
+): { openIssues: number; issuesHidden: boolean } {
+  // A full page means `openPRs` (and the issues list) are capped, so the
+  // subtraction would be wrong and an empty issue list proves nothing — fall
+  // back to what was listed and never claim the issues are hidden.
+  if (listFull) return { openIssues: listed.length, issuesHidden: false };
+  if (openIssuesAndPrs === null) {
+    // Repo-info lookup failed (e.g. a secondary rate limit): the count is
+    // unknown, so an empty issue list next to listed PRs can't be trusted.
+    return { openIssues: listed.length, issuesHidden: listed.length === 0 && openPRs > 0 };
+  }
+  const openIssues = Math.max(openIssuesAndPrs - openPRs, listed.length);
+  return { openIssues, issuesHidden: listed.length === 0 && openIssues > 0 };
+}
+
+/**
  * Fetches open issues *and* PRs for a repo in a single call — GitHub's
  * `/issues` endpoint returns both (a PR is also an "issue"; entries with a
  * `pull_request` field are PRs) — rather than one call each to `/issues`
@@ -335,6 +385,9 @@ export async function getRepoStatus(
   token: string,
   owner: string,
   repo: string,
+  // Token for the `/issues` list only — an App token minted without the
+  // Issues permission gets PRs back and no issues. Defaults to `token`.
+  issuesToken: string = token,
 ): Promise<GitHubRepoStatus> {
   const key = `${owner}/${repo}`;
   const cached = cache.get(key);
@@ -343,7 +396,7 @@ export async function getRepoStatus(
   }
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${issuesToken}`,
   };
   if (cached?.etag) headers["If-None-Match"] = cached.etag;
 
@@ -379,11 +432,11 @@ export async function getRepoStatus(
     (item.pull_request ? pulls : issues).push(entry);
   }
 
-  const actionsRuns = await fetchActionsRuns(token, owner, repo);
+  const { runs: actionsRuns, openIssuesAndPrs } = await fetchRepoInfoAndRuns(token, owner, repo);
 
   const data: GitHubRepoStatus = {
     repo: { owner, repo, htmlUrl: `https://github.com/${owner}/${repo}` },
-    openIssues: issues.length,
+    ...countOpenIssues(issues, pulls.length, openIssuesAndPrs, items.length >= 100),
     openPRs: pulls.length,
     pulls,
     issues,

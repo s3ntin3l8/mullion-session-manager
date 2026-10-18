@@ -191,7 +191,7 @@ Configuring one:
    never the private key itself, which no endpoint echoes back.
 
 Once configured, a call for `owner/repo` mints a short-lived (~1h)
-installation token scoped to exactly that repository and one of three
+installation token scoped to exactly that repository and one of four
 permission sets — never the App's full installation grant, and never bound
 to a single issue (a GitHub App installation token can't scope to an
 individual issue, only a repository):
@@ -213,14 +213,29 @@ individual issue, only a repository):
   what the App is allowed to hold — only widening that constant (a code
   change) fixes it. See [`tasks.md`](tasks.md#auto-approve) for the full
   mechanics.
+- **issues** — Issues, Pull requests, Metadata (all read) — used only to
+  list a repo's open issues for the sidebar's Issues count (`GET
+/repos/{owner}/{repo}/issues`). A token without Issues access gets only
+  the PRs back, which is why this isn't folded into **read**: adding
+  `issues` there would 422 every read mint on installs not yet re-approved
+  with Issues. Pull requests rides along because that same call also
+  supplies the open-PR entries. Until the App registration is re-approved
+  with Issues read, this scope's mint fails. `resolveGitHubToken` then returns
+  the shared PAT if one is configured (so the list still populates), and
+  otherwise the call falls back to the read token, which can't see issues:
+  the sidebar then shows "The GitHub token can't list issues". To fix that,
+  re-approve the App's new permission in its GitHub settings (Settings →
+  Developer settings → GitHub Apps → Permissions & events → Repository
+  permissions → Issues: Read-only), then accept the update on the
+  installation.
 - **dispatch** (#744) — Actions: write, Metadata — used only for the
   release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
-  which needs `actions: write`, a permission neither of the other two sets
+  which needs `actions: write`, a permission none of the other three sets
   grants. Deliberately its own set rather than folded into `write`: Task
   Master's ordinary issue/PR/push writes have no business holding an
   Actions-write scope.
 
-The three are minted and cached independently, so an installation that only
+The four are minted and cached independently, so an installation that only
 granted the write set (e.g. one approved before Actions/Metadata were added
 to the App definition) still gets Task Master's writes covered while the
 read- and dispatch-scoped calls fall back to the PAT. If the App isn't

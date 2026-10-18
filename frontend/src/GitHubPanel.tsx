@@ -647,7 +647,12 @@ export function GitHubPanel({
       {status && (
         <div className="github-panel-section">
           <div className="github-panel-section-title">Issues ({status.openIssues})</div>
-          {status.issues.length === 0 && (
+          {status.issuesHidden && (
+            <div className="github-panel-empty-row">
+              The GitHub token can't list issues — grant it Issues access
+            </div>
+          )}
+          {status.issues.length === 0 && !status.issuesHidden && (
             <div className="github-panel-empty-row">No open issues</div>
           )}
           {status.issues.map((issue) => (

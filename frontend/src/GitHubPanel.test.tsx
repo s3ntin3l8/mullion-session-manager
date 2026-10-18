@@ -27,6 +27,7 @@ const RELEASE_NOT_CONFIGURED: ProjectReleaseStatus = {
 const STATUS: GitHubStatus = {
   repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },
   openIssues: 1,
+  issuesHidden: false,
   openPRs: 1,
   pulls: [
     {
@@ -212,6 +213,21 @@ describe("GitHubPanel", () => {
 
     expect(await screen.findByText("Pull requests (0)")).toBeInTheDocument();
     expect(screen.getByText("No open issues")).toBeInTheDocument();
+  });
+
+  it("explains a hidden issue list instead of claiming there are no issues", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: { ...STATUS, openIssues: 47, issues: [], issuesHidden: true },
+        prs: PRS_LOADED,
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 6 }} />);
+
+    expect(await screen.findByText("Issues (47)")).toBeInTheDocument();
+    expect(screen.getByText(/can't list issues/)).toBeInTheDocument();
+    expect(screen.queryByText("No open issues")).not.toBeInTheDocument();
   });
 
   it("omits the Actions section entirely when there are no runs", async () => {

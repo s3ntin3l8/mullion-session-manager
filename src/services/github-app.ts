@@ -213,7 +213,7 @@ export interface InstallationToken {
   expiresAt: Date;
 }
 
-// #489 (round 2, issue #489 remaining scope) — three permission sets, not
+// #489 (round 2, issue #489 remaining scope) — four permission sets, not
 // one widened one. Task Master's write paths need exactly WRITE_PERMISSIONS
 // and nothing more; the base integration's read-only surfaces (repo-status
 // widget, PR/CI poller) need Actions/PRs read access WRITE_PERMISSIONS
@@ -248,6 +248,23 @@ export const DISPATCH_PERMISSIONS = {
   actions: "write",
   metadata: "read",
 } as const;
+// A fourth, narrow set for listing issues in the repo-status widget.
+// `/issues` returns only PRs to a token without Issues access (the sidebar
+// showed "Issues (0)" for every repo), but folding `issues: read` into
+// READ_PERMISSIONS would 422 the whole read-token mint — and push every
+// read surface to the PAT — on any installation not yet re-approved with
+// Issues. A dedicated scope fails alone: resolveGitHubToken falls back to
+// the PAT for just this call, and the read token keeps working.
+//
+// `pull_requests: read` rides along because the same `/issues` call also
+// supplies the PR entries (items with `pull_request`) that feed the open-PR
+// count and list: with Issues alone GitHub filters those out and the PR side
+// of the sidebar would empty.
+export const ISSUES_READ_PERMISSIONS = {
+  issues: "read",
+  pull_requests: "read",
+  metadata: "read",
+} as const;
 // #737 — the reviewer App's permission set. Only `pull_requests: write`
 // (needed to submit a review at all, including a gating `APPROVE`/
 // `REQUEST_CHANGES` event) and `metadata: read` (GitHub's own minimum for
@@ -260,7 +277,7 @@ export const REVIEW_PERMISSIONS = {
   metadata: "read",
 } as const;
 
-export type InstallationTokenScope = "write" | "read" | "dispatch" | "review";
+export type InstallationTokenScope = "write" | "read" | "issues" | "dispatch" | "review";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -268,6 +285,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return WRITE_PERMISSIONS;
     case "read":
       return READ_PERMISSIONS;
+    case "issues":
+      return ISSUES_READ_PERMISSIONS;
     case "dispatch":
       return DISPATCH_PERMISSIONS;
     case "review":

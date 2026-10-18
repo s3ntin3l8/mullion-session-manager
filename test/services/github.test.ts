@@ -49,6 +49,7 @@ function mockGithubApi(opts: {
   runs?: unknown[];
   repoInfoOk?: boolean;
   runsOk?: boolean;
+  openIssuesCount?: number;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
@@ -61,7 +62,14 @@ function mockGithubApi(opts: {
       return Promise.resolve(
         jsonResponse(
           200,
-          opts.defaultBranch === null ? {} : { default_branch: opts.defaultBranch ?? "main" },
+          opts.defaultBranch === null
+            ? {}
+            : {
+                default_branch: opts.defaultBranch ?? "main",
+                ...(opts.openIssuesCount === undefined
+                  ? {}
+                  : { open_issues_count: opts.openIssuesCount }),
+              },
         ),
       );
     }
@@ -102,6 +110,59 @@ describe("getRepoStatus", () => {
       repo: "split-repo",
       htmlUrl: "https://github.com/split-owner/split-repo",
     });
+  });
+
+  it("counts issues from open_issues_count minus PRs, and flags a PR-only list as hidden", async () => {
+    // A token without the Issues permission: /issues returns only PRs while
+    // the repo-info count (issues + PRs) shows 47 issues + 1 PR.
+    fetchMock = mockGithubApi({ issues: [PR], openIssuesCount: 48 });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("tok", "hidden-owner", "hidden-repo");
+    expect(status.openIssues).toBe(47);
+    expect(status.issues).toEqual([]);
+    expect(status.issuesHidden).toBe(true);
+  });
+
+  it("flags issuesHidden when the count lookup fails and only PRs came back", async () => {
+    // Repo-info call fails (e.g. secondary rate limit) -> count unknown; a
+    // PR-only list is the Issues-less-token signature, so don't claim "none".
+    fetchMock = mockGithubApi({ issues: [PR], repoInfoOk: false });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("tok", "nocount-owner", "nocount-repo");
+    expect(status.issues).toEqual([]);
+    expect(status.issuesHidden).toBe(true);
+  });
+
+  it("does not flag issuesHidden when issues were listed", async () => {
+    fetchMock = mockGithubApi({ issues: [ISSUE, PR], openIssuesCount: 2 });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("tok", "visible-owner", "visible-repo");
+    expect(status.openIssues).toBe(1);
+    expect(status.issuesHidden).toBe(false);
+  });
+
+  it("lists issues with the dedicated issues token, everything else with the main one", async () => {
+    // The issues-scope token sees issues AND PRs in the one /issues call, so
+    // the PR list/count must stay populated when it replaces the main token.
+    fetchMock = mockGithubApi({ issues: [ISSUE, PR], openIssuesCount: 2 });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("main-tok", "tok-owner", "tok-repo", "issues-tok");
+    expect(status.openPRs).toBe(1);
+    expect(status.pulls).toHaveLength(1);
+    expect(status.openIssues).toBe(1);
+    const authFor = (suffix: string) =>
+      fetchMock.mock.calls.find(([u]) => String(u).includes(suffix))?.[1]?.headers?.Authorization;
+    expect(authFor("/issues?")).toBe("Bearer issues-tok");
+    expect(authFor("/tok-repo/actions/runs")).toBe("Bearer main-tok");
+  });
+
+  it("never claims issues are hidden when the list page is full (capped counts)", async () => {
+    const prs = Array.from({ length: 100 }, (_, i) => ({ ...PR, number: 1000 + i }));
+    fetchMock = mockGithubApi({ issues: prs, openIssuesCount: 150 });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("tok", "full-owner", "full-repo");
+    expect(status.issuesHidden).toBe(false);
+    expect(status.openIssues).toBe(0);
   });
 
   it("sends a bearer token, User-Agent, and Accept header", async () => {
