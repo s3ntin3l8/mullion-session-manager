@@ -291,6 +291,17 @@ describe("/api/storage/cleanup", () => {
       expect(pruneTempStorage).not.toHaveBeenCalled();
     });
 
+    it("gives the skipped temp step a reason when the scan reported none", async () => {
+      inspectTempStorage.mockResolvedValueOnce({ available: false });
+      const app = await buildTestApp();
+      await app.inject({ method: "GET", url: "/api/storage/temp" });
+      const { job } = await runCleanup(app);
+      expect(step(job, "temp")).toMatchObject({
+        state: "skipped",
+        note: "Temp files unavailable: could not be scanned",
+      });
+    });
+
     it.each([
       ["opencode is running", { inUse: true }],
       ["Can't tell whether opencode is running", { holdersUnknown: true }],

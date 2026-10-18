@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api/index.js";
+import { api, ApiError, RateLimitedError } from "../api/index.js";
 import type { CleanupJob, DockerPruneMode } from "../api/index.js";
 import { usePolling } from "../hooks/usePolling.js";
 
@@ -64,6 +64,12 @@ export function useCleanupJob(onFinished: () => void) {
       .then(apply, (cause: unknown) => {
         // 409: another tab (or an earlier click) already started one. Join it.
         if (cause instanceof ApiError && cause.statusCode === 409) return load();
+        if (cause instanceof RateLimitedError) {
+          setError(
+            `Too many cleanup requests. Try again in ${Math.max(1, Math.ceil(cause.retryAfterMs / 1000))} s.`,
+          );
+          return;
+        }
         setError(cause instanceof ApiError ? cause.message : "Could not start the cleanup.");
       })
       .finally(() => setStartingMode(null));

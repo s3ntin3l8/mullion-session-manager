@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import {
   api,
   ApiError,
+  RateLimitedError,
   type DockerStorageStatus,
   type SystemStats,
   type DevWorktreeStatus,
@@ -513,10 +514,12 @@ describe("Settings -> Storage", () => {
 
     it("shows the error when the cleanup can't be started", async () => {
       setup();
-      vi.spyOn(api, "startCleanup").mockRejectedValue(new ApiError("Too many requests", 429));
+      vi.spyOn(api, "startCleanup").mockRejectedValue(new RateLimitedError(429, 12_300));
       render(<StorageSection />);
       await confirm("Clean up (safe)…");
-      expect(await screen.findByText("Too many requests")).toBeInTheDocument();
+      expect(
+        await screen.findByText("Too many cleanup requests. Try again in 13 s."),
+      ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Clean up (safe)…" })).toBeEnabled();
     });
 

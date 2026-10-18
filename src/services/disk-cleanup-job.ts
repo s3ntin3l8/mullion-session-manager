@@ -3,7 +3,12 @@
 // a reload, a second tab or a proxy timeout can't lose it, and each source's
 // progress is visible while it works. One job at a time per server.
 
-export type CleanupMode = "safe" | "aggressive";
+import type { DockerPruneMode } from "./docker-storage.js";
+import type { TempPruneMode } from "./temp-storage.js";
+
+// Both prune services take the same two tiers; the intersection fails to
+// compile if either of them ever diverges from what a job hands to it.
+export type CleanupMode = DockerPruneMode & TempPruneMode;
 export type CleanupSource = "docker" | "temp" | "caches" | "opencode" | "worktrees";
 
 export interface CleanupStepResult {

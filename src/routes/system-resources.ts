@@ -246,7 +246,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       source: "temp",
       label: "Temp files",
       skip:
-        tempSeen && !tempSeen.available ? `Temp files unavailable: ${tempSeen.error ?? ""}` : null,
+        tempSeen && !tempSeen.available
+          ? `Temp files unavailable: ${tempSeen.error ?? "could not be scanned"}`
+          : null,
       run: step(temp, () =>
         pruneTempStorage(mode, { claudeSessionsDirs: claudeSessionsDirs(app) }),
       ),

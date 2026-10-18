@@ -162,15 +162,12 @@ so it is deliberately narrow:
   doesn't commit changes nothing. The child gets only `PATH`, `HOME`,
   `LD_LIBRARY_PATH` and its temp dir, not the server's whole environment (a
   `NODE_OPTIONS` loader meant for the server shouldn't follow it).
-- **A long request.** The cleanup request stays open until the `VACUUM`
-  finishes, which can be minutes on a large database. A reverse proxy with a
-  short read timeout (nginx's `proxy_read_timeout` defaults to 60 s) will cut
-  the response while the compaction carries on; Settings then says the
-  request ended and that it may still be running. Raise that timeout for
-  `/api/storage/opencode/prune`, or just reload the page: while it runs, the
-  database card shows "being compacted right now" (the compaction's own child
-  process is not mistaken for opencode). Running it as a background job that
-  the page polls is tracked in #1667.
+- **Not a long request.** The compaction runs as part of the cleanup job, so
+  no HTTP request waits on the `VACUUM`, which can take minutes on a large
+  database: a reverse proxy's read timeout (nginx's `proxy_read_timeout`
+  defaults to 60 s) cannot cut it off, and a reload just finds the job still
+  running. While it runs, the database card shows "being compacted right now"
+  (the compaction's own child process is not mistaken for opencode).
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
   checkpointed and truncated afterwards so the file actually shrinks (if a
