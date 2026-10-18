@@ -16,7 +16,11 @@ export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
 
 export interface MeasuredProbe<T> {
   read(options?: { refresh?: boolean }): Promise<Measured<T>>;
-  /** Drops the held value and orphans any run in flight (its result is discarded). */
+  /**
+   * Drops the held value. A run already in flight can't be stopped, so its
+   * result is discarded and the next read waits for it to end before starting
+   * a fresh run: runs never overlap.
+   */
   invalidate(): void;
 }
 
@@ -45,15 +49,26 @@ export function createMeasuredProbe<T extends object>(
   let held: Held<T> | null = null;
   let inFlight: Promise<void> | null = null;
   let generation = 0;
+  // The generation the run in flight started under.
+  let runGeneration = 0;
+  // A read arrived while an invalidated (orphaned) run was still going: start a
+  // fresh run the moment it ends.
+  let rerunWanted = false;
 
   const start = () => {
     const mine = generation;
     const finish = (next: Held<T>) => {
+      inFlight = null;
       // invalidate() bumped the generation: this result is for a world that no
       // longer exists, so it must not overwrite anything.
-      if (mine !== generation) return;
+      if (mine !== generation) {
+        if (rerunWanted) {
+          rerunWanted = false;
+          start();
+        }
+        return;
+      }
       held = next;
-      inFlight = null;
     };
     // `new Promise` so a run that throws before returning a promise is a
     // failed measurement like any other, not an exception out of read().
@@ -69,6 +84,7 @@ export function createMeasuredProbe<T extends object>(
           freshUntil: now() + options.ttlMs,
         }),
     );
+    runGeneration = mine;
   };
 
   const snapshot = (): Measured<T> => {
@@ -85,6 +101,7 @@ export function createMeasuredProbe<T extends object>(
     async read({ refresh = false } = {}) {
       const stale = !held || held.freshUntil <= now();
       if (!inFlight && (refresh || stale)) start();
+      else if (inFlight && runGeneration !== generation) rerunWanted = true;
       if (inFlight) {
         let timer: NodeJS.Timeout | undefined;
         await Promise.race([
@@ -101,7 +118,7 @@ export function createMeasuredProbe<T extends object>(
     invalidate() {
       generation += 1;
       held = null;
-      inFlight = null;
+      rerunWanted = false;
     },
   };
 }

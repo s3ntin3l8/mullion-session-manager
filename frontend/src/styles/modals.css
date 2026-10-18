@@ -1380,6 +1380,9 @@
 .storage-disk-figure.resource-critical {
   color: var(--r);
 }
+.storage-disk-figure.resource-unavailable {
+  color: var(--dim);
+}
 .storage-disk-paths {
   margin-top: 6px;
   font-family: "Geist Mono", monospace;

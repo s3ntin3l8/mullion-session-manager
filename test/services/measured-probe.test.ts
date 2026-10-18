@@ -77,7 +77,7 @@ describe("createMeasuredProbe", () => {
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
-  it("discards a run that was invalidated while in flight", async () => {
+  it("discards an invalidated run, and starts the next one only after it ends", async () => {
     const stale = deferred<{ bytes: number }>();
     const fn = vi
       .fn<() => Promise<{ bytes: number }>>()
@@ -86,10 +86,28 @@ describe("createMeasuredProbe", () => {
     const probe = createMeasuredProbe(fn, { ttlMs: 1000, waitMs: 5 });
     await probe.read();
     probe.invalidate();
+    // A read while the orphan still runs joins its wait: no second run yet.
+    expect(await probe.read()).toEqual({ state: "measuring", measuredAt: null });
+    expect(await probe.read({ refresh: true })).toEqual({ state: "measuring", measuredAt: null });
+    expect(fn).toHaveBeenCalledTimes(1);
+    stale.resolve({ bytes: 1 });
+    // The orphan's figure is thrown away; the run that was asked for follows it.
+    await vi.waitFor(async () =>
+      expect(await probe.read()).toMatchObject({ bytes: 2, state: "ready" }),
+    );
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts no run after an invalidated one if nobody asks again", async () => {
+    const stale = deferred<{ bytes: number }>();
+    const fn = vi.fn<() => Promise<{ bytes: number }>>().mockReturnValueOnce(stale.promise);
+    const probe = createMeasuredProbe(fn, { ttlMs: 1000, waitMs: 5 });
+    await probe.read();
+    probe.invalidate();
     stale.resolve({ bytes: 1 });
     await stale.promise;
-    expect(await probe.read()).toMatchObject({ bytes: 2, state: "ready" });
-    expect(fn).toHaveBeenCalledTimes(2);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 
   it("reports a failed run, keeps earlier figures, and retries only after the TTL", async () => {

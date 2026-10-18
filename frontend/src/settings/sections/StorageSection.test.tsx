@@ -188,6 +188,21 @@ describe("Settings -> Storage", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
     });
 
+    it("shows a filesystem that can't be measured as unavailable, not as a low-disk alert", async () => {
+      setup();
+      vi.spyOn(api, "getSystemStats").mockResolvedValue({
+        ...stats,
+        filesystems: [
+          { labels: ["Gone"], paths: ["/mnt/gone"], available: false, error: "ENOENT" },
+        ],
+      });
+      render(<StorageSection />);
+      const figure = await screen.findByText("ENOENT");
+      expect(figure).toHaveClass("resource-unavailable");
+      expect(figure).not.toHaveClass("resource-critical");
+      expect(screen.queryByRole("img", { name: /used/ })).not.toBeInTheDocument();
+    });
+
     it("says how long ago the oldest figure was measured", async () => {
       setup();
       const tenMinutesAgo = new Date(Date.now() - 10 * 60_000).toISOString();

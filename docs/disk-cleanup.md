@@ -21,7 +21,7 @@ every two seconds while anything is measuring. At most one run per inspection
 is ever in flight, `?refresh=1` (the Refresh button) joins a running one
 instead of starting a second, and the freshness window (30 s for Docker,
 5 minutes for the disk walks) counts from when a run _finishes_. A prune
-drops the held result and discards any run still in flight.
+drops the held result; a run still in flight can't be stopped, so its figure is thrown away and the next run starts only once it has ended.
 
 ## Docker
 

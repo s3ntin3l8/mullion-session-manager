@@ -86,10 +86,6 @@ export interface ProbeMeta {
 }
 export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
 
-export function hasMeasuredData<T>(value: Measured<T> | null): value is T & ProbeMeta {
-  return value !== null && value.measuredAt !== null;
-}
-
 export interface DockerStorageStatus {
   available: boolean;
   rows: Array<{

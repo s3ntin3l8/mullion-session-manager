@@ -8,7 +8,7 @@ import type {
   ProbeMeta,
   SystemStats,
 } from "../../api/index.js";
-import { hasMeasuredData } from "../../api/types.js";
+import { hasMeasuredData } from "../measured.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton, Toggle } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -119,7 +119,9 @@ function DiskRow({ filesystem }: { filesystem: SystemStats["filesystems"][number
   const usedPercent = usable
     ? Math.min(100, Math.max(0, (1 - filesystem.freeBytes! / filesystem.totalBytes!) * 100))
     : 0;
-  const severity = filesystem.severity ?? (usable ? "normal" : "critical");
+  // A mount that can't be measured is not a low-disk alert: it gets its own,
+  // muted style, and no meter.
+  const severity = usable ? (filesystem.severity ?? "normal") : "unavailable";
   return (
     <div className="storage-disk" title={filesystem.paths.join("\n")}>
       <div className="storage-disk-head">

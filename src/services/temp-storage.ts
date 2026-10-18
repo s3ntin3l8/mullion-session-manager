@@ -123,8 +123,15 @@ const FS_CONCURRENCY = 16;
 // tree of pending promises, and a handful in flight is plenty to keep the
 // limiter saturated.
 const TOP_LEVEL_CONCURRENCY = 8;
+// Entries of one directory are visited this many at a time. The limiter above
+// bounds syscalls in flight; this bounds the promises (and suspended frames)
+// allocated for a directory with a hundred thousand entries.
+const DIR_ENTRY_CONCURRENCY = FS_CONCURRENCY;
 let activeFsCalls = 0;
+// A queue with a moving head: `Array#shift` is O(length), which made a wide
+// directory quadratic.
 const fsWaiters: Array<() => void> = [];
+let fsWaitersHead = 0;
 
 async function limited<T>(call: () => Promise<T>): Promise<T> {
   if (activeFsCalls < FS_CONCURRENCY) activeFsCalls++;
@@ -133,9 +140,16 @@ async function limited<T>(call: () => Promise<T>): Promise<T> {
     return await call();
   } finally {
     // Hand the slot straight to the next waiter; only free it if nobody waits.
-    const next = fsWaiters.shift();
-    if (next) next();
-    else activeFsCalls--;
+    if (fsWaitersHead < fsWaiters.length) {
+      const next = fsWaiters[fsWaitersHead++] as () => void;
+      if (fsWaitersHead === fsWaiters.length) {
+        fsWaiters.length = 0;
+        fsWaitersHead = 0;
+      }
+      next();
+    } else {
+      activeFsCalls--;
+    }
   }
 }
 
@@ -164,33 +178,31 @@ async function walk(dir: string, rootDev: number, budget: { left: number }): Pro
   } catch {
     return { bytes: 0, newestMtimeMs: 0, unsafe: true };
   }
-  const parts = await Promise.all(
-    names.map(async (name): Promise<WalkResult> => {
-      const part: WalkResult = { bytes: 0, newestMtimeMs: 0, unsafe: false };
-      if (--budget.left < 0) return { ...part, unsafe: true };
-      let st: Stats;
-      try {
-        st = await limited(() => fs.lstat(path.join(dir, name)));
-      } catch {
-        return part; // vanished between readdir and lstat
-      }
-      if (st.isSocket() || st.dev !== rootDev) {
-        // This entry is not removable at all, so the rest of its walk is wasted:
-        // exhausting the budget makes every sibling still in flight bail out.
-        budget.left = -1;
-        return { ...part, unsafe: true };
-      }
-      part.bytes = diskBytes(st);
-      part.newestMtimeMs = st.mtimeMs;
-      if (st.isDirectory()) {
-        const child = await walk(path.join(dir, name), rootDev, budget);
-        part.bytes += child.bytes;
-        part.newestMtimeMs = Math.max(part.newestMtimeMs, child.newestMtimeMs);
-        part.unsafe = child.unsafe;
-      }
-      return part;
-    }),
-  );
+  const parts = await mapLimit(names, DIR_ENTRY_CONCURRENCY, async (name): Promise<WalkResult> => {
+    const part: WalkResult = { bytes: 0, newestMtimeMs: 0, unsafe: false };
+    if (--budget.left < 0) return { ...part, unsafe: true };
+    let st: Stats;
+    try {
+      st = await limited(() => fs.lstat(path.join(dir, name)));
+    } catch {
+      return part; // vanished between readdir and lstat
+    }
+    if (st.isSocket() || st.dev !== rootDev) {
+      // This entry is not removable at all, so the rest of its walk is wasted:
+      // exhausting the budget makes every sibling still in flight bail out.
+      budget.left = -1;
+      return { ...part, unsafe: true };
+    }
+    part.bytes = diskBytes(st);
+    part.newestMtimeMs = st.mtimeMs;
+    if (st.isDirectory()) {
+      const child = await walk(path.join(dir, name), rootDev, budget);
+      part.bytes += child.bytes;
+      part.newestMtimeMs = Math.max(part.newestMtimeMs, child.newestMtimeMs);
+      part.unsafe = child.unsafe;
+    }
+    return part;
+  });
   return parts.reduce<WalkResult>(
     (total, part) => ({
       bytes: total.bytes + part.bytes,
@@ -353,16 +365,14 @@ export async function dirSize(dir: string): Promise<number> {
   } catch {
     return 0;
   }
-  const sizes = await Promise.all(
-    names.map(async (name) => {
-      try {
-        const st = await limited(() => fs.lstat(path.join(dir, name)));
-        return diskBytes(st) + (st.isDirectory() ? await dirSize(path.join(dir, name)) : 0);
-      } catch {
-        return 0; // vanished mid-walk
-      }
-    }),
-  );
+  const sizes = await mapLimit(names, DIR_ENTRY_CONCURRENCY, async (name) => {
+    try {
+      const st = await limited(() => fs.lstat(path.join(dir, name)));
+      return diskBytes(st) + (st.isDirectory() ? await dirSize(path.join(dir, name)) : 0);
+    } catch {
+      return 0; // vanished mid-walk
+    }
+  });
   return sizes.reduce((sum, size) => sum + size, 0);
 }
 
