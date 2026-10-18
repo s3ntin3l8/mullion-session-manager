@@ -129,10 +129,12 @@ function writeShimFileSync(filePath: string, content: string): void {
  * for `shell` (the session's `$SHELL`, e.g. "/bin/zsh" or "zsh") into `env`
  * in place.
  *
- * Resource governor concurrency caps (`VITEST_MAX_WORKERS`,
- * `PYTEST_XDIST_AUTO_NUM_WORKERS`, `MAKEFLAGS`) are computed once at session
- * launch from host cores and 1-minute load average (`os.loadavg()`), preserving
- * any caller-pre-set values. `MULLION_HOST_CORES` is published as a convenience.
+ * Resource governor concurrency caps (`VITEST_MAX_WORKERS` and
+ * `PYTEST_XDIST_AUTO_NUM_WORKERS`) are computed once at session launch from
+ * host cores and 1-minute load average (`os.loadavg()`) via
+ * `computeAdaptiveWorkers()`, while `MAKEFLAGS` is sized to `-j <cores> -l <cores>`
+ * from raw cores with make's native load-limiting backoff, preserving any
+ * caller-pre-set values. `MULLION_HOST_CORES` is published as a convenience.
  *
  * Shell integration hook injection is a no-op for any shell this doesn't know
  * how to instrument (see this file's own doc comment). Must be called AFTER
