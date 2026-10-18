@@ -139,13 +139,17 @@ function describePrEvent(event: Pick<NotificationEvent, "kind" | "payload">): {
         attention: false,
       };
     }
-    default: {
+    case "pr_review_submitted": {
       const changes = event.payload.decision === "CHANGES_REQUESTED";
       return {
         text: changes ? `${n}: changes requested` : `${n}: approved`,
         attention: changes,
       };
     }
+    // A pr_* kind added to describeEvent's case list but not handled above
+    // reads as a generic update rather than as someone else's wording.
+    default:
+      return { text: `${n}: updated`, attention: false };
   }
 }
 

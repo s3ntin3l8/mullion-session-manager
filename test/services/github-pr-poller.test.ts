@@ -395,10 +395,9 @@ describe("startGitHubPRPoller", () => {
       const app = {
         ...mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]),
         pty: {
-          sessionIdsOnBranch: vi.fn((projectId: number, branch: string) =>
-            projectId === 1 && branch === "feat-x" ? ["11"] : [],
+          projectSessions: vi.fn((projectId: number) =>
+            projectId === 1 ? [{ id: "11", cwd: "/nowhere", liveBranch: "feat-x" }] : [],
           ),
-          sessionsWithoutBranch: vi.fn(() => []),
           get: vi.fn(() => ({ emitPrEvent })),
         },
       } as unknown as FastifyInstance;
@@ -473,10 +472,11 @@ describe("startGitHubPRPoller", () => {
         .mockResolvedValueOnce(status(pr()))
         .mockResolvedValue(status(pr({ ciStatus: "failure", prPhase: "ci_failing" })));
       const { app, emitPrEvent } = appWithSessions();
-      (app as unknown as { pty: Record<string, unknown> }).pty.sessionIdsOnBranch = () => [];
-      (app as unknown as { pty: Record<string, unknown> }).pty.sessionsWithoutBranch = () => [
-        { id: "31", cwd: dir },
-        { id: "32", cwd: "/nonexistent-dir-for-poller-test" },
+      (app as unknown as { pty: Record<string, unknown> }).pty.projectSessions = () => [
+        { id: "31", cwd: dir, liveBranch: null },
+        { id: "32", cwd: "/nonexistent-dir-for-poller-test", liveBranch: null },
+        // Hook says main, but the checkout is on the PR's branch (a worktree).
+        { id: "33", cwd: dir, liveBranch: "main" },
       ];
       const get = vi.fn(() => ({ emitPrEvent }));
       (app as unknown as { pty: Record<string, unknown> }).pty.get = get;
@@ -492,6 +492,7 @@ describe("startGitHubPRPoller", () => {
         expect(emitPrEvent).toHaveBeenCalledWith("pr_ci_failed", expect.anything()),
       );
       expect(get).toHaveBeenCalledWith("31");
+      expect(get).toHaveBeenCalledWith("33");
       expect(get).not.toHaveBeenCalledWith("32");
       fs.rmSync(dir, { recursive: true, force: true });
     });
@@ -504,8 +505,7 @@ describe("startGitHubPRPoller", () => {
       const app = {
         ...mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]),
         pty: {
-          sessionsWithoutBranch: () => [],
-          sessionIdsOnBranch: () => {
+          projectSessions: () => {
             throw new Error("boom");
           },
         },

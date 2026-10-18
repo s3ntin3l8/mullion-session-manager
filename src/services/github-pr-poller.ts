@@ -16,7 +16,13 @@ import { gitEnv } from "./git-env.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
 import { diffPrSnapshots, snapshotPr, type PrChange, type PrSnapshot } from "./github-pr-phase.js";
-import { derivePrEvents } from "./pr-session-events.js";
+import {
+  createProbeMemo,
+  derivePrEvents,
+  pruneClosedMeta,
+  sessionIdsOnBranch,
+  type ProjectSession,
+} from "./pr-session-events.js";
 import { broadcastToProject } from "./github-ws-broadcast.js";
 import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
@@ -208,14 +214,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     projectIds: number[],
     changes: PrChange[],
   ): Promise<void> {
-    // One branch probe per branchless session per run, however many changes
-    // and projects consult it.
-    const probes = new Map<string, Promise<string | null>>();
-    const branchOf = (s: { id: string; cwd: string }): Promise<string | null> => {
-      let p = probes.get(s.id);
-      if (!p) probes.set(s.id, (p = checkoutBranch(s.cwd)));
-      return p;
-    };
+    const branchOf = createProbeMemo((s) => checkoutBranch(s.cwd));
     const metas = lastPrMeta.get(repoKey);
     // Per-PR work is independent (a closed PR costs a merge lookup), so run it
     // side by side; the caller doesn't await this at all.
@@ -250,31 +249,29 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     // Closed PRs have had their one look at the carried-over metadata.
     // Re-read: pushPrChanges replaces this map every poll, and this runs
     // detached, so the one captured above may already be stale.
-    const current = lastPrMeta.get(repoKey);
-    for (const change of changes) if (change.kind === "closed") current?.delete(change.number);
+    pruneClosedMeta(lastPrMeta.get(repoKey), changes);
     // allSettled so one PR's failure neither skips the prune above nor hides
     // the other PRs' events; surface it to the caller's warn.
     const failed = results.find((r) => r.status === "rejected");
     if (failed) throw (failed as PromiseRejectedResult).reason;
   }
 
-  // The session row matches on its displayBranch, which prefers polled git
-  // status over the hook-reported branch; a session that never sent a
-  // git_branch hook is resolved here from its own checkout instead.
+  // The session row matches on its displayBranch (polled git status first),
+  // so the hook-reported branch alone would miss worktree sessions.
   async function sessionsForPr(
     projectId: number,
     number: number,
     headBranch: string | undefined,
-    branchOf: (s: { id: string; cwd: string }) => Promise<string | null>,
+    branchOf: (s: ProjectSession) => Promise<string | null>,
   ): Promise<string[]> {
     const ids = new Set<string>();
     if (headBranch) {
-      for (const id of app.pty.sessionIdsOnBranch(projectId, headBranch)) ids.add(id);
-      const unknown = app.pty.sessionsWithoutBranch(projectId);
-      const resolved = await Promise.all(
-        unknown.map(async (s) => ((await branchOf(s)) === headBranch ? s.id : null)),
+      const onBranch = await sessionIdsOnBranch(
+        app.pty.projectSessions(projectId),
+        headBranch,
+        branchOf,
       );
-      for (const id of resolved) if (id) ids.add(id);
+      for (const id of onBranch) ids.add(id);
     }
     const rows = app.db
       .select({ sessionId: tasks.sessionId })

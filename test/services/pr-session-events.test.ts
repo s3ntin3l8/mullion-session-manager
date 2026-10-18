@@ -1,5 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { derivePrEvents } from "../../src/services/pr-session-events.js";
+import { describe, it, expect, vi } from "vitest";
+import {
+  createProbeMemo,
+  derivePrEvents,
+  pruneClosedMeta,
+  sessionIdsOnBranch,
+  type ProjectSession,
+} from "../../src/services/pr-session-events.js";
 import type { PrChange, PrSnapshot } from "../../src/services/github-pr-phase.js";
 
 const snap = (over: Partial<PrSnapshot> = {}): PrSnapshot => ({
@@ -85,5 +91,57 @@ describe("derivePrEvents", () => {
 
   it("emits nothing for an opened PR", () => {
     expect(kinds({ number: 7, kind: "opened", before: null, after: snap() })).toEqual([]);
+  });
+});
+
+describe("session branch matching", () => {
+  const sess = (id: string, liveBranch: string | null): ProjectSession => ({
+    id,
+    cwd: `/work/${id}`,
+    liveBranch,
+  });
+
+  it("matches the hook branch without probing, and probes everything else", async () => {
+    const probed: string[] = [];
+    const branchOf = async (s: ProjectSession) => {
+      probed.push(s.id);
+      return s.id === "wt" ? "feat-x" : "main";
+    };
+    const ids = await sessionIdsOnBranch(
+      [sess("hook", "feat-x"), sess("none", null), sess("wt", "main"), sess("other", "main")],
+      "feat-x",
+      branchOf,
+    );
+    // "wt" reported the main checkout's branch but lives in the PR's worktree.
+    expect(ids.sort()).toEqual(["hook", "wt"]);
+    expect(probed.sort()).toEqual(["none", "other", "wt"]);
+  });
+
+  it("probes each session once however many changes consult it (memo)", async () => {
+    const probe = vi.fn(async () => "feat-x");
+    const branchOf = createProbeMemo(probe);
+    const sessions = [sess("a", null), sess("b", null)];
+    await Promise.all([
+      sessionIdsOnBranch(sessions, "feat-x", branchOf),
+      sessionIdsOnBranch(sessions, "feat-x", branchOf),
+      sessionIdsOnBranch(sessions, "other", branchOf),
+    ]);
+    expect(probe).toHaveBeenCalledTimes(2);
+  });
+
+  it("prunes only closed PRs from the live metadata map", () => {
+    const metas = new Map<number, unknown>([
+      [7, {}],
+      [8, {}],
+    ]);
+    const change = (number: number, kind: PrChange["kind"]): PrChange => ({
+      number,
+      kind,
+      before: null,
+      after: null,
+    });
+    pruneClosedMeta(metas, [change(7, "closed"), change(8, "updated")]);
+    expect([...metas.keys()]).toEqual([8]);
+    expect(() => pruneClosedMeta(undefined, [change(7, "closed")])).not.toThrow();
   });
 });
