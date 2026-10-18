@@ -954,6 +954,8 @@ export interface GitHubStatus {
   openPRs: number;
   pulls: GitHubIssueOrPr[];
   issues: GitHubIssueOrPr[];
+  /** Open issues exist but the token's list came back without them. */
+  issuesHidden: boolean;
   actionsRuns: GitHubActionsRun[];
   ciStatus: GitHubCiStatus;
 }

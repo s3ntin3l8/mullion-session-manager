@@ -32,6 +32,7 @@ const PROJECT = makeProject({ id: 1, name: "mullion", cwd: "/home/x/mullion" });
 const STATUS: GitHubStatus = {
   repo: { owner: "acme", repo: "widgets", htmlUrl: "https://github.com/acme/widgets" },
   openIssues: 3,
+  issuesHidden: false,
   openPRs: 2,
   pulls: [],
   issues: [],

@@ -248,6 +248,24 @@ describe("github-app (#489)", () => {
       });
     });
 
+    // The repo-status widget's issue list needs Issues read, which must NOT
+    // be folded into the "read" set (a 422 there would drop every read
+    // surface to the PAT on installs not yet re-approved with Issues).
+    it("mints the issues scope with only issues:read + metadata:read", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "issues");
+      const [, opts] = fetchMock.mock.calls[0];
+      expect(JSON.parse(opts.body as string).permissions).toEqual({
+        issues: "read",
+        metadata: "read",
+      });
+    });
+
     // #744 — a third permission set for the release-please dispatch trigger.
     // Deliberately its own set, not folded into WRITE_PERMISSIONS: Task
     // Master's ordinary issue/PR/push writes have no business holding

@@ -1789,7 +1789,10 @@ export async function projectsRoute(app: FastifyInstance) {
       const { repoRef, token } = ctx;
 
       try {
-        return await getRepoStatus(token, repoRef.owner, repoRef.repo);
+        // The read-scoped App token has no Issues permission; list issues with
+        // the dedicated "issues" scope (PAT fallback if it can't be minted).
+        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
+        return await getRepoStatus(token, repoRef.owner, repoRef.repo, issuesToken);
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         app.log.warn(
