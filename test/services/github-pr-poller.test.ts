@@ -265,13 +265,14 @@ describe("startGitHubPRPoller", () => {
     // Advance to sweep margin: (2-1)*2000 + 60000*2 = 122000ms.
     // At 2001ms now, advance 119999ms.
     await vi.advanceTimersByTimeAsync(119_999);
-    // sweepTimer fires pollOnce which iterates all 2 rows.
-    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(staggeredCalls + 2);
+    // sweepTimer fires pollOnce; both rows share one repo, so it is
+    // refreshed once, not once per project.
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(staggeredCalls + 1);
 
-    // Interval fires after 60s — pollOnce again iterates 2 rows.
+    // Interval fires after 60s — one more refresh of the shared repo.
     const intervalFiredAt = mockGetRepoPRsStatus.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(intervalFiredAt + 2);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(intervalFiredAt + 1);
 
     cleanup();
     vi.useRealTimers();

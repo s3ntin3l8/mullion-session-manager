@@ -55,6 +55,7 @@ type ReviewFields = Pick<
   | "requestedReviewers"
   | "unresolvedThreads"
   | "commentCount"
+  | "reviewStateKnown"
 >;
 
 // Last successfully fetched review fields per PR. A failed or backed-off
@@ -73,6 +74,7 @@ function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
     requestedReviewers: pr.requestedReviewers,
     unresolvedThreads: pr.unresolvedThreads,
     commentCount: pr.commentCount,
+    reviewStateKnown: pr.reviewStateKnown,
   };
 }
 
@@ -201,13 +203,13 @@ export async function enrichPrsWithReviewState(
 
   const data = await graphql<{
     rateLimit?: RateLimitNode;
-    repository: { pullRequests: { nodes: Array<GqlPrNode | null> } } | null;
+    repository: { pullRequests: { nodes: Array<GqlPrNode | null> | null } | null } | null;
   }>(token, PR_LIST_QUERY, { owner, repo });
   if (!data?.repository) return reuseLastKnown();
   noteBudget(data.rateLimit);
 
   const byNumber = new Map<number, GqlPrNode>();
-  for (const node of data.repository.pullRequests.nodes) {
+  for (const node of data.repository.pullRequests?.nodes ?? []) {
     if (node) byNumber.set(node.number, node);
   }
 
@@ -220,6 +222,7 @@ export async function enrichPrsWithReviewState(
       if (known) Object.assign(pr, known);
       continue;
     }
+    pr.reviewStateKnown = true;
     pr.isDraft = node.isDraft;
     pr.updatedAt = node.updatedAt;
     pr.reviewDecision = asDecision(node.reviewDecision);
@@ -259,7 +262,7 @@ export async function enrichPrsWithReviewState(
       rateLimit?: RateLimitNode;
       repository: Record<
         string,
-        { reviewThreads: { nodes: Array<{ isResolved: boolean } | null> } } | null
+        { reviewThreads: { nodes: Array<{ isResolved: boolean } | null> | null } | null } | null
       > | null;
     }>(
       token,
@@ -274,6 +277,8 @@ export async function enrichPrsWithReviewState(
       const entry = threads?.repository?.[`p${n}`];
       const node = byNumber.get(n);
       if (!entry || !node) continue;
+      // A nulled connection means "not fetched", not "no threads".
+      if (!entry.reviewThreads?.nodes) continue;
       const unresolved = entry.reviewThreads.nodes.filter((t) => t && !t.isResolved).length;
       threadCache.set(keyFor(n), { updatedAt: node.updatedAt, unresolved, ts: Date.now() });
       const pr = prs.find((p) => p.number === n);

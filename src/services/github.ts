@@ -105,14 +105,15 @@ export interface PROrWithChecks {
   /** null = not fetched (yet), as opposed to a known zero. */
   unresolvedThreads: number | null;
   commentCount: number | null;
+  /** True once the GraphQL enrichment filled this PR's review fields; false
+   *  while they are still the REST-side defaults. */
+  reviewStateKnown: boolean;
   prPhase: PrPhase;
 }
 
 /** Recomputes `prPhase` from the PR's current CI + review fields, in place. */
 export function applyPrPhase(pr: PROrWithChecks): void {
-  // commentCount is only ever set by the GraphQL enrichment, so it doubles as
-  // the "review fields are real, not defaults" marker.
-  pr.prPhase = derivePrPhase({ ...pr, reviewStateKnown: pr.commentCount !== null });
+  pr.prPhase = derivePrPhase(pr);
 }
 
 export interface GitHubPRsStatus {
@@ -792,6 +793,7 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
       requestedReviewers: [],
       unresolvedThreads: null,
       commentCount: null,
+      reviewStateKnown: false,
       prPhase: "unknown",
     };
     applyPrPhase(pr);

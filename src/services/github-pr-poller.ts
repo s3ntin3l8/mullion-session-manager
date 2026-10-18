@@ -154,10 +154,15 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     if (running) return;
     running = true;
     try {
+      // One refresh per repo per tick: several projects can share a repo, and
+      // projectIdsFor() already fans the push out to all of them.
+      const polled = new Set<string>();
       for (const row of repoRows) {
         if (!row.repoRef) continue;
         const { owner, repo } = row.repoRef;
         const repoKey = `${owner}/${repo}`;
+        if (polled.has(repoKey)) continue;
+        polled.add(repoKey);
 
         // #489 remaining scope — resolved per-repo, "read" scope (an App
         // installation token is scoped to a single repo, so there's no

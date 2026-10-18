@@ -30,6 +30,7 @@ function pr(number: number): PROrWithChecks {
     requestedReviewers: [],
     unresolvedThreads: null,
     commentCount: null,
+    reviewStateKnown: false,
     prPhase: "unknown",
   };
 }
@@ -228,6 +229,41 @@ describe("enrichPrsWithReviewState", () => {
       .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
     await enrichPrsWithReviewState("tok", "o", "budget-repo", [pr(1)]);
     expect(graphqlBackoffRemainingMs()).toBeGreaterThan(1_000_000);
+  });
+
+  it("survives a nulled pullRequests connection or thread connection", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { repository: { pullRequests: null } } }), {
+        status: 200,
+      }),
+    );
+    const none = [pr(1)];
+    await expect(enrichPrsWithReviewState("tok", "o", "null-repo", none)).resolves.toBeUndefined();
+    expect(none[0].reviewStateKnown).toBe(false);
+
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { repository: { p1: { reviewThreads: null } } } }), {
+          status: 200,
+        }),
+      );
+    const noThreads = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "null-threads-repo", noThreads);
+    expect(noThreads[0].unresolvedThreads).toBeNull();
+    expect(noThreads[0].reviewStateKnown).toBe(true);
+  });
+
+  it("keeps a known review decision when only the comment count is nulled", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([gqlNode(1, { reviewDecision: "CHANGES_REQUESTED", comments: null })]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "partial-repo", prs);
+    expect(prs[0].commentCount).toBeNull();
+    expect(prs[0].prPhase).toBe("changes_requested");
   });
 
   it("makes no request when there are no PRs", async () => {

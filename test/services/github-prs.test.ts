@@ -124,6 +124,7 @@ describe("getRepoPRsStatus", () => {
       requestedReviewers: [],
       unresolvedThreads: null,
       commentCount: null,
+      reviewStateKnown: false,
       prPhase: "unknown",
     });
   });
