@@ -9,6 +9,7 @@ const mockResolveGitHubRepo = vi.hoisted(() => vi.fn());
 const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
 const mockEnrich = vi.hoisted(() => vi.fn());
 const mockBroadcast = vi.hoisted(() => vi.fn());
+const mockMergeState = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/github.js", () => ({
   GitHubApiError: class extends Error {
@@ -22,6 +23,7 @@ vi.mock("../../src/services/github.js", () => ({
   getRepoPRsStatus: mockGetRepoPRsStatus,
   setRepoPRsStatus: vi.fn(),
   refreshDefaultBranchCi: mockRefreshDefaultBranchCi,
+  getPullRequestMergeState: mockMergeState,
 }));
 
 // Review-state enrichment has its own tests (github-pr-reviews.test.ts); here
@@ -93,6 +95,7 @@ describe("startGitHubPRPoller", () => {
     mockEnrich.mockReset();
     mockEnrich.mockResolvedValue(undefined);
     mockBroadcast.mockReset();
+    mockMergeState.mockReset();
     mockRefreshDefaultBranchCi.mockReset();
     mockRefreshDefaultBranchCi.mockResolvedValue(undefined);
     mockResolveGitHubToken.mockReset();
@@ -359,5 +362,137 @@ describe("startGitHubPRPoller", () => {
 
     cleanup();
     vi.useRealTimers();
+  });
+
+  describe("session events", () => {
+    const pr = (over: Record<string, unknown> = {}) => ({
+      number: 7,
+      headSha: "abc",
+      headBranch: "feat-x",
+      title: "Add x",
+      htmlUrl: "https://github.com/test-owner/test-repo/pull/7",
+      isDraft: false,
+      ciStatus: "in_progress",
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      unresolvedThreads: 0,
+      commentCount: 0,
+      prPhase: "ci_pending",
+      ...over,
+    });
+    const status = (...prs: ReturnType<typeof pr>[]) => ({
+      prs,
+      prSummary: { total: prs.length, pass: 0, fail: 0, pending: 0, unknown: 0 },
+    });
+
+    function appWithSessions(taskSessionIds: number[] = []) {
+      const emitPrEvent = vi.fn();
+      const app = {
+        ...mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]),
+        pty: {
+          sessionIdsOnBranch: vi.fn((projectId: number, branch: string) =>
+            projectId === 1 && branch === "feat-x" ? ["11"] : [],
+          ),
+          get: vi.fn(() => ({ emitPrEvent })),
+        },
+      } as unknown as FastifyInstance;
+      (app as unknown as { db: unknown }).db = {
+        select: () => ({
+          from: () => ({
+            all: () => [{ id: 1, cwd: "/tmp/one", hostId: "local" }],
+            where: () => ({ all: () => taskSessionIds.map((sessionId) => ({ sessionId })) }),
+          }),
+        }),
+      };
+      return { app, emitPrEvent };
+    }
+
+    async function runTwoPolls(first: unknown, second: unknown, taskSessionIds: number[] = []) {
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
+      mockGetRepoPRsStatus.mockResolvedValueOnce(first).mockResolvedValue(second);
+      const { app, emitPrEvent } = appWithSessions(taskSessionIds);
+      vi.useFakeTimers();
+      const cleanup = startGitHubPRPoller(app);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(16_000);
+      cleanup();
+      vi.useRealTimers();
+      return emitPrEvent;
+    }
+
+    it("emits pr_ci_failed on the branch's session when CI flips red", async () => {
+      const emit = await runTwoPolls(
+        status(pr()),
+        status(pr({ ciStatus: "failure", prPhase: "ci_failing" })),
+      );
+      expect(emit).toHaveBeenCalledWith("pr_ci_failed", {
+        number: 7,
+        title: "Add x",
+        url: "https://github.com/test-owner/test-repo/pull/7",
+      });
+    });
+
+    it("also reaches a Task Master task's session and emits a review decision", async () => {
+      const emit = await runTwoPolls(
+        status(pr({ ciStatus: "success" })),
+        status(pr({ ciStatus: "success", reviewDecision: "CHANGES_REQUESTED", commentCount: 1 })),
+        [22],
+      );
+      const kinds = emit.mock.calls.map((c) => c[0]);
+      expect(kinds).toContain("pr_review_submitted");
+      expect(kinds).toContain("pr_new_comments");
+    });
+
+    it("emits pr_merged when a vanished PR was merged, nothing when closed unmerged", async () => {
+      mockMergeState.mockResolvedValue({
+        merged: true,
+        title: "Add x",
+        htmlUrl: "https://github.com/test-owner/test-repo/pull/7",
+      });
+      const merged = await runTwoPolls(status(pr()), status());
+      expect(merged).toHaveBeenCalledWith("pr_merged", expect.objectContaining({ number: 7 }));
+
+      mockMergeState.mockResolvedValue({ merged: false, title: "", htmlUrl: "" });
+      mockGetRepoPRsStatus.mockReset();
+      const closed = await runTwoPolls(status(pr()), status());
+      expect(closed).not.toHaveBeenCalled();
+    });
+
+    it("survives a failing emit without losing the poll's bookkeeping", async () => {
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
+      mockGetRepoPRsStatus
+        .mockResolvedValueOnce(status(pr()))
+        .mockResolvedValue(status(pr({ ciStatus: "failure", prPhase: "ci_failing" })));
+      const app = {
+        ...mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]),
+        pty: {
+          sessionIdsOnBranch: () => {
+            throw new Error("boom");
+          },
+        },
+      } as unknown as FastifyInstance;
+      (app as unknown as { db: unknown }).db = {
+        select: () => ({
+          from: () => ({
+            all: () => [{ id: 1, cwd: "/tmp/one", hostId: "local" }],
+            where: () => ({ all: () => [] }),
+          }),
+        }),
+      };
+      vi.useFakeTimers();
+      const cleanup = startGitHubPRPoller(app);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(120_000);
+      const before = mockRefreshDefaultBranchCi.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ owner: "test-owner" }),
+        expect.stringContaining("session event emit failed"),
+      );
+      expect(mockRefreshDefaultBranchCi.mock.calls.length).toBeGreaterThan(before);
+      cleanup();
+      vi.useRealTimers();
+    });
   });
 });

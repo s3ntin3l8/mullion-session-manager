@@ -16,6 +16,7 @@ import {
 } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { matchSessionPr } from "./github/matchSessionPr.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 
@@ -167,10 +168,9 @@ export function TaskDetail({
   const capAnnounced = task.autoReturnCapAnnouncedAt !== null;
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
   const prsStatus = prsByProject[task.projectId];
-  const matchedPr =
-    task.branchName && prsStatus?.prs
-      ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
-      : undefined;
+  // Branch only (no taskPrNumber): the card below deliberately prefers the
+  // branch-matched PR as the CURRENT one over task.prNumber.
+  const matchedPr = matchSessionPr(prsStatus?.prs, { branch: task.branchName });
   // #701 — sibling tasks that are themselves Task Master tasks (i.e. also
   // carry the task label) and list this task as their parent. Hermes
   // review — issue numbers are per-repo, and cross-repo parents are

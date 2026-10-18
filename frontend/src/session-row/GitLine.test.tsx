@@ -33,6 +33,8 @@ let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let sessions: Session[];
+let tasks: { sessionId: number | null; prNumber: number | null }[];
+const openRightSidebarPrMock = vi.fn();
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
 const renameSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -47,6 +49,8 @@ vi.mock("../store/index.js", () => ({
       gitBranchesByProject,
       prsByProject,
       sessions,
+      tasks,
+      openRightSidebarPr: openRightSidebarPrMock,
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
       renameSession: renameSessionMock,
@@ -83,6 +87,8 @@ beforeEach(() => {
   gitDiffStats = {};
   gitBranchesByProject = {};
   prsByProject = {};
+  tasks = [];
+  openRightSidebarPrMock.mockReset();
   sessions = [];
   localStorage.clear();
 });
@@ -330,6 +336,74 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     const prLink = container.querySelector(".session-git-pr");
     expect(prLink?.textContent).toContain("7");
     expect(prLink?.querySelector(".github-panel-ci-dot.good")).toBeTruthy();
+  });
+
+  it("shows the PR's phase and unresolved threads, and opens the sidebar drill-in on click", async () => {
+    const session = makeRow3Session({});
+    sessionGitStatuses = { [session.id]: { ...DIRTY_STATUS, branch: "feature/x" } };
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 7,
+            title: "Add feature x",
+            htmlUrl: "https://github.com/o/r/pull/7",
+            author: "dev",
+            headSha: "abc",
+            headBranch: "feature/x",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+            prPhase: "changes_requested",
+            unresolvedThreads: 2,
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    await user.click(container.querySelector(".session-git-toggle")!);
+
+    const chip = container.querySelector(".session-git-pr")!;
+    expect(chip.textContent).toContain("changes");
+    expect(chip.textContent).toContain("💬2");
+    expect(chip.getAttribute("title")).toContain("Changes requested");
+
+    await user.click(chip);
+    expect(openRightSidebarPrMock).toHaveBeenCalledWith(1, 7);
+  });
+
+  it("matches a task session to its recorded PR even when the branch differs", async () => {
+    const session = makeRow3Session({});
+    sessionGitStatuses = { [session.id]: { ...DIRTY_STATUS, branch: "detached-work" } };
+    tasks = [{ sessionId: session.id, prNumber: 7 }];
+    prsByProject = {
+      1: {
+        prs: [
+          {
+            number: 7,
+            title: "Task PR",
+            htmlUrl: "https://github.com/o/r/pull/7",
+            author: "dev",
+            headSha: "abc",
+            headBranch: "mullion/task-7",
+            baseBranch: "main",
+            ciStatus: "success",
+            actionsRuns: [],
+          },
+        ],
+        prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    const user = userEvent.setup();
+    const { container } = render(
+      <SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />,
+    );
+    await user.click(container.querySelector(".session-git-toggle")!);
+    expect(container.querySelector(".session-git-pr")?.textContent).toContain("7");
   });
 
   it("shows no PR badge when no open PR matches the session's branch", async () => {

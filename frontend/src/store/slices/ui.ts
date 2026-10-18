@@ -106,6 +106,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
     rightSidebarProjectRequest: null,
+    githubOpenPrByProject: {},
     rightSidebarPinned,
     // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
     rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
@@ -252,6 +253,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
           },
         }),
       }));
+    },
+
+    setGithubOpenPr: (projectId, number) =>
+      set((s) => ({ githubOpenPrByProject: { ...s.githubOpenPrByProject, [projectId]: number } })),
+
+    openRightSidebarPr: (projectId, number) => {
+      get().setGithubOpenPr(projectId, number);
+      get().openRightSidebarView("github", projectId);
     },
 
     toggleRightSidebar: () => {

@@ -173,6 +173,9 @@ export function useAttentionNotifications({
       // just never an OS-level Notification/sound/auto-focus, which would be
       // gated by the wrong axis anyway.
       if (event.kind === "dev_server_detected") continue;
+      // Same wrong-axis reasoning for PR transitions: they're about the PR,
+      // not the session's current status. Bell/tab badge only for now.
+      if (event.kind.startsWith("pr_")) continue;
       const session = sessions.find((s) => s.id === sessionId);
       if (!session) continue;
       // #719 — a muted session produces no OS notification, no sound, and no

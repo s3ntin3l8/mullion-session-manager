@@ -41,3 +41,41 @@ export function sortPrsByAttention<
     return b.number - a.number;
   });
 }
+
+/** The short glyph + words a compact surface (session row) shows for a PR. */
+export function phaseChip(
+  phase: GitHubPrPhase | undefined,
+  unresolvedThreads: number | null | undefined,
+): { glyph: string; text: string } | null {
+  const threads = unresolvedThreads && unresolvedThreads > 0 ? ` 💬${unresolvedThreads}` : "";
+  switch (phase) {
+    case "ci_failing":
+      return { glyph: "✗", text: `CI${threads}` };
+    case "changes_requested":
+      return { glyph: "✎", text: `changes${threads}` };
+    case "conflicts":
+      return { glyph: "⚠", text: `conflicts${threads}` };
+    case "ready_to_merge":
+      return { glyph: "✓", text: `ready${threads}` };
+    case "draft":
+      return { glyph: "", text: `draft${threads}` };
+    default:
+      return threads ? { glyph: "", text: threads.trim() } : null;
+  }
+}
+
+/** Open PRs that want the user, by phase — what the right-rail badge counts. */
+export function attentionSummary(prs: readonly { prPhase?: GitHubPrPhase }[]): {
+  total: number;
+  byPhase: Partial<Record<GitHubPrPhase, number>>;
+} {
+  const byPhase: Partial<Record<GitHubPrPhase, number>> = {};
+  let total = 0;
+  for (const pr of prs) {
+    if (pr.prPhase && ATTENTION_ORDER.includes(pr.prPhase)) {
+      byPhase[pr.prPhase] = (byPhase[pr.prPhase] ?? 0) + 1;
+      total += 1;
+    }
+  }
+  return { total, byPhase };
+}

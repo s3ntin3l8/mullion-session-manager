@@ -567,6 +567,10 @@ export interface UiSlice {
   // overlaying the grid.
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
+  /** The PR open in each project's GitHub view drill-in (absent/null = the
+   *  list). In the store, not the panel, so it survives switching sidebar
+   *  views and so a session row can open it before the panel is mounted. */
+  githubOpenPrByProject: Record<number, number | null>;
   rightSidebarOpen: boolean;
   rightSidebarPinned: boolean;
   rightSidebarWidth: number;
@@ -671,6 +675,9 @@ export interface UiSlice {
   // Asks the drawer to show `projectId` (pins its project picker); the nonce
   // makes a repeat request for the same project still fire.
   openRightSidebarView: (view: string, projectId?: number) => void;
+  setGithubOpenPr: (projectId: number, number: number | null) => void;
+  /** Shows a PR's drill-in in the right sidebar's GitHub view. */
+  openRightSidebarPr: (projectId: number, number: number) => void;
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;

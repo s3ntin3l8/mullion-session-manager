@@ -1,5 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
+import { PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
 import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon } from "../ui/icons.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
@@ -62,20 +63,25 @@ function useGitBadge(projectId: number | null): RailBadge | null {
   return null;
 }
 
-// Failing PR checks and a red default branch both come straight from the live
+// PRs that want the user (failing CI, requested changes, conflicts — by phase,
+// not just red CI) and a red default branch both come straight from the live
 // store (prsByProject from the /ws/github push, defaultBranchCiByProject from
 // the poller via the same refreshGitRefs batch), so the badge costs no extra
 // requests.
 function useGitHubBadge(projectId: number | null): RailBadge | null {
-  const failing = useDashboardStore((s) =>
-    projectId != null ? (s.prsByProject[projectId]?.prSummary.fail ?? 0) : 0,
+  const prs = useDashboardStore((s) =>
+    projectId != null ? s.prsByProject[projectId]?.prs : undefined,
   );
   const defaultBranchFailing = useDashboardStore((s) =>
     projectId != null ? s.defaultBranchCiByProject[projectId] === "failure" : false,
   );
-  if (failing === 0 && !defaultBranchFailing) return null;
+  const { total, byPhase } = attentionSummary(prs ?? []);
+  if (total === 0 && !defaultBranchFailing) return null;
   const reasons: string[] = [];
-  if (failing > 0) reasons.push(`${failing} PR check${failing === 1 ? "" : "s"} failing`);
+  for (const phase of ["ci_failing", "changes_requested", "conflicts"] as const) {
+    const n = byPhase[phase];
+    if (n) reasons.push(`${n} PR${n === 1 ? "" : "s"}: ${PHASE_LABEL[phase].toLowerCase()}`);
+  }
   if (defaultBranchFailing) reasons.push("default branch CI failing");
   return { kind: "alert", title: reasons.join(", ") };
 }

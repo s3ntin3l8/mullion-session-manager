@@ -1,21 +1,31 @@
 import type { FastifyInstance } from "fastify";
-import { projects } from "../db/schema.js";
+import { and, eq } from "drizzle-orm";
+import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import {
   GitHubApiError,
+  getPullRequestMergeState,
   getRepoPRsStatus,
   refreshDefaultBranchCi,
   setRepoPRsStatus,
 } from "./github.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
-import { diffPrSnapshots, snapshotPr, type PrSnapshot } from "./github-pr-phase.js";
+import { diffPrSnapshots, snapshotPr, type PrChange, type PrSnapshot } from "./github-pr-phase.js";
+import { derivePrEvents } from "./pr-session-events.js";
 import { broadcastToProject } from "./github-ws-broadcast.js";
 import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
+
+interface PrMeta {
+  number: number;
+  headBranch: string;
+  title: string;
+  htmlUrl: string;
+}
 
 async function resolveRemoteRepoRef(
   app: FastifyInstance,
@@ -71,6 +81,9 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   // waiting for its next refetch. Process-local; the first poll of a repo has
   // no baseline and so never pushes.
   const lastSnapshots = new Map<string, Map<number, PrSnapshot>>();
+  // The branch/title/url of each open PR at the last poll: a PR that vanished
+  // from the open list has no live row left to read them from.
+  const lastPrMeta = new Map<string, Map<number, PrMeta>>();
 
   async function resolveAllRepos(): Promise<
     { repoRef: GitHubRepoRef | null; projectId: number }[]
@@ -107,26 +120,43 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     // Review state (GraphQL) is best-effort and never throws.
     await enrichPrsWithReviewState(token, owner, repo, status.prs, app.log);
     setRepoPRsStatus(owner, repo, status);
-    pushPrChanges(repoKey, status.prs, projectIds);
+    const changes = pushPrChanges(repoKey, status.prs, projectIds);
+    if (changes.length > 0 && projectIds) {
+      // Notifications are a side channel: they must never cost the poll its
+      // activity bookkeeping or the default-branch refresh below.
+      try {
+        await emitSessionEvents(token, owner, repo, repoKey, projectIds, changes);
+      } catch (err) {
+        app.log.warn({ err, owner, repo }, "[github-pr-poller] session event emit failed");
+      }
+    }
     activityTracker.recordPollResult(repoKey, repoHasActivity(status));
     await refreshDefaultBranchCi(token, owner, repo);
   }
 
+  // Previous metadata is returned alongside the changes' own so a vanished
+  // PR can still be resolved to a branch; the maps are replaced every poll.
   function pushPrChanges(
     repoKey: string,
-    prs: Parameters<typeof snapshotPr>[0][],
+    prs: (Parameters<typeof snapshotPr>[0] & PrMeta)[],
     projectIds: number[] | null,
-  ): void {
+  ): PrChange[] {
     const next = prs.map(snapshotPr);
     const prev = lastSnapshots.get(repoKey);
     if (projectIds === null) {
-      if (!prev) lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
-      return;
+      if (!prev) {
+        lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
+        lastPrMeta.set(repoKey, metaOf(prs));
+      }
+      return [];
     }
     lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
-    if (!prev) return;
+    const prevMeta = lastPrMeta.get(repoKey) ?? new Map<number, PrMeta>();
+    const nextMeta = metaOf(prs);
+    lastPrMeta.set(repoKey, new Map([...prevMeta, ...nextMeta]));
+    if (!prev) return [];
     const changes = diffPrSnapshots(prev, next);
-    if (changes.length === 0) return;
+    if (changes.length === 0) return [];
     for (const projectId of projectIds) {
       const pid = String(projectId);
       broadcastToProject(pid, {
@@ -136,6 +166,66 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         pr: { changed: changes.map((c) => c.number) },
       });
     }
+    return changes;
+  }
+
+  function metaOf(prs: PrMeta[]): Map<number, PrMeta> {
+    return new Map(
+      prs.map((p) => [
+        p.number,
+        { number: p.number, headBranch: p.headBranch, title: p.title, htmlUrl: p.htmlUrl },
+      ]),
+    );
+  }
+
+  // PR transitions -> the owning session's event stream (bell/timeline,
+  // events.subscribe). A session owns a PR when it is on its head branch or
+  // is the Task Master task session for it. Best effort: a failed merge
+  // lookup or a missing session just means no event.
+  async function emitSessionEvents(
+    token: string,
+    owner: string,
+    repo: string,
+    repoKey: string,
+    projectIds: number[],
+    changes: PrChange[],
+  ): Promise<void> {
+    const metas = lastPrMeta.get(repoKey);
+    for (const change of changes) {
+      const meta = metas?.get(change.number);
+      let merged = false;
+      let title = meta?.title ?? "";
+      let url = meta?.htmlUrl ?? "";
+      if (change.kind === "closed") {
+        const state = await getPullRequestMergeState(token, owner, repo, change.number);
+        if (!state?.merged) continue;
+        merged = true;
+        title = state.title || title;
+        url = state.htmlUrl || url;
+      }
+      const events = derivePrEvents(change, { number: change.number, title, url }, merged);
+      if (events.length === 0) continue;
+      for (const projectId of projectIds) {
+        for (const id of sessionsForPr(projectId, change.number, meta?.headBranch)) {
+          const session = app.pty.get(id);
+          for (const ev of events) session?.emitPrEvent(ev.kind, ev.payload);
+        }
+      }
+    }
+    // Closed PRs have had their one look at the carried-over metadata.
+    for (const change of changes) if (change.kind === "closed") metas?.delete(change.number);
+  }
+
+  function sessionsForPr(projectId: number, number: number, headBranch?: string): string[] {
+    const ids = new Set<string>();
+    if (headBranch) for (const id of app.pty.sessionIdsOnBranch(projectId, headBranch)) ids.add(id);
+    const rows = app.db
+      .select({ sessionId: tasks.sessionId })
+      .from(tasks)
+      .where(and(eq(tasks.projectId, projectId), eq(tasks.prNumber, number)))
+      .all();
+    for (const r of rows) if (r.sessionId !== null) ids.add(String(r.sessionId));
+    return [...ids];
   }
 
   function projectIdsFor(

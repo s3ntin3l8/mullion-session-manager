@@ -1907,6 +1907,13 @@ export class Session {
     this.redrawNudge.trigger();
   }
 
+  /** Records a PR transition (github-pr-poller) on this session — the one
+   * public door onto the private emitEvent, restricted to the pr_* kinds. */
+  emitPrEvent(kind: NotificationEvent["kind"], payload: Record<string, unknown>): void {
+    if (!kind.startsWith("pr_")) throw new Error(`emitPrEvent: not a pr_* kind: ${kind}`);
+    this.emitEvent(kind, payload);
+  }
+
   /**
    * Record a notification event into this session's ring buffer and fan it
    * out to live subscribers (mirrors scrollbackBuffer's own FIFO-eviction
@@ -3833,6 +3840,14 @@ export class PtyManager {
 
   list(): SessionInfo[] {
     return [...this.sessions.values()].map((s) => s.toInfo());
+  }
+
+  /** Live local sessions of `projectId` that are on `branch` (hook-reported
+   * liveBranch) — how a PR transition finds the session(s) to notify. */
+  sessionIdsOnBranch(projectId: number, branch: string): string[] {
+    return [...this.sessions.values()]
+      .filter((s) => s.projectId === projectId && s.liveBranch === branch)
+      .map((s) => s.id);
   }
 
   /** Rich statuses — the TTL backstop's entry point, called from the

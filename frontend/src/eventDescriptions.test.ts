@@ -1172,3 +1172,50 @@ describe("sessionUnreadCount / sessionNeedsYou", () => {
     expect(sessionNeedsYou({ id: 1, attention: true }, [attention], 0, {}, true)).toBe(false);
   });
 });
+
+describe("pr_* events", () => {
+  const pr = (kind: NotificationEvent["kind"], payload: Record<string, unknown> = {}) =>
+    makeEvent({ kind, payload: { number: 7, ...payload } });
+
+  it("describes each transition", () => {
+    expect(describeEvent(pr("pr_ci_failed"))).toEqual({ text: "#7: CI failed", attention: true });
+    expect(describeEvent(pr("pr_ci_passed"))?.attention).toBe(false);
+    expect(describeEvent(pr("pr_conflicts"))?.text).toBe("#7: has merge conflicts");
+    expect(describeEvent(pr("pr_merged"))?.text).toBe("#7 was merged");
+    expect(describeEvent(pr("pr_new_comments", { added: 1 }))?.text).toBe("#7: 1 new comment");
+    expect(describeEvent(pr("pr_new_comments", { added: 3 }))?.text).toBe("#7: 3 new comments");
+    expect(describeEvent(pr("pr_new_comments", { added: 0 }))?.text).toBe("#7: new review threads");
+    expect(describeEvent(pr("pr_review_submitted", { decision: "APPROVED" }))).toEqual({
+      text: "#7: approved",
+      attention: false,
+    });
+    expect(describeEvent(pr("pr_review_submitted", { decision: "CHANGES_REQUESTED" }))).toEqual({
+      text: "#7: changes requested",
+      attention: true,
+    });
+  });
+
+  it("notifies only on bad news, as an error", () => {
+    for (const bad of [
+      pr("pr_ci_failed"),
+      pr("pr_conflicts"),
+      pr("pr_review_submitted", { decision: "CHANGES_REQUESTED" }),
+    ]) {
+      expect(notifyKind(bad)).toBe("attention");
+      expect(notifySeverity(bad)).toBe("error");
+    }
+    for (const quiet of [
+      pr("pr_ci_passed"),
+      pr("pr_merged"),
+      pr("pr_new_comments", { added: 1 }),
+      pr("pr_review_submitted", { decision: "APPROVED" }),
+    ]) {
+      expect(notifyKind(quiet)).toBeNull();
+      expect(notifySeverity(quiet)).toBeNull();
+    }
+  });
+
+  it("labels them for the bell and timeline", () => {
+    expect(notifyLabel(pr("pr_ci_failed"))).toBe("PR CI");
+  });
+});

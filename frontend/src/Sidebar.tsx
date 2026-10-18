@@ -53,6 +53,7 @@ import {
 } from "./lib/sessionDisplay.js";
 import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
+import { matchSessionPr } from "./github/matchSessionPr.js";
 import { Header } from "./session-row/Header.js";
 import { Details } from "./session-row/Details.js";
 
@@ -1707,10 +1708,11 @@ export function SessionRow({
   // doc comment). Uses displayBranch (which inverts precedence for worktree
   // sessions — preferring poll-derived git status over hook-reported
   // liveBranch) so branches from worktree sessions still match their PRs.
-  const matchedPr =
-    displayBranch && prsStatus?.prs
-      ? prsStatus.prs.find((pr) => pr.headBranch === displayBranch)
-      : undefined;
+  const taskPrNumber = useDashboardStore(
+    (s) => s.tasks.find((t) => t.sessionId === session.id)?.prNumber ?? null,
+  );
+  const matchedPr = matchSessionPr(prsStatus?.prs, { branch: displayBranch, taskPrNumber });
+  const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
 
   // U3 — factored into sessionDisplayTitle (module scope, top of file) so
   // the sidebar's new search filter matches against exactly this same
@@ -1922,6 +1924,7 @@ export function SessionRow({
           worktreeLabel={worktreeLabel}
           effectiveCwd={effectiveCwd}
           matchedPr={matchedPr}
+          onOpenPr={(n) => openRightSidebarPr(project.id, n)}
           diffStats={diffStats}
           foldDetails={foldDetails}
           fileChanges={fileChanges}

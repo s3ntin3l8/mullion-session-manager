@@ -142,4 +142,17 @@ describe("right sidebar hydration", () => {
     expect(s.rightSidebarView).toBe("git");
     expect(s.rightSidebarWidth).toBe(340);
   });
+
+  it("openRightSidebarPr records the PR for its project and opens the GitHub view there", () => {
+    useDashboardStore.getState().openRightSidebarPr(3, 42);
+
+    const s = useDashboardStore.getState();
+    expect(s.githubOpenPrByProject[3]).toBe(42);
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarProjectRequest?.projectId).toBe(3);
+
+    useDashboardStore.getState().setGithubOpenPr(3, null);
+    expect(useDashboardStore.getState().githubOpenPrByProject[3]).toBeNull();
+  });
 });

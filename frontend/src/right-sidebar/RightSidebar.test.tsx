@@ -7,6 +7,7 @@ import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { GitStatus, Project } from "../api/index.js";
+import type { GitHubPrPhase } from "../api/types.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -124,27 +125,58 @@ describe("RightSidebar", () => {
     expect(btn.title).toContain("conflicts");
   });
 
-  it("badges the GitHub rail icon only while PR checks are failing", () => {
-    const failing = (n: number) => ({
-      prs: [],
-      prSummary: { total: n, pass: 0, fail: n, pending: 0, unknown: 0 },
-    });
+  const prWith = (number: number, prPhase: GitHubPrPhase) => ({
+    number,
+    title: `PR ${number}`,
+    htmlUrl: "",
+    author: "a",
+    headSha: "s",
+    headBranch: `b${number}`,
+    baseBranch: "main",
+    ciStatus: null,
+    actionsRuns: [],
+    prPhase,
+  });
+  const withPrs = (...phases: GitHubPrPhase[]) => ({
+    prs: phases.map((p, i) => prWith(i + 1, p)),
+    prSummary: { total: phases.length, pass: 0, fail: 0, pending: 0, unknown: 0 },
+  });
+
+  it("badges the GitHub rail icon only while a PR needs attention", () => {
     renderSidebar();
     const github = () => screen.getByRole("button", { name: "GitHub" });
     expect(github().querySelector(".right-rail-badge")).toBeNull();
 
-    act(() => useDashboardStore.setState({ prsByProject: { 1: failing(2) } }));
+    act(() =>
+      useDashboardStore.setState({ prsByProject: { 1: withPrs("ci_failing", "ci_failing") } }),
+    );
     expect(github().querySelector(".right-rail-badge.alert")).toBeTruthy();
-    expect(github().title).toBe("GitHub — 2 PR checks failing");
+    expect(github().title).toBe("GitHub — 2 PRs: ci failing");
 
-    act(() => useDashboardStore.setState({ prsByProject: { 1: failing(1) } }));
-    expect(github().title).toBe("GitHub — 1 PR check failing");
+    act(() =>
+      useDashboardStore.setState({
+        prsByProject: {
+          1: withPrs("ci_failing", "changes_requested", "conflicts", "ready_to_merge"),
+        },
+      }),
+    );
+    expect(github().title).toBe(
+      "GitHub — 1 PR: ci failing, 1 PR: changes requested, 1 PR: conflicts",
+    );
+
+    // Waiting or ready PRs are not attention.
+    act(() =>
+      useDashboardStore.setState({
+        prsByProject: { 1: withPrs("review_pending", "ready_to_merge") },
+      }),
+    );
+    expect(github().querySelector(".right-rail-badge")).toBeNull();
 
     act(() => useDashboardStore.setState({ prsByProject: {} }));
     expect(github().querySelector(".right-rail-badge")).toBeNull();
   });
 
-  it("badges the GitHub rail icon when the default branch CI is failing, alone or with PR checks", () => {
+  it("badges the GitHub rail icon when the default branch CI is failing, alone or with PRs", () => {
     renderSidebar();
     const github = () => screen.getByRole("button", { name: "GitHub" });
 
@@ -155,14 +187,8 @@ describe("RightSidebar", () => {
     expect(github().querySelector(".right-rail-badge.alert")).toBeTruthy();
     expect(github().title).toBe("GitHub — default branch CI failing");
 
-    act(() =>
-      useDashboardStore.setState({
-        prsByProject: {
-          1: { prs: [], prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 } },
-        },
-      }),
-    );
-    expect(github().title).toBe("GitHub — 1 PR check failing, default branch CI failing");
+    act(() => useDashboardStore.setState({ prsByProject: { 1: withPrs("ci_failing") } }));
+    expect(github().title).toBe("GitHub — 1 PR: ci failing, default branch CI failing");
   });
 
   it("switches views from the rail", async () => {
