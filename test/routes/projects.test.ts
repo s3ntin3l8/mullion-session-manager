@@ -1815,7 +1815,7 @@ describe("projects route", () => {
           method: "POST",
           url: `/api/projects/${id}/github/issues/7/queue`,
         });
-        expect(off.statusCode).toBe(400);
+        expect(off.statusCode).toBe(403);
 
         app.config.MULLION_TASK_MASTER_ENABLED = true;
         const on = await app.inject({

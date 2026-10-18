@@ -155,12 +155,11 @@ export async function listIssues(
   // `/issues` returns PRs too (they carry a `pull_request` field).
   const rawIssues = raw.filter((i) => !i.pull_request);
   const needle = query.q?.trim().toLowerCase();
-  const items = rawIssues
-    .map(toItem)
-    .filter((i) => !needle || i.title.toLowerCase().includes(needle));
+  const pageItems = rawIssues.map(toItem);
+  const items = pageItems.filter((i) => !needle || i.title.toLowerCase().includes(needle));
 
   const seen = new Map<string, IssueLabel>();
-  for (const item of rawIssues.map(toItem)) {
+  for (const item of pageItems) {
     for (const l of item.labels) if (!seen.has(l.name)) seen.set(l.name, l);
   }
 

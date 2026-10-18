@@ -86,6 +86,7 @@ import {
   invalidateReleaseCache,
 } from "../services/github-write.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
+import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
 import type {
   ProjectReleaseStatus,
@@ -1926,7 +1927,7 @@ export async function projectsRoute(app: FastifyInstance) {
             ...i,
             taskStatus: taskStatus.get(i.number) ?? null,
           })),
-          taskMasterEnabled: app.config.MULLION_TASK_MASTER_ENABLED,
+          taskMasterEnabled: resolveTaskMasterConfig(app).enabled,
           taskLabel: app.config.MULLION_TASK_LABEL,
         };
       } catch (err) {
@@ -1969,8 +1970,10 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects/:id/github/issues/:number/queue",
     { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      if (!app.config.MULLION_TASK_MASTER_ENABLED) {
-        return reply.badRequest("Task Master is not enabled");
+      if (!resolveTaskMasterConfig(app).enabled) {
+        return reply.forbidden(
+          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+        );
       }
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {

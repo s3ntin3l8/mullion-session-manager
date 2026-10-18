@@ -53,16 +53,25 @@ interface LabelChipProps {
   onClick?: () => void;
 }
 
+export interface TaskMasterInfo {
+  enabled: boolean;
+  label: string;
+}
+
 export function IssuesSection({
   projectId,
   openIssues,
   issuesHidden,
   onOpenIssue,
+  onTaskMaster,
 }: {
   projectId: number;
   openIssues: number;
   issuesHidden: boolean;
   onOpenIssue: (number: number) => void;
+  /** Reports Task Master availability from the list response, so the detail
+   *  view needn't fetch a list page just to learn it. */
+  onTaskMaster?: (info: TaskMasterInfo) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [unassigned, setUnassigned] = useState(false);
@@ -106,6 +115,7 @@ export function IssuesSection({
       .then((res) => {
         if (cancelled) return;
         setError(null);
+        onTaskMaster?.({ enabled: res.taskMasterEnabled, label: res.taskLabel });
         setFetched((prev) =>
           page > 1 && prev?.key === filterKey
             ? {
@@ -190,7 +200,11 @@ export function IssuesSection({
           {error && <ErrorText>{error}</ErrorText>}
           {data && data.issues.length === 0 && !loading && (
             <div className="github-panel-empty-row">
-              {filtered ? "No issues match these filters" : "No open issues"}
+              {data.hasMore
+                ? "No matches on this page — load more"
+                : filtered
+                  ? "No issues match these filters"
+                  : "No open issues"}
             </div>
           )}
           {data?.issues.map((issue) => (
@@ -240,16 +254,17 @@ export function IssueDetailView({
   projectId,
   number,
   onBack,
+  taskMaster,
 }: {
   projectId: number;
   number: number;
   onBack: () => void;
+  taskMaster?: TaskMasterInfo | null;
 }) {
   const [issue, setIssue] = useState<GitHubIssueDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"session" | "queue" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [taskInfo, setTaskInfo] = useState<{ enabled: boolean; label: string } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,15 +275,6 @@ export function IssueDetailView({
         (err: unknown) =>
           !cancelled && setError(err instanceof Error ? err.message : "Could not load the issue"),
       );
-    // The list response carries Task Master availability; a cheap first-page
-    // fetch is enough to learn it without a dedicated endpoint.
-    api
-      .getProjectIssues(projectId, {})
-      .then(
-        (res) =>
-          !cancelled && setTaskInfo({ enabled: res.taskMasterEnabled, label: res.taskLabel }),
-      )
-      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -343,7 +349,7 @@ export function IssueDetailView({
             <button type="button" disabled={busy !== null} onClick={startSession}>
               {busy === "session" ? "Starting…" : "Start session"}
             </button>
-            {taskInfo?.enabled && (
+            {taskMaster?.enabled && (
               <button type="button" disabled={busy !== null} onClick={queue}>
                 {busy === "queue" ? "Queueing…" : "Queue for Task Master"}
               </button>

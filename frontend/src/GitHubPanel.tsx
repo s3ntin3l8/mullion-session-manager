@@ -1,4 +1,4 @@
-import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
+import { IssueDetailView, IssuesSection, type TaskMasterInfo } from "./github/IssuesView.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type {
@@ -530,6 +530,7 @@ export function GitHubPanel({
   const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
   // Drill-in: an open issue replaces the list until the user goes back.
   const [openIssue, setOpenIssue] = useState<number | null>(null);
+  const [taskMaster, setTaskMaster] = useState<TaskMasterInfo | null>(null);
   const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
   const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
   const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
@@ -585,6 +586,7 @@ export function GitHubPanel({
           projectId={params.projectId}
           number={openIssue}
           onBack={() => setOpenIssue(null)}
+          taskMaster={taskMaster}
         />
       </div>
     );
@@ -665,6 +667,7 @@ export function GitHubPanel({
           openIssues={status.openIssues}
           issuesHidden={status.issuesHidden}
           onOpenIssue={setOpenIssue}
+          onTaskMaster={setTaskMaster}
         />
       )}
 

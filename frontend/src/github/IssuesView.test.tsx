@@ -85,6 +85,34 @@ describe("IssuesSection", () => {
     expect(onOpen).toHaveBeenCalledWith(7);
   });
 
+  it("does not claim 'no matches' while another page may hold them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { ...LIST, issues: [], hasMore: true })),
+    );
+    render(
+      <IssuesSection projectId={1} openIssues={60} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText("No matches on this page — load more")).toBeInTheDocument();
+  });
+
+  it("reports Task Master availability to the parent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    const onTaskMaster = vi.fn();
+    render(
+      <IssuesSection
+        projectId={1}
+        openIssues={1}
+        issuesHidden={false}
+        onOpenIssue={vi.fn()}
+        onTaskMaster={onTaskMaster}
+      />,
+    );
+    await waitFor(() =>
+      expect(onTaskMaster).toHaveBeenCalledWith({ enabled: true, label: "mullion-task" }),
+    );
+  });
+
   it("pages with Load more and shows filtered-empty copy", async () => {
     const fetchMock = vi
       .fn()
@@ -137,7 +165,14 @@ describe("IssueDetailView", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const onBack = vi.fn();
-    const { container } = render(<IssueDetailView projectId={1} number={7} onBack={onBack} />);
+    const { container } = render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={onBack}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
 
     expect(await screen.findByText("crashes")).toBeInTheDocument();
     expect(container.querySelector("[onerror]")).toBeNull();
