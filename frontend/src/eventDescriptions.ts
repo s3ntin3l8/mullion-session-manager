@@ -113,6 +113,46 @@ function firstChangedFileName(files: unknown[]): string | null {
 // persisted-history row) pass through here without a cast: TimelineEvent's
 // kind/payload already match NotificationEvent's exactly, so only the
 // fields this function actually needs have to line up.
+// The pr_* kinds (github-pr-poller.ts -> pr-session-events.ts) share one
+// payload shape: number + title, plus `decision` / `added` where relevant.
+function describePrEvent(event: Pick<NotificationEvent, "kind" | "payload">): {
+  text: string;
+  attention: boolean;
+} {
+  const n = typeof event.payload.number === "number" ? `#${event.payload.number}` : "PR";
+  switch (event.kind) {
+    case "pr_ci_failed":
+      return { text: `${n}: CI failed`, attention: true };
+    case "pr_ci_passed":
+      return { text: `${n}: CI passed`, attention: false };
+    case "pr_conflicts":
+      return { text: `${n}: has merge conflicts`, attention: true };
+    case "pr_merged":
+      return { text: `${n} was merged`, attention: false };
+    case "pr_new_comments": {
+      const added = typeof event.payload.added === "number" ? event.payload.added : 0;
+      return {
+        text:
+          added > 0
+            ? `${n}: ${added} new comment${added === 1 ? "" : "s"}`
+            : `${n}: new review threads`,
+        attention: false,
+      };
+    }
+    case "pr_review_submitted": {
+      const changes = event.payload.decision === "CHANGES_REQUESTED";
+      return {
+        text: changes ? `${n}: changes requested` : `${n}: approved`,
+        attention: changes,
+      };
+    }
+    // A pr_* kind added to describeEvent's case list but not handled above
+    // reads as a generic update rather than as someone else's wording.
+    default:
+      return { text: `${n}: updated`, attention: false };
+  }
+}
+
 export function describeEvent(
   event: Pick<NotificationEvent, "kind" | "payload">,
 ): { text: string; attention: boolean; generic?: boolean } | null {
@@ -475,6 +515,13 @@ export function describeEvent(
         attention: true,
       };
     }
+    case "pr_ci_failed":
+    case "pr_ci_passed":
+    case "pr_review_submitted":
+    case "pr_new_comments":
+    case "pr_merged":
+    case "pr_conflicts":
+      return describePrEvent(event);
     default:
       return null;
   }
@@ -687,6 +734,12 @@ export function notifyKind(
   // No paired `attention` signal exists for this kind (see
   // useAttentionNotifications.ts's own explicit skip), so it stays here.
   if (event.kind === "dev_server_detected" && event.payload.state === undefined) return "attention";
+  // PR transitions that want the user: red CI, new conflicts, requested
+  // changes. The good-news kinds stay timeline-only.
+  if (event.kind === "pr_ci_failed" || event.kind === "pr_conflicts") return "attention";
+  if (event.kind === "pr_review_submitted" && event.payload.decision === "CHANGES_REQUESTED") {
+    return "attention";
+  }
   return null;
 }
 
@@ -774,6 +827,13 @@ function specificKindSeverity(
       return event.payload.state === "started" ? "blocked" : null;
     case "promote_request":
       return event.payload.state === undefined ? "blocked" : null;
+    // Red PR news is "error" (the agent's next push usually resolves it);
+    // the rest is informational and handled by notifyKind returning null.
+    case "pr_ci_failed":
+    case "pr_conflicts":
+      return "error";
+    case "pr_review_submitted":
+      return event.payload.decision === "CHANGES_REQUESTED" ? "error" : null;
     default:
       return null;
   }
@@ -869,6 +929,13 @@ export const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
   session_diff: "Diff",
   // Issue #404.
   dev_server_detected: "Dev Server",
+  // PR transitions from the GitHub poller.
+  pr_ci_failed: "PR CI",
+  pr_ci_passed: "PR CI",
+  pr_review_submitted: "PR Review",
+  pr_new_comments: "PR Comments",
+  pr_merged: "PR Merged",
+  pr_conflicts: "PR Conflicts",
 };
 
 export const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];

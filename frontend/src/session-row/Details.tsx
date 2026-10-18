@@ -28,6 +28,7 @@ export interface DetailsProps {
   worktreeLabel: string | null;
   effectiveCwd: string;
   matchedPr: GitHubPROrWithChecks | undefined;
+  onOpenPr: (prNumber: number) => void;
   diffStats: GitDiffStats | null | undefined;
   // Row: files (issue #177) — `foldDetails` decides whether this renders
   // only when `open`, or always (LaneCard's pre-existing behavior).
@@ -52,6 +53,7 @@ export function Details({
   worktreeLabel,
   effectiveCwd,
   matchedPr,
+  onOpenPr,
   diffStats,
   foldDetails,
   fileChanges,
@@ -79,6 +81,7 @@ export function Details({
             worktreeLabel={worktreeLabel}
             effectiveCwd={effectiveCwd}
             matchedPr={matchedPr}
+            onOpenPr={onOpenPr}
             diffStats={diffStats}
           />
         </div>

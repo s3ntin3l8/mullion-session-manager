@@ -1148,10 +1148,18 @@
   gap: 4px;
   color: var(--dim);
   text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
 .session-git-pr:hover {
   color: var(--fg);
   text-decoration: underline;
+}
+.session-git-pr-phase {
+  white-space: pre;
 }
 .session-git-diffstat {
   flex-shrink: 0;

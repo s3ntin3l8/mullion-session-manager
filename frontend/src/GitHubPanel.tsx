@@ -542,7 +542,9 @@ export function GitHubPanel({
   // the release section, not the PR/issue lists too.
   const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
   // Drill-in: an open PR replaces the list until the user goes back.
-  const [openPr, setOpenPr] = useState<number | null>(null);
+  const openPr = useDashboardStore((s) => s.githubOpenPrByProject[params.projectId] ?? null);
+  const setGithubOpenPr = useDashboardStore((s) => s.setGithubOpenPr);
+  const setOpenPr = (n: number | null) => setGithubOpenPr(params.projectId, n);
   // Drill-in: an open issue replaces the list until the user goes back.
   const [openIssue, setOpenIssue] = useState<number | null>(null);
   const [taskMaster, setTaskMaster] = useState<TaskMasterInfo | null>(null);

@@ -67,6 +67,8 @@ vi.mock("./store/index.js", () => {
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
+      tasks: [],
+      openRightSidebarPr: vi.fn(),
       sessions,
       mutedSessionIds: [],
       promoteSession: promoteSessionMock,

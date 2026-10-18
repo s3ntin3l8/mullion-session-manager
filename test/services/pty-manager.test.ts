@@ -4720,6 +4720,66 @@ describe("PtyManager", () => {
       });
     });
 
+    it("emitPrEvent records a pr_* event and refuses any other kind", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+
+      session.emitPrEvent("pr_ci_failed", { number: 7 });
+      const last = session.getEvents().at(-1);
+      expect(last?.kind).toBe("pr_ci_failed");
+      expect(last?.payload).toEqual({ number: 7 });
+
+      expect(() => session.emitPrEvent("attention", {})).toThrow(/not a pr_\* kind/);
+    });
+
+    it("projectSessions lists a project's sessions with hook branch and probe dir", async () => {
+      const on = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        projectId: 5,
+      });
+      const other = manager.getOrCreate({
+        id: "2",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        projectId: 6,
+      });
+      await waitForSpawn(on);
+      await waitForSpawn(other);
+      on.emitHookEvent({ kind: "git_branch", branch: "feat/foo" });
+      other.emitHookEvent({ kind: "git_branch", branch: "feat/foo" });
+
+      expect(manager.projectSessions(5)).toEqual([
+        { id: "1", cwd: "/tmp", liveBranch: "feat/foo" },
+      ]);
+      const third = manager.getOrCreate({
+        id: "3",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        projectId: 5,
+      });
+      await waitForSpawn(third);
+      expect(manager.projectSessions(5)).toContainEqual({
+        id: "3",
+        cwd: "/tmp",
+        liveBranch: null,
+      });
+      expect(manager.projectSessions(7)).toEqual([]);
+    });
+
     it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
       const session = manager.getOrCreate({
         id: "1",

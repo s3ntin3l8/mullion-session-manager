@@ -1,4 +1,5 @@
 import type { GitDiffStats, GitHubPROrWithChecks, GitStatus } from "../api/index.js";
+import { PHASE_LABEL, phaseChip } from "../github/prPhase.js";
 import { sessionGitDotClass, sessionPrDotClass } from "../lib/sidebarStatus.js";
 
 // SessionRow's row 3 (issue #202) — worktree/branch/PR/diff-stats single-line
@@ -17,6 +18,8 @@ export interface GitLineProps {
   effectiveCwd: string;
   matchedPr: GitHubPROrWithChecks | undefined;
   diffStats: GitDiffStats | null | undefined;
+  /** Opens the PR's drill-in in the right sidebar (not github.com). */
+  onOpenPr: (prNumber: number) => void;
 }
 
 export function GitLine({
@@ -26,7 +29,9 @@ export function GitLine({
   effectiveCwd,
   matchedPr,
   diffStats,
+  onOpenPr,
 }: GitLineProps) {
+  const chip = matchedPr ? phaseChip(matchedPr.prPhase, matchedPr.unresolvedThreads) : null;
   return (
     <div className="session-git-line">
       <span
@@ -50,17 +55,24 @@ export function GitLine({
         </span>
       )}
       {matchedPr && (
-        <a
-          href={matchedPr.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
+        <button
+          type="button"
           className="session-git-pr"
-          title={matchedPr.title}
-          onClick={(e) => e.stopPropagation()}
+          title={`${matchedPr.title}${matchedPr.prPhase ? ` — ${PHASE_LABEL[matchedPr.prPhase]}` : ""}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenPr(matchedPr.number);
+          }}
         >
           <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
           {matchedPr.number}
-        </a>
+          {chip && (
+            <span className="session-git-pr-phase">
+              {" "}
+              {chip.glyph} {chip.text}
+            </span>
+          )}
+        </button>
       )}
       {diffStats && diffStats.filesChanged > 0 && (
         <span className="session-git-diffstat">

@@ -100,7 +100,17 @@ export interface NotificationEvent {
     // preview, dismiss suppresses it), not folded into status_change. Unlike
     // review_gate/promote_request, nothing blocks on this: it's purely
     // backend-detected, never holds an agent's hook-socket connection open.
-    | "dev_server_detected";
+    | "dev_server_detected"
+    // PR transitions from the GitHub poller (github-pr-poller.ts), emitted
+    // onto the session whose branch (or Task Master task) owns the PR — see
+    // pr-session-events.ts. Machine-sourced like dev_server_detected, so an
+    // agent can wait on its own PR via events.subscribe.
+    | "pr_ci_failed"
+    | "pr_ci_passed"
+    | "pr_review_submitted"
+    | "pr_new_comments"
+    | "pr_merged"
+    | "pr_conflicts";
   ts: number;
   payload: Record<string, unknown>;
 }

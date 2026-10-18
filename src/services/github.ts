@@ -1433,3 +1433,25 @@ export async function getJobLogs(
     return null;
   }
 }
+
+/** Whether a PR that left the open list was merged (vs. closed unmerged).
+ *  Null when the lookup failed — callers then emit nothing. */
+export async function getPullRequestMergeState(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{ merged: boolean; title: string; htmlUrl: string } | null> {
+  validateGitHubRepoRef(owner, repo);
+  try {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { merged?: boolean; title?: string; html_url?: string };
+    return { merged: data.merged === true, title: data.title ?? "", htmlUrl: data.html_url ?? "" };
+  } catch {
+    return null;
+  }
+}

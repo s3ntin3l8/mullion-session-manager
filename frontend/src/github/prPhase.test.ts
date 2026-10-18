@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./prPhase.js";
+import {
+  PHASE_LABEL,
+  attentionSummary,
+  phaseChip,
+  phaseTone,
+  sortPrsByAttention,
+} from "./prPhase.js";
 
 describe("phaseTone", () => {
   it("maps phases to tones", () => {
@@ -28,5 +34,34 @@ describe("sortPrsByAttention", () => {
     expect(sortPrsByAttention(prs).map((p) => p.number)).toEqual([5, 4, 2, 3, 1, 6]);
     // Does not mutate its input.
     expect(prs[0].number).toBe(1);
+  });
+});
+
+describe("phaseChip", () => {
+  it("maps attention and ready phases to a glyph", () => {
+    expect(phaseChip("ci_failing", 0)).toEqual({ glyph: "✗", text: "CI" });
+    expect(phaseChip("changes_requested", 3)).toEqual({ glyph: "✎", text: "changes 💬3" });
+    expect(phaseChip("conflicts", null)).toEqual({ glyph: "⚠", text: "conflicts" });
+    expect(phaseChip("ready_to_merge", undefined)).toEqual({ glyph: "✓", text: "ready" });
+    expect(phaseChip("draft", 0)).toEqual({ glyph: "", text: "draft" });
+  });
+  it("shows only unresolved threads for quiet phases, nothing otherwise", () => {
+    expect(phaseChip("review_pending", 1)).toEqual({ glyph: "", text: "💬1" });
+    expect(phaseChip("review_pending", 0)).toBeNull();
+    expect(phaseChip(undefined, undefined)).toBeNull();
+  });
+});
+
+describe("attentionSummary", () => {
+  it("counts only needs-attention phases, by phase", () => {
+    expect(
+      attentionSummary([
+        { prPhase: "ci_failing" },
+        { prPhase: "ci_failing" },
+        { prPhase: "conflicts" },
+        { prPhase: "ready_to_merge" },
+        {},
+      ]),
+    ).toEqual({ total: 3, byPhase: { ci_failing: 2, conflicts: 1 } });
   });
 });

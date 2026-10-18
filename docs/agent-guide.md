@@ -340,6 +340,27 @@ from inside a session, and deliberately can't target a _different_ session
 long-running task rather than relying on the human to be watching your
 scrollback live.
 
+## Waiting on a PR
+
+The GitHub poller turns PR transitions into session events, delivered to the
+session whose branch is the PR's head (or, for a Task Master task, the task's
+own session). Subscribe with `mullion events tail` (add `includeChildren` over
+the socket to also receive your children's) and match on `kind`:
+
+| `kind`                | Fires when                                  | `payload`                      |
+| --------------------- | ------------------------------------------- | ------------------------------ |
+| `pr_ci_failed`        | CI on the PR's head turned red              | `number`, `title`, `url`       |
+| `pr_ci_passed`        | CI went from failing/running to green       | `number`, `title`, `url`       |
+| `pr_review_submitted` | review decision became approved / changes   | + `decision` (`APPROVED`, …)   |
+| `pr_new_comments`     | comments or unresolved threads were added   | + `added`, `unresolvedThreads` |
+| `pr_conflicts`        | the PR started conflicting with its base    | `number`, `title`, `url`       |
+| `pr_merged`           | the PR left the open list because it merged | `number`, `title`, `url`       |
+
+A parent can therefore wait on a child's PR going green or approved instead of
+polling GitHub. Delivery is best effort and edge-triggered (one event per
+transition, at the poll cadence): treat a missing event as "no change", not
+as an error.
+
 ## Reporting your own status
 
 If your CLI has no Mullion hook adapter (a plain shell script, an unsupported
