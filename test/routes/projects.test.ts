@@ -1920,11 +1920,19 @@ describe("projects route", () => {
       // The poller's CI view for a PR; without it the phase can't be "ready".
       async function warmCiCache(
         number: number,
-        ciStatus: "success" | "failure" | null = "success",
+        ciStatus: "success" | "failure" | null,
         // Whether the head-run lookup answered. Independent of ciStatus: an
-        // answered-but-empty lookup is { ciStatus: null, ciFetched: true }.
-        ciFetched: boolean = ciStatus !== null,
+        // answered-but-empty lookup is { ciStatus: null, ciFetched: true }, and
+        // a failed one is { ciStatus: null, ciFetched: false }. Always explicit.
+        ciFetched: boolean,
         headSha: string = `sha${number}`,
+        actionsRuns: Array<{
+          name: string;
+          status: string;
+          conclusion: string | null;
+          htmlUrl: string;
+          headSha: string;
+        }> = [],
       ) {
         const { setRepoPRsStatus } = await import("../../src/services/github.js");
         setRepoPRsStatus("acme", "widgets", {
@@ -1940,7 +1948,7 @@ describe("projects route", () => {
               baseBranch: "main",
               ciStatus,
               ciFetched,
-              actionsRuns: [],
+              actionsRuns,
             },
           ],
           prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
@@ -1972,7 +1980,7 @@ describe("projects route", () => {
 
       it("returns the PR detail with the derived phase", async () => {
         mockGithub(gqlPr(41));
-        await warmCiCache(41);
+        await warmCiCache(41, "success", true);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/41` });
@@ -2009,7 +2017,7 @@ describe("projects route", () => {
         // A warm entry with no CI answer (null) is unknown unless GitHub itself
         // calls the PR CLEAN; anything else can't be called ready.
         mockGithub(gqlPr(52, { mergeStateStatus: "UNSTABLE" }));
-        await warmCiCache(52, null);
+        await warmCiCache(52, null, false);
         const warmNoCi = await app.inject({
           method: "GET",
           url: `/api/projects/${id}/github/prs/52`,
@@ -2023,7 +2031,7 @@ describe("projects route", () => {
         expect(refused.statusCode).toBe(409);
 
         mockGithub(gqlPr(53));
-        await warmCiCache(53, null);
+        await warmCiCache(53, null, false);
         const clean = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/53` });
         // ciKnown reports the poller's fetch, not GitHub's CLEAN tie-break.
         expect(clean.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: false });
@@ -2062,7 +2070,7 @@ describe("projects route", () => {
           }
           return null;
         });
-        await warmCiCache(43);
+        await warmCiCache(43, "success", true);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const url = `/api/projects/${id}/github/prs/43/merge`;
@@ -2082,7 +2090,7 @@ describe("projects route", () => {
 
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
-        await warmCiCache(44);
+        await warmCiCache(44, "success", true);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const res = await app.inject({
@@ -2115,7 +2123,7 @@ describe("projects route", () => {
         expect(cold.json().message).toMatch(/unknown/);
 
         mockGithub(gqlPr(49, { mergeable: "UNKNOWN" }));
-        await warmCiCache(49);
+        await warmCiCache(49, "success", true);
         const unconfirmed = await app.inject({
           method: "POST",
           url: url(49),
@@ -2179,7 +2187,15 @@ describe("projects route", () => {
         // The poller last saw sha-old with green CI; the live PR is at sha55
         // (UNSTABLE). The old answer must not vouch for the new commit.
         mockGithub(gqlPr(55, { mergeStateStatus: "UNSTABLE" }));
-        await warmCiCache(55, "success", true, "sha-old");
+        await warmCiCache(55, "success", true, "sha-old", [
+          {
+            name: "CI",
+            status: "completed",
+            conclusion: "success",
+            htmlUrl: "https://github.com/acme/widgets/actions/runs/1",
+            headSha: "sha-old",
+          },
+        ]);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const detail = await app.inject({
@@ -2230,7 +2246,7 @@ describe("projects route", () => {
       });
 
       it("merge maps a GitHub refusal to 409", async () => {
-        await warmCiCache(45);
+        await warmCiCache(45, "success", true);
         mockGithub(gqlPr(45), (url) =>
           url.endsWith("/pulls/45/merge") ? jsonResponse(405, { message: "not mergeable" }) : null,
         );
