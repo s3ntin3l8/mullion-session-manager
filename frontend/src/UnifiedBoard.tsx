@@ -51,8 +51,8 @@ import { LaneCard } from "./unified-board/LaneCard.js";
 const DEFAULT_DRAWER_WIDTH = 380; // .kanban-detail-drawer's own prior fixed width
 const MIN_DRAWER_WIDTH = 300;
 // Reserves at least this much width for the columns behind the drawer —
-// .kanban-unified-columns .kanban-column's own min-width (200px) plus a
-// sliver of the next column, so dragging the drawer wide never collapses
+// .kanban-unified-columns .kanban-column's own min-width (160px) plus part
+// of the next column, so dragging the drawer wide never collapses
 // the board down to zero visible columns.
 const MIN_COLUMNS_WIDTH = 240;
 

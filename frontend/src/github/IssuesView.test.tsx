@@ -85,6 +85,21 @@ describe("IssuesSection", () => {
     expect(onOpen).toHaveBeenCalledWith(7);
   });
 
+  it("sorts through the app's themed dropdown and refetches with the new sort", async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, LIST)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    const sort = await screen.findByLabelText("Sort issues");
+    expect(sort.closest(".settings-dropdown.small")).not.toBeNull();
+    await userEvent.selectOptions(sort, "comments");
+    await waitFor(() => {
+      const urls = fetchMock.mock.calls.map((c) => String((c as unknown[])[0]));
+      expect(urls.some((u) => u.includes("sort=comments"))).toBe(true);
+    });
+  });
+
   it("does not claim 'no matches' while another page may hold them", async () => {
     vi.stubGlobal(
       "fetch",
