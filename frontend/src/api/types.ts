@@ -1117,6 +1117,32 @@ export interface WebhookRegistrationResult {
 // picker). Branch/worktree lists are fetched on demand when the GitPanel
 // opens, not on the sidebar's 4s live-refresh tick (they change far less
 // often than working-tree status).
+export interface GitLogCommit {
+  sha: string;
+  parents: string[];
+  author: string;
+  /** Author date, seconds since the epoch. */
+  time: number;
+  subject: string;
+  /** Decorations: "HEAD -> main", "origin/x", "tag: v1". */
+  refs: string[];
+}
+
+export interface GitLogResponse {
+  commits: GitLogCommit[];
+  hasMore: boolean;
+}
+
+export interface GitCommitDetail {
+  sha: string;
+  parents: string[];
+  author: string;
+  email: string;
+  time: number;
+  message: string;
+  files: { path: string; additions: number | null; deletions: number | null }[];
+}
+
 export interface GitBranchesResult {
   branches: GitBranchInfo[];
   worktrees: GitWorktreeInfo[];

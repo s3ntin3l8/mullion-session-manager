@@ -33,14 +33,29 @@ remote-host support uses.
 
 ## Endpoints
 
-| Endpoint                                | Method | Notes                                                                                                                 |
-| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------- |
-| `/api/projects/:id/git-branches`        | GET    | Branches + worktrees + remote branches. `?detail=1` additionally computes `isMerged` per branch. Rate-limited 30/min. |
-| `/api/projects/:id/git-fetch`           | POST   | Manual `git fetch origin` trigger. Rate-limited 10/min.                                                               |
-| `/api/projects/:id/git-pull`            | POST   | Fast-forward `git pull --ff-only` (`git merge --ff-only @{u}`). Rate-limited 10/min.                                  |
-| `/api/projects/:id/git-branch-delete`   | POST   | `{ name, force? }`. POST, not DELETE — a branch name can contain `/`. Rate-limited 10/min.                            |
-| `/api/projects/:id/git-worktree-remove` | POST   | `{ worktreePath, force? }`. Rate-limited 10/min.                                                                      |
-| `/api/projects/:id/git-worktree-prune`  | POST   | No body. Rate-limited 10/min.                                                                                         |
+| Endpoint                                 | Method | Notes                                                                                                                                                                                                              |
+| ---------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `/api/projects/:id/git-branches`         | GET    | Branches + worktrees + remote branches. `?detail=1` additionally computes `isMerged` per branch. Rate-limited 30/min.                                                                                              |
+| `/api/projects/:id/git-fetch`            | POST   | Manual `git fetch origin` trigger. Rate-limited 10/min.                                                                                                                                                            |
+| `/api/projects/:id/git-pull`             | POST   | Fast-forward `git pull --ff-only` (`git merge --ff-only @{u}`). Rate-limited 10/min.                                                                                                                               |
+| `/api/projects/:id/git-branch-delete`    | POST   | `{ name, force? }`. POST, not DELETE — a branch name can contain `/`. Rate-limited 10/min.                                                                                                                         |
+| `/api/projects/:id/git-worktree-remove`  | POST   | `{ worktreePath, force? }`. Rate-limited 10/min.                                                                                                                                                                   |
+| `/api/projects/:id/git-worktree-prune`   | POST   | No body. Rate-limited 10/min.                                                                                                                                                                                      |
+| `/api/projects/:id/git-log`              | GET    | Paged `git log --topo-order` (`skip`, `limit` ≤ 200, `scope=all\|head`) for the sidebar's History graph. Optional `cwd` must be one of `git worktree list`. Local hosts only (204 otherwise). Rate-limited 60/min. |
+| `/api/projects/:id/git-commit/:sha`      | GET    | One commit's message and `--numstat` file list (renames report the new path). Same `cwd` rule. Rate-limited 60/min.                                                                                                |
+| `/api/projects/:id/git-commit/:sha/file` | GET    | `?path=` — that file's patch within the commit. Rate-limited 60/min.                                                                                                                                               |
+
+## The sidebar's Git view
+
+The right sidebar's Git view (`right-sidebar/GitSidebarView.tsx`) composes
+four collapsible sections (open/closed state is kept per user in
+`localStorage`): **Changes** (the source-control section), **Branches**
+(ahead/behind, last-commit age, merged tag — fetched with `?detail=1` — and the
+PR's phase chip), **Worktrees** (the sessions running in each, and a selector
+that scopes History to a worktree) and **History** (a lane graph computed by
+`git/graphLayout.ts`, ref chips, per-commit files and diffs, "Load more"
+paging). History and commit detail are local-host only for now; remote-host
+projects show "No history available" (tracked in #1672).
 
 ## Safety guards, and what `force` actually overrides
 

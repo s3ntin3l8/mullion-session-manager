@@ -10,10 +10,41 @@ import type {
   GitRefsBatchResult,
   GitFileDiffResponse,
   GitPullResult,
+  GitLogResponse,
+  GitCommitDetail,
 } from "./types.js";
 import type { GitStatus, GitDiffStats } from "../../../src/shared/types.js";
 
 export const gitApi = {
+  // Commit history for the Git sidebar. undefined (204) when the project
+  // isn't a local git repo. `cwd` scopes to one of the project's worktrees.
+  getProjectGitLog: (
+    projectId: number,
+    opts: { skip?: number; limit?: number; scope?: "all" | "head"; cwd?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (opts.skip) params.set("skip", String(opts.skip));
+    if (opts.limit) params.set("limit", String(opts.limit));
+    if (opts.scope) params.set("scope", opts.scope);
+    if (opts.cwd) params.set("cwd", opts.cwd);
+    const qs = params.toString();
+    return request<GitLogResponse | undefined>(
+      `/api/projects/${projectId}/git-log${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  getProjectGitCommit: (projectId: number, sha: string, cwd?: string) =>
+    request<GitCommitDetail | undefined>(
+      `/api/projects/${projectId}/git-commit/${sha}${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""}`,
+    ),
+
+  getProjectGitCommitFile: (projectId: number, sha: string, path: string, cwd?: string) =>
+    request<{ patch: string } | undefined>(
+      `/api/projects/${projectId}/git-commit/${sha}/file?path=${encodeURIComponent(path)}${
+        cwd ? `&cwd=${encodeURIComponent(cwd)}` : ""
+      }`,
+    ),
+
   // undefined for the 204 "not applicable" response (see src/shared/types.ts's
   // GitStatus). `opts.fresh` (issue #433, Hermes review on PR #506) bypasses the
   // backend's ~5s git-status cache — pass it only for an explicit user

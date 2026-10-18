@@ -54,6 +54,14 @@ import {
   type GitBranchInfo,
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
+import {
+  MAX_LOG_PAGE,
+  getCommitDetail,
+  getCommitFileDiff,
+  getCommitLog,
+  isSafeRepoPath,
+  isValidSha,
+} from "../services/git-log.js";
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import { getIntegration, getToken, resolveGitHubToken } from "../services/github-integration.js";
@@ -3089,6 +3097,102 @@ export async function projectsRoute(app: FastifyInstance) {
       return result;
     },
   );
+
+  // History for the right sidebar's Git view. Local hosts only (a remote
+  // host's git runs in its agent; a mirrored /internal/git-log is deferred
+  // — those projects get the same 204 "nothing to show" as other git
+  // widgets). `cwd` optionally scopes the query to one of the project's own
+  // worktrees; it is accepted only if `git worktree list` reports it, so it
+  // can never point git at an arbitrary directory.
+  async function resolveGitLogCwd(
+    project: typeof projects.$inferSelect,
+    requestedCwd: string | undefined,
+  ): Promise<string | null | "forbidden"> {
+    if (project.hostId !== LOCAL_HOST_ID) return null;
+    if (requestedCwd === undefined || requestedCwd === project.cwd) return project.cwd;
+    const worktrees = await listWorktrees(project.cwd);
+    // Hand back git's own path for the match, never the request's string.
+    const match = worktrees?.find((w) => w.path === requestedCwd);
+    return match ? match.path : "forbidden";
+  }
+
+  const gitLogRateLimit = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+
+  app.get<{
+    Params: { id: string };
+    Querystring: { cwd?: string; skip?: string; limit?: string; scope?: string };
+  }>("/api/projects/:id/git-log", gitLogRateLimit, async (request, reply) => {
+    const projectId = Number(request.params.id);
+    if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!project) return reply.notFound();
+    const cwd = await resolveGitLogCwd(project, request.query.cwd);
+    if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
+    if (cwd === null) {
+      reply.code(204);
+      return;
+    }
+    const skip = request.query.skip === undefined ? 0 : Number(request.query.skip);
+    const limit = request.query.limit === undefined ? 100 : Number(request.query.limit);
+    if (!Number.isInteger(skip) || skip < 0 || !Number.isInteger(limit) || limit < 1) {
+      return reply.badRequest("skip and limit must be non-negative integers");
+    }
+    const scope = request.query.scope;
+    if (scope !== undefined && scope !== "all" && scope !== "head") {
+      return reply.badRequest("scope must be all or head");
+    }
+    const commits = await getCommitLog(cwd, { skip, limit, all: scope !== "head" });
+    if (!commits) {
+      reply.code(204);
+      return;
+    }
+    return { commits, hasMore: commits.length >= Math.min(limit, MAX_LOG_PAGE) };
+  });
+
+  app.get<{ Params: { id: string; sha: string }; Querystring: { cwd?: string } }>(
+    "/api/projects/:id/git-commit/:sha",
+    gitLogRateLimit,
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      if (!isValidSha(request.params.sha)) return reply.badRequest("Invalid commit id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      const cwd = await resolveGitLogCwd(project, request.query.cwd);
+      if (cwd === "forbidden")
+        return reply.badRequest("cwd is not one of this project's worktrees");
+      if (cwd === null) {
+        reply.code(204);
+        return;
+      }
+      const detail = await getCommitDetail(cwd, request.params.sha);
+      if (!detail) return reply.notFound("Commit not found");
+      return detail;
+    },
+  );
+
+  app.get<{
+    Params: { id: string; sha: string };
+    Querystring: { cwd?: string; path?: string };
+  }>("/api/projects/:id/git-commit/:sha/file", gitLogRateLimit, async (request, reply) => {
+    const projectId = Number(request.params.id);
+    if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+    const file = request.query.path;
+    if (!isValidSha(request.params.sha) || !file || !isSafeRepoPath(file)) {
+      return reply.badRequest("Invalid commit id or path");
+    }
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!project) return reply.notFound();
+    const cwd = await resolveGitLogCwd(project, request.query.cwd);
+    if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
+    if (cwd === null) {
+      reply.code(204);
+      return;
+    }
+    const patch = await getCommitFileDiff(cwd, request.params.sha, file);
+    if (patch === null) return reply.notFound("Diff not available");
+    return { patch };
+  });
 
   // Manual fetch trigger — POST /api/projects/:id/git-fetch runs
   // `git fetch origin` for this project now, regardless of auto-fetch
