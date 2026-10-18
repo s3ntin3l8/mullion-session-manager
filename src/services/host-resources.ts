@@ -5,13 +5,13 @@ import os from "node:os";
  * Uses `os.availableParallelism()` when available (Node 19.4+), falling back
  * to `os.cpus()?.length`, and defaulting to 4 if neither reports valid cores.
  */
-export function getAvailableHostCores(): number {
+export function getAvailableHostCores(osModule: typeof os = os): number {
   try {
-    if (typeof os.availableParallelism === "function") {
-      const cores = os.availableParallelism();
+    if (typeof osModule.availableParallelism === "function") {
+      const cores = osModule.availableParallelism();
       if (typeof cores === "number" && cores > 0) return cores;
     }
-    const cpus = os.cpus();
+    const cpus = osModule.cpus();
     if (Array.isArray(cpus) && cpus.length > 0) return cpus.length;
   } catch {
     // Non-standard runtime or procfs unreadable — fall through to default.

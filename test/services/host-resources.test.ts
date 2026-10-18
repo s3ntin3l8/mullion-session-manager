@@ -1,3 +1,4 @@
+import type os from "node:os";
 import { describe, it, expect } from "vitest";
 import {
   getAvailableHostCores,
@@ -11,6 +12,38 @@ describe("host-resources", () => {
       const cores = getAvailableHostCores();
       expect(Number.isInteger(cores)).toBe(true);
       expect(cores).toBeGreaterThan(0);
+    });
+
+    it("falls back to os.cpus() when availableParallelism is undefined or returns non-positive", () => {
+      const mockOs = {
+        availableParallelism: undefined,
+        cpus: () => Array.from({ length: 6 }, () => ({} as os.CpuInfo)),
+      } as unknown as typeof os;
+      expect(getAvailableHostCores(mockOs)).toBe(6);
+
+      const mockOsNonPositive = {
+        availableParallelism: () => 0,
+        cpus: () => Array.from({ length: 2 }, () => ({} as os.CpuInfo)),
+      } as unknown as typeof os;
+      expect(getAvailableHostCores(mockOsNonPositive)).toBe(2);
+    });
+
+    it("falls back to 4 when both availableParallelism and cpus() fail or return empty", () => {
+      const mockOsEmpty = {
+        availableParallelism: undefined,
+        cpus: () => [] as os.CpuInfo[],
+      } as unknown as typeof os;
+      expect(getAvailableHostCores(mockOsEmpty)).toBe(4);
+
+      const mockOsThrow = {
+        availableParallelism: () => {
+          throw new Error("unsupported");
+        },
+        cpus: () => {
+          throw new Error("procfs unreadable");
+        },
+      } as unknown as typeof os;
+      expect(getAvailableHostCores(mockOsThrow)).toBe(4);
     });
   });
 

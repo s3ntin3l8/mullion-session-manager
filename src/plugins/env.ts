@@ -138,6 +138,13 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Optional cgroup v2 CPUQuota override applied to manual session scopes (e.g. "400%").
+    // Unset by default (""), preserving 100% burst capacity on manual sessions.
+    MULLION_SESSION_CPU_QUOTA: {
+      type: "string",
+      default: "",
+      pattern: "^(?:\\d+%)?$",
+    },
     // Shared secret an "agent" role's internal API (src/routes/internal.ts)
     // requires on every request, including the /internal/ws/attach upgrade —
     // see src/app.ts's fail-closed boot check: role "agent" with an empty
@@ -539,12 +546,6 @@ export const schema = {
     MULLION_TASK_SKIP_PERMISSIONS: {
       type: "boolean",
       default: false,
-    },
-    // Optional cgroup v2 CPUQuota override applied to manual session scopes (e.g. "400%").
-    // Unset by default (""), preserving 100% burst capacity on manual sessions.
-    MULLION_SESSION_CPU_QUOTA: {
-      type: "string",
-      default: "",
     },
     // Comma-separated GitHub logins (e.g. bot accounts, whose
     // author_association is never OWNER/MEMBER/COLLABORATOR) whose issues and
@@ -972,6 +973,7 @@ declare module "fastify" {
       MULLION_TRUST_GATEWAY: boolean;
       MULLION_GATEWAY_LOGOUT_URL: string;
       MULLION_SESSION_SECRET: string;
+      MULLION_SESSION_CPU_QUOTA: string;
       MULLION_OIDC_ISSUER: string;
       MULLION_OIDC_CLIENT_ID: string;
       MULLION_OIDC_CLIENT_SECRET: string;
@@ -992,7 +994,6 @@ declare module "fastify" {
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
-      MULLION_SESSION_CPU_QUOTA: string;
       MULLION_TASK_TRUSTED_LOGINS: string;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;

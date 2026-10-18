@@ -1,6 +1,7 @@
 import { mkdirSync, openSync, writeSync, closeSync, constants as fsConstants } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { getAvailableHostCores } from "./host-resources.js";
+import { computeAdaptiveWorkers, getAvailableHostCores } from "./host-resources.js";
 
 // Injects an OSC 7 ("here is my current working directory") announcement
 // into a session's interactive shell — issue: sidebar worktree display.
@@ -75,9 +76,9 @@ function adaptiveZshenvContent(totalCores: number): string {
     sourceUserDotfile(".zshenv") +
     `
 # Mullion Adaptive Resource Governor
-# Dynamically adapts build and test tool concurrency to available host cores (${totalCores}) and system load.
+# Dynamically adapts build and test tool concurrency to available host cores and system load.
 _mullion_calc_workers() {
-  local cores=${totalCores}
+  local cores="\${MULLION_HOST_CORES:-${totalCores}}"
   local load_1m
   load_1m=$(awk '{printf("%d", $1)}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load average: ' '{print $2}' | awk -F, '{printf("%d", $1)}' || echo 0)
 
@@ -91,9 +92,9 @@ _mullion_calc_workers() {
   fi
 }
 
-[[ -z "$PYTEST_ADDOPTS" ]] && export PYTEST_ADDOPTS="-n $(_mullion_calc_workers)"
-[[ -z "$VITEST_MAX_THREADS" ]] && export VITEST_MAX_THREADS=$(_mullion_calc_workers)
-[[ -z "$MAKEFLAGS" ]] && export MAKEFLAGS="-j ${totalCores} -l ${totalCores}"
+[[ -z "$PYTEST_XDIST_AUTO_NUM_WORKERS" ]] && export PYTEST_XDIST_AUTO_NUM_WORKERS="$(_mullion_calc_workers)"
+[[ -z "$VITEST_MAX_WORKERS" ]] && export VITEST_MAX_WORKERS="$(_mullion_calc_workers)"
+[[ -z "$MAKEFLAGS" ]] && export MAKEFLAGS="-j \${MULLION_HOST_CORES:-${totalCores}} -l \${MULLION_HOST_CORES:-${totalCores}}"
 `
   );
 }
@@ -172,6 +173,17 @@ export function applyShellIntegrationEnv(
 ): void {
   const totalCores = getAvailableHostCores();
   env.MULLION_HOST_CORES = String(totalCores);
+  const initialWorkers = computeAdaptiveWorkers(totalCores, os.loadavg()[0] ?? 0);
+  if (!env.VITEST_MAX_WORKERS) {
+    env.VITEST_MAX_WORKERS = String(initialWorkers);
+  }
+  if (!env.PYTEST_XDIST_AUTO_NUM_WORKERS) {
+    env.PYTEST_XDIST_AUTO_NUM_WORKERS = String(initialWorkers);
+  }
+  if (!env.MAKEFLAGS) {
+    env.MAKEFLAGS = `-j ${totalCores} -l ${totalCores}`;
+  }
+
   const shellName = path.basename(shell);
   if (shellName === "zsh") {
     env.MULLION_USER_ZDOTDIR = env.ZDOTDIR || env.HOME || "";
@@ -180,8 +192,5 @@ export function applyShellIntegrationEnv(
     env.PROMPT_COMMAND = env.PROMPT_COMMAND
       ? `${env.PROMPT_COMMAND}; ${OSC7_BASH_SNIPPET}`
       : OSC7_BASH_SNIPPET;
-    if (!env.MAKEFLAGS) {
-      env.MAKEFLAGS = `-j ${totalCores} -l ${totalCores}`;
-    }
   }
 }

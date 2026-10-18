@@ -151,7 +151,7 @@ describe("applyShellIntegrationEnv", () => {
     expect(fs.existsSync(path.join(sessionsDir, "shell-integration"))).toBe(false);
   });
 
-  it("injects MULLION_HOST_CORES into the environment", () => {
+  it("injects MULLION_HOST_CORES and initial worker limits into the environment", () => {
     const sessionsDir = mkTmpDir("shell-integration-env-cores-");
     const env: NodeJS.ProcessEnv = { HOME: "/home/user" };
 
@@ -159,6 +159,27 @@ describe("applyShellIntegrationEnv", () => {
 
     expect(env.MULLION_HOST_CORES).toBeDefined();
     expect(Number.parseInt(env.MULLION_HOST_CORES!, 10)).toBeGreaterThan(0);
+    expect(env.VITEST_MAX_WORKERS).toBeDefined();
+    expect(Number.parseInt(env.VITEST_MAX_WORKERS!, 10)).toBeGreaterThan(0);
+    expect(env.PYTEST_XDIST_AUTO_NUM_WORKERS).toBeDefined();
+    expect(Number.parseInt(env.PYTEST_XDIST_AUTO_NUM_WORKERS!, 10)).toBeGreaterThan(0);
+    expect(env.MAKEFLAGS).toContain("-j");
+  });
+
+  it("preserves pre-existing worker limits in applyShellIntegrationEnv", () => {
+    const sessionsDir = mkTmpDir("shell-integration-env-preset-");
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/home/user",
+      VITEST_MAX_WORKERS: "2",
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "3",
+      MAKEFLAGS: "-j 4",
+    };
+
+    applyShellIntegrationEnv("/bin/zsh", env, sessionsDir);
+
+    expect(env.VITEST_MAX_WORKERS).toBe("2");
+    expect(env.PYTEST_XDIST_AUTO_NUM_WORKERS).toBe("3");
+    expect(env.MAKEFLAGS).toBe("-j 4");
   });
 });
 
@@ -169,9 +190,11 @@ describe("ensureShellIntegrationFiles — adaptive resource governor", () => {
     const content = fs.readFileSync(path.join(zdotdir, ".zshenv"), "utf8");
 
     expect(content).toContain("Mullion Adaptive Resource Governor");
-    expect(content).toContain("local cores=14");
-    expect(content).toContain('export PYTEST_ADDOPTS="-n $(_mullion_calc_workers)"');
-    expect(content).toContain("export VITEST_MAX_THREADS=$(_mullion_calc_workers)");
-    expect(content).toContain('export MAKEFLAGS="-j 14 -l 14"');
+    expect(content).toContain('local cores="${MULLION_HOST_CORES:-14}"');
+    expect(content).toContain('export PYTEST_XDIST_AUTO_NUM_WORKERS="$(_mullion_calc_workers)"');
+    expect(content).toContain('export VITEST_MAX_WORKERS="$(_mullion_calc_workers)"');
+    expect(content).toContain(
+      'export MAKEFLAGS="-j ${MULLION_HOST_CORES:-14} -l ${MULLION_HOST_CORES:-14}"',
+    );
   });
 });
