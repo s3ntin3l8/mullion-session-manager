@@ -95,7 +95,9 @@ export function agentTranscriptScript({ startDelay, lines, releaseFile }) {
 
 /** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
 export function lastTranscriptLine(lines) {
-  return lines.findLast((l) => l.trim() !== "");
+  const last = lines.findLast((l) => l.trim() !== "");
+  if (last === undefined) throw new Error("transcript has no non-blank line");
+  return last;
 }
 
 export const AUTH_TRANSCRIPT = [

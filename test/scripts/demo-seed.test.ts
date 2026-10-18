@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -7,6 +7,7 @@ import {
   KEEPALIVE_INTERVAL_S,
   agentTranscriptScript,
   lastTranscriptLine,
+  seedDemo,
 } from "../../scripts/demo/seed.mjs";
 
 // The demo's fake agents must never fall silent after their transcript, or
@@ -64,5 +65,31 @@ describe("agentTranscriptScript", () => {
 describe("lastTranscriptLine", () => {
   it("skips trailing blank lines", () => {
     expect(lastTranscriptLine(["first", "last", "", "  "])).toBe("last");
+  });
+
+  it("throws on an all-blank transcript", () => {
+    expect(() => lastTranscriptLine(["", "  "])).toThrow("no non-blank line");
+  });
+});
+
+describe("seedDemo holdTranscripts", () => {
+  // Seeds against a stub API (every call answers with an id) so only the
+  // generated scripts and the returned release path are under test.
+  const seed = (holdTranscripts?: boolean) => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    return seedDemo({ api: async () => ({ id: 1 }), root, holdTranscripts });
+  };
+
+  it("gates fake-agent.sh on the returned release file when holding", async () => {
+    const seeded = await seed(true);
+    const script = readFileSync(path.join(seeded.scriptsDir, "fake-agent.sh"), "utf8");
+    expect(seeded.authReleaseFile).toBe(path.join(seeded.scriptsDir, "fake-agent.release"));
+    expect(script).toContain(`while [ ! -e '${seeded.authReleaseFile}' ]`);
+  });
+
+  it("starts printing immediately by default, as `make demo` expects", async () => {
+    const seeded = await seed();
+    const script = readFileSync(path.join(seeded.scriptsDir, "fake-agent.sh"), "utf8");
+    expect(script).not.toContain("fake-agent.release");
   });
 });

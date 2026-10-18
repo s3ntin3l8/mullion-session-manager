@@ -104,7 +104,8 @@ async function newContext(browser, options) {
 async function waitUntil(check, what, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = await check();
+    // A transient API error on a loaded host is "not yet", not a failure.
+    const value = await check().catch(() => false);
     if (value) return value;
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 250));
@@ -118,15 +119,45 @@ async function waitUntil(check, what, timeoutMs = 60_000) {
  * dashboard and git-panel shots catch them at whatever point the host's load
  * allows, sometimes still scrolling.
  */
+async function findSession(demo, scriptName) {
+  const sessions = await demo.api("/api/sessions");
+  return sessions.find((s) => s.command?.endsWith(`/${scriptName}`));
+}
+
 async function waitForTranscript(demo, scriptName, lines) {
   const last = lastTranscriptLine(lines);
   await waitUntil(async () => {
-    const sessions = await demo.api("/api/sessions");
-    const session = sessions.find((s) => s.command?.endsWith(`/${scriptName}`));
+    const session = await findSession(demo, scriptName);
     if (!session) return false;
     const { b64 } = await demo.api(`/api/sessions/${session.id}/scrollback`);
     return Buffer.from(b64, "base64").toString("utf8").includes(last);
   }, `${scriptName} to finish its transcript`);
+}
+
+/**
+ * Waits until the browser's terminal is attached to `scriptName`'s session (a
+ * live subscriber on its PTY) and the PTY size it fitted has held still for
+ * SETTLE_MS. Output printed before then lands at an interim geometry (a
+ * pre-fit row count or font size) and the shot shows it scrolled or clipped.
+ */
+const SETTLE_MS = 1500;
+async function waitForSettledTerminal(demo, scriptName) {
+  let last = null;
+  let since = 0;
+  await waitUntil(async () => {
+    const session = await findSession(demo, scriptName);
+    if (!(session?.subscriberCount > 0)) {
+      last = null;
+      return false;
+    }
+    const size = `${session.cols}x${session.rows}`;
+    if (size !== last) {
+      last = size;
+      since = Date.now();
+      return false;
+    }
+    return Date.now() - since >= SETTLE_MS;
+  }, `the terminal attached to ${scriptName} to settle`);
 }
 
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
@@ -154,7 +185,7 @@ async function captureDesktop(browser, demo) {
   // the session is open here and its terminal sized, then prints it into the
   // live terminal; the shot waits for the whole transcript.
   await page.locator(".session-item", { hasText: "fake-agent.sh" }).first().click();
-  await page.waitForTimeout(1500);
+  await waitForSettledTerminal(demo, "fake-agent.sh");
   await writeFile(demo.seeded.authReleaseFile, "");
   await waitForTranscript(demo, "fake-agent.sh", AUTH_TRANSCRIPT);
   await page.waitForTimeout(1000);
