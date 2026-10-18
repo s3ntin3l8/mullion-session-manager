@@ -8,6 +8,7 @@ import type {
   GitHubJob,
   GitHubLogResponse,
   GitHubIssuesResponse,
+  GitHubPrDetail,
   GitHubIssueDetail,
   GitHubIssueSort,
   WebhookRegistrationResult,
@@ -73,6 +74,27 @@ export const githubApi = {
     request<{ queued: boolean; label: string }>(
       `/api/projects/${projectId}/github/issues/${number}/queue`,
       { method: "POST" },
+    ),
+
+  // PR drill-in: detail, actions and the session hand-off prompt.
+  getProjectPr: (projectId: number, number: number) =>
+    request<GitHubPrDetail>(`/api/projects/${projectId}/github/prs/${number}`),
+
+  reReviewProjectPr: (projectId: number, number: number) =>
+    request<{ status: string; runId: string; replayed: boolean }>(
+      `/api/projects/${projectId}/github/prs/${number}/re-review`,
+      { method: "POST" },
+    ),
+
+  mergeProjectPr: (projectId: number, number: number, headSha: string) =>
+    request<{ merged: boolean; sha: string }>(
+      `/api/projects/${projectId}/github/prs/${number}/merge`,
+      { method: "POST", body: JSON.stringify({ headSha }) },
+    ),
+
+  getProjectPrHandoff: (projectId: number, number: number) =>
+    request<{ prompt: string; branch: string }>(
+      `/api/projects/${projectId}/github/prs/${number}/handoff`,
     ),
 
   // Phase 2 — jobs and logs for a workflow run (issue #102 follow-up).

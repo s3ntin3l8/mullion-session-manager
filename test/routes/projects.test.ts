@@ -1856,6 +1856,198 @@ describe("projects route", () => {
       });
     });
 
+    describe("PR detail routes", () => {
+      async function connectedProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-prdetail-"));
+        fs.mkdirSync(path.join(projectCwd, ".git"));
+        fs.writeFileSync(
+          path.join(projectCwd, ".git", "config"),
+          '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
+        );
+        await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/token",
+          payload: { token: "ghp_connected" },
+        });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "pr-detail", cwd: projectCwd },
+        });
+        return { projectCwd, id: created.json().id as number };
+      }
+
+      const gqlPr = (number: number, over: Record<string, unknown> = {}) => ({
+        number,
+        title: `PR ${number}`,
+        url: `https://github.com/acme/widgets/pull/${number}`,
+        bodyHTML: "<p>b</p>",
+        state: "OPEN",
+        isDraft: false,
+        baseRefName: "main",
+        headRefName: "feat",
+        headRefOid: `sha${number}`,
+        additions: 1,
+        deletions: 1,
+        changedFiles: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+        author: { login: "me" },
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+        reviewDecision: "APPROVED",
+        commits: { totalCount: 0, nodes: [] },
+        reviewRequests: { nodes: [] },
+        latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
+        reviews: { nodes: [] },
+        reviewThreads: {
+          nodes: [
+            {
+              isResolved: false,
+              isOutdated: false,
+              path: "a.ts",
+              line: 2,
+              comments: {
+                nodes: [{ author: { login: "bob" }, bodyHTML: "<p>fix</p>", createdAt: "t" }],
+              },
+            },
+          ],
+        },
+        comments: { nodes: [] },
+        ...over,
+      });
+
+      function mockGithub(
+        pr: Record<string, unknown>,
+        extra?: (url: string, init?: RequestInit) => Response | null,
+      ) {
+        fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const custom = extra?.(url, init);
+          if (custom) return Promise.resolve(custom);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.endsWith("/graphql")) {
+            return Promise.resolve(
+              jsonResponse(200, { data: { repository: { pullRequest: pr } } }),
+            );
+          }
+          if (url.includes("/pulls/") && url.includes("/files")) {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+      }
+
+      it("returns the PR detail with the derived phase", async () => {
+        mockGithub(gqlPr(41));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/41` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          number: 41,
+          headSha: "sha41",
+          prPhase: "ready_to_merge",
+          threads: [{ path: "a.ts" }],
+        });
+        const bad = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/x` });
+        expect(bad.statusCode).toBe(400);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("404s a missing PR", async () => {
+        mockGithub(null as unknown as Record<string, unknown>);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/404` });
+        expect(res.statusCode).toBe(404);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("hand-off returns a prompt built from the open threads, plus the branch", async () => {
+        mockGithub(gqlPr(42));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/42/handoff`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().branch).toBe("feat");
+        expect(res.json().prompt).toContain("a.ts:2");
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge: refuses a stale head, an unready PR, and merges a ready one", async () => {
+        let merged: unknown = null;
+        mockGithub(gqlPr(43), (url, init) => {
+          if (url.endsWith("/pulls/43/merge")) {
+            merged = JSON.parse(String(init?.body));
+            return jsonResponse(200, { merged: true, sha: "mergesha" });
+          }
+          return null;
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = `/api/projects/${id}/github/prs/43/merge`;
+
+        const noSha = await app.inject({ method: "POST", url, payload: {} });
+        expect(noSha.statusCode).toBe(400);
+        const stale = await app.inject({ method: "POST", url, payload: { headSha: "old" } });
+        expect(stale.statusCode).toBe(409);
+        expect(merged).toBeNull();
+
+        const ok = await app.inject({ method: "POST", url, payload: { headSha: "sha43" } });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toEqual({ merged: true, sha: "mergesha" });
+        expect(merged).toMatchObject({ merge_method: "squash", sha: "sha43" });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge refuses a PR that is not ready (changes requested)", async () => {
+        mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/44/merge`,
+          payload: { headSha: "sha44" },
+        });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toMatch(/changes requested/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge maps a GitHub refusal to 409", async () => {
+        mockGithub(gqlPr(45), (url) =>
+          url.endsWith("/pulls/45/merge") ? jsonResponse(405, { message: "not mergeable" }) : null,
+        );
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/45/merge`,
+          payload: { headSha: "sha45" },
+        });
+        expect(res.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("re-review reports an unconfigured reviewer as a precondition failure", async () => {
+        mockGithub(gqlPr(46));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/46/re-review`,
+        });
+        expect(res.statusCode).toBe(412);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       // Unlike every other test in this block, this needs a real (failing)
       // network connection to 127.0.0.1:1, not the api.github.com fetch
