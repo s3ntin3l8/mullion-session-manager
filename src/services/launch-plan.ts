@@ -476,8 +476,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const totalCores = getAvailableHostCores();
   const taskQuotaPercent = computeTaskMasterCpuQuota(totalCores);
   const manualQuota = process.env.MULLION_SESSION_CPU_QUOTA;
-  const validManualQuota =
-    manualQuota && /^\d+%$/.test(manualQuota) ? manualQuota : undefined;
+  const validManualQuota = manualQuota && /^[1-9]\d*%$/.test(manualQuota) ? manualQuota : undefined;
   const quotaArgs = isTaskSession
     ? ["-p", `CPUQuota=${taskQuotaPercent}%`]
     : validManualQuota

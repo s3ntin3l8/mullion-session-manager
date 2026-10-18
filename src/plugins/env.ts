@@ -143,7 +143,7 @@ export const schema = {
     MULLION_SESSION_CPU_QUOTA: {
       type: "string",
       default: "",
-      pattern: "^(?:\\d+%)?$",
+      pattern: "^(?:[1-9]\\d*%)?$",
     },
     // Shared secret an "agent" role's internal API (src/routes/internal.ts)
     // requires on every request, including the /internal/ws/attach upgrade —

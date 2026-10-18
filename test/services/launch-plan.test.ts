@@ -652,6 +652,21 @@ describe("buildLaunchPlan — initial-prompt composition", () => {
 });
 
 describe("buildLaunchPlan — shell/unitName/argv shape", () => {
+  let ambientQuota: string | undefined;
+
+  beforeEach(() => {
+    ambientQuota = process.env.MULLION_SESSION_CPU_QUOTA;
+    delete process.env.MULLION_SESSION_CPU_QUOTA;
+  });
+
+  afterEach(() => {
+    if (ambientQuota === undefined) {
+      delete process.env.MULLION_SESSION_CPU_QUOTA;
+    } else {
+      process.env.MULLION_SESSION_CPU_QUOTA = ambientQuota;
+    }
+  });
+
   it("resolves shell from process.env.SHELL, falling back to /bin/bash", () => {
     process.env.SHELL = "/usr/bin/zsh";
     expect(buildLaunchPlan(baseSession()).shell).toBe("/usr/bin/zsh");
@@ -731,7 +746,7 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
   it("ignores invalid MULLION_SESSION_CPU_QUOTA formats", () => {
     const prior = process.env.MULLION_SESSION_CPU_QUOTA;
     try {
-      for (const invalid of ["350", "400cores", "invalid", "%", " 350% "]) {
+      for (const invalid of ["0%", "00%", "350", "400cores", "invalid", "%", " 350% "]) {
         process.env.MULLION_SESSION_CPU_QUOTA = invalid;
         const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
         expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(false);

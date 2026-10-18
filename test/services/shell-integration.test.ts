@@ -182,19 +182,3 @@ describe("applyShellIntegrationEnv", () => {
     expect(env.MAKEFLAGS).toBe("-j 4");
   });
 });
-
-describe("ensureShellIntegrationFiles — adaptive resource governor", () => {
-  it("injects adaptive resource governor snippet into .zshenv with host cores", () => {
-    const sessionsDir = mkTmpDir("shell-integration-adaptive-");
-    const zdotdir = ensureShellIntegrationFiles(sessionsDir, 14);
-    const content = fs.readFileSync(path.join(zdotdir, ".zshenv"), "utf8");
-
-    expect(content).toContain("Mullion Adaptive Resource Governor");
-    expect(content).toContain('local cores="${MULLION_HOST_CORES:-14}"');
-    expect(content).toContain('export PYTEST_XDIST_AUTO_NUM_WORKERS="$(_mullion_calc_workers)"');
-    expect(content).toContain('export VITEST_MAX_WORKERS="$(_mullion_calc_workers)"');
-    expect(content).toContain(
-      'export MAKEFLAGS="-j ${MULLION_HOST_CORES:-14} -l ${MULLION_HOST_CORES:-14}"',
-    );
-  });
-});

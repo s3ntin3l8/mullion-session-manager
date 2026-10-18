@@ -17,13 +17,13 @@ describe("host-resources", () => {
     it("falls back to os.cpus() when availableParallelism is undefined or returns non-positive", () => {
       const mockOs = {
         availableParallelism: undefined,
-        cpus: () => Array.from({ length: 6 }, () => ({} as os.CpuInfo)),
+        cpus: () => Array.from({ length: 6 }, () => ({}) as os.CpuInfo),
       } as unknown as typeof os;
       expect(getAvailableHostCores(mockOs)).toBe(6);
 
       const mockOsNonPositive = {
         availableParallelism: () => 0,
-        cpus: () => Array.from({ length: 2 }, () => ({} as os.CpuInfo)),
+        cpus: () => Array.from({ length: 2 }, () => ({}) as os.CpuInfo),
       } as unknown as typeof os;
       expect(getAvailableHostCores(mockOsNonPositive)).toBe(2);
     });
