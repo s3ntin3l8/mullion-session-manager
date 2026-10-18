@@ -56,7 +56,11 @@ import {
   type SessionLiveness,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
-import { cleanupSessionFiles } from "./session-files-cleanup.js";
+import {
+  cleanupSessionFiles,
+  sweepOrphanedSessionTmpDirs,
+  type SweepLogger,
+} from "./session-files-cleanup.js";
 import { TitleChangeDebouncer } from "./title-change-debouncer.js";
 import { loadOrCreateHookToken } from "./hook-token.js";
 import { isGenuineUserInput } from "./terminal-input-classify.js";
@@ -4256,5 +4260,25 @@ export class PtyManager {
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
     return isMasterAliveBatchProcess(this.sessionsDir, this.instanceId, ids);
+  }
+
+  /**
+   * Issue #1681 — sweeps orphaned `<id>.tmp` directories under `sessionsDir` whose
+   * session is confirmed dead. Untracked sessions are checked via
+   * `isMasterAliveStateBatch()`, skipping "alive" and "unknown" to prevent
+   * deleting the TMPDIR of a live dtach session after a server restart.
+   */
+  sweepOrphanedTmpDirs(log?: SweepLogger): Promise<number> {
+    return sweepOrphanedSessionTmpDirs(
+      this.sessionsDir,
+      async (candidateIds: string[]) => {
+        const liveness = await this.isMasterAliveStateBatch(candidateIds);
+        return new Set(candidateIds.filter((id) => liveness[id] === "dead"));
+      },
+      {
+        activeSessionIds: new Set(this.sessions.keys()),
+        log,
+      },
+    );
   }
 }

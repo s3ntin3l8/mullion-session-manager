@@ -118,5 +118,8 @@ for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_C
 
 afterAll(() => {
   fs.rmSync(tmpDb, { force: true });
+  fs.rmSync(`${tmpDb}-wal`, { force: true });
+  fs.rmSync(`${tmpDb}-shm`, { force: true });
+  fs.rmSync(`${tmpDb}-journal`, { force: true });
   fs.rmSync(tmpSessionsDir, { recursive: true, force: true });
 });

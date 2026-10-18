@@ -725,3 +725,70 @@ describe("buildLaunchPlan — shell integration (real applyShellIntegrationEnv, 
     expect(plan.env.PROMPT_COMMAND).toEqual(expect.stringContaining("\\033]7;"));
   });
 });
+
+describe("buildLaunchPlan — session TMPDIR isolation", () => {
+  it("injects TMPDIR, TEMP, and TMP pointing to <sessionsDir>/<id>.tmp and creates the dir", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-");
+    const plan = buildLaunchPlan(baseSession({ id: "99", sessionsDir }));
+    const expectedTmp = path.join(sessionsDir, "99.tmp");
+
+    expect(plan.env.TMPDIR).toBe(expectedTmp);
+    expect(plan.env.TEMP).toBe(expectedTmp);
+    expect(plan.env.TMP).toBe(expectedTmp);
+    expect(fs.existsSync(expectedTmp)).toBe(true);
+  });
+
+  it("preserves caller-supplied TMPDIR when provided in session.env", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-custom-");
+    const customTmp = "/custom/tmp/dir";
+    const plan = buildLaunchPlan(
+      baseSession({
+        id: "100",
+        sessionsDir,
+        env: { TMPDIR: customTmp },
+      }),
+    );
+
+    expect(plan.env.TMPDIR).toBe(customTmp);
+    expect(plan.env.TEMP).toBe(customTmp);
+    expect(plan.env.TMP).toBe(customTmp);
+    expect(fs.existsSync(path.join(sessionsDir, "100.tmp"))).toBe(false);
+  });
+
+  it("preserves caller-supplied TEMP or TMP and mirrors across all three", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-temp-");
+    const customTmp = "/custom/temp/dir";
+    const plan = buildLaunchPlan(
+      baseSession({
+        id: "101",
+        sessionsDir,
+        env: { TEMP: customTmp },
+      }),
+    );
+
+    expect(plan.env.TMPDIR).toBe(customTmp);
+    expect(plan.env.TEMP).toBe(customTmp);
+    expect(plan.env.TMP).toBe(customTmp);
+    expect(fs.existsSync(path.join(sessionsDir, "101.tmp"))).toBe(false);
+  });
+
+  it("logs warning if creating session tmp dir fails", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Point sessionsDir to a path where creating a directory will fail (e.g. an existing regular file)
+    const filePath = path.join(mkTmpDir("launch-plan-blocked-"), "blocked");
+    fs.writeFileSync(filePath, "file");
+
+    buildLaunchPlan(
+      baseSession({
+        id: "102",
+        sessionsDir: filePath,
+      }),
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to create session tmp dir for session 102"),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
+  });
+});
