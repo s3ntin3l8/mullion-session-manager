@@ -1453,7 +1453,10 @@ async function runStatus(client, args, opts, io) {
 const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
 
 async function runReview(client, args, opts, io) {
-  const { flags } = extractFlags(args, { pr: "string" });
+  // `mullion review` requests; `status` and `stop <runId>` troubleshoot / cancel.
+  const sub = args[0] === "status" || args[0] === "stop" ? args[0] : "request";
+  const rest = sub === "request" ? args : args.slice(1);
+  const { flags, rest: positionals } = extractFlags(rest, { pr: "string" });
   const body = {};
   if (flags.pr !== undefined) {
     const prNumber = Number(flags.pr);
@@ -1462,23 +1465,57 @@ async function runReview(client, args, opts, io) {
     }
     body.prNumber = prNumber;
   }
+  if (sub === "stop") {
+    if (positionals.length !== 1) throw new CliUsageError("usage: mullion review stop <runId>");
+    // The run is named, not derived from a PR.
+    delete body.prNumber;
+    body.runId = positionals[0];
+  }
   if (opts.session !== undefined) body.sessionId = opts.session;
   client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
+  const op = sub === "request" ? "reviews.request" : `reviews.${sub}`;
   const result =
     opts.session !== undefined
-      ? await client.request("reviews.request", body)
+      ? await client.request(op, body)
       : await requestOwnSessionFallback(
           client,
-          "reviews.request",
+          op,
           body,
           io,
           "'sessionId' is required",
-          (ownId) => ({ ...body, sessionId: ownId }),
+          (ownId) => ({
+            ...body,
+            sessionId: ownId,
+          }),
         );
+  if (sub === "stop") {
+    return { json: result, text: `review run ${result.runId}: ${result.status}` };
+  }
+  if (sub === "status") {
+    return { json: result, text: formatReviewStatus(result) };
+  }
   return {
     json: result,
-    text: `review requested for ${result.repo}#${result.prNumber} — it will post to the PR in a few minutes`,
+    text: `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}) — it will post to the PR in a few minutes`,
   };
+}
+
+function formatReviewStatus(r) {
+  if (r.status === "not_found") {
+    return `no review run known for ${r.repo}#${r.prNumber} — none requested from this Mullion, or the server restarted`;
+  }
+  const lines = [`review run ${r.runId} for ${r.repo}#${r.prNumber}: ${r.status}`];
+  if (r.shuttingDown) lines.push("the review gateway is shutting down");
+  if (r.error) lines.push(`error: ${r.error}`);
+  if (r.output) lines.push(`reply: ${r.output}`);
+  if (r.github?.checked) {
+    lines.push(
+      r.github.review
+        ? `posted: ${r.github.review.author} ${r.github.review.state} at ${r.github.review.commitId.slice(0, 7)}`
+        : "posted: nothing from a review bot yet",
+    );
+  }
+  return lines.join("\n");
 }
 
 async function runConfig(client, _args, _opts, io) {
@@ -1570,6 +1607,8 @@ Commands:
   notify --message <text> [--title <t>]
   status <working|done|needs_input> [--message <text>]   (--message is ignored for working)
   review [--pr <n>]
+  review status [--pr <n>]
+  review stop <runId>
   mcp
   config
 

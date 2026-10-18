@@ -60,6 +60,8 @@ mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 download
 mullion project list|actions|dock|tooling
 mullion review [--pr <n>]
+mullion review status [--pr <n>]
+mullion review stop <runId>
 mullion preview create|get|delete|list
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
@@ -421,7 +423,22 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   optional, and an empty one uses Mullion's built-in review prompt. The
   review is dispatched asynchronously and posts to the PR within a few
   minutes; a repeat request for the same PR inside the configured cooldown
-  exits non-zero with a 409. Local-host projects only.
+  exits non-zero with a 409, as does a request for a commit that already has
+  a review run (for example one the repository's own workflow started). The
+  confirmation names the run id.
+- `review status [--pr <n>]` — troubleshoots a requested review: the run's
+  Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
+  `interrupted`, or `not_found`), the review bot's reply or error, and whether
+  a review from a bot account actually landed on the PR after the request
+  (Hermes can report `completed` for a run that posted nothing, e.g. when it
+  had no App credentials). `not_found` means this Mullion has no run for the
+  PR: nothing was requested here, or the server restarted. Use it when a
+  review has not appeared after several minutes, not to poll.
+- `review stop <runId>` — stops a run **this session** dispatched; another
+  session's run is refused (403). Operators can stop any tracked run from
+  Settings → Integrations → Review relay → Recent reviews.
+
+All three are Local-host-project only.
 
 ### mcp
 

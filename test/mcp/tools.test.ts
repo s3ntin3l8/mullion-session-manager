@@ -34,6 +34,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "stop_dock_session",
       "get_scrollback",
       "request_review",
+      "review_status",
+      "stop_review",
       "list_projects",
       "list_actions",
       "create_preview",
@@ -416,6 +418,26 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       properties: { pr_number: { type: "integer", minimum: 1 } },
     });
     expect(tool.inputSchema).not.toHaveProperty("required");
+  });
+
+  it("review_status passes pr_number to client.reviewStatus and returns the result", async () => {
+    const tool = TOOLS.find((t) => t.name === "review_status")!;
+    const reviewStatus = vi.fn().mockResolvedValue({ status: "running", runId: "run_1" });
+    const text = await tool.handler({ pr_number: 7 }, { reviewStatus });
+    expect(reviewStatus).toHaveBeenCalledWith(7);
+    expect(JSON.parse(text)).toEqual({ status: "running", runId: "run_1" });
+    await tool.handler(undefined, { reviewStatus });
+    expect(reviewStatus).toHaveBeenLastCalledWith(undefined);
+    expect(tool.inputSchema).not.toHaveProperty("required");
+  });
+
+  it("stop_review passes run_id to client.stopReview and requires it", async () => {
+    const tool = TOOLS.find((t) => t.name === "stop_review")!;
+    const stopReview = vi.fn().mockResolvedValue({ runId: "run_1", status: "stopping" });
+    const text = await tool.handler({ run_id: "run_1" }, { stopReview });
+    expect(stopReview).toHaveBeenCalledWith("run_1");
+    expect(JSON.parse(text)).toEqual({ runId: "run_1", status: "stopping" });
+    expect(tool.inputSchema).toMatchObject({ required: ["run_id"] });
   });
 
   it("get_project_tooling calls client.getProjectTooling with the projectId", async () => {

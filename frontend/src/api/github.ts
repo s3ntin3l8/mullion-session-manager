@@ -10,6 +10,7 @@ import type {
   WebhookRegistrationResult,
   GitHubIntegration,
   HermesIntegration,
+  ReviewRun,
   SetGitHubAppResult,
   DeviceFlowStatus,
   ProjectReleaseStatus,
@@ -102,6 +103,14 @@ export const githubApi = {
 
   testHermesConnection: () =>
     request<{ ok: boolean }>("/api/integrations/hermes/test", { method: "POST" }),
+
+  // Runs the Mullion server dispatched to the review bot, with live status.
+  listReviews: () => request<{ runs: ReviewRun[] }>("/api/reviews"),
+
+  stopReview: (runId: string) =>
+    request<{ runId: string; status: string }>(`/api/reviews/${encodeURIComponent(runId)}/stop`, {
+      method: "POST",
+    }),
 
   disconnectGitHub: () => request<void>("/api/integrations/github", { method: "DELETE" }),
 

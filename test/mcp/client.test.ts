@@ -600,6 +600,47 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    describe("reviewStatus / stopReview", () => {
+      it("reviewStatus sends reviews.status, forwarding an explicit prNumber", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "running" });
+        await client.reviewStatus();
+        expect(spy).toHaveBeenLastCalledWith("reviews.status", {}, 60_000);
+        await client.reviewStatus(9);
+        expect(spy).toHaveBeenLastCalledWith("reviews.status", { prNumber: 9 }, 60_000);
+      });
+
+      it("stopReview sends reviews.stop with the runId", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "stopping" });
+        await client.stopReview("run_1");
+        expect(spy).toHaveBeenCalledWith("reviews.stop", { runId: "run_1" }, 60_000);
+      });
+
+      it("stopReview retries with MULLION_SESSION_ID after the no-pin 400", async () => {
+        let calls = 0;
+        const socketPath = await startControlServer((msg, socket) => {
+          calls += 1;
+          if (calls === 1) {
+            socket.write(
+              `${JSON.stringify({ id: msg.id, ok: false, status: 400, error: "'sessionId' is required" })}\n`,
+            );
+            return;
+          }
+          expect(msg.body).toEqual({ runId: "run_1", sessionId: "42" });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "stopping" } })}\n`,
+          );
+        });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+          MULLION_SESSION_ID: "42",
+        });
+        await client.stopReview("run_1");
+        expect(calls).toBe(2);
+      });
+    });
+
     describe("ownSessionId fallback (issue #1291)", () => {
       it("getScrollback retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
         let calls = 0;

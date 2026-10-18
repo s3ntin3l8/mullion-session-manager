@@ -682,6 +682,41 @@ export async function getPullRequestReviewDecision(
   return null;
 }
 
+export interface PullRequestReviewSummary {
+  author: string;
+  authorIsBot: boolean;
+  state: string;
+  commitId: string;
+  submittedAt: string | null;
+}
+
+/**
+ * Reviews on a PR (first 100, oldest first), reduced to what "did the review
+ * bot's verdict land" needs. Read-only.
+ */
+export async function listPullRequestReviews(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequestReviewSummary[]> {
+  const reviews = await githubRequest<
+    Array<{
+      user: { login: string; type: string } | null;
+      state: string;
+      commit_id: string;
+      submitted_at: string | null;
+    }>
+  >(token, owner, repo, "GET", `/pulls/${number}/reviews?per_page=100`);
+  return reviews.map((r) => ({
+    author: r.user?.login ?? "ghost",
+    authorIsBot: r.user?.type === "Bot",
+    state: r.state,
+    commitId: r.commit_id,
+    submittedAt: r.submitted_at,
+  }));
+}
+
 /**
  * Closes a PR without merging — used to clean up a draft PR opened at
  * "-> reviewing" when the task is subsequently given up on rather than

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
@@ -22,6 +22,8 @@ const NOT_CONFIGURED_APP = {
 describe("Settings -> Integrations -> Review relay", () => {
   let hermes: { hasKey: boolean; updatedAt: string | null };
   let testResponse: () => Response;
+  let reviewRuns: Array<Record<string, unknown>>;
+  let reviewsResponse: (() => Response) | null;
   let settingsPatches: Array<Record<string, unknown>>;
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
@@ -38,6 +40,8 @@ describe("Settings -> Integrations -> Review relay", () => {
     });
     hermes = { hasKey: false, updatedAt: null };
     testResponse = () => jsonResponse(200, { ok: true });
+    reviewRuns = [];
+    reviewsResponse = null;
     settingsPatches = [];
     unexpectedCalls = [];
 
@@ -82,6 +86,14 @@ describe("Settings -> Integrations -> Review relay", () => {
       }
       if (url === "/api/integrations/hermes/test" && method === "POST") {
         return Promise.resolve(testResponse());
+      }
+      if (url === "/api/reviews" && method === "GET") {
+        return Promise.resolve(reviewsResponse?.() ?? jsonResponse(200, { runs: reviewRuns }));
+      }
+      if (url.startsWith("/api/reviews/") && url.endsWith("/stop") && method === "POST") {
+        const runId = decodeURIComponent(url.slice("/api/reviews/".length, -"/stop".length));
+        reviewRuns = reviewRuns.map((r) => (r.runId === runId ? { ...r, status: "cancelled" } : r));
+        return Promise.resolve(jsonResponse(200, { runId, status: "stopping" }));
       }
       if (url === "/api/settings" && method === "PATCH") {
         settingsPatches.push(JSON.parse(String(init?.body)));
@@ -269,5 +281,91 @@ describe("Settings -> Integrations -> Review relay", () => {
     hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
     await renderCard();
     expect(await screen.findByText("Review relay ready")).toBeInTheDocument();
+  });
+
+  describe("recent reviews", () => {
+    const run = (over: Record<string, unknown>) => ({
+      runId: "run_1",
+      status: "running",
+      repo: "acme/widgets",
+      prNumber: 7,
+      headSha: "abc1234",
+      dispatchedAt: "2026-01-01T10:00:00.000Z",
+      shuttingDown: false,
+      ...over,
+    });
+
+    beforeEach(() => {
+      hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          reviewRelay: {
+            ...DEFAULT_SETTINGS.reviewRelay,
+            provider: "hermes",
+            apiUrl: "http://192.168.2.6:8643",
+          },
+        },
+        settingsLoaded: true,
+      });
+    });
+
+    it("is hidden until the relay is configured", async () => {
+      hermes = { hasKey: false, updatedAt: null };
+      await renderCard();
+      await screen.findByText("Review relay not configured");
+      expect(screen.queryByTestId("review-relay-recent")).not.toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalledWith("/api/reviews", expect.anything());
+    });
+
+    it("says so when nothing was requested yet", async () => {
+      await renderCard();
+      expect(await screen.findByText("No reviews requested yet.")).toBeInTheDocument();
+    });
+
+    it("lists runs and stops an active one only after the confirm click", async () => {
+      reviewRuns = [
+        run({}),
+        run({ runId: "run_2", prNumber: 8, status: "completed" }),
+        run({ runId: "run_3", prNumber: 9, status: "failed", error: "no App credentials" }),
+      ];
+      const user = userEvent.setup();
+      await renderCard();
+      const active = await screen.findByTestId("review-run-run_1");
+      expect(active).toHaveTextContent("acme/widgets#7");
+      expect(active).toHaveTextContent("running");
+      expect(screen.getByTestId("review-run-run_3")).toHaveTextContent("no App credentials");
+      // Finished runs have nothing to stop.
+      expect(screen.getByTestId("review-run-run_2")).not.toHaveTextContent("Stop");
+
+      await user.click(within(active).getByRole("button"));
+      expect(fetchMock).not.toHaveBeenCalledWith("/api/reviews/run_1/stop", expect.anything());
+      await user.click(within(active).getByRole("button"));
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/api/reviews/run_1/stop",
+          expect.objectContaining({ method: "POST" }),
+        ),
+      );
+      // The list reloads and shows the new status.
+      await waitFor(() =>
+        expect(screen.getByTestId("review-run-run_1")).toHaveTextContent("cancelled"),
+      );
+    });
+
+    it("refreshes on demand", async () => {
+      const user = userEvent.setup();
+      await renderCard();
+      await screen.findByText("No reviews requested yet.");
+      reviewRuns = [run({})];
+      await user.click(screen.getByRole("button", { name: "Refresh" }));
+      expect(await screen.findByTestId("review-run-run_1")).toBeInTheDocument();
+    });
+
+    it("shows the server's message when the list can't be loaded", async () => {
+      reviewsResponse = () => jsonResponse(503, { message: "The Hermes API is unreachable" });
+      await renderCard();
+      expect(await screen.findByText(/The Hermes API is unreachable/)).toBeInTheDocument();
+    });
   });
 });

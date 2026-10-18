@@ -13,6 +13,13 @@ import {
 } from "../../src/services/hermes-integration.js";
 import {
   assertReviewerConfigured,
+  getHermesReviewStatus,
+  getReviewRunForPr,
+  listHermesReviews,
+  ReviewConflictError,
+  ReviewRunForbiddenError,
+  ReviewRunNotFoundError,
+  stopHermesReview,
   buildReviewMessage,
   BUILTIN_REVIEW_PROMPT,
   HermesAuthError,
@@ -29,13 +36,10 @@ const tmpDb = path.join(os.tmpdir(), `hermes-review-test-${process.pid}.db`);
 
 const API = "http://192.168.2.6:8643";
 const PROMPT_URL = "https://raw.githubusercontent.com/acme/.github/HEAD/review.md";
-const PR = { owner: "acme", repo: "widgets", prNumber: 7 };
+const PR = { owner: "acme", repo: "widgets", prNumber: 7, headSha: "abc1234" };
 
-function timeoutError() {
-  return Object.assign(new Error("The operation was aborted due to timeout"), {
-    name: "TimeoutError",
-  });
-}
+const accepted = (runId = "run_1") =>
+  new Response(JSON.stringify({ run_id: runId, status: "queued" }), { status: 202 });
 
 describe("hermes review relay", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
@@ -43,6 +47,8 @@ describe("hermes review relay", () => {
   // What the Hermes endpoints do — overridable per test.
   let health: () => Promise<Response>;
   let dispatch: (init: RequestInit) => Promise<Response>;
+  // GET/POST /v1/runs/<id>[/stop] — the status and stop endpoints.
+  let runEndpoint: (url: string, init: RequestInit) => Promise<Response>;
   let promptResponse: () => Promise<Response>;
 
   beforeAll(async () => {
@@ -72,12 +78,14 @@ describe("hermes review relay", () => {
     });
     setHermesKey(app, "sekret-key"); // pragma: allowlist secret
     health = async () => new Response("ok", { status: 200 });
-    dispatch = async () => new Response("{}", { status: 200 });
+    dispatch = async () => accepted();
+    runEndpoint = async () => new Response("{}", { status: 404 });
     promptResponse = async () => new Response("REVIEW PROMPT BODY", { status: 200 });
     fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === PROMPT_URL) return promptResponse();
       if (url === `${API}/health`) return health();
-      if (url === `${API}/v1/chat/completions`) return dispatch(init ?? {});
+      if (url === `${API}/v1/runs`) return dispatch(init ?? {});
+      if (url.startsWith(`${API}/v1/runs/`)) return runEndpoint(url, init ?? {});
       return Promise.reject(new Error(`unexpected fetch ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -130,29 +138,87 @@ describe("hermes review relay", () => {
       await requestHermesReview(app, PR);
 
       expect(calls("/health")).toHaveLength(1);
-      const [post] = calls("/v1/chat/completions");
+      const [post] = calls("/v1/runs");
       expect(post).toBeDefined();
       const init = post[1] as RequestInit;
       expect(init.method).toBe("POST");
-      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sekret-key");
+      const headers = init.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer sekret-key");
+      expect(headers["Idempotency-Key"]).toMatch(/^mullion-review:acme\/widgets#7@abc1234:\d+$/);
       expect(init.redirect).toBe("manual");
       const body = JSON.parse(init.body as string);
       expect(body.model).toBe("hermes-agent");
-      expect(body.stream).toBe(false);
-      expect(body.messages).toHaveLength(1);
-      expect(body.messages[0].content).toContain("Target: pr #7 in repo acme/widgets");
-      expect(body.messages[0].content).toContain("REVIEW PROMPT BODY");
+      expect(body.input).toContain("Target: pr #7 in repo acme/widgets");
+      expect(body.input).toContain("REVIEW PROMPT BODY");
     });
 
-    it("treats a timeout after the health check as accepted-and-running", async () => {
-      dispatch = () => Promise.reject(timeoutError());
-      await expect(requestHermesReview(app, PR)).resolves.toBeUndefined();
+    it("retries within the cooldown window reuse the key; a later request gets a new one", async () => {
+      const keyOf = (i: number) =>
+        (fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/v1/runs"))[i][1] as RequestInit)
+          .headers as Record<string, string>;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        dispatch = () => Promise.reject(new Error("connect ECONNREFUSED"));
+        await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
+        dispatch = async () => accepted();
+        await requestHermesReview(app, PR); // the retry
+        expect(keyOf(1)["Idempotency-Key"]).toBe(keyOf(0)["Idempotency-Key"]);
+        vi.setSystemTime(Date.now() + 11 * 60_000); // past the 10-minute window
+        await requestHermesReview(app, PR);
+        expect(keyOf(2)["Idempotency-Key"]).not.toBe(keyOf(1)["Idempotency-Key"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("returns the run id Hermes assigned and indexes it for the PR", async () => {
+      dispatch = async () => accepted("run_abc");
+      await expect(requestHermesReview(app, { ...PR, sessionId: 5 })).resolves.toEqual({
+        runId: "run_abc",
+        status: "queued",
+      });
+      expect(getReviewRunForPr("ACME", "Widgets", 7)).toMatchObject({
+        runId: "run_abc",
+        headSha: "abc1234",
+        sessionId: 5,
+      });
+    });
+
+    it("treats a timeout on the POST as a failure and frees the cooldown slot", async () => {
+      dispatch = () =>
+        Promise.reject(Object.assign(new Error("timeout"), { name: "TimeoutError" }));
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
+      dispatch = async () => accepted();
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
+    });
+
+    it("fails when Hermes answers 202 without a run id", async () => {
+      dispatch = async () => new Response("{}", { status: 202 });
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/no run id/);
+      dispatch = async () => new Response("not json", { status: 202 });
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/no run id/);
+    });
+
+    it("maps a 409 idempotency conflict to ReviewConflictError", async () => {
+      dispatch = async () =>
+        new Response('{"error":{"code":"idempotency_key_conflict"}}', { status: 409 });
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewConflictError);
+    });
+
+    it("passes Retry-After through on 429/503 from Hermes", async () => {
+      dispatch = async () =>
+        new Response("busy", { status: 429, headers: { "Retry-After": "30" } });
+      const err = (await requestHermesReview(app, PR).catch(
+        (e: unknown) => e,
+      )) as HermesUnavailableError;
+      expect(err).toBeInstanceOf(HermesUnavailableError);
+      expect(err.retryAfterSeconds).toBe(30);
     });
 
     it("tolerates a trailing slash on the configured URL", async () => {
       applySettingsPatch(app, { reviewRelay: { apiUrl: `${API}///` } });
       await requestHermesReview(app, PR);
-      expect(calls("/v1/chat/completions")).toHaveLength(1);
+      expect(calls("/v1/runs")).toHaveLength(1);
     });
 
     it("fails with HermesUnavailableError when the POST can't connect", async () => {
@@ -176,20 +242,20 @@ describe("hermes review relay", () => {
     it("does not POST when the health check fails", async () => {
       health = () => Promise.reject(new Error("connect timed out"));
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
-      expect(calls("/v1/chat/completions")).toHaveLength(0);
+      expect(calls("/v1/runs")).toHaveLength(0);
     });
 
     it("does not POST when health returns a non-2xx", async () => {
       health = async () => new Response("down", { status: 503 });
       await expect(requestHermesReview(app, PR)).rejects.toThrow(/unreachable/);
-      expect(calls("/v1/chat/completions")).toHaveLength(0);
+      expect(calls("/v1/runs")).toHaveLength(0);
     });
 
     it("does not start a cooldown for a failed dispatch", async () => {
       dispatch = () => Promise.reject(new Error("connect ECONNREFUSED"));
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
-      dispatch = async () => new Response("{}", { status: 200 });
-      await expect(requestHermesReview(app, PR)).resolves.toBeUndefined();
+      dispatch = async () => accepted();
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
     });
 
     it("fails when the prompt can't be fetched (network and HTTP error)", async () => {
@@ -210,10 +276,8 @@ describe("hermes review relay", () => {
       applySettingsPatch(app, { reviewRelay: { promptRepo: "" } });
       await requestHermesReview(app, PR);
       expect(fetchMock.mock.calls.some(([url]) => url === PROMPT_URL)).toBe(false);
-      const post = fetchMock.mock.calls.find(([url]) =>
-        String(url).endsWith("/v1/chat/completions"),
-      );
-      const content = JSON.parse(String(post![1].body)).messages[0].content as string;
+      const post = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/v1/runs"));
+      const content = JSON.parse(String(post![1].body)).input as string;
       expect(content).toContain(BUILTIN_REVIEW_PROMPT);
     });
 
@@ -258,12 +322,14 @@ describe("hermes review relay", () => {
         expect(err).toBeInstanceOf(ReviewCooldownError);
         expect((err as ReviewCooldownError).retryAfterSeconds).toBeGreaterThan(0);
         expect((err as ReviewCooldownError).retryAfterSeconds).toBeLessThanOrEqual(600);
-        expect(calls("/v1/chat/completions")).toHaveLength(1);
+        expect(calls("/v1/runs")).toHaveLength(1);
       });
 
       it("is per PR and case-insensitive on the repo", async () => {
         await requestHermesReview(app, PR);
-        await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toBeUndefined();
+        await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toMatchObject({
+          runId: "run_1",
+        });
         await expect(
           requestHermesReview(app, { owner: "ACME", repo: "Widgets", prNumber: 7 }),
         ).rejects.toBeInstanceOf(ReviewCooldownError);
@@ -274,7 +340,7 @@ describe("hermes review relay", () => {
         try {
           await requestHermesReview(app, PR);
           vi.setSystemTime(Date.now() + 10 * 60_000 + 1);
-          await expect(requestHermesReview(app, PR)).resolves.toBeUndefined();
+          await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
         } finally {
           vi.useRealTimers();
         }
@@ -283,8 +349,129 @@ describe("hermes review relay", () => {
       it("is disabled by a 0-minute cooldown", async () => {
         applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
         await requestHermesReview(app, PR);
-        await expect(requestHermesReview(app, PR)).resolves.toBeUndefined();
+        await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
       });
+    });
+  });
+
+  describe("run status, list and stop", () => {
+    const run = (over: Record<string, unknown>) =>
+      new Response(JSON.stringify({ object: "hermes.run", run_id: "run_1", ...over }), {
+        status: 200,
+      });
+
+    it("reports not_found when no run is tracked for the PR", async () => {
+      await expect(getHermesReviewStatus(app, PR)).resolves.toMatchObject({
+        provider: "hermes",
+        status: "not_found",
+      });
+      expect(calls("/v1/runs/run_1")).toHaveLength(0);
+    });
+
+    it("returns Hermes' status, bounded output, error and shutdown flag", async () => {
+      await requestHermesReview(app, PR);
+      runEndpoint = async (url, init) => {
+        expect(url).toBe(`${API}/v1/runs/run_1`);
+        expect(init.method).toBe("GET");
+        return run({
+          status: "completed",
+          output: "x".repeat(10_000),
+          error: "",
+          shutdown_requested_at: 1,
+        });
+      };
+      const status = await getHermesReviewStatus(app, PR);
+      expect(status).toMatchObject({
+        provider: "hermes",
+        runId: "run_1",
+        status: "completed",
+        shuttingDown: true,
+        headSha: "abc1234",
+        repo: "acme/widgets",
+      });
+      expect((status as { output: string }).output).toHaveLength(4_000);
+      expect((status as { error?: string }).error).toBeUndefined();
+    });
+
+    it("maps an expired run (404) to not_found but keeps the run's identity", async () => {
+      await requestHermesReview(app, PR);
+      await expect(getHermesReviewStatus(app, PR)).resolves.toMatchObject({
+        runId: "run_1",
+        status: "not_found",
+      });
+    });
+
+    it("fails status with Unavailable on a Hermes 500 and Auth on 401", async () => {
+      await requestHermesReview(app, PR);
+      runEndpoint = async () => new Response("boom", { status: 500 });
+      await expect(getHermesReviewStatus(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
+      runEndpoint = async () => new Response("no", { status: 401 });
+      await expect(getHermesReviewStatus(app, PR)).rejects.toBeInstanceOf(HermesAuthError);
+    });
+
+    it("lists recent runs newest first, degrading to unknown when one can't be read", async () => {
+      dispatch = async () => accepted("run_a");
+      await requestHermesReview(app, PR);
+      dispatch = async () => accepted("run_b");
+      await requestHermesReview(app, { ...PR, prNumber: 8 });
+      runEndpoint = async (url) =>
+        url.endsWith("run_a")
+          ? new Response("boom", { status: 500 })
+          : run({ run_id: "run_b", status: "running" });
+      const runs = await listHermesReviews(app);
+      expect(runs.map((r) => [r.runId, r.status])).toEqual([
+        ["run_b", "running"],
+        ["run_a", "unknown"],
+      ]);
+    });
+
+    it("evicts the oldest runs beyond the tracking cap", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      for (let i = 0; i < 205; i += 1) {
+        dispatch = async () => accepted(`run_${i}`);
+        await requestHermesReview(app, { ...PR, prNumber: i + 1 });
+      }
+      expect(getReviewRunForPr("acme", "widgets", 1)).toBeNull();
+      expect(getReviewRunForPr("acme", "widgets", 205)?.runId).toBe("run_204");
+    });
+
+    it("stops a tracked run (operator, no session)", async () => {
+      await requestHermesReview(app, { ...PR, sessionId: 5 });
+      runEndpoint = async (url, init) => {
+        expect(url).toBe(`${API}/v1/runs/run_1/stop`);
+        expect(init.method).toBe("POST");
+        return new Response('{"run_id":"run_1","status":"stopping"}', { status: 200 });
+      };
+      await expect(stopHermesReview(app, "run_1")).resolves.toEqual({
+        runId: "run_1",
+        status: "stopping",
+      });
+    });
+
+    it("lets a session stop only its own run", async () => {
+      await requestHermesReview(app, { ...PR, sessionId: 5 });
+      runEndpoint = async () => new Response('{"status":"stopping"}', { status: 200 });
+      await expect(stopHermesReview(app, "run_1", 6)).rejects.toBeInstanceOf(
+        ReviewRunForbiddenError,
+      );
+      await expect(stopHermesReview(app, "run_1", 5)).resolves.toMatchObject({
+        status: "stopping",
+      });
+    });
+
+    it("refuses an unknown run without calling Hermes, and maps a Hermes 404", async () => {
+      await expect(stopHermesReview(app, "run_nope")).rejects.toBeInstanceOf(
+        ReviewRunNotFoundError,
+      );
+      expect(calls("/stop")).toHaveLength(0);
+      await requestHermesReview(app, PR);
+      await expect(stopHermesReview(app, "run_1")).rejects.toBeInstanceOf(ReviewRunNotFoundError);
+    });
+
+    it("fails stop with Unavailable on a Hermes 500", async () => {
+      await requestHermesReview(app, PR);
+      runEndpoint = async () => new Response("boom", { status: 500 });
+      await expect(stopHermesReview(app, "run_1")).rejects.toBeInstanceOf(HermesUnavailableError);
     });
   });
 
@@ -377,7 +564,7 @@ describe("hermes review relay", () => {
       expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
       const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
       expect(rejected.reason).toBeInstanceOf(ReviewCooldownError);
-      expect(calls("/v1/chat/completions")).toHaveLength(1);
+      expect(calls("/v1/runs")).toHaveLength(1);
     });
   });
 

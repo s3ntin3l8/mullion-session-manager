@@ -132,5 +132,9 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   server to relay an automated Hermes review of your PR. It posts to the PR
   within a few minutes; wait for it instead of requesting again. Only works
   once an operator has configured the review relay in Mullion's Settings.
+  If a requested review never appears, `mullion review status` (or
+  `review_status`) shows the run's state, the bot's reply and whether its
+  review landed; `mullion review stop <runId>` (or `stop_review`) cancels a
+  run you started.
 - Drive the browser (see the Mullion browser skill) against whatever's
   already listening, dock-managed or started in your own shell.

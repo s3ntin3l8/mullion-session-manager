@@ -197,8 +197,8 @@ pair-and-connect`, the three ops above with no MCP tool at all.
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
 set, not for you. `get_scrollback` (defaults to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
-(defaults to your own project), and `request_review` (your own session's PR)
-work normally at session scope.
+(defaults to your own project), and `request_review` / `review_status` / `stop_review` (your own session's
+PR and runs) work normally at session scope.
 
 ## Browser automation
 

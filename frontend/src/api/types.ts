@@ -511,6 +511,20 @@ export interface HermesIntegration {
   updatedAt: string | null;
 }
 
+/** One review run this Mullion dispatched (GET /api/reviews). */
+export interface ReviewRun {
+  runId: string;
+  /** Hermes' status, "not_found" once expired, or "unknown" when it couldn't be read. */
+  status: string;
+  repo: string;
+  prNumber: number;
+  headSha: string;
+  dispatchedAt: string;
+  output?: string;
+  error?: string;
+  shuttingDown: boolean;
+}
+
 export interface GitHubIntegration {
   connected: boolean;
   tokenType: "pat" | "oauth" | null;
