@@ -1,3 +1,4 @@
+import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type {
@@ -527,6 +528,8 @@ export function GitHubPanel({
   // "explicitly out of scope" list). Bumping this alone re-fetches only
   // the release section, not the PR/issue lists too.
   const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
+  // Drill-in: an open issue replaces the list until the user goes back.
+  const [openIssue, setOpenIssue] = useState<number | null>(null);
   const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
   const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
   const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
@@ -572,6 +575,18 @@ export function GitHubPanel({
         No GitHub status available for this project. Connect an account in Settings → Integrations,
         and make sure this project's <code>origin</code> remote points at github.com.
       </EmptyStateNote>
+    );
+  }
+
+  if (openIssue !== null) {
+    return (
+      <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
+        <IssueDetailView
+          projectId={params.projectId}
+          number={openIssue}
+          onBack={() => setOpenIssue(null)}
+        />
+      </div>
     );
   }
 
@@ -645,29 +660,12 @@ export function GitHubPanel({
       )}
 
       {status && (
-        <div className="github-panel-section">
-          <div className="github-panel-section-title">Issues ({status.openIssues})</div>
-          {status.issuesHidden && (
-            <div className="github-panel-empty-row">
-              The GitHub token can't list issues — grant it Issues access
-            </div>
-          )}
-          {status.issues.length === 0 && !status.issuesHidden && (
-            <div className="github-panel-empty-row">No open issues</div>
-          )}
-          {status.issues.map((issue) => (
-            <a
-              key={issue.number}
-              className="github-panel-row"
-              href={issue.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="github-panel-row-number">#{issue.number}</span>
-              <span className="github-panel-row-title">{issue.title}</span>
-            </a>
-          ))}
-        </div>
+        <IssuesSection
+          projectId={params.projectId}
+          openIssues={status.openIssues}
+          issuesHidden={status.issuesHidden}
+          onOpenIssue={setOpenIssue}
+        />
       )}
 
       {((prsStatus && prsStatus.prs.length === 0) || (!prsStatus && status)) &&

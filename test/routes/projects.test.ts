@@ -1641,6 +1641,199 @@ describe("projects route", () => {
       fs.rmSync(projectCwd, { recursive: true, force: true });
     });
 
+    describe("issues view routes", () => {
+      async function connectedProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-issues-"));
+        fs.mkdirSync(path.join(projectCwd, ".git"));
+        fs.writeFileSync(
+          path.join(projectCwd, ".git", "config"),
+          '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
+        );
+        await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/token",
+          payload: { token: "ghp_connected" },
+        });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "issues-view", cwd: projectCwd },
+        });
+        return { projectCwd, id: created.json().id as number };
+      }
+
+      const rawIssue = (n: number, extra: Record<string, unknown> = {}) => ({
+        number: n,
+        title: `issue ${n}`,
+        html_url: `https://github.com/acme/widgets/issues/${n}`,
+        user: { login: "a" },
+        labels: [{ name: "bug", color: "d73a4a" }],
+        assignees: [{ login: "me" }],
+        comments: 2,
+        milestone: { title: "v1" },
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-02T00:00:00Z",
+        ...extra,
+      });
+
+      it("lists filtered issues (PRs dropped) with labels and forwards the filters", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.includes("/repos/acme/widgets/issues?")) {
+            return Promise.resolve(
+              jsonResponse(200, [rawIssue(1), rawIssue(2, { pull_request: {} })]),
+            );
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/issues?labels=bug&assignee=me&sort=comments&q=issue`,
+        });
+        expect(res.statusCode).toBe(200);
+        const body = res.json();
+        expect(body.issues).toHaveLength(1);
+        expect(body.issues[0]).toMatchObject({
+          number: 1,
+          labels: [{ name: "bug", color: "d73a4a" }],
+          assignees: ["me"],
+          commentCount: 2,
+          milestone: "v1",
+          taskStatus: null,
+        });
+        expect(body.labels).toEqual([{ name: "bug", color: "d73a4a" }]);
+        const url = String(
+          fetchMock.mock.calls.map(([u]) => String(u)).find((u) => u.includes("/issues?")),
+        );
+        expect(url).toContain("labels=bug");
+        expect(url).toContain("assignee=me");
+        expect(url).toContain("sort=comments");
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("rejects a bad sort or page", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const badSort = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/issues?sort=nope`,
+        });
+        expect(badSort.statusCode).toBe(400);
+        const badPage = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/issues?page=0`,
+        });
+        expect(badPage.statusCode).toBe(400);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("502s when GitHub rejects the issue list", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          return Promise.resolve(jsonResponse(500, { message: "boom" }));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues` });
+        expect(res.statusCode).toBe(502);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("returns an issue's rendered body and comments; 404s for a PR", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.endsWith("/issues/5/comments?per_page=100")) {
+            return Promise.resolve(
+              jsonResponse(200, [
+                {
+                  id: 9,
+                  user: { login: "bob" },
+                  body_html: "<p>hi</p>",
+                  created_at: "2026-01-03T00:00:00Z",
+                  html_url: "https://github.com/acme/widgets/issues/5#issuecomment-9",
+                },
+              ]),
+            );
+          }
+          if (url.endsWith("/issues/5")) {
+            return Promise.resolve(
+              jsonResponse(200, rawIssue(5, { body_html: "<p>body</p>", state: "closed" })),
+            );
+          }
+          if (url.endsWith("/issues/6/comments?per_page=100")) {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          if (url.endsWith("/issues/6")) {
+            return Promise.resolve(jsonResponse(200, rawIssue(6, { pull_request: {} })));
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+
+        const ok = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/5` });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toMatchObject({
+          number: 5,
+          state: "closed",
+          bodyHtml: "<p>body</p>",
+          comments: [{ id: 9, author: "bob", bodyHtml: "<p>hi</p>" }],
+        });
+        const pr = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/6` });
+        expect(pr.statusCode).toBe(404);
+        const bad = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/x` });
+        expect(bad.statusCode).toBe(400);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("queue: refuses when Task Master is off, labels the issue when it is on", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.endsWith("/issues/7/labels")) return Promise.resolve(jsonResponse(200, []));
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+
+        const off = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/issues/7/queue`,
+        });
+        expect(off.statusCode).toBe(400);
+
+        app.config.MULLION_TASK_MASTER_ENABLED = true;
+        const on = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/issues/7/queue`,
+        });
+        expect(on.statusCode).toBe(200);
+        expect(on.json()).toEqual({ queued: true, label: app.config.MULLION_TASK_LABEL });
+        const labelCall = fetchMock.mock.calls.find(([u]) =>
+          String(u).endsWith("/issues/7/labels"),
+        );
+        expect(JSON.parse(labelCall![1].body as string)).toEqual({
+          labels: [app.config.MULLION_TASK_LABEL],
+        });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       // Unlike every other test in this block, this needs a real (failing)
       // network connection to 127.0.0.1:1, not the api.github.com fetch

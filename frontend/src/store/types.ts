@@ -168,6 +168,8 @@ export interface SessionsSlice {
       // interface is the store slice's own contract, api/sessions.ts is the
       // HTTP layer's).
       model?: string;
+      // See api/sessions.ts's createSession opts.
+      seedPrompt?: string;
     },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;

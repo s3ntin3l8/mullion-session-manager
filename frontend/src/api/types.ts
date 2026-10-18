@@ -971,6 +971,55 @@ export interface GitHubPRsStatus {
   prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
+export interface GitHubIssueLabel {
+  name: string;
+  /** Hex colour without the leading `#`. */
+  color: string;
+}
+
+export interface GitHubIssueListItem {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  author: string | null;
+  labels: GitHubIssueLabel[];
+  assignees: string[];
+  commentCount: number;
+  milestone: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Task Master task status for this issue, when one exists. */
+  taskStatus: string | null;
+}
+
+export interface GitHubIssuesResponse {
+  issues: GitHubIssueListItem[];
+  page: number;
+  hasMore: boolean;
+  /** Every label on the returned page, for the filter chips. */
+  labels: GitHubIssueLabel[];
+  taskMasterEnabled: boolean;
+  taskLabel: string;
+}
+
+export interface GitHubIssueComment {
+  id: number;
+  author: string | null;
+  /** GitHub-rendered HTML — sanitize before inserting. */
+  bodyHtml: string;
+  createdAt: string;
+  htmlUrl: string;
+}
+
+export interface GitHubIssueDetail extends Omit<GitHubIssueListItem, "taskStatus"> {
+  state: "open" | "closed";
+  /** GitHub-rendered HTML — sanitize before inserting. */
+  bodyHtml: string;
+  comments: GitHubIssueComment[];
+}
+
+export type GitHubIssueSort = "updated" | "created" | "comments";
+
 export interface GitHubStatus {
   repo: { owner: string; repo: string; htmlUrl: string };
   openIssues: number;

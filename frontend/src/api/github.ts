@@ -7,6 +7,9 @@ import type {
   GitHubPRsStatus,
   GitHubJob,
   GitHubLogResponse,
+  GitHubIssuesResponse,
+  GitHubIssueDetail,
+  GitHubIssueSort,
   WebhookRegistrationResult,
   GitHubIntegration,
   HermesIntegration,
@@ -38,6 +41,38 @@ export const githubApi = {
   getProjectGitHubPRs: (projectId: number, branch?: string) =>
     request<GitHubPRsStatus | undefined>(
       `/api/projects/${projectId}/github/prs${branch ? `?branch=${encodeURIComponent(branch)}` : ""}`,
+    ),
+
+  // Issues view: filterable list, single-issue detail, and Task Master queueing.
+  getProjectIssues: (
+    projectId: number,
+    query: {
+      labels?: string[];
+      assignee?: string;
+      sort?: GitHubIssueSort;
+      q?: string;
+      page?: number;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (query.labels?.length) params.set("labels", query.labels.join(","));
+    if (query.assignee) params.set("assignee", query.assignee);
+    if (query.sort) params.set("sort", query.sort);
+    if (query.q) params.set("q", query.q);
+    if (query.page && query.page > 1) params.set("page", String(query.page));
+    const qs = params.toString();
+    return request<GitHubIssuesResponse>(
+      `/api/projects/${projectId}/github/issues${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  getProjectIssue: (projectId: number, number: number) =>
+    request<GitHubIssueDetail>(`/api/projects/${projectId}/github/issues/${number}`),
+
+  queueProjectIssue: (projectId: number, number: number) =>
+    request<{ queued: boolean; label: string }>(
+      `/api/projects/${projectId}/github/issues/${number}/queue`,
+      { method: "POST" },
     ),
 
   // Phase 2 — jobs and logs for a workflow run (issue #102 follow-up).

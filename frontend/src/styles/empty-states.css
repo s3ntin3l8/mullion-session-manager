@@ -1907,6 +1907,121 @@
   white-space: nowrap;
   flex: 1;
 }
+/* Issues view (github/IssuesView.tsx): filters, label chips, detail drill-in. */
+button.github-panel-row.gh-issue-row {
+  width: 100%;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+}
+.gh-issue-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.gh-issue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 6px;
+}
+.gh-issue-search {
+  flex: 1;
+  min-width: 90px;
+}
+.gh-issue-unassigned {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.gh-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 6px 4px;
+}
+.gh-issue-row-main .gh-label-row {
+  padding: 0;
+}
+.gh-label-chip {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 0 6px;
+  border: 1px solid var(--dim);
+  border-radius: 999px;
+  color: var(--fg);
+  background: none;
+}
+.gh-label-chip-button {
+  cursor: pointer;
+  font-family: inherit;
+}
+.gh-label-chip-button.active {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
+.gh-task-chip {
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--dim);
+}
+.gh-issue-more {
+  margin: 4px 6px;
+}
+.gh-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gh-detail-back {
+  align-self: flex-start;
+}
+.gh-detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.gh-detail-meta {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.gh-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.gh-detail-notice {
+  font-size: 12px;
+  color: var(--g);
+}
+.gh-html {
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.gh-html pre {
+  overflow-x: auto;
+  padding: 6px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 5px;
+}
+.gh-html img {
+  max-width: 100%;
+}
+.gh-comment {
+  padding: 6px 0;
+  border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+}
 /* CI status dot (GitHubPanel.tsx's Actions section + Dock.tsx's widget,
    issue #27 phase 5) — same 3-color language as .dock-monitor's own
    running/off dot elsewhere in this file. */

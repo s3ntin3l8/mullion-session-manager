@@ -78,11 +78,14 @@ import {
   unregisterHook,
 } from "../services/github-webhook.js";
 import {
+  addLabels,
   detectReleaseWorkflow,
   dispatchWorkflow,
   getCachedReleasePullRequestStatus,
+  GitHubWriteScopeError,
   invalidateReleaseCache,
 } from "../services/github-write.js";
+import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
 import type {
   ProjectReleaseStatus,
@@ -1864,6 +1867,135 @@ export async function projectsRoute(app: FastifyInstance) {
         return;
       }
       return { prs: filtered, prSummary: computePRSummary(filtered) };
+    },
+  );
+
+  // Issues view — filterable open-issue list (labels, assignee, sort, title
+  // query, paging), each item annotated with its Task Master task status when
+  // one exists. Uses the "issues" token scope (an App token without Issues
+  // access only ever sees PRs), falling back like /github does.
+  app.get<{
+    Params: { id: string };
+    Querystring: {
+      labels?: string;
+      assignee?: string;
+      sort?: string;
+      q?: string;
+      page?: string;
+    };
+  }>(
+    "/api/projects/:id/github/issues",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "issues",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+      const { labels, assignee, sort, q, page } = request.query;
+      if (sort !== undefined && sort !== "updated" && sort !== "created" && sort !== "comments") {
+        return reply.badRequest("sort must be updated, created or comments");
+      }
+      const pageNum = page === undefined ? 1 : Number(page);
+      if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 50) {
+        return reply.badRequest("page must be an integer between 1 and 50");
+      }
+      try {
+        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
+        const result = await listIssues(issuesToken, repoRef.owner, repoRef.repo, {
+          labels,
+          assignee,
+          sort,
+          q,
+          page: pageNum,
+        });
+        const numbers = result.issues.map((i) => i.number);
+        const taskRows =
+          numbers.length === 0
+            ? []
+            : app.db
+                .select({ issueNumber: tasks.issueNumber, status: tasks.status })
+                .from(tasks)
+                .where(and(eq(tasks.projectId, projectId), inArray(tasks.issueNumber, numbers)))
+                .all();
+        const taskStatus = new Map(taskRows.map((t) => [t.issueNumber, t.status]));
+        return {
+          ...result,
+          issues: result.issues.map((i) => ({
+            ...i,
+            taskStatus: taskStatus.get(i.number) ?? null,
+          })),
+          taskMasterEnabled: app.config.MULLION_TASK_MASTER_ENABLED,
+          taskLabel: app.config.MULLION_TASK_LABEL,
+        };
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn({ statusCode: err.statusCode, projectId }, "github issues unavailable");
+        return reply.code(502).send({ message: "GitHub issues unavailable", statusCode: 502 });
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/issues/:number",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "issue detail",
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
+      try {
+        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
+        return await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        if (err.statusCode === 404) return reply.notFound("Issue not found");
+        app.log.warn({ statusCode: err.statusCode, projectId, number }, "github issue unavailable");
+        return reply.code(502).send({ message: "GitHub issue unavailable", statusCode: 502 });
+      }
+    },
+  );
+
+  // Queue an issue for Task Master by adding its watch label — the task
+  // watcher (or the label webhook) then ingests it. Needs write access and
+  // Task Master switched on; otherwise there is nothing that would pick the
+  // label up.
+  app.post<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/issues/:number/queue",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      if (!app.config.MULLION_TASK_MASTER_ENABLED) {
+        return reply.badRequest("Task Master is not enabled");
+      }
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "issue queue",
+        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+      });
+      if (!ctx) return;
+      const { repoRef, token } = ctx;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
+      try {
+        await addLabels(token, repoRef.owner, repoRef.repo, number, [
+          app.config.MULLION_TASK_LABEL,
+        ]);
+        return { queued: true, label: app.config.MULLION_TASK_LABEL };
+      } catch (err) {
+        if (err instanceof GitHubWriteScopeError) {
+          return reply.code(403).send({ message: err.message, statusCode: 403 });
+        }
+        if (err instanceof GitHubApiError) {
+          app.log.warn({ statusCode: err.statusCode, projectId, number }, "issue queue failed");
+          return reply.code(502).send({ message: "Could not label the issue", statusCode: 502 });
+        }
+        throw err;
+      }
     },
   );
 
