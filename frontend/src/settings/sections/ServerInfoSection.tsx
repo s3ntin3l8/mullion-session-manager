@@ -8,6 +8,8 @@ import type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  DevWorktreeCandidate,
+  DevWorktreeStatus,
 } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { formatRelativeAge } from "../../relativeTime.js";
@@ -18,6 +20,17 @@ import { claimPostUpdateReload } from "../../postUpdateReload.js";
 import { formatBytes } from "../../formatBytes.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { useDashboardStore } from "../../store/index.js";
+
+function describeWorktree(candidate: DevWorktreeCandidate): string {
+  const kind = candidate.kind === "claude-agent" ? "Claude agent" : "worktree";
+  const why =
+    candidate.reason === "gone"
+      ? "branch deleted on the remote"
+      : candidate.reason === "merged"
+        ? `PR ${candidate.detail ?? ""} merged`.trim()
+        : "already in the default branch";
+  return `${kind}, ${why}`;
+}
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -36,11 +49,13 @@ export function ServerInfoSection() {
   const [temp, setTemp] = useState<TempStorageStatus | null>(null);
   const [caches, setCaches] = useState<CacheStorageStatus | null>(null);
   const [opencode, setOpencode] = useState<OpencodeStorageStatus | null>(null);
+  const [worktrees, setWorktrees] = useState<DevWorktreeStatus | null>(null);
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
   const hasCaches = !!caches?.available && caches.caches.some((c) => c.exists);
   const hasOpencode = !!opencode?.available && opencode.reclaimableBytes > 0;
+  const hasWorktrees = !!worktrees?.available && worktrees.candidates.length > 0;
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
   const visibleCaches = (caches?.caches ?? []).filter(
@@ -50,7 +65,17 @@ export function ServerInfoSection() {
   const pruning = pruningMode !== null;
   const [pruneResult, setPruneResult] = useState<string | null>(null);
 
+  // Walks every project's worktrees (a git status each, and GitHub for the
+  // unpushed ones), so it can be slow: loaded on its own, never holding up the
+  // rest of the page.
+  const refreshWorktrees = () =>
+    api
+      .getDevWorktrees()
+      .then(setWorktrees)
+      .catch(() => setWorktrees(null));
+
   const refreshResources = () => {
+    void refreshWorktrees();
     return Promise.all([
       api.getSystemStats(),
       api.getDockerStorage(),
@@ -122,11 +147,26 @@ export function ServerInfoSection() {
                 () => api.pruneOpencodeStorage(),
               )
             : null;
+        // Aggressive-only; the server decides which worktrees are stale.
+        // Always in aggressive mode, whatever the preview says: it may still be
+        // loading (it is the slow one), have failed, or be as of the last fetch,
+        // and fetching is the first thing the cleanup does. The server decides
+        // what is stale.
+        const worktreeResult =
+          mode === "aggressive"
+            ? await settle("Developer worktree cleanup failed.", () => api.pruneDevWorktrees())
+            : null;
+        // Usually nothing, so only worth a mention when it did something.
+        const worktreePart =
+          worktreeResult && (worktreeResult.reclaimedBytes > 0 || worktreeResult.error)
+            ? worktreeResult
+            : null;
         const parts = [
           ["Docker", dockerResult],
           ["temp files", tempResult],
           ["caches", cacheResult],
           ["opencode database", opencodeResult],
+          ["developer worktrees", worktreePart],
         ].filter((part): part is [string, NonNullable<typeof dockerResult>] => part[1] !== null);
         const total = parts.reduce((sum, [, result]) => sum + result.reclaimedBytes, 0);
         const errors = parts
@@ -347,6 +387,34 @@ export function ServerInfoSection() {
           </div>
         </>
       )}
+      {hasWorktrees && worktrees && (
+        <>
+          <div className="settings-info-table">
+            {worktrees.candidates.map((candidate, i) => (
+              <div
+                key={candidate.path}
+                className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}
+              >
+                <span className="settings-info-key">
+                  {candidate.projectName} / {candidate.slug}
+                </span>
+                <span className="settings-info-value">
+                  {describeWorktree(candidate)} · {formatBytes(candidate.bytes)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="settings-footer-note">
+            Developer worktrees (<code>.wt/</code> and Claude agents'{" "}
+            <code>.claude/worktrees/</code>) whose work is already elsewhere free{" "}
+            {formatBytes(worktrees.totalBytes)}. Aggressive cleanup removes them; one with
+            uncommitted changes, a session in it, or activity in the last day is never touched, and
+            the branch is always kept. Files git ignores go with the directory (
+            <code>node_modules</code>, but also a local <code>.env</code>). Based on the last fetch,
+            so a branch deleted since may only show up after the cleanup fetches.
+          </div>
+        </>
+      )}
       {caches?.available && visibleCaches.length > 0 && (
         <>
           <div className="settings-info-table">
@@ -385,7 +453,7 @@ export function ServerInfoSection() {
           </div>
         </>
       )}
-      {(docker?.available || temp?.available || hasCaches || hasOpencode) && (
+      {(docker?.available || temp?.available || hasCaches || hasOpencode || hasWorktrees) && (
         <>
           {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
           <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
@@ -402,7 +470,7 @@ export function ServerInfoSection() {
               <ConfirmButton
                 variant="danger"
                 armedLabel="Confirm aggressive cleanup"
-                title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, and free space inside opencode's database"
+                title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, free space inside opencode's database, and developer worktrees whose branch is merged or gone"
                 disabled={pruning}
                 onConfirm={() => runPrune("aggressive")}
               >

@@ -7,6 +7,7 @@ import {
   type DockerStorageStatus,
   type ServerInfo,
   type SystemStats,
+  type DevWorktreeStatus,
   type OpencodeStorageStatus,
   type TempStorageStatus,
   type CacheStorageStatus,
@@ -81,6 +82,8 @@ const noOpencode: OpencodeStorageStatus = {
   compacting: false,
 };
 
+const noWorktrees: DevWorktreeStatus = { available: true, candidates: [], totalBytes: 0 };
+
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
 
 function setup(
@@ -89,11 +92,16 @@ function setup(
     temp?: TempStorageStatus;
     caches?: CacheStorageStatus;
     opencode?: OpencodeStorageStatus;
+    worktrees?: DevWorktreeStatus;
   } = {},
 ) {
   useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
   vi.spyOn(api, "getCacheStorage").mockResolvedValue(overrides.caches ?? noCaches);
   vi.spyOn(api, "getOpencodeStorage").mockResolvedValue(overrides.opencode ?? noOpencode);
+  vi.spyOn(api, "getDevWorktrees").mockResolvedValue(overrides.worktrees ?? noWorktrees);
+  // Aggressive cleanup always asks the server to clear stale worktrees (it
+  // fetches first); most tests have nothing to say about that.
+  vi.spyOn(api, "pruneDevWorktrees").mockResolvedValue({ output: "", reclaimedBytes: 0 });
   vi.spyOn(api, "getServerInfo").mockResolvedValue(info);
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(overrides.docker ?? docker);
@@ -261,6 +269,136 @@ describe("Settings -> Server info resources", () => {
       "x.json is unparseable and its process may be running",
     );
     expect(screen.getByText(/9\.json is unparseable; skipped/)).toBeInTheDocument();
+  });
+
+  describe("stale developer worktrees (#1605)", () => {
+    const worktrees: DevWorktreeStatus = {
+      available: true,
+      totalBytes: 3 * GIB,
+      candidates: [
+        {
+          projectId: 1,
+          projectName: "mullion",
+          path: "/p/.wt/fix-a",
+          slug: "fix-a",
+          branch: "fix-a",
+          kind: "wt",
+          reason: "gone",
+          bytes: GIB,
+        },
+        {
+          projectId: 1,
+          projectName: "mullion",
+          path: "/p/.claude/worktrees/agent-1",
+          slug: "agent-1",
+          branch: "agent-1",
+          kind: "claude-agent",
+          reason: "merged",
+          detail: "#12",
+          bytes: GIB,
+        },
+        {
+          projectId: 2,
+          projectName: "other",
+          path: "/o/.wt/loose",
+          slug: "loose",
+          branch: null,
+          kind: "wt",
+          reason: "detached-merged",
+          bytes: GIB,
+        },
+      ],
+    };
+
+    it("lists what would be removed, why, and what it frees", async () => {
+      setup({ worktrees });
+      render(<ServerInfoSection />);
+      const row = (key: string) => screen.getByText(key).nextElementSibling;
+      expect(await screen.findByText("mullion / fix-a")).toBeInTheDocument();
+      expect(row("mullion / fix-a")).toHaveTextContent(
+        "worktree, branch deleted on the remote · 1.0 GiB",
+      );
+      expect(row("mullion / agent-1")).toHaveTextContent("Claude agent, PR #12 merged");
+      expect(row("other / loose")).toHaveTextContent("worktree, already in the default branch");
+      expect(screen.getByText(/free 3.0 GiB/)).toBeInTheDocument();
+    });
+
+    it("still runs the cleanup when the preview is empty, since that is what fetches", async () => {
+      setup();
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 7 });
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      // Nothing to report from it, so the summary is just the Docker part.
+      expect(await screen.findByText("Freed 7 B.")).toBeInTheDocument();
+      expect(api.pruneDevWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs the cleanup even while the preview is still loading, or failed", async () => {
+      setup();
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "getDevWorktrees").mockReturnValue(new Promise(() => {}));
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      await screen.findByText(/Freed/);
+      expect(api.pruneDevWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't wait for the worktree preview before showing the rest", async () => {
+      setup();
+      vi.spyOn(api, "getDevWorktrees").mockReturnValue(new Promise(() => {}));
+      render(<ServerInfoSection />);
+      expect(await screen.findByText("Disk cleanup")).toBeInTheDocument();
+      expect(screen.getByText("2.50 1m load / 8 logical cores")).toBeInTheDocument();
+    });
+
+    it("shows nothing when there are none, or when they can't be listed", async () => {
+      setup();
+      const { unmount } = render(<ServerInfoSection />);
+      await screen.findByText("Disk cleanup");
+      expect(screen.queryByText(/Developer worktrees/)).not.toBeInTheDocument();
+      unmount();
+      vi.restoreAllMocks();
+      setup();
+      vi.spyOn(api, "getDevWorktrees").mockRejectedValue(new Error("boom"));
+      render(<ServerInfoSection />);
+      await screen.findByText("Disk cleanup");
+      expect(screen.queryByText(/Developer worktrees/)).not.toBeInTheDocument();
+    });
+
+    it("removes them only in aggressive mode and reports it", async () => {
+      setup({ worktrees });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 0 });
+      vi.spyOn(api, "pruneDevWorktrees").mockResolvedValue({
+        output: "Removed 3 stale developer worktrees.",
+        reclaimedBytes: 3 * GIB,
+      });
+      render(<ServerInfoSection />);
+      const safe = await screen.findByRole("button", { name: "Clean up (safe)…" });
+      await userEvent.click(safe);
+      await userEvent.click(safe);
+      await screen.findByText(/Freed/);
+      expect(api.pruneDevWorktrees).not.toHaveBeenCalled();
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(await screen.findByText(/developer worktrees 3.0 GiB/)).toBeInTheDocument();
+      expect(api.pruneDevWorktrees).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a failed cleanup without hiding the rest", async () => {
+      setup({ worktrees });
+      vi.spyOn(api, "pruneDockerStorage").mockResolvedValue({ output: "", reclaimedBytes: 5 });
+      vi.spyOn(api, "pruneDevWorktrees").mockRejectedValue(new Error("network"));
+      render(<ServerInfoSection />);
+      const aggressive = await screen.findByRole("button", { name: "Aggressive cleanup…" });
+      await userEvent.click(aggressive);
+      await userEvent.click(aggressive);
+      expect(await screen.findByText(/Developer worktree cleanup failed/)).toBeInTheDocument();
+    });
   });
 
   describe("opencode database compaction (#1604)", () => {

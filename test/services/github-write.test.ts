@@ -8,6 +8,7 @@ import {
   getIssueState,
   createPullRequest,
   findPullRequestByHead,
+  findMergedPullRequestByHead,
   getPullRequestByNumber,
   mergePullRequest,
   updatePullRequestBranch,
@@ -781,6 +782,46 @@ describe("github-write service", () => {
     );
     const result = await findPullRequestByHead("tok", "owner", "repo", "owner:mullion/task-1");
     expect(result).toEqual({ number: 3, htmlUrl: "https://github.com/owner/repo/pull/3" });
+  });
+
+  it("findMergedPullRequestByHead asks for closed PRs and returns the newest merged one with its head commit", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [
+        { number: 12, merged_at: null, head: { sha: "closedsha" }, base: { ref: "main" } },
+        {
+          number: 11,
+          merged_at: "2026-10-01T00:00:00Z",
+          head: { sha: "mergedsha" },
+          base: { ref: "feature-a" },
+        },
+        {
+          number: 5,
+          merged_at: "2026-09-01T00:00:00Z",
+          head: { sha: "oldsha" },
+          base: { ref: "main" },
+        },
+      ]),
+    );
+    expect(await findMergedPullRequestByHead("tok", "owner", "repo", "owner:feat-x")).toEqual({
+      number: 11,
+      headSha: "mergedsha",
+      baseRef: "feature-a",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repo/pulls?head=owner%3Afeat-x&state=closed&sort=created&direction=desc&per_page=5",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("findMergedPullRequestByHead returns null when none merged, or none at all", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, [
+        { number: 12, merged_at: null, head: { sha: "closedsha" }, base: { ref: "main" } },
+      ]),
+    );
+    expect(await findMergedPullRequestByHead("tok", "owner", "repo", "owner:abandoned")).toBeNull();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, []));
+    expect(await findMergedPullRequestByHead("tok", "owner", "repo", "owner:none")).toBeNull();
   });
 
   it("listWorkflows GETs /actions/workflows and maps snake_case fields", async () => {

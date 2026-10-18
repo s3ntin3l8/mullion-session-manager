@@ -321,6 +321,17 @@ export async function resolveCommitSha(cwd: string, ref: string): Promise<string
   return sha ? sha.trim() : null;
 }
 
+/**
+ * True when `commit` is reachable from `base` (`git merge-base --is-ancestor`),
+ * i.e. nothing in it is missing from `base`. Any failure (unresolvable ref,
+ * non-repo cwd, git error) is `false`: callers use this to decide something is
+ * safe to throw away, so "couldn't tell" must read as "no".
+ */
+export async function isAncestorOf(cwd: string, commit: string, base: string): Promise<boolean> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return false;
+  return (await runGit(cwd, ["merge-base", "--is-ancestor", commit, base])) !== null;
+}
+
 /** Parses `git worktree list --porcelain`'s blank-line-separated blocks. The
  * main worktree (the repo's original checkout, where `.git` is a real
  * directory rather than a redirect file) is always listed first. */

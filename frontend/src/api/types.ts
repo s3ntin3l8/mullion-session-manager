@@ -143,6 +143,28 @@ export interface OpencodeStorageStatus {
   error?: string;
 }
 
+export interface DevWorktreeCandidate {
+  projectId: number;
+  projectName: string;
+  path: string;
+  /** Path under the worktree root, e.g. `fix-thing`. */
+  slug: string;
+  branch: string | null;
+  /** `wt` is a `.wt/` developer worktree; `claude-agent` one under `.claude/worktrees/`. */
+  kind: "wt" | "claude-agent";
+  reason: "gone" | "merged" | "detached-merged";
+  /** e.g. `#1234` for `merged`. */
+  detail?: string;
+  bytes: number;
+}
+
+export interface DevWorktreeStatus {
+  available: boolean;
+  candidates: DevWorktreeCandidate[];
+  totalBytes: number;
+  error?: string;
+}
+
 export interface Project {
   id: number;
   name: string;

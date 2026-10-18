@@ -136,3 +136,54 @@ so it is deliberately narrow:
   `VACUUM` is atomic and leaves the database as it was.
 - **Not retention.** This reclaims free pages only. Deleting old sessions is
   opencode's to do (it has no bulk or age-based command yet); see #1664.
+
+## Developer worktrees
+
+`services/dev-worktrees.ts`. Every project on this host keeps its own
+developer worktrees: `.wt/<slug>` (this repo's convention, see `AGENTS.md`) and
+`.claude/worktrees/agent-*`, which Claude Code's isolated sub-agents leave
+behind. Each is a full checkout, usually with its own `node_modules`, a few
+hundred MB apiece, and nothing removes one once its PR is merged. Aggressive
+cleanup removes the ones whose work is already elsewhere. `.mullion-worktrees/`
+is not touched: Task Master owns those.
+
+A worktree is only offered when **all** of these hold:
+
+- Its tree is clean (no staged, unstaged or untracked changes, no conflicts).
+- No session or resumable task is using it. Sessions of every project count, not
+  just the repo's own: a worktree is often registered as a project of its own.
+- Its `HEAD` hasn't moved for a day (its reflog), so one just created, or one
+  someone pulled into this morning, is left alone.
+- And one of these shows its work is elsewhere:
+  - **`gone`**: its branch's upstream was deleted on the remote, which is what a
+    merged PR's auto-deleted branch looks like. This is read from the last
+    fetch, so the preview can only undercount; cleanup fetches each project
+    first.
+  - **`merged`**: for repos that don't delete branches on merge (and for
+    branches pushed without tracking), GitHub reports a PR that merged exactly
+    this commit into the repo's default branch. Commits added after the merge
+    don't count, and neither does a merge into some other feature branch.
+    Needs a GitHub remote and a token; without them this rule is skipped.
+    Answers are cached for ten minutes, except a lookup that failed (rate
+    limit, offline), which is simply asked again next time.
+  - **`detached-merged`**: a detached `HEAD` whose commit is already in the
+    default branch, so nothing names those commits that would be lost.
+
+Removal goes through the same path as the Git panel's "remove worktree": a
+clean-status check, repeated right before each removal (still clean, same
+commit, same reason, still unused), then `git worktree remove`. That helper
+passes `--force` to git itself once its own check has passed, so the check is
+the guard, not git. **The branch is always kept**, so a commit that was never
+pushed is still reachable from it. What is not kept is anything git ignores,
+because it goes with the directory: `node_modules` is the point, but also a
+local `.env` or editor settings in the worktree. Only local projects are
+considered; a remote host's worktrees are on another machine.
+
+The Settings preview is read from the last fetch and loads on its own, so it
+never holds up the rest of the page. Aggressive cleanup asks the server to
+clean up whenever it can, even when the preview is empty, because the first
+thing it does is fetch each project that has developer worktrees.
+
+Known limits: a worktree outside `.wt/` and `.claude/worktrees/` is never
+considered, and a repo whose default branch can't be determined (no `origin`)
+gets neither `merged` nor `detached-merged`.
