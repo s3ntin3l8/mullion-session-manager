@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gitEnv } from "../../src/services/git-env.js";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type * as SettingsModule from "../../src/services/settings.js";
@@ -466,7 +467,7 @@ describe("startGitHubPRPoller", () => {
 
     it("reaches a session that never reported a branch, via its checkout's HEAD", async () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "poller-branch-"));
-      execFileSync("git", ["init", "-q", "-b", "feat-x", dir]);
+      execFileSync("git", ["init", "-q", "-b", "feat-x", dir], { env: gitEnv() });
       mockResolveGitHubToken.mockReturnValue("ghp_token");
       mockGetRepoPRsStatus
         .mockResolvedValueOnce(status(pr()))

@@ -12,6 +12,7 @@ import {
   refreshDefaultBranchCi,
   setRepoPRsStatus,
 } from "./github.js";
+import { gitEnv } from "./git-env.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
 import { diffPrSnapshots, snapshotPr, type PrChange, type PrSnapshot } from "./github-pr-phase.js";
@@ -28,6 +29,8 @@ async function checkoutBranch(cwd: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], {
       timeout: 3_000,
+      // git honors GIT_DIR/GIT_WORK_TREE before -C, so scrub the ambient env.
+      env: gitEnv(),
     });
     return stdout.trim() || null;
   } catch {
@@ -205,10 +208,18 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     projectIds: number[],
     changes: PrChange[],
   ): Promise<void> {
+    // One branch probe per branchless session per run, however many changes
+    // and projects consult it.
+    const probes = new Map<string, Promise<string | null>>();
+    const branchOf = (s: { id: string; cwd: string }): Promise<string | null> => {
+      let p = probes.get(s.id);
+      if (!p) probes.set(s.id, (p = checkoutBranch(s.cwd)));
+      return p;
+    };
     const metas = lastPrMeta.get(repoKey);
     // Per-PR work is independent (a closed PR costs a merge lookup), so run it
     // side by side; the caller doesn't await this at all.
-    await Promise.all(
+    const results = await Promise.allSettled(
       changes.map(async (change) => {
         const meta = metas?.get(change.number);
         let merged = false;
@@ -224,7 +235,12 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         const events = derivePrEvents(change, { number: change.number, title, url }, merged);
         if (events.length === 0) return;
         for (const projectId of projectIds) {
-          for (const id of await sessionsForPr(projectId, change.number, meta?.headBranch)) {
+          for (const id of await sessionsForPr(
+            projectId,
+            change.number,
+            meta?.headBranch,
+            branchOf,
+          )) {
             const session = app.pty.get(id);
             for (const ev of events) session?.emitPrEvent(ev.kind, ev.payload);
           }
@@ -232,7 +248,14 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
       }),
     );
     // Closed PRs have had their one look at the carried-over metadata.
-    for (const change of changes) if (change.kind === "closed") metas?.delete(change.number);
+    // Re-read: pushPrChanges replaces this map every poll, and this runs
+    // detached, so the one captured above may already be stale.
+    const current = lastPrMeta.get(repoKey);
+    for (const change of changes) if (change.kind === "closed") current?.delete(change.number);
+    // allSettled so one PR's failure neither skips the prune above nor hides
+    // the other PRs' events; surface it to the caller's warn.
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed) throw (failed as PromiseRejectedResult).reason;
   }
 
   // The session row matches on its displayBranch, which prefers polled git
@@ -241,14 +264,15 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   async function sessionsForPr(
     projectId: number,
     number: number,
-    headBranch?: string,
+    headBranch: string | undefined,
+    branchOf: (s: { id: string; cwd: string }) => Promise<string | null>,
   ): Promise<string[]> {
     const ids = new Set<string>();
     if (headBranch) {
       for (const id of app.pty.sessionIdsOnBranch(projectId, headBranch)) ids.add(id);
       const unknown = app.pty.sessionsWithoutBranch(projectId);
       const resolved = await Promise.all(
-        unknown.map(async (s) => ((await checkoutBranch(s.cwd)) === headBranch ? s.id : null)),
+        unknown.map(async (s) => ((await branchOf(s)) === headBranch ? s.id : null)),
       );
       for (const id of resolved) if (id) ids.add(id);
     }
