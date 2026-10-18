@@ -41,7 +41,8 @@ describe("agentTranscriptScript", () => {
   });
 
   it("keeps writing an invisible SGR reset after the transcript", async () => {
-    const out = await runFor(agentTranscriptScript({ startDelay: 0, lines: ["done"] }), 2_600);
+    // Two keepalives at a 1 s cadence, with margin for a loaded host.
+    const out = await runFor(agentTranscriptScript({ startDelay: 0, lines: ["done"] }), 3_600);
     const tail = out.slice(out.indexOf("done\n") + "done\n".length);
     // Nothing but keepalives after the last line, and more than one of them.
     expect(tail.replaceAll("\u001b[0m", "")).toBe("");

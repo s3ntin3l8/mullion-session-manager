@@ -136,23 +136,33 @@ async function waitForTranscript(demo, scriptName, lines) {
 
 /**
  * Waits until the browser's terminal is attached to `scriptName`'s session (a
- * live subscriber on its PTY) and the PTY size it fitted has held still for
- * SETTLE_MS. Output printed before then lands at an interim geometry (a
- * pre-fit row count or font size) and the shot shows it scrolled or clipped.
+ * live subscriber on its PTY, no "Connecting…" overlay) and its geometry has
+ * held still for SETTLE_MS: web fonts loaded and the `.xterm-screen` box (cell
+ * size × cols/rows) unchanged. The PTY's own size isn't in the sessions API,
+ * so the fitted terminal in the page is what's measured. Output printed before
+ * then lands at an interim geometry (a pre-fit row count or font size) and the
+ * shot shows it scrolled or clipped.
  */
 const SETTLE_MS = 1500;
-async function waitForSettledTerminal(demo, scriptName) {
+async function waitForSettledTerminal(page, demo, scriptName) {
   let last = null;
   let since = 0;
   await waitUntil(async () => {
     const session = await findSession(demo, scriptName);
-    if (!(session?.subscriberCount > 0)) {
+    const geometry = await page.evaluate(() => {
+      // Runs in the page; this file's lint env is Node, hence globalThis.
+      const doc = globalThis.document;
+      const screen = doc.querySelector(".xterm-screen");
+      if (!screen || doc.querySelector(".terminal-status-overlay")) return null;
+      if (doc.fonts.status !== "loaded") return null;
+      return `${screen.offsetWidth}x${screen.offsetHeight}`;
+    });
+    if (!(session?.subscriberCount > 0) || geometry === null) {
       last = null;
       return false;
     }
-    const size = `${session.cols}x${session.rows}`;
-    if (size !== last) {
-      last = size;
+    if (geometry !== last) {
+      last = geometry;
       since = Date.now();
       return false;
     }
@@ -185,7 +195,7 @@ async function captureDesktop(browser, demo) {
   // the session is open here and its terminal sized, then prints it into the
   // live terminal; the shot waits for the whole transcript.
   await page.locator(".session-item", { hasText: "fake-agent.sh" }).first().click();
-  await waitForSettledTerminal(demo, "fake-agent.sh");
+  await waitForSettledTerminal(page, demo, "fake-agent.sh");
   await writeFile(demo.seeded.authReleaseFile, "");
   await waitForTranscript(demo, "fake-agent.sh", AUTH_TRANSCRIPT);
   await page.waitForTimeout(1000);
@@ -244,7 +254,8 @@ async function captureMobile(browser, demo) {
   //    during page load and drawer opening, so its attach/resize is done
   //    before the transcript starts printing.
   await page.locator(".session-item", { hasText: "mobile-demo.sh" }).first().click();
-  await page.waitForTimeout(5000);
+  await waitForTranscript(demo, "mobile-demo.sh", MOBILE_TRANSCRIPT);
+  await page.waitForTimeout(1000);
   await shot(page, "mobile-terminal.png");
   await context.close();
 }
