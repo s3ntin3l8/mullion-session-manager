@@ -5,7 +5,7 @@
 //
 // One GraphQL query (cost ≈ a handful of points; it shares the review
 // enrichment's separate GraphQL backoff, see github-pr-reviews.ts) plus one
-// REST call for the files, cached for 30s per PR so a re-open or a burst of
+// REST call for the files (newest-first windows — `last:` — so a busy PR shows its latest activity), cached for 30s per PR so a re-open or a burst of
 // webhook nudges doesn't re-spend either budget.
 
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
@@ -157,9 +157,9 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       commits(last: 20) { totalCount nodes { commit { oid messageHeadline committedDate author { name } } } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
-      reviews(first: 50) { nodes { author { login } state bodyHTML submittedAt } }
-      reviewThreads(first: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
-      comments(first: 50) { nodes { author { login } bodyHTML createdAt } }
+      reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt } }
+      reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
+      comments(last: 50) { nodes { author { login } bodyHTML createdAt } }
     }
   }
 }`;

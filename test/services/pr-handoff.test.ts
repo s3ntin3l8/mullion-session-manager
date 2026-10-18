@@ -52,6 +52,33 @@ describe("buildHandoffPrompt", () => {
     expect(text).toContain("`feat-thing`");
   });
 
+  it("strips nested/spliced tags and script blocks completely", () => {
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        reviews: [],
+        threads: [
+          {
+            isResolved: false,
+            isOutdated: false,
+            path: "a.ts",
+            line: 1,
+            comments: [
+              {
+                author: "x",
+                bodyHtml: "<scr<script>x</script>ipt>alert(1)</scr<script></script>ipt><b>ok</b>",
+                createdAt: "t",
+              },
+            ],
+          },
+        ],
+      },
+      [],
+    );
+    expect(text).not.toMatch(/<\/?script/i);
+    expect(text).toContain("ok");
+  });
+
   it("says so when nothing is outstanding and clips very long comments", () => {
     const empty = buildHandoffPrompt({ ...pr, threads: [], reviews: [] }, []);
     expect(empty).toContain("nothing outstanding");

@@ -7,12 +7,23 @@ import type { PrDetail } from "./github-pr-detail.js";
 
 const MAX_COMMENT_CHARS = 600;
 
+/** Applies `pattern` until it stops matching, so removing one tag can't splice a new one together. */
+function stripRepeatedly(text: string, pattern: RegExp): string {
+  let prev: string;
+  let out = text;
+  do {
+    prev = out;
+    out = out.replace(pattern, "");
+  } while (out !== prev);
+  return out;
+}
+
 function htmlToText(html: string): string {
-  return html
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, "")
+  const withoutBlocks = stripRepeatedly(html, /<(script|style)\b[\s\S]*?<\/\1\s*>/gi);
+  const withBreaks = withoutBlocks
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|li|pre|h[1-6])>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<\/(p|div|li|pre|h[1-6])>/gi, "\n");
+  return stripRepeatedly(withBreaks, /<[^>]*>/g)
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')

@@ -217,6 +217,17 @@ describe("PrDetailView", () => {
     });
   });
 
+  it("re-fetches on Refresh and periodically while open", async () => {
+    const fn = stub(PR);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await screen.findByText("Add thing");
+    const prFetches = () => fn.mock.calls.filter((c) => String(c[0]).endsWith("/prs/12")).length;
+    expect(prFetches()).toBe(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(prFetches()).toBe(2));
+  });
+
   it("shows an error and a back button when the PR cannot be loaded", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { message: "gone" })));
     const onBack = vi.fn();

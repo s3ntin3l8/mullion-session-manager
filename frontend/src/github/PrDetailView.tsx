@@ -152,6 +152,8 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
   );
 }
 
+const PR_REFRESH_MS = 30_000;
+
 export function PrDetailView({
   projectId,
   number,
@@ -169,6 +171,15 @@ export function PrDetailView({
   const [showBody, setShowBody] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showCommits, setShowCommits] = useState(false);
+
+  // The GitHub tab this replaces refreshed itself: re-fetch periodically
+  // while the view is open (the server caches ~30s, so faster is pointless).
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState !== "hidden") setReloadKey((k) => k + 1);
+    }, PR_REFRESH_MS);
+    return () => clearInterval(t);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -266,9 +277,14 @@ export function PrDetailView({
 
   return (
     <div className="gh-detail">
-      <button type="button" className="gh-detail-back" onClick={onBack}>
-        ← Back
-      </button>
+      <div className="gh-detail-actions">
+        <button type="button" className="gh-detail-back" onClick={onBack}>
+          ← Back
+        </button>
+        <button type="button" className="gh-link-button" onClick={() => setReloadKey((k) => k + 1)}>
+          Refresh
+        </button>
+      </div>
       {error && <ErrorText>{error}</ErrorText>}
       {notice && <div className="gh-detail-notice">{notice}</div>}
 

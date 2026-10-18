@@ -1917,6 +1917,31 @@ describe("projects route", () => {
         ...over,
       });
 
+      // The poller's CI view for a PR; without it the phase can't be "ready".
+      async function warmCiCache(
+        number: number,
+        ciStatus: "success" | "failure" | null = "success",
+      ) {
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [
+            {
+              ...PR_REVIEW_DEFAULTS,
+              number,
+              title: `PR ${number}`,
+              htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
+              author: "me",
+              headSha: `sha${number}`,
+              headBranch: "feat",
+              baseBranch: "main",
+              ciStatus,
+              actionsRuns: [],
+            },
+          ],
+          prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+        });
+      }
+
       function mockGithub(
         pr: Record<string, unknown>,
         extra?: (url: string, init?: RequestInit) => Response | null,
@@ -1942,6 +1967,7 @@ describe("projects route", () => {
 
       it("returns the PR detail with the derived phase", async () => {
         mockGithub(gqlPr(41));
+        await warmCiCache(41);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/41` });
@@ -1954,6 +1980,16 @@ describe("projects route", () => {
         });
         const bad = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/x` });
         expect(bad.statusCode).toBe(400);
+
+        // Cold poller cache: no CI knowledge, so the phase must not claim "ready".
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [],
+          prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+        });
+        mockGithub(gqlPr(47));
+        const cold = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/47` });
+        expect(cold.json().prPhase).toBe("unknown");
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
@@ -1989,6 +2025,7 @@ describe("projects route", () => {
           }
           return null;
         });
+        await warmCiCache(43);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const url = `/api/projects/${id}/github/prs/43/merge`;
@@ -2008,6 +2045,7 @@ describe("projects route", () => {
 
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
+        await warmCiCache(44);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const res = await app.inject({
@@ -2020,7 +2058,54 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("merge refuses when CI knowledge is cold or mergeability is unconfirmed", async () => {
+        mockGithub(gqlPr(48));
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [],
+          prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = (n: number) => `/api/projects/${id}/github/prs/${n}/merge`;
+
+        const cold = await app.inject({
+          method: "POST",
+          url: url(48),
+          payload: { headSha: "sha48" },
+        });
+        expect(cold.statusCode).toBe(409);
+        expect(cold.json().message).toMatch(/unknown/);
+
+        mockGithub(gqlPr(49, { mergeable: "UNKNOWN" }));
+        await warmCiCache(49);
+        const unconfirmed = await app.inject({
+          method: "POST",
+          url: url(49),
+          payload: { headSha: "sha49" },
+        });
+        expect(unconfirmed.statusCode).toBe(409);
+        expect(unconfirmed.json().message).toMatch(/mergeable/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge says so when no write-scoped token is available", async () => {
+        mockGithub(gqlPr(50));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        await app.inject({ method: "DELETE", url: "/api/integrations/github" });
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/50/merge`,
+          payload: { headSha: "sha50" },
+        });
+        expect(res.statusCode).toBe(502);
+        expect(res.json().message).toMatch(/write access/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge maps a GitHub refusal to 409", async () => {
+        await warmCiCache(45);
         mockGithub(gqlPr(45), (url) =>
           url.endsWith("/pulls/45/merge") ? jsonResponse(405, { message: "not mergeable" }) : null,
         );

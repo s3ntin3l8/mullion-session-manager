@@ -2030,8 +2030,10 @@ export async function projectsRoute(app: FastifyInstance) {
       (p) => p.number === number,
     );
     const ciStatus = cached?.ciStatus ?? null;
+    // Without the poller's CI view there is no CI knowledge at all, so the
+    // phase must not claim "ready" — treat it as unknown until the cache warms.
     const prPhase = derivePrPhase({
-      reviewStateKnown: true,
+      reviewStateKnown: cached !== undefined,
       isDraft: detail.isDraft,
       mergeable: detail.mergeable,
       mergeStateStatus: detail.mergeStateStatus,
@@ -2116,6 +2118,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "pr merge",
         resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+        noTokenMessage: "No GitHub token with write access is available to merge this pull request",
       });
       if (!ctx) return;
       const number = Number(request.params.number);
@@ -2133,6 +2136,9 @@ export async function projectsRoute(app: FastifyInstance) {
         if (detail.state !== "OPEN") return reply.conflict("This pull request is not open");
         if (detail.headSha !== expectedSha) {
           return reply.conflict("The pull request changed since you loaded it — reload and retry");
+        }
+        if (detail.mergeable !== "MERGEABLE") {
+          return reply.conflict("GitHub has not confirmed this pull request is mergeable yet");
         }
         if (prPhase !== "ready_to_merge") {
           return reply.conflict(`Not ready to merge (${prPhase.replace(/_/g, " ")})`);
