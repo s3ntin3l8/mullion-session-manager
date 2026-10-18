@@ -6,6 +6,7 @@ import { GitHubPanel } from "./GitHubPanel.js";
 import type {
   GitHubJob,
   GitHubLogResponse,
+  GitHubIssuesResponse,
   GitHubPRsStatus,
   GitHubStatus,
   ProjectReleaseStatus,
@@ -71,6 +72,29 @@ const PRS_LOADED: GitHubPRsStatus = {
   prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };
 
+// What GET .../github/issues returns for a given status fixture: its issues
+// as list items (labels/taskStatus the REST status doesn't carry added).
+function issuesResponse(status: GitHubStatus, over: Partial<GitHubIssuesResponse> = {}) {
+  return {
+    issues: status.issues.map((i) => ({
+      ...i,
+      labels: [{ name: "bug", color: "d73a4a" }],
+      assignees: [],
+      commentCount: 0,
+      milestone: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-02T00:00:00Z",
+      taskStatus: null,
+    })),
+    page: 1,
+    hasMore: false,
+    labels: status.issues.length > 0 ? [{ name: "bug", color: "d73a4a" }] : [],
+    taskMasterEnabled: false,
+    taskLabel: "mullion-task",
+    ...over,
+  };
+}
+
 // Promise.withResolvers isn't in this project's configured TS lib target —
 // a plain manual deferred instead, just for the tests below that need to
 // assert a transient loading state before resolving it.
@@ -92,6 +116,9 @@ function mockFetch(
     }
     if (url.endsWith("/release")) {
       return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
+    }
+    if (url.includes("/github/issues")) {
+      return Promise.resolve(jsonResponse(200, issuesResponse(status.status)));
     }
     return Promise.resolve(jsonResponse(200, status.status));
   });
@@ -155,6 +182,9 @@ function mockFetchWithAccordion(opts: {
       if (opts.jobs === "error") return Promise.reject(new Error("jobs fetch failed"));
       return Promise.resolve(jsonResponse(200, opts.jobs));
     }
+    if (url.includes("/github/issues")) {
+      return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
+    }
     return Promise.resolve(jsonResponse(200, STATUS));
   });
 }
@@ -173,8 +203,8 @@ describe("GitHubPanel", () => {
     const prLink = screen.getByRole("link", { name: "#42" });
     expect(prLink).toHaveAttribute("href", "https://github.com/acme/widgets/pull/42");
 
-    const issueLink = screen.getByRole("link", { name: /GitHub integration/ });
-    expect(issueLink).toHaveAttribute("href", "https://github.com/acme/widgets/issues/27");
+    // Issues load through the filterable list; a row opens the detail view.
+    expect(await screen.findByRole("button", { name: /GitHub integration/ })).toBeInTheDocument();
     expect(screen.getByText("#27")).toBeInTheDocument();
 
     expect(screen.getByText("Issues (1)")).toBeInTheDocument();
@@ -212,7 +242,7 @@ describe("GitHubPanel", () => {
     render(<GitHubPanel params={{ projectId: 4 }} />);
 
     expect(await screen.findByText("Pull requests (0)")).toBeInTheDocument();
-    expect(screen.getByText("No open issues")).toBeInTheDocument();
+    expect(await screen.findByText("No open issues")).toBeInTheDocument();
   });
 
   it("explains a hidden issue list instead of claiming there are no issues", async () => {
@@ -304,6 +334,9 @@ describe("GitHubPanel", () => {
           return logGate.promise.then((body) => jsonResponse(200, body));
         }
         if (url.endsWith("/jobs")) return jobsGate.promise.then((body) => jsonResponse(200, body));
+        if (url.includes("/github/issues")) {
+          return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
+        }
         return Promise.resolve(jsonResponse(200, STATUS));
       }),
     );
@@ -403,6 +436,9 @@ describe("GitHubPanel", () => {
       if (url.endsWith("/release"))
         return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
       if (url.endsWith("/jobs")) return Promise.resolve(jsonResponse(200, [JOB]));
+      if (url.includes("/github/issues")) {
+        return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
+      }
       return Promise.resolve(jsonResponse(200, STATUS));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -461,6 +497,9 @@ describe("GitHubPanel", () => {
           return Promise.resolve((opts.merge ?? (() => jsonResponse(200, { merged: true })))());
         }
         if (url.endsWith("/release")) return Promise.resolve(jsonResponse(200, opts.release));
+        if (url.includes("/github/issues")) {
+          return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
+        }
         return Promise.resolve(jsonResponse(200, STATUS));
       });
     }
@@ -586,6 +625,9 @@ describe("GitHubPanel", () => {
             return Promise.resolve(
               jsonResponse(200, releaseCallCount === 1 ? cleanRelease : mergedRelease),
             );
+          }
+          if (url.includes("/github/issues")) {
+            return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
           }
           return Promise.resolve(jsonResponse(200, STATUS));
         }),

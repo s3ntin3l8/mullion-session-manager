@@ -84,6 +84,9 @@ export const sessionsApi = {
       // issue #1408). Validated server-side (issue #1423) — an invalid
       // hand-typed value surfaces through the existing launchError path.
       model?: string;
+      // Delivered as the new session's first-turn prompt (when the agent
+      // supports it) — e.g. a GitHub issue to start work on.
+      seedPrompt?: string;
     },
   ) =>
     request<Session>("/api/sessions", {
