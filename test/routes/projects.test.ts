@@ -1990,6 +1990,20 @@ describe("projects route", () => {
         mockGithub(gqlPr(47));
         const cold = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/47` });
         expect(cold.json().prPhase).toBe("unknown");
+
+        // A warm entry whose CI lookup failed (ciStatus null) is just as unknown.
+        await warmCiCache(47, null);
+        const warmNoCi = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/47`,
+        });
+        expect(warmNoCi.json().prPhase).toBe("unknown");
+        const refused = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/47/merge`,
+          payload: { headSha: "sha47" },
+        });
+        expect(refused.statusCode).toBe(409);
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 

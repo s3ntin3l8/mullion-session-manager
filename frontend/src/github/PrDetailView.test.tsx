@@ -217,7 +217,7 @@ describe("PrDetailView", () => {
     });
   });
 
-  it("re-fetches on Refresh and periodically while open", async () => {
+  it("re-fetches on Refresh", async () => {
     const fn = stub(PR);
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     await screen.findByText("Add thing");
@@ -226,6 +226,33 @@ describe("PrDetailView", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(prFetches()).toBe(2));
+  });
+
+  it("polls while visible and skips ticks while the tab is hidden", async () => {
+    const fn = stub(PR);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await screen.findByText("Add thing");
+      const prFetches = () => fn.mock.calls.filter((c) => String(c[0]).endsWith("/prs/12")).length;
+      expect(prFetches()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await waitFor(() => expect(prFetches()).toBe(2));
+
+      const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(prFetches()).toBe(2);
+      visibility.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says checks are unknown (not absent) when the poller has no CI answer", async () => {
+    stub({ ...PR, ciStatus: null, actionsRuns: [], prPhase: "unknown" });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText("Checks unknown")).toBeInTheDocument();
   });
 
   it("shows an error and a back button when the PR cannot be loaded", async () => {

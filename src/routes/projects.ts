@@ -2030,10 +2030,11 @@ export async function projectsRoute(app: FastifyInstance) {
       (p) => p.number === number,
     );
     const ciStatus = cached?.ciStatus ?? null;
-    // Without the poller's CI view there is no CI knowledge at all, so the
-    // phase must not claim "ready" — treat it as unknown until the cache warms.
+    // No CI knowledge — no poller entry, or one whose head-run lookup failed
+    // (ciStatus null) — means "ready" can't be claimed: the phase stays
+    // unknown until the poller has a real CI answer for this PR.
     const prPhase = derivePrPhase({
-      reviewStateKnown: cached !== undefined,
+      reviewStateKnown: cached !== undefined && cached.ciStatus !== null,
       isDraft: detail.isDraft,
       mergeable: detail.mergeable,
       mergeStateStatus: detail.mergeStateStatus,

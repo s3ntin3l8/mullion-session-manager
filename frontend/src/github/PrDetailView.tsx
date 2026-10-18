@@ -97,7 +97,15 @@ function checksSummary(pr: GitHubPrDetail): {
   const classes = pr.actionsRuns.map((r) => checkDotClass(r.status, r.conclusion));
   const failing = classes.filter((c) => c === "bad").length;
   const running = classes.filter((c) => c === "pending").length;
-  if (pr.actionsRuns.length === 0) return { tone: "dim", glyph: "○", text: "No checks reported" };
+  if (pr.actionsRuns.length === 0) {
+    // ciStatus null = the poller has no answer (not yet fetched or failed), as
+    // opposed to a PR that genuinely has no runs.
+    return {
+      tone: "dim",
+      glyph: "○",
+      text: pr.ciStatus === null ? "Checks unknown" : "No checks reported",
+    };
+  }
   if (failing > 0) {
     return {
       tone: "bad",
