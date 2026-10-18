@@ -20,7 +20,10 @@ import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 
 const GRAPHQL_URL = "https://api.github.com/graphql";
 const REQUEST_TIMEOUT_MS = 8_000;
-const PR_PAGE = 25;
+// Newest-updated PRs enriched per repo. A PR beyond this page keeps its
+// last-known review state, or stays phase "unknown" if it never had one —
+// it self-corrects as soon as the PR sees activity moves it into the page.
+const PR_PAGE = 50;
 const THREADS_PER_PR = 50;
 // Stop spending points when the hourly budget is nearly gone; resume at reset.
 const LOW_BUDGET_REMAINING = 200;
@@ -28,8 +31,27 @@ const DEFAULT_BACKOFF_MS = 60_000;
 
 let graphqlBackoffUntil = 0;
 
+/** The poller's logger, narrowed to what this module uses. */
+export interface ReviewLog {
+  warn(obj: object, msg: string): void;
+  debug(obj: object, msg: string): void;
+}
+// Last failure reason that was warned about, so a permanent failure (e.g. a
+// token that can't read these fields) logs once, not every 15s tick.
+let lastWarnedFailure: string | null = null;
+
+function noteFailure(log: ReviewLog | undefined, reason: string, extra: object = {}): void {
+  if (!log || lastWarnedFailure === reason) return;
+  lastWarnedFailure = reason;
+  log.warn(
+    { reason, ...extra },
+    "[github-pr-reviews] review-state lookup failed; PR phases fall back to last known / unknown",
+  );
+}
+
 export function resetGraphqlBackoffForTests(): void {
   graphqlBackoffUntil = 0;
+  lastWarnedFailure = null;
   threadCache.clear();
   lastKnown.clear();
 }
@@ -120,6 +142,7 @@ async function graphql<T>(
   token: string,
   query: string,
   variables: Record<string, unknown>,
+  log?: ReviewLog,
 ): Promise<T | null> {
   // Don't pile onto a REST rate limit either — same GitHub account, and the
   // caller (the poller) will simply retry next tick.
@@ -139,17 +162,22 @@ async function graphql<T>(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch {
+    noteFailure(log, "network");
     return null;
   }
 
   if (res.status === 429 || res.status === 403) {
+    noteFailure(log, `http ${res.status}`);
     const retryAfter = Number(res.headers.get("retry-after"));
     graphqlBackoffUntil =
       Date.now() +
       (Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : DEFAULT_BACKOFF_MS);
     return null;
   }
-  if (!res.ok) return null;
+  if (!res.ok) {
+    noteFailure(log, `http ${res.status}`);
+    return null;
+  }
 
   let json: { data?: T; errors?: Array<{ type?: string; message: string }> };
   try {
@@ -157,6 +185,7 @@ async function graphql<T>(
   } catch {
     return null;
   }
+  if (json.errors?.length) noteFailure(log, json.errors[0].type ?? json.errors[0].message);
   if (json.errors?.some((e) => e.type === "RATE_LIMITED")) {
     graphqlBackoffUntil = Date.now() + DEFAULT_BACKOFF_MS;
     return null;
@@ -165,7 +194,13 @@ async function graphql<T>(
   return json.data ?? null;
 }
 
-function noteBudget(rateLimit: RateLimitNode | undefined): void {
+function noteBudget(rateLimit: RateLimitNode | undefined, log?: ReviewLog): void {
+  if (rateLimit) {
+    log?.debug(
+      { cost: rateLimit.cost, remaining: rateLimit.remaining },
+      "[github-pr-reviews] GraphQL budget",
+    );
+  }
   if (!rateLimit || rateLimit.remaining >= LOW_BUDGET_REMAINING) return;
   const resetAt = Date.parse(rateLimit.resetAt);
   graphqlBackoffUntil = Number.isNaN(resetAt) ? Date.now() + DEFAULT_BACKOFF_MS : resetAt;
@@ -190,6 +225,7 @@ export async function enrichPrsWithReviewState(
   owner: string,
   repo: string,
   prs: PROrWithChecks[],
+  log?: ReviewLog,
 ): Promise<void> {
   if (prs.length === 0) return;
   const keyFor = (n: number) => `${owner}/${repo}#${n}`;
@@ -204,9 +240,10 @@ export async function enrichPrsWithReviewState(
   const data = await graphql<{
     rateLimit?: RateLimitNode;
     repository: { pullRequests: { nodes: Array<GqlPrNode | null> | null } | null } | null;
-  }>(token, PR_LIST_QUERY, { owner, repo });
+  }>(token, PR_LIST_QUERY, { owner, repo }, log);
   if (!data?.repository) return reuseLastKnown();
-  noteBudget(data.rateLimit);
+  noteBudget(data.rateLimit, log);
+  lastWarnedFailure = null;
 
   const byNumber = new Map<number, GqlPrNode>();
   for (const node of data.repository.pullRequests?.nodes ?? []) {
@@ -271,8 +308,9 @@ export async function enrichPrsWithReviewState(
         repository(owner: $owner, name: $repo) { ${aliases} }
       }`,
       { owner, repo },
+      log,
     );
-    noteBudget(threads?.rateLimit);
+    noteBudget(threads?.rateLimit, log);
     for (const n of needThreads) {
       const entry = threads?.repository?.[`p${n}`];
       const node = byNumber.get(n);

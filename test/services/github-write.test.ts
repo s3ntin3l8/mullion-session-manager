@@ -38,6 +38,7 @@ import {
   isGitHubRateLimited,
   resetGitHubRateLimitForTests,
 } from "../../src/services/github-fetch.js";
+import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -1212,6 +1213,7 @@ describe("github-write service", () => {
         title: "chore(main): release 0.2.46",
         htmlUrl: "https://github.com/owner/repo/pull/12",
         author: null,
+        ...PR_REVIEW_DEFAULTS,
         headSha: "deadbeef",
         headBranch: "release-please--branches--main--components--repo",
         baseBranch: "main",

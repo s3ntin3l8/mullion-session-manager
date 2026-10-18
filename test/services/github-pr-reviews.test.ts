@@ -241,13 +241,11 @@ describe("enrichPrsWithReviewState", () => {
     await expect(enrichPrsWithReviewState("tok", "o", "null-repo", none)).resolves.toBeUndefined();
     expect(none[0].reviewStateKnown).toBe(false);
 
-    fetchMock
-      .mockResolvedValueOnce(listResponse([gqlNode(1)]))
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ data: { repository: { p1: { reviewThreads: null } } } }), {
-          status: 200,
-        }),
-      );
+    fetchMock.mockResolvedValueOnce(listResponse([gqlNode(1)])).mockResolvedValueOnce(
+      new Response(JSON.stringify({ data: { repository: { p1: { reviewThreads: null } } } }), {
+        status: 200,
+      }),
+    );
     const noThreads = [pr(1)];
     await enrichPrsWithReviewState("tok", "o", "null-threads-repo", noThreads);
     expect(noThreads[0].unresolvedThreads).toBeNull();
@@ -264,6 +262,25 @@ describe("enrichPrsWithReviewState", () => {
     await enrichPrsWithReviewState("tok", "o", "partial-repo", prs);
     expect(prs[0].commentCount).toBeNull();
     expect(prs[0].prPhase).toBe("changes_requested");
+  });
+
+  it("warns once per distinct failure and logs the GraphQL cost", async () => {
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    fetchMock.mockResolvedValue(new Response("nope", { status: 500 }));
+    await enrichPrsWithReviewState("tok", "o", "log-repo", [pr(1)], log);
+    await enrichPrsWithReviewState("tok", "o", "log-repo", [pr(1)], log);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0][0]).toMatchObject({ reason: "http 500" });
+
+    fetchMock.mockReset();
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    await enrichPrsWithReviewState("tok", "o", "log-repo", [pr(1)], log);
+    expect(log.debug).toHaveBeenCalledWith(
+      { cost: 1, remaining: 4000 },
+      "[github-pr-reviews] GraphQL budget",
+    );
   });
 
   it("makes no request when there are no PRs", async () => {

@@ -105,7 +105,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   ): Promise<void> {
     const status = await getRepoPRsStatus(token, owner, repo);
     // Review state (GraphQL) is best-effort and never throws.
-    await enrichPrsWithReviewState(token, owner, repo, status.prs);
+    await enrichPrsWithReviewState(token, owner, repo, status.prs, app.log);
     setRepoPRsStatus(owner, repo, status);
     pushPrChanges(repoKey, status.prs, projectIds);
     activityTracker.recordPollResult(repoKey, repoHasActivity(status));

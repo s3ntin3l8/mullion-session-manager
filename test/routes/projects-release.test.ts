@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
 // #744 — release-please detection/run/merge routes. Kept in its own file
 // (the same split test/routes/projects-docker.test.ts and
@@ -274,6 +275,7 @@ describe("release-please routes (#744)", () => {
             title: "chore(main): release 0.2.46",
             htmlUrl: "https://github.com/acme/widgets/pull/12",
             author: null,
+            ...PR_REVIEW_DEFAULTS,
             headSha: "deadbeef",
             headBranch: RELEASE_HEAD_REF,
             baseBranch: "main",
@@ -287,6 +289,7 @@ describe("release-please routes (#744)", () => {
             title: "chore(main): release 0.2.46",
             htmlUrl: "https://github.com/acme/widgets/pull/12",
             author: null,
+            ...PR_REVIEW_DEFAULTS,
             headSha: "deadbeef",
             headBranch: RELEASE_HEAD_REF,
             baseBranch: "main",
