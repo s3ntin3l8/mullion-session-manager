@@ -251,7 +251,7 @@ describe("github-app (#489)", () => {
     // The repo-status widget's issue list needs Issues read, which must NOT
     // be folded into the "read" set (a 422 there would drop every read
     // surface to the PAT on installs not yet re-approved with Issues).
-    it("mints the issues scope with only issues:read + metadata:read", async () => {
+    it("mints the issues scope with only issues:read + pull_requests:read + metadata:read", async () => {
       const fetchMock = vi
         .fn()
         .mockResolvedValue(
@@ -262,6 +262,7 @@ describe("github-app (#489)", () => {
       const [, opts] = fetchMock.mock.calls[0];
       expect(JSON.parse(opts.body as string).permissions).toEqual({
         issues: "read",
+        pull_requests: "read",
         metadata: "read",
       });
     });

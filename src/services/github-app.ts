@@ -255,8 +255,14 @@ export const DISPATCH_PERMISSIONS = {
 // read surface to the PAT — on any installation not yet re-approved with
 // Issues. A dedicated scope fails alone: resolveGitHubToken falls back to
 // the PAT for just this call, and the read token keeps working.
+//
+// `pull_requests: read` rides along because the same `/issues` call also
+// supplies the PR entries (items with `pull_request`) that feed the open-PR
+// count and list: with Issues alone GitHub filters those out and the PR side
+// of the sidebar would empty.
 export const ISSUES_READ_PERMISSIONS = {
   issues: "read",
+  pull_requests: "read",
   metadata: "read",
 } as const;
 // #737 — the reviewer App's permission set. Only `pull_requests: write`

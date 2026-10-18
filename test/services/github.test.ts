@@ -132,9 +132,14 @@ describe("getRepoStatus", () => {
   });
 
   it("lists issues with the dedicated issues token, everything else with the main one", async () => {
-    fetchMock = mockGithubApi({ issues: [ISSUE], openIssuesCount: 1 });
+    // The issues-scope token sees issues AND PRs in the one /issues call, so
+    // the PR list/count must stay populated when it replaces the main token.
+    fetchMock = mockGithubApi({ issues: [ISSUE, PR], openIssuesCount: 2 });
     vi.stubGlobal("fetch", fetchMock);
-    await getRepoStatus("main-tok", "tok-owner", "tok-repo", "issues-tok");
+    const status = await getRepoStatus("main-tok", "tok-owner", "tok-repo", "issues-tok");
+    expect(status.openPRs).toBe(1);
+    expect(status.pulls).toHaveLength(1);
+    expect(status.openIssues).toBe(1);
     const authFor = (suffix: string) =>
       fetchMock.mock.calls.find(([u]) => String(u).includes(suffix))?.[1]?.headers?.Authorization;
     expect(authFor("/issues?")).toBe("Bearer issues-tok");
