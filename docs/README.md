@@ -40,7 +40,7 @@ when you'd reach for it.
   one place; the source every other doc's config section links to.
 - [`auth.md`](auth.md) — the optional shared-token gate and native OIDC
   login, and how they compose with an external forwardAuth gateway.
-- [`disk-cleanup.md`](disk-cleanup.md) — what Settings → Server → Disk
+- [`disk-cleanup.md`](disk-cleanup.md) — what Settings → Storage → Disk
   cleanup removes in its safe and aggressive tiers, and the guards on each.
 - [`ssh-agent.md`](ssh-agent.md) — give a session access to an SSH agent
   that lives off-host (e.g. your laptop's 1Password agent), without a

@@ -1,6 +1,6 @@
 # Disk cleanup
 
-Settings → Server → Disk cleanup frees space the host accumulates around
+Settings → Storage → Disk cleanup frees space the host accumulates around
 Mullion. It has a **safe** and an **aggressive** button; each tier below says
 what it does in which. Every figure shown beforehand is an estimate, and
 every removal re-checks the entry right before deleting it, so something that
@@ -8,6 +8,20 @@ started being used between the preview and the click is left alone.
 
 The backend lives in `src/routes/system-resources.ts`; each tier is its own
 service. Everything here is local to the machine the Mullion server runs on.
+
+## How the figures are measured
+
+Measuring can be slow (a `/tmp` with a million files takes a while even with
+the walk's 16 concurrent syscalls), so no request waits for it. Each
+inspection (Docker, temp files, caches, opencode, worktrees) is wrapped by
+`services/measured-probe.ts`: a read starts a background run if the held
+result is stale, waits about a second and a half, and otherwise answers
+`state: "measuring"` with the last known figures (if any). The page polls
+every two seconds while anything is measuring. At most one run per inspection
+is ever in flight, `?refresh=1` (the Refresh button) joins a running one
+instead of starting a second, and the freshness window (30 s for Docker,
+5 minutes for the disk walks) counts from when a run _finishes_. A prune
+drops the held result and discards any run still in flight.
 
 ## Docker
 

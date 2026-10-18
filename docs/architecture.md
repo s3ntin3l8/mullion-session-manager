@@ -166,7 +166,7 @@ way as a namespaced one.
   merged, Docker-discovery-aware read), `opencode-models` (`GET
 /api/opencode/models` and `GET /api/agy/models` — bare-array model catalogs
   for the Settings model pickers, despite the route's own name only naming
-  opencode), `system-resources` (Settings → Server's resource-monitoring
+  opencode), `system-resources` (Settings → Storage's resource-monitoring
   surface — CPU/memory/disk sampling plus the Docker, host temp-file
   (`services/temp-storage.ts`, with Claude scratch in
   `services/claude-scratch.ts`) and opt-in `~/.cache`

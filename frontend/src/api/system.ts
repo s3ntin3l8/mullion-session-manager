@@ -18,6 +18,7 @@ import type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  Measured,
   DevWorktreeStatus,
   PruneResult,
 } from "./types.js";
@@ -79,22 +80,29 @@ export const systemApi = {
 
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
 
-  getSystemStats: () => request<SystemStats>("/api/system-stats"),
-  getDockerStorage: () => request<DockerStorageStatus>("/api/storage/docker"),
+  // `refresh` skips the server's short-lived cache. For the slow storage
+  // measurements it asks for a new run; a run already in progress is joined,
+  // never doubled.
+  getSystemStats: (refresh?: boolean) =>
+    request<SystemStats>(`/api/system-stats${refresh ? "?refresh=1" : ""}`),
+  getDockerStorage: (refresh?: boolean) =>
+    request<Measured<DockerStorageStatus>>(`/api/storage/docker${refresh ? "?refresh=1" : ""}`),
   pruneDockerStorage: (mode: DockerPruneMode = "safe") =>
     request<PruneResult>("/api/storage/docker/prune", {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),
 
-  getTempStorage: () => request<TempStorageStatus>("/api/storage/temp"),
+  getTempStorage: (refresh?: boolean) =>
+    request<Measured<TempStorageStatus>>(`/api/storage/temp${refresh ? "?refresh=1" : ""}`),
   pruneTempStorage: (mode: DockerPruneMode = "safe") =>
     request<PruneResult>("/api/storage/temp/prune", {
       method: "POST",
       body: JSON.stringify({ mode }),
     }),
 
-  getCacheStorage: () => request<CacheStorageStatus>("/api/storage/caches"),
+  getCacheStorage: (refresh?: boolean) =>
+    request<Measured<CacheStorageStatus>>(`/api/storage/caches${refresh ? "?refresh=1" : ""}`),
   // The server empties only ids that are in this list AND in its saved
   // settings.diskCleanup.cacheDirs (see the route for why both).
   pruneCacheStorage: (cacheDirs: string[]) =>
@@ -103,13 +111,15 @@ export const systemApi = {
       body: JSON.stringify({ cacheDirs }),
     }),
 
-  getOpencodeStorage: () => request<OpencodeStorageStatus>("/api/storage/opencode"),
+  getOpencodeStorage: (refresh?: boolean) =>
+    request<Measured<OpencodeStorageStatus>>(`/api/storage/opencode${refresh ? "?refresh=1" : ""}`),
   // Nothing to choose: the server compacts its own opencode database, and only
   // while opencode isn't running.
   pruneOpencodeStorage: () =>
     request<PruneResult>("/api/storage/opencode/prune", { method: "POST" }),
 
-  getDevWorktrees: () => request<DevWorktreeStatus>("/api/storage/worktrees"),
+  getDevWorktrees: (refresh?: boolean) =>
+    request<Measured<DevWorktreeStatus>>(`/api/storage/worktrees${refresh ? "?refresh=1" : ""}`),
   // Nothing to choose: the server works out which worktrees are stale itself,
   // and removes only clean, unused ones (their branches are kept).
   pruneDevWorktrees: () => request<PruneResult>("/api/storage/worktrees/prune", { method: "POST" }),

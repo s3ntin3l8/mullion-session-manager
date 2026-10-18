@@ -148,6 +148,48 @@ describe("temp-storage", () => {
     expect(status.estimates.aggressiveBytes).toBeGreaterThan(status.estimates.safeBytes + 400);
   });
 
+  it("reports the npm cache on its own, still counted in the aggressive total", async () => {
+    await makeEntry("a", 2 * DAY);
+    const status = await inspectTempStorage({ root, npmCacheDir: npmDir, now: NOW });
+    expect(status.estimates.npmCacheBytes).toBeGreaterThanOrEqual(500);
+    const withoutNpm = await inspectTempStorage({
+      root,
+      npmCacheDir: path.join(npmDir, "missing"),
+      now: NOW,
+    });
+    expect(withoutNpm.estimates.npmCacheBytes).toBe(0);
+    expect(status.estimates.aggressiveBytes - status.estimates.npmCacheBytes).toBe(
+      withoutNpm.estimates.aggressiveBytes,
+    );
+  });
+
+  it("measures a tree much wider than the syscall limit exactly", async () => {
+    // 5 dirs x 40 files, plus nesting: far more entries than the 16 concurrent
+    // calls the walk allows, so the waiter queue and the totals are exercised.
+    const entry = await makeEntry("wide", 2 * DAY);
+    let expected = 0;
+    const blocks = async (p: string) => (await fs.lstat(p)).blocks * 512;
+    expected += await blocks(entry);
+    expected += await blocks(path.join(entry, "file.txt"));
+    for (let d = 0; d < 5; d++) {
+      const sub = path.join(entry, `sub${String(d)}`, "deeper");
+      await fs.mkdir(sub, { recursive: true });
+      for (let f = 0; f < 40; f++) {
+        await fs.writeFile(path.join(sub, `f${String(f)}`), "z".repeat(10 + f));
+      }
+      expected += await blocks(path.join(entry, `sub${String(d)}`));
+      expected += await blocks(sub);
+      for (let f = 0; f < 40; f++) expected += await blocks(path.join(sub, `f${String(f)}`));
+    }
+    const status = await inspectTempStorage({
+      root,
+      npmCacheDir: path.join(npmDir, "missing"),
+      // The files above were just written; look at them from a month on.
+      now: NOW + 30 * DAY,
+    });
+    expect(status.estimates.aggressiveBytes).toBe(expected);
+  });
+
   it("reports unavailable for a missing root", async () => {
     const status = await inspectTempStorage({ root: path.join(root, "nope") });
     expect(status.available).toBe(false);

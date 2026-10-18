@@ -196,6 +196,8 @@ export type {
   PairAndConnectBody,
   SystemImage,
   AvailableSystemImage,
+  Measured,
+  ProbeMeta,
 } from "./types.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";

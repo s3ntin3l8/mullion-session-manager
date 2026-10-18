@@ -29,15 +29,20 @@ import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { worktreeInUse } from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
+import { createMeasuredProbe } from "../services/measured-probe.js";
 
 const STATS_CACHE_MS = 10_000;
-// `docker system df -v` is slow on large hosts; share one result across polls.
-// Inspections are shared across polls: `docker system df -v` and the temp walk
-// are slow, and every tier is only measured when the page opens or refreshes.
-const INSPECT_CACHE_MS = 30_000;
-// The worktree preview costs more (a git status and a size walk per worktree,
-// and GitHub for unpushed branches), so it is held longer.
-const WORKTREE_INSPECT_CACHE_MS = 60_000;
+// `docker system df -v` is quick enough to keep fresh.
+const DOCKER_INSPECT_CACHE_MS = 30_000;
+// The temp, cache, opencode and worktree measurements walk the disk (minutes,
+// for a large /tmp), so they are held for five minutes; the Refresh button
+// (`?refresh=1`) is how a user asks for a new one sooner. The clock runs from
+// when a measurement finishes, never from when it started.
+const SLOW_INSPECT_CACHE_MS = 5 * 60_000;
+const refreshRequested = (query: { refresh?: string }) => query.refresh === "1";
+const REFRESH_QUERY = {
+  schema: { querystring: { type: "object", properties: { refresh: { type: "string" } } } },
+};
 const PRUNE_RATE_LIMIT = { max: 3, timeWindow: "1 minute" };
 
 function databaseDirectory(databaseUrl: string): string {
@@ -145,24 +150,28 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   let cached: { expiresAt: number; value: Awaited<ReturnType<typeof sampleSystemStats>> } | null =
     null;
 
-  app.get("/api/system-stats", async () => {
-    if (cached && cached.expiresAt > Date.now()) return cached.value;
-    const value = await sampleSystemStats(monitoredPaths(app));
-    cached = { expiresAt: Date.now() + STATS_CACHE_MS, value };
-    return value;
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/system-stats",
+    REFRESH_QUERY,
+    async (request) => {
+      if (!refreshRequested(request.query) && cached && cached.expiresAt > Date.now()) {
+        return cached.value;
+      }
+      const value = await sampleSystemStats(monitoredPaths(app));
+      cached = { expiresAt: Date.now() + STATS_CACHE_MS, value };
+      return value;
+    },
+  );
+
+  const docker = createMeasuredProbe(() => inspectDockerStorage(), {
+    ttlMs: DOCKER_INSPECT_CACHE_MS,
   });
 
-  let dockerCached: {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof inspectDockerStorage>>>;
-  } | null = null;
-
-  app.get("/api/storage/docker", async () => {
-    if (dockerCached && dockerCached.expiresAt > Date.now()) return dockerCached.value;
-    const value = inspectDockerStorage();
-    dockerCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
-    return value;
-  });
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/storage/docker",
+    REFRESH_QUERY,
+    async (request) => docker.read({ refresh: refreshRequested(request.query) }),
+  );
 
   app.post<{ Body?: { mode?: DockerPruneMode } }>(
     "/api/storage/docker/prune",
@@ -180,7 +189,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       try {
         const result = await pruneDockerStorage(request.body?.mode ?? "safe");
         cached = null;
-        dockerCached = null;
+        docker.invalidate();
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "DOCKER_PRUNE_IN_PROGRESS") {
@@ -193,17 +202,16 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   );
 
-  let tempCached: {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof inspectTempStorage>>>;
-  } | null = null;
+  const temp = createMeasuredProbe(
+    () => inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) }),
+    { ttlMs: SLOW_INSPECT_CACHE_MS },
+  );
 
-  app.get("/api/storage/temp", async () => {
-    if (tempCached && tempCached.expiresAt > Date.now()) return tempCached.value;
-    const value = inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) });
-    tempCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
-    return value;
-  });
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/storage/temp",
+    REFRESH_QUERY,
+    async (request) => temp.read({ refresh: refreshRequested(request.query) }),
+  );
 
   app.post<{ Body?: { mode?: TempPruneMode } }>(
     "/api/storage/temp/prune",
@@ -223,7 +231,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
           claudeSessionsDirs: claudeSessionsDirs(app),
         });
         cached = null;
-        tempCached = null;
+        temp.invalidate();
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "TEMP_PRUNE_IN_PROGRESS") {
@@ -236,17 +244,15 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   );
 
-  let opencodeCached: {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof inspectOpencodeStorage>>>;
-  } | null = null;
-
-  app.get("/api/storage/opencode", async () => {
-    if (opencodeCached && opencodeCached.expiresAt > Date.now()) return opencodeCached.value;
-    const value = inspectOpencodeStorage();
-    opencodeCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
-    return value;
+  const opencode = createMeasuredProbe(() => inspectOpencodeStorage(), {
+    ttlMs: SLOW_INSPECT_CACHE_MS,
   });
+
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/storage/opencode",
+    REFRESH_QUERY,
+    async (request) => opencode.read({ refresh: refreshRequested(request.query) }),
+  );
 
   // No body: there is nothing a client can choose. The path is fixed server-side
   // and the VACUUM is skipped whenever opencode has the database open.
@@ -257,7 +263,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       try {
         const result = await pruneOpencodeStorage();
         cached = null;
-        opencodeCached = null;
+        opencode.invalidate();
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "OPENCODE_PRUNE_IN_PROGRESS") {
@@ -270,17 +276,15 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   );
 
-  let worktreesCached: {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof inspectDevWorktrees>>>;
-  } | null = null;
-
-  app.get("/api/storage/worktrees", async () => {
-    if (worktreesCached && worktreesCached.expiresAt > Date.now()) return worktreesCached.value;
-    const value = inspectDevWorktrees(devWorktreeOptions());
-    worktreesCached = { expiresAt: Date.now() + WORKTREE_INSPECT_CACHE_MS, value };
-    return value;
+  const worktrees = createMeasuredProbe(() => inspectDevWorktrees(devWorktreeOptions()), {
+    ttlMs: SLOW_INSPECT_CACHE_MS,
   });
+
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/storage/worktrees",
+    REFRESH_QUERY,
+    async (request) => worktrees.read({ refresh: refreshRequested(request.query) }),
+  );
 
   // No body: which worktrees are stale is decided here, from git and GitHub,
   // never from the client.
@@ -291,7 +295,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       try {
         const result = await pruneDevWorktrees(devWorktreeOptions());
         cached = null;
-        worktreesCached = null;
+        worktrees.invalidate();
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "DEV_WORKTREE_PRUNE_IN_PROGRESS") {
@@ -304,17 +308,15 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   );
 
-  let cachesCached: {
-    expiresAt: number;
-    value: Promise<Awaited<ReturnType<typeof inspectCacheStorage>>>;
-  } | null = null;
-
-  app.get("/api/storage/caches", async () => {
-    if (cachesCached && cachesCached.expiresAt > Date.now()) return cachesCached.value;
-    const value = inspectCacheStorage();
-    cachesCached = { expiresAt: Date.now() + INSPECT_CACHE_MS, value };
-    return value;
+  const caches = createMeasuredProbe(() => inspectCacheStorage(), {
+    ttlMs: SLOW_INSPECT_CACHE_MS,
   });
+
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/storage/caches",
+    REFRESH_QUERY,
+    async (request) => caches.read({ refresh: refreshRequested(request.query) }),
+  );
 
   // Both sides must agree: the client sends the ids it is showing as ticked
   // (settings are saved on a short debounce, so the stored set can briefly lag
@@ -340,7 +342,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
           requested === undefined ? stored : stored.filter((id) => requested.includes(id));
         const result = await pruneCacheStorage(ids);
         cached = null;
-        cachesCached = null;
+        caches.invalidate();
         return result;
       } catch (error) {
         if (error instanceof Error && error.message === "CACHE_PRUNE_IN_PROGRESS") {

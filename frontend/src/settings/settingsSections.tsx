@@ -6,6 +6,7 @@ import {
   BoltIcon,
   BotIcon,
   DeviceIcon,
+  DiskIcon,
   DockIcon,
   FolderIcon,
   GitHubIcon,
@@ -36,6 +37,7 @@ export type SettingsSection =
   | "devices"
   | "hosts"
   | "integrations"
+  | "storage"
   | "server";
 
 // Section ids that were folded into another section. `openSettings` only
@@ -178,10 +180,17 @@ export const SECTIONS: Array<{
     icon: (size) => <GitHubIcon size={size} />,
   },
   {
+    id: "storage",
+    group: "System",
+    title: "Storage",
+    desc: "Disk usage and cleanup.",
+    icon: (size) => <DiskIcon size={size} />,
+  },
+  {
     id: "server",
     group: "System",
     title: "Server",
-    desc: "Diagnostics, logging, storage, and updates.",
+    desc: "Diagnostics, logging, and updates.",
     icon: (size) => <ServerRackIcon size={size} />,
   },
 ];
@@ -295,6 +304,13 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "server", text: "sessions directory database rate limit cpu ram" },
   { section: "server", text: "log level logging debug trace verbosity" },
   { section: "server", text: "features browser pane android devices discovery" },
-  { section: "server", text: "storage disk docker cleanup prune reclaimable" },
+  {
+    section: "storage",
+    text: "storage disk space usage free docker cleanup prune reclaimable safe aggressive",
+  },
+  {
+    section: "storage",
+    text: "temp files tmp npm cache playwright hugging face pip go build opencode database worktrees",
+  },
   { section: "server", text: "updates update now release latest apply auto-update" },
 ];

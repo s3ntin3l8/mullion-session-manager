@@ -78,11 +78,12 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   1Password instead of starting dictation, rebind either side (Settings →
   Keyboard & input → "Hotkey" here, or 1Password's own Settings → General →
   Shortcuts).
-- **Resource monitoring.** Settings → Server shows CPU, memory, and
-  per-path disk usage (home, Mullion's own data/sessions directories, every
-  configured project root) sampled from the host, plus a Docker storage
-  breakdown — both measured when the page opens (or you click "Refresh
-  resources"), not continuously polled — with two-click safe and aggressive
+- **Resource monitoring.** Settings → Server shows CPU and memory;
+  Settings → Storage shows per-path disk usage (home, Mullion's own
+  data/sessions directories, every configured project root) sampled from the
+  host, plus a Docker storage breakdown — measured in the background when the
+  page opens (or you click "Refresh"), not continuously polled, so a huge
+  temp folder never holds the page up — with two-click safe and aggressive
   cleanup. Safe removes dangling Docker images plus stopped containers,
   networks older than 7 days and build cache older than 24 hours, and this user's `/tmp`
   entries untouched for 7+ days; aggressive also removes all unused images
