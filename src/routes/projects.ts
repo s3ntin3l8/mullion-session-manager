@@ -2026,9 +2026,13 @@ export async function projectsRoute(app: FastifyInstance) {
     ctx: { repoRef: GitHubRepoRef; token: string },
   ) {
     const detail = await getPrDetail(ctx.token, ctx.repoRef.owner, ctx.repoRef.repo, number);
-    const cached = getPRsStatus(ctx.repoRef.owner, ctx.repoRef.repo)?.prs.find(
+    // The poller's entry is keyed by PR number; trust it only if it describes
+    // the head the user is looking at — after a push, its CI answer and runs
+    // belong to the old commit.
+    const entry = getPRsStatus(ctx.repoRef.owner, ctx.repoRef.repo)?.prs.find(
       (p) => p.number === number,
     );
+    const cached = entry?.headSha === detail.headSha ? entry : undefined;
     const ciStatus = cached?.ciStatus ?? null;
     // "Ready" needs a real CI answer: either the poller fetched this PR's head
     // runs (even if there are none) or GitHub's own merge state is CLEAN —

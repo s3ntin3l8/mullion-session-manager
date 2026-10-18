@@ -1921,6 +1921,10 @@ describe("projects route", () => {
       async function warmCiCache(
         number: number,
         ciStatus: "success" | "failure" | null = "success",
+        // Whether the head-run lookup answered. Independent of ciStatus: an
+        // answered-but-empty lookup is { ciStatus: null, ciFetched: true }.
+        ciFetched: boolean = ciStatus !== null,
+        headSha: string = `sha${number}`,
       ) {
         const { setRepoPRsStatus } = await import("../../src/services/github.js");
         setRepoPRsStatus("acme", "widgets", {
@@ -1931,12 +1935,11 @@ describe("projects route", () => {
               title: `PR ${number}`,
               htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
               author: "me",
-              headSha: `sha${number}`,
+              headSha,
               headBranch: "feat",
               baseBranch: "main",
               ciStatus,
-              // A null status models a head-run lookup that never answered.
-              ciFetched: ciStatus !== null,
+              ciFetched,
               actionsRuns: [],
             },
           ],
@@ -2169,6 +2172,45 @@ describe("projects route", () => {
           payload: { headSha: "sha54" },
         });
         expect(merge.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("ignores a poller entry for an older head: no ready, no old runs, merge refused", async () => {
+        // The poller last saw sha-old with green CI; the live PR is at sha55
+        // (UNSTABLE). The old answer must not vouch for the new commit.
+        mockGithub(gqlPr(55, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(55, "success", true, "sha-old");
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/55`,
+        });
+        expect(detail.json()).toMatchObject({
+          prPhase: "unknown",
+          ciStatus: null,
+          ciKnown: false,
+          actionsRuns: [],
+        });
+        const merge = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/55/merge`,
+          payload: { headSha: "sha55" },
+        });
+        expect(merge.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("an answered-but-empty lookup (no runs) is a CI answer and can be ready", async () => {
+        mockGithub(gqlPr(56, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(56, null, true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/56`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: true });
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
