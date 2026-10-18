@@ -59,7 +59,6 @@ import { buildLaunchPlan } from "./launch-plan.js";
 import {
   cleanupSessionFiles,
   sweepOrphanedSessionTmpDirs,
-  MIN_ORPHAN_TMP_AGE_MS,
   type SweepLogger,
 } from "./session-files-cleanup.js";
 import { TitleChangeDebouncer } from "./title-change-debouncer.js";
@@ -4264,7 +4263,7 @@ export class PtyManager {
   }
 
   /**
-   * Issue #1677 — sweeps orphaned `<id>.tmp` directories under `sessionsDir` whose
+   * Issue #1681 — sweeps orphaned `<id>.tmp` directories under `sessionsDir` whose
    * session is confirmed dead. Untracked sessions are checked via
    * `isMasterAliveStateBatch()`, skipping "alive" and "unknown" to prevent
    * deleting the TMPDIR of a live dtach session after a server restart.
@@ -4276,9 +4275,10 @@ export class PtyManager {
         const liveness = await this.isMasterAliveStateBatch(candidateIds);
         return new Set(candidateIds.filter((id) => liveness[id] === "dead"));
       },
-      new Set(this.sessions.keys()),
-      MIN_ORPHAN_TMP_AGE_MS,
-      log,
+      {
+        activeSessionIds: new Set(this.sessions.keys()),
+        log,
+      },
     );
   }
 }

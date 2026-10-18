@@ -285,7 +285,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     sessionEnv.SSH_AUTH_SOCK = session.sshAuthSock;
   }
 
-  // Issue #1677 — isolate temporary files per session (`<sessionsDir>/<id>.tmp`).
+  // Issue #1681 — isolate temporary files per session (`<sessionsDir>/<id>.tmp`).
   // Prevents test runners (Vitest SSR transforms, Jest, cargo, go) and build
   // tools from leaking thousands of orphaned files/folders into host `/tmp`.
   // Cleaned up when the session terminates via cleanupSessionFiles.

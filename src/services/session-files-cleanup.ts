@@ -1,10 +1,5 @@
 import path from "node:path";
-import {
-  rm as rmAsync,
-  unlink as unlinkAsync,
-  readdir as readdirAsync,
-  stat as statAsync,
-} from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import { stateFilePath } from "./session-state-file.js";
 import { hookTokenPath } from "./hook-token.js";
 import { sessionAgentGuidePath } from "./agent-guide.js";
@@ -36,19 +31,19 @@ export function sessionTmpDirPath(sessionsDir: string, id: string): string {
  *  - agent-guide/briefing (#405) and workflow-conventions (#937) are written
  *    unconditionally at spawn time but nothing else removed them;
  *  - the opencode tier-0/seed files and config dir (#949) share the lifecycle;
- *  - the session-scoped temporary directory (#1677) is removed to prevent temp leaks.
+ *  - the session-scoped temporary directory (#1681) is removed to prevent temp leaks.
  */
 export async function cleanupSessionFiles(sessionsDir: string, id: string): Promise<void> {
   await Promise.allSettled([
-    unlinkAsync(hookTokenPath(sessionsDir, id)),
-    unlinkAsync(stateFilePath(sessionsDir, id)),
-    unlinkAsync(sessionAgentGuidePath(sessionsDir, id)),
-    unlinkAsync(sessionWorkflowConventionsPath(sessionsDir, id)),
-    unlinkAsync(sessionBriefingPath(sessionsDir, id)),
-    unlinkAsync(opencodeTier0Path(sessionsDir, id)),
-    unlinkAsync(opencodeSeedPath(sessionsDir, id)),
-    rmAsync(opencodeConfigDir(sessionsDir, id), { recursive: true, force: true }),
-    rmAsync(sessionTmpDirPath(sessionsDir, id), { recursive: true, force: true }),
+    fsPromises.unlink(hookTokenPath(sessionsDir, id)),
+    fsPromises.unlink(stateFilePath(sessionsDir, id)),
+    fsPromises.unlink(sessionAgentGuidePath(sessionsDir, id)),
+    fsPromises.unlink(sessionWorkflowConventionsPath(sessionsDir, id)),
+    fsPromises.unlink(sessionBriefingPath(sessionsDir, id)),
+    fsPromises.unlink(opencodeTier0Path(sessionsDir, id)),
+    fsPromises.unlink(opencodeSeedPath(sessionsDir, id)),
+    fsPromises.rm(opencodeConfigDir(sessionsDir, id), { recursive: true, force: true }),
+    fsPromises.rm(sessionTmpDirPath(sessionsDir, id), { recursive: true, force: true }),
   ]);
 }
 
@@ -58,6 +53,12 @@ export const MIN_ORPHAN_TMP_AGE_MS = 60_000;
 export interface SweepLogger {
   warn(obj: unknown, msg: string): void;
   info?(obj: unknown, msg: string): void;
+}
+
+export interface SweepOrphanedTmpDirsOptions {
+  activeSessionIds?: Set<string>;
+  minAgeMs?: number;
+  log?: SweepLogger;
 }
 
 /**
@@ -75,15 +76,29 @@ export type DeadSessionFilter = (candidateIds: string[]) => Promise<Set<string>>
 export async function sweepOrphanedSessionTmpDirs(
   sessionsDir: string,
   isDead: DeadSessionFilter,
-  activeSessionIds: Set<string> = new Set(),
-  minAgeMs: number = MIN_ORPHAN_TMP_AGE_MS,
+  activeSessionIdsOrOptions?: Set<string> | SweepOrphanedTmpDirsOptions,
+  minAgeMs?: number,
   log?: SweepLogger,
 ): Promise<number> {
+  let activeSessionIds: Set<string>;
+  let resolvedMinAgeMs: number;
+  let resolvedLog: SweepLogger | undefined;
+
+  if (activeSessionIdsOrOptions instanceof Set) {
+    activeSessionIds = activeSessionIdsOrOptions;
+    resolvedMinAgeMs = minAgeMs ?? MIN_ORPHAN_TMP_AGE_MS;
+    resolvedLog = log;
+  } else {
+    activeSessionIds = activeSessionIdsOrOptions?.activeSessionIds ?? new Set();
+    resolvedMinAgeMs = activeSessionIdsOrOptions?.minAgeMs ?? MIN_ORPHAN_TMP_AGE_MS;
+    resolvedLog = activeSessionIdsOrOptions?.log;
+  }
+
   let entries;
   try {
-    entries = await readdirAsync(sessionsDir, { withFileTypes: true });
+    entries = await fsPromises.readdir(sessionsDir, { withFileTypes: true });
   } catch (err) {
-    log?.warn({ err, sessionsDir }, "sweepOrphanedSessionTmpDirs: failed to readdir");
+    resolvedLog?.warn({ err, sessionsDir }, "sweepOrphanedSessionTmpDirs: failed to readdir");
     return 0;
   }
 
@@ -97,12 +112,12 @@ export async function sweepOrphanedSessionTmpDirs(
 
     const fullPath = path.join(sessionsDir, entry.name);
     try {
-      const st = await statAsync(fullPath);
-      if (now - st.mtimeMs >= minAgeMs) {
+      const st = await fsPromises.stat(fullPath);
+      if (now - st.mtimeMs >= resolvedMinAgeMs) {
         candidateIds.push(id);
       }
     } catch (err) {
-      log?.warn(
+      resolvedLog?.warn(
         { err, path: fullPath },
         "sweepOrphanedSessionTmpDirs: failed to stat candidate tmp dir",
       );
@@ -115,7 +130,7 @@ export async function sweepOrphanedSessionTmpDirs(
   try {
     confirmedDead = await isDead(candidateIds);
   } catch (err) {
-    log?.warn(
+    resolvedLog?.warn(
       { err, candidateIds },
       "sweepOrphanedSessionTmpDirs: failed to check session liveness",
     );
@@ -127,10 +142,10 @@ export async function sweepOrphanedSessionTmpDirs(
     [...confirmedDead].map(async (id) => {
       const fullPath = sessionTmpDirPath(sessionsDir, id);
       try {
-        await rmAsync(fullPath, { recursive: true, force: true });
+        await fsPromises.rm(fullPath, { recursive: true, force: true });
         swept++;
       } catch (err) {
-        log?.warn(
+        resolvedLog?.warn(
           { err, id, fullPath },
           "sweepOrphanedSessionTmpDirs: failed to rm candidate tmp dir",
         );

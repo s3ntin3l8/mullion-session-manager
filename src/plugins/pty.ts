@@ -452,7 +452,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
         app.log.error({ err }, "stale-state sweep failed");
       }
 
-      // Issue #1677 — sweeps orphaned `<id>.tmp` directories under sessionsDir
+      // Issue #1681 — sweeps orphaned `<id>.tmp` directories under sessionsDir
       // left behind by aborted spawns, crashed processes, or hard restarts.
       // Primary-role only (matches all other periodic sweeps); remote agent-role
       // hosts rely on terminate()-time cleanupSessionFiles.

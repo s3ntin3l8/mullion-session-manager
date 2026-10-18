@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -152,6 +153,48 @@ describe("session-files-cleanup", () => {
         expect.stringContaining("failed to check session liveness"),
       );
       expect(fs.existsSync(orphanDir)).toBe(true);
+    });
+
+    it("logs warning when stat fails on candidate tmp dir", async () => {
+      const orphanId = "orphan-stat-fail";
+      const orphanDir = sessionTmpDirPath(tmpDir, orphanId);
+      fs.mkdirSync(orphanDir, { recursive: true });
+
+      const mockLogger: SweepLogger = { warn: vi.fn() };
+      const statSpy = vi
+        .spyOn(fsPromises, "stat")
+        .mockRejectedValueOnce(new Error("stat permission denied"));
+
+      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, () => new Set(), { log: mockLogger });
+
+      expect(swept).toBe(0);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error), path: orphanDir }),
+        expect.stringContaining("failed to stat candidate tmp dir"),
+      );
+      statSpy.mockRestore();
+    });
+
+    it("logs warning when rm fails on candidate tmp dir", async () => {
+      const orphanId = "orphan-rm-fail";
+      const orphanDir = sessionTmpDirPath(tmpDir, orphanId);
+      fs.mkdirSync(orphanDir, { recursive: true });
+      const twoMinutesAgo = new Date(Date.now() - 120_000);
+      fs.utimesSync(orphanDir, twoMinutesAgo, twoMinutesAgo);
+
+      const mockLogger: SweepLogger = { warn: vi.fn() };
+      const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(new Error("rm failed"));
+
+      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, (ids) => new Set(ids), {
+        log: mockLogger,
+      });
+
+      expect(swept).toBe(0);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error), id: orphanId, fullPath: orphanDir }),
+        expect.stringContaining("failed to rm candidate tmp dir"),
+      );
+      rmSpy.mockRestore();
     });
   });
 });
