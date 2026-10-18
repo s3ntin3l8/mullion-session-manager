@@ -367,7 +367,9 @@ describe("RightSidebar", () => {
       ] as never,
     });
     renderSidebar();
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    // The Git view's History section has its own scope <select>; the project
+    // picker is the first combobox in the sidebar.
+    const select = screen.getAllByRole("combobox")[0] as HTMLSelectElement;
     act(() => useDashboardStore.getState().openRightSidebarView("git", 2));
     expect(select.value).toBe("2");
 

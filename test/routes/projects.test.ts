@@ -6,6 +6,7 @@ import { plainNodePtyMock } from "../helpers/mock-pty.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
@@ -2271,6 +2272,112 @@ describe("projects route", () => {
         });
         expect(res.statusCode).toBe(412);
         fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+    });
+
+    describe("git log routes", () => {
+      const gitIn = (cwd: string, ...args: string[]) =>
+        execFileSync("git", ["-C", cwd, ...args], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "T",
+            GIT_AUTHOR_EMAIL: "t@example.com",
+            GIT_COMMITTER_NAME: "T",
+            GIT_COMMITTER_EMAIL: "t@example.com",
+          },
+        }).trim();
+
+      async function repoProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "projects-gitlog-"));
+        gitIn(dir, "init", "-q", "-b", "main");
+        fs.writeFileSync(path.join(dir, "a.txt"), "one\n");
+        gitIn(dir, "add", ".");
+        gitIn(dir, "commit", "-q", "-m", "first");
+        fs.writeFileSync(path.join(dir, "a.txt"), "one\ntwo\n");
+        gitIn(dir, "commit", "-q", "-am", "second");
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "gitlog", cwd: dir },
+        });
+        return { dir, id: created.json().id as number, head: gitIn(dir, "rev-parse", "HEAD") };
+      }
+
+      it("lists commits, then serves one commit's files and a file diff", async () => {
+        const app = await makeApp();
+        const { dir, id, head } = await repoProject(app);
+
+        const log = await app.inject({ method: "GET", url: `/api/projects/${id}/git-log?limit=1` });
+        expect(log.statusCode).toBe(200);
+        expect(log.json().commits).toHaveLength(1);
+        expect(log.json().commits[0]).toMatchObject({ sha: head, subject: "second" });
+        expect(log.json().hasMore).toBe(true);
+        const head2 = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-log?scope=head`,
+        });
+        expect(head2.json().commits).toHaveLength(2);
+        expect(head2.json().hasMore).toBe(false);
+
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-commit/${head}`,
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json().files).toEqual([{ path: "a.txt", additions: 1, deletions: 0 }]);
+
+        const file = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-commit/${head}/file?path=a.txt`,
+        });
+        expect(file.statusCode).toBe(200);
+        expect(file.json().patch).toContain("+two");
+        fs.rmSync(dir, { recursive: true, force: true });
+      });
+
+      it("validates ids, paging, scope, sha and path; 404s unknown project/commit", async () => {
+        const app = await makeApp();
+        const { dir, id } = await repoProject(app);
+        const get = (url: string) => app.inject({ method: "GET", url });
+
+        expect((await get("/api/projects/x/git-log")).statusCode).toBe(400);
+        expect((await get("/api/projects/999999/git-log")).statusCode).toBe(404);
+        expect((await get(`/api/projects/${id}/git-log?skip=-1`)).statusCode).toBe(400);
+        expect((await get(`/api/projects/${id}/git-log?limit=0`)).statusCode).toBe(400);
+        expect((await get(`/api/projects/${id}/git-log?scope=nope`)).statusCode).toBe(400);
+        expect((await get(`/api/projects/${id}/git-commit/--output=x`)).statusCode).toBe(400);
+        expect((await get(`/api/projects/${id}/git-commit/0000000`)).statusCode).toBe(404);
+        expect((await get(`/api/projects/${id}/git-commit/abc1234/file`)).statusCode).toBe(400);
+        expect(
+          (await get(`/api/projects/${id}/git-commit/abc1234/file?path=../x`)).statusCode,
+        ).toBe(400);
+        fs.rmSync(dir, { recursive: true, force: true });
+      });
+
+      it("accepts a worktree cwd of the project and refuses any other directory", async () => {
+        const app = await makeApp();
+        const { dir, id } = await repoProject(app);
+        const wt = `${dir}-wt`;
+        gitIn(dir, "worktree", "add", "-q", "-b", "side", wt);
+        fs.writeFileSync(path.join(wt, "s.txt"), "s\n");
+        gitIn(wt, "add", ".");
+        gitIn(wt, "commit", "-q", "-m", "side only");
+
+        const ok = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-log?scope=head&cwd=${encodeURIComponent(wt)}`,
+        });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json().commits[0].subject).toBe("side only");
+
+        const bad = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-log?cwd=${encodeURIComponent("/tmp")}`,
+        });
+        expect(bad.statusCode).toBe(400);
+        fs.rmSync(wt, { recursive: true, force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
       });
     });
 
