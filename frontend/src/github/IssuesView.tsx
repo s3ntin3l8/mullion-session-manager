@@ -12,6 +12,7 @@ import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
+import { Dropdown } from "../ui/primitives.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
@@ -24,6 +25,10 @@ const SORT_LABELS: Record<GitHubIssueSort, string> = {
   created: "Newest",
   comments: "Most comments",
 };
+const SORT_OPTIONS = (Object.keys(SORT_LABELS) as GitHubIssueSort[]).map((value) => ({
+  value,
+  label: SORT_LABELS[value],
+}));
 
 function LabelChip({ label, active, onClick }: LabelChipProps) {
   const style = { borderColor: `#${label.color}` };
@@ -164,18 +169,13 @@ export function IssuesSection({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <select
-              className="gh-issue-sort"
-              aria-label="Sort issues"
+            <Dropdown
+              small
+              ariaLabel="Sort issues"
               value={sort}
-              onChange={(e) => setSort(e.target.value as GitHubIssueSort)}
-            >
-              {(Object.keys(SORT_LABELS) as GitHubIssueSort[]).map((k) => (
-                <option key={k} value={k}>
-                  {SORT_LABELS[k]}
-                </option>
-              ))}
-            </select>
+              onChange={setSort}
+              options={SORT_OPTIONS}
+            />
             <label className="gh-issue-unassigned">
               <input
                 type="checkbox"

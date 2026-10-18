@@ -5,9 +5,15 @@ import { parseUnifiedDiff, type DiffLine } from "../diffUtils.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { ErrorText } from "../ui/ErrorText.js";
+import { Dropdown } from "../ui/primitives.js";
 import { PHASE_LABEL, phaseTone } from "../github/prPhase.js";
 import { computeGraphLayout } from "./graphLayout.js";
 import { HistoryGraph } from "./HistoryGraph.js";
+
+const HISTORY_SCOPE_OPTIONS: Array<{ value: "all" | "head"; label: string }> = [
+  { value: "all", label: "All branches" },
+  { value: "head", label: "Current branch" },
+];
 
 const PAGE = 100;
 
@@ -181,15 +187,13 @@ export function GitHistorySection({
   return (
     <div className="gh-history">
       <div className="gh-issue-filters">
-        <select
-          aria-label="History scope"
-          className="gh-issue-sort"
+        <Dropdown
+          small
+          ariaLabel="History scope"
           value={scope}
-          onChange={(e) => setScope(e.target.value as "all" | "head")}
-        >
-          <option value="all">All branches</option>
-          <option value="head">Current branch</option>
-        </select>
+          onChange={setScope}
+          options={HISTORY_SCOPE_OPTIONS}
+        />
       </div>
       {error && <ErrorText>{error}</ErrorText>}
       {commits === undefined && <div className="github-panel-empty-row">Loading…</div>}

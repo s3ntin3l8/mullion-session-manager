@@ -190,6 +190,16 @@ describe("GitHistorySection", () => {
     });
   });
 
+  it("renders the history scope as the app's themed dropdown, not a bare native select", async () => {
+    stubFetch((url) =>
+      url.includes("/git-log") ? jsonResponse(200, { commits: COMMITS, hasMore: false }) : null,
+    );
+    render(<GitHistorySection projectId={1} cwd="/wt/x" />);
+    const scope = await screen.findByLabelText("History scope");
+    expect(scope.closest(".settings-dropdown.small")).not.toBeNull();
+    expect(scope).toHaveValue("all");
+  });
+
   it("drops Load more when a reload (scope change) fails after a page had more", async () => {
     vi.stubGlobal(
       "fetch",

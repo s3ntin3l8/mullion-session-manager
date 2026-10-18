@@ -1078,19 +1078,22 @@
   min-height: 0;
 }
 /* Seven task columns at .kanban-column's own min-width (240px) would need
-   ~1800px before even a drawer opens — this modifier narrows the floor to
-   200px so 7 fit before scrolling on a typical laptop. overflow-x: auto is
-   already on .kanban-board, so anything narrower still degrades honestly
-   (horizontal scroll) rather than needing hideable columns. */
+   ~1800px before even a drawer opens. This modifier narrows the floor to
+   160px: 7 x 160 + 6 x 14px gaps + 2 x 16px padding = 1236px, which fits the
+   board area of a 1600px-wide window with the sidebar open, so the last
+   columns (Done, Failed) no longer sit clipped at the right edge there.
+   overflow-x: auto is already on .kanban-board, so anything narrower still
+   degrades honestly (horizontal scroll) rather than needing hideable
+   columns. */
 .kanban-unified-columns .kanban-column {
-  flex: 1 1 200px;
-  min-width: 200px;
+  flex: 1 1 160px;
+  min-width: 160px;
   max-width: 320px;
 }
 /* #746 — this selector's own higher specificity would otherwise override
    the plain .kanban-column-collapsed rule above (both classes are on the
    same element here, but ".kanban-unified-columns .kanban-column" beats a
-   single class), silently keeping a collapsed column at the same 200px
+   single class), silently keeping a collapsed column at the same 160px
    floor every other column claims. */
 .kanban-unified-columns .kanban-column-collapsed {
   flex: 0 0 auto;
