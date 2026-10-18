@@ -1799,6 +1799,28 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("queue: says so when no write-scoped token is available", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) =>
+          Promise.resolve(
+            String(input) === "https://api.github.com/user"
+              ? jsonResponse(200, { login: "octocat" })
+              : jsonResponse(200, []),
+          ),
+        );
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        app.config.MULLION_TASK_MASTER_ENABLED = true;
+        // Disconnect the PAT so no token resolves at all.
+        await app.inject({ method: "DELETE", url: "/api/integrations/github" });
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/issues/7/queue`,
+        });
+        expect(res.statusCode).toBe(502);
+        expect(res.json().message).toMatch(/write access/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("queue: refuses when Task Master is off, labels the issue when it is on", async () => {
         fetchMock.mockImplementation((input: RequestInfo | URL) => {
           const url = String(input);

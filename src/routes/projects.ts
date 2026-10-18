@@ -672,6 +672,10 @@ interface LoadProjectRepoContextOptions {
    * pre-existing inconsistency, not something this refactor fixes — it's
    * preserved as-is via this override rather than silently normalized. */
   resolveToken?: (repoRef: GitHubRepoRef) => Promise<string | null>;
+  /** When set, a missing token is answered with this 502 message instead of
+   * the silent 204 — for actions the user explicitly clicked, where "nothing
+   * happened" would be a worse answer than "no token". */
+  noTokenMessage?: string;
 }
 
 /**
@@ -746,6 +750,10 @@ async function loadProjectRepoContext(
   const resolveToken = options.resolveToken ?? ((ref) => resolveGitHubToken(app, ref, "read"));
   const token = await resolveToken(repoRef);
   if (!token) {
+    if (options.noTokenMessage) {
+      reply.badGateway(options.noTokenMessage);
+      return null;
+    }
     reply.code(204);
     return null;
   }
@@ -1979,6 +1987,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "issue queue",
         resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+        noTokenMessage: "No GitHub token with write access is available to label this issue",
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;

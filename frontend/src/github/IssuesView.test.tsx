@@ -233,6 +233,23 @@ describe("IssueDetailView", () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  it("says when only the first comments were fetched", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          jsonResponse(
+            200,
+            url.includes("/github/issues/7") ? { ...DETAIL, commentCount: 230 } : LIST,
+          ),
+        ),
+      ),
+    );
+    render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
+    expect(await screen.findByText("Comments (1 of 230)")).toBeInTheDocument();
+    expect(screen.getByText(/Showing the first 1/)).toBeInTheDocument();
+  });
+
   it("shows an error when the issue cannot be loaded", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { message: "gone" })));
     render(<IssueDetailView projectId={1} number={9} onBack={vi.fn()} />);

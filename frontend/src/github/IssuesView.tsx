@@ -366,7 +366,19 @@ export function IssueDetailView({
           )}
           {issue.comments.length > 0 && (
             <div className="github-panel-section">
-              <div className="github-panel-section-title">Comments ({issue.comments.length})</div>
+              <div className="github-panel-section-title">
+                Comments ({issue.comments.length}
+                {issue.commentCount > issue.comments.length ? ` of ${issue.commentCount}` : ""})
+              </div>
+              {issue.commentCount > issue.comments.length && (
+                <div className="github-panel-empty-row">
+                  Showing the first {issue.comments.length} —{" "}
+                  <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
+                    open on GitHub
+                  </a>{" "}
+                  for the rest
+                </div>
+              )}
               {issue.comments.map((c) => (
                 <div key={c.id} className="gh-comment">
                   <div className="gh-detail-meta">
