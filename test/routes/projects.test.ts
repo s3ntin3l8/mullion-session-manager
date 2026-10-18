@@ -1935,6 +1935,8 @@ describe("projects route", () => {
               headBranch: "feat",
               baseBranch: "main",
               ciStatus,
+              // A null status models a head-run lookup that never answered.
+              ciFetched: ciStatus !== null,
               actionsRuns: [],
             },
           ],
@@ -1987,7 +1989,7 @@ describe("projects route", () => {
           prs: [],
           prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
         });
-        mockGithub(gqlPr(47));
+        mockGithub(gqlPr(47, { mergeStateStatus: "UNSTABLE" }));
         const cold = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/47` });
         expect(cold.json().prPhase).toBe("unknown");
 
@@ -2020,7 +2022,8 @@ describe("projects route", () => {
         mockGithub(gqlPr(53));
         await warmCiCache(53, null);
         const clean = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/53` });
-        expect(clean.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: true });
+        // ciKnown reports the poller's fetch, not GitHub's CLEAN tie-break.
+        expect(clean.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: false });
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
@@ -2090,7 +2093,7 @@ describe("projects route", () => {
       });
 
       it("merge refuses when CI knowledge is cold or mergeability is unconfirmed", async () => {
-        mockGithub(gqlPr(48));
+        mockGithub(gqlPr(48, { mergeStateStatus: "UNSTABLE" }));
         const { setRepoPRsStatus } = await import("../../src/services/github.js");
         setRepoPRsStatus("acme", "widgets", {
           prs: [],

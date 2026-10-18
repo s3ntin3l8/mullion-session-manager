@@ -14,6 +14,7 @@ export const PR_REVIEW_DEFAULTS: Pick<
   | "unresolvedThreads"
   | "commentCount"
   | "reviewStateKnown"
+  | "ciFetched"
   | "prPhase"
 > = {
   isDraft: false,
@@ -26,5 +27,6 @@ export const PR_REVIEW_DEFAULTS: Pick<
   unresolvedThreads: null,
   commentCount: null,
   reviewStateKnown: false,
+  ciFetched: false,
   prPhase: "unknown",
 };

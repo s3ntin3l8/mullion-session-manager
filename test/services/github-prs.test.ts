@@ -125,6 +125,8 @@ describe("getRepoPRsStatus", () => {
       unresolvedThreads: null,
       commentCount: null,
       reviewStateKnown: false,
+      // The head-run lookup answered (with no runs), which is still an answer.
+      ciFetched: true,
       prPhase: "unknown",
     });
   });

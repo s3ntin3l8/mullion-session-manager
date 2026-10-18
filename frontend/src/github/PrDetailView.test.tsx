@@ -230,6 +230,14 @@ describe("PrDetailView", () => {
     await waitFor(() => expect(prFetches()).toBe(2));
   });
 
+  it("says the file list is unavailable (not partial) when it failed to load", async () => {
+    stub({ ...PR, files: [], changedFiles: 4 });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /4 files changed/ }));
+    expect(screen.getByText("File list unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/Showing the first/)).toBeNull();
+  });
+
   it("says when the file list is partial", async () => {
     stub({ ...PR, changedFiles: 250 });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
@@ -264,7 +272,7 @@ describe("PrDetailView", () => {
     expect(await screen.findByText("Checks unknown")).toBeInTheDocument();
     unmount();
 
-    // A PR with no runs that GitHub itself calls clean has an answer: none.
+    // The poller did fetch the head runs and found none: that is an answer.
     stub({ ...PR, ciStatus: null, ciKnown: true, actionsRuns: [] });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText("No checks reported")).toBeInTheDocument();

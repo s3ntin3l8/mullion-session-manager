@@ -2030,15 +2030,14 @@ export async function projectsRoute(app: FastifyInstance) {
       (p) => p.number === number,
     );
     const ciStatus = cached?.ciStatus ?? null;
-    // "Ready" needs a real CI answer. The poller's `ciStatus` is null both when
-    // its lookup hasn't answered and when a PR simply has no (or only skipped)
-    // runs, so for that case GitHub's own merge state is the tie-break: CLEAN
-    // means no required check is outstanding. Review/conflict phases don't
-    // depend on CI knowledge and are always derived from the live review data.
-    const ciKnown =
-      cached !== undefined && (cached.ciStatus !== null || detail.mergeStateStatus === "CLEAN");
-    const derived = derivePrPhase({
+    // "Ready" needs a real CI answer: either the poller fetched this PR's head
+    // runs (even if there are none) or GitHub's own merge state is CLEAN —
+    // the same rule the poller's list pill uses (derivePrPhase). Review and
+    // conflict phases don't depend on CI knowledge.
+    const ciKnown = cached?.ciFetched === true;
+    const prPhase = derivePrPhase({
       reviewStateKnown: true,
+      ciFetched: ciKnown,
       isDraft: detail.isDraft,
       mergeable: detail.mergeable,
       mergeStateStatus: detail.mergeStateStatus,
@@ -2047,7 +2046,6 @@ export async function projectsRoute(app: FastifyInstance) {
       reviewers: detail.reviewers,
       ciStatus,
     });
-    const prPhase = derived === "ready_to_merge" && !ciKnown ? "unknown" : derived;
     return {
       detail,
       ciStatus,

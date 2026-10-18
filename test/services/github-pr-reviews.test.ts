@@ -31,6 +31,7 @@ function pr(number: number): PROrWithChecks {
     unresolvedThreads: null,
     commentCount: null,
     reviewStateKnown: false,
+    ciFetched: false,
     prPhase: "unknown",
   };
 }

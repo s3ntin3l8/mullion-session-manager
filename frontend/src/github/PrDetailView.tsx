@@ -319,7 +319,10 @@ export function PrDetailView({
           {pr.changedFiles} files changed <span className="gh-add">+{pr.additions}</span>{" "}
           <span className="gh-del">−{pr.deletions}</span>
         </button>
-        {showFiles && pr.files.length < pr.changedFiles && (
+        {showFiles && pr.files.length === 0 && pr.changedFiles > 0 && (
+          <div className="github-panel-empty-row">File list unavailable</div>
+        )}
+        {showFiles && pr.files.length > 0 && pr.files.length < pr.changedFiles && (
           <div className="github-panel-empty-row">
             Showing the first {pr.files.length} of {pr.changedFiles} files
           </div>

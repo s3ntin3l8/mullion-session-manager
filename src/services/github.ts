@@ -108,6 +108,8 @@ export interface PROrWithChecks {
   /** True once the GraphQL enrichment filled this PR's review fields; false
    *  while they are still the REST-side defaults. */
   reviewStateKnown: boolean;
+  /** True once this PR's head-run lookup succeeded (runs may legitimately be empty). */
+  ciFetched: boolean;
   prPhase: PrPhase;
 }
 
@@ -794,6 +796,7 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
       unresolvedThreads: null,
       commentCount: null,
       reviewStateKnown: false,
+      ciFetched: false,
       prPhase: "unknown",
     };
     applyPrPhase(pr);
@@ -1274,6 +1277,7 @@ export async function getRepoPRsStatus(
     if (result.status === "fulfilled") {
       prs[i].actionsRuns = result.value;
       prs[i].ciStatus = computeCiStatus(result.value);
+      prs[i].ciFetched = true;
       applyPrPhase(prs[i]);
     }
   }

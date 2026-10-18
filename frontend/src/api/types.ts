@@ -953,6 +953,8 @@ export interface GitHubPROrWithChecks {
   /** null = not fetched (yet), as opposed to a known zero. */
   unresolvedThreads?: number | null;
   commentCount?: number | null;
+  /** True once the poller fetched this PR's head runs (possibly none). */
+  ciFetched?: boolean;
   prPhase?: GitHubPrPhase;
 }
 
