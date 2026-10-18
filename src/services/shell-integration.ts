@@ -125,15 +125,23 @@ function writeShimFileSync(filePath: string, content: string): void {
 }
 
 /**
- * Mutates `env` in place to inject the OSC 7 shell-integration hook for
- * `shell` (the session's `$SHELL`, e.g. "/bin/zsh" or "zsh") — a no-op for
- * any shell this doesn't know how to instrument (see this file's own doc
- * comment). Must be called AFTER `env.HOME` is already set to the real
- * value (buildSessionEnv/session-env.ts doesn't strip it) — `MULLION_USER_
- * ZDOTDIR` captures whatever `env.ZDOTDIR` already pointed at (or falls
- * back to `env.HOME`) BEFORE this overwrites `env.ZDOTDIR` with the shim
- * directory, since that capture is what every shim file (ensureShellIntegrationFiles
- * above) uses to still reach the user's own real dotfiles.
+ * Injects resource governor variables and the OSC 7 shell-integration hook
+ * for `shell` (the session's `$SHELL`, e.g. "/bin/zsh" or "zsh") into `env`
+ * in place.
+ *
+ * Resource governor concurrency caps (`VITEST_MAX_WORKERS`,
+ * `PYTEST_XDIST_AUTO_NUM_WORKERS`, `MAKEFLAGS`) are computed once at session
+ * launch from host cores and 1-minute load average (`os.loadavg()`), preserving
+ * any caller-pre-set values. `MULLION_HOST_CORES` is published as a convenience.
+ *
+ * Shell integration hook injection is a no-op for any shell this doesn't know
+ * how to instrument (see this file's own doc comment). Must be called AFTER
+ * `env.HOME` is already set to the real value (buildSessionEnv/session-env.ts
+ * doesn't strip it) — `MULLION_USER_ZDOTDIR` captures whatever `env.ZDOTDIR`
+ * already pointed at (or falls back to `env.HOME`) BEFORE this overwrites
+ * `env.ZDOTDIR` with the shim directory, since that capture is what every shim
+ * file (ensureShellIntegrationFiles above) uses to still reach the user's own
+ * real dotfiles.
  */
 export function applyShellIntegrationEnv(
   shell: string,
