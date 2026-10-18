@@ -123,6 +123,16 @@ describe("getRepoStatus", () => {
     expect(status.issuesHidden).toBe(true);
   });
 
+  it("flags issuesHidden when the count lookup fails and only PRs came back", async () => {
+    // Repo-info call fails (e.g. secondary rate limit) -> count unknown; a
+    // PR-only list is the Issues-less-token signature, so don't claim "none".
+    fetchMock = mockGithubApi({ issues: [PR], repoInfoOk: false });
+    vi.stubGlobal("fetch", fetchMock);
+    const status = await getRepoStatus("tok", "nocount-owner", "nocount-repo");
+    expect(status.issues).toEqual([]);
+    expect(status.issuesHidden).toBe(true);
+  });
+
   it("does not flag issuesHidden when issues were listed", async () => {
     fetchMock = mockGithubApi({ issues: [ISSUE, PR], openIssuesCount: 2 });
     vi.stubGlobal("fetch", fetchMock);

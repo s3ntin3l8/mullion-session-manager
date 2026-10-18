@@ -1602,6 +1602,11 @@ describe("projects route", () => {
         return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
       });
 
+      const realResolve = vi.mocked(resolveGitHubToken).getMockImplementation()!;
+      vi.mocked(resolveGitHubToken).mockImplementation(async (app, ref, scope) =>
+        scope === "issues" ? "issues-sentinel" : realResolve(app, ref, scope),
+      );
+
       const app = await makeApp();
       await app.inject({
         method: "PUT",
@@ -1625,9 +1630,13 @@ describe("projects route", () => {
         openIssues: 1,
         openPRs: 1,
       });
-      // The issue list is fetched with the dedicated "issues" token scope.
+      // The issue list is fetched with the dedicated "issues" token scope,
+      // and that scope's token (not the read one) reaches the /issues call.
       expect(vi.mocked(resolveGitHubToken).mock.calls.map((c) => c[2])).toContain("issues");
+      const issuesCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/issues?"));
+      expect(issuesCall?.[1]?.headers?.Authorization).toBe("Bearer issues-sentinel");
 
+      vi.mocked(resolveGitHubToken).mockImplementation(realResolve);
       fs.rmSync(projectCwd, { recursive: true, force: true });
     });
 

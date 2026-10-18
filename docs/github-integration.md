@@ -220,15 +220,17 @@ individual issue, only a repository):
   `issues` there would 422 every read mint on installs not yet re-approved
   with Issues. Pull requests rides along because that same call also
   supplies the open-PR entries. Until the App registration is re-approved
-  with Issues read, this scope's mint fails and the call falls back to the
-  read token (and then the PAT), and the sidebar shows "The GitHub token
-  can't list issues"; re-approve the App's new permission in its GitHub
-  settings (Settings → Developer settings → GitHub Apps → Permissions &
-  events → Repository permissions → Issues: Read-only), then accept the
-  update on the installation.
+  with Issues read, this scope's mint fails. `resolveGitHubToken` then returns
+  the shared PAT if one is configured (so the list still populates), and
+  otherwise the call falls back to the read token, which can't see issues:
+  the sidebar then shows "The GitHub token can't list issues". To fix that,
+  re-approve the App's new permission in its GitHub settings (Settings →
+  Developer settings → GitHub Apps → Permissions & events → Repository
+  permissions → Issues: Read-only), then accept the update on the
+  installation.
 - **dispatch** (#744) — Actions: write, Metadata — used only for the
   release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
-  which needs `actions: write`, a permission neither of the other two sets
+  which needs `actions: write`, a permission none of the other three sets
   grants. Deliberately its own set rather than folded into `write`: Task
   Master's ordinary issue/PR/push writes have no business holding an
   Actions-write scope.

@@ -337,7 +337,9 @@ export function getCachedDefaultBranchCi(owner: string, repo: string): GitHubCiS
  * open PRs (GitHub counts a PR as an issue there), not the length of the
  * `/issues` list: that list is capped at one page shared with PRs, and a
  * token without the Issues permission gets only PRs back. Falls back to the
- * list length when the count is unavailable.
+ * list length when the count is unavailable — and, if that left no issues
+ * but PR entries did come back (the signature of an Issues-less token), flags
+ * `issuesHidden` rather than assert "No open issues" it can't verify.
  */
 function countOpenIssues(
   listed: GitHubIssueOrPr[],
@@ -348,8 +350,11 @@ function countOpenIssues(
   // A full page means `openPRs` (and the issues list) are capped, so the
   // subtraction would be wrong and an empty issue list proves nothing — fall
   // back to what was listed and never claim the issues are hidden.
-  if (openIssuesAndPrs === null || listFull) {
-    return { openIssues: listed.length, issuesHidden: false };
+  if (listFull) return { openIssues: listed.length, issuesHidden: false };
+  if (openIssuesAndPrs === null) {
+    // Repo-info lookup failed (e.g. a secondary rate limit): the count is
+    // unknown, so an empty issue list next to listed PRs can't be trusted.
+    return { openIssues: listed.length, issuesHidden: listed.length === 0 && openPRs > 0 };
   }
   const openIssues = Math.max(openIssuesAndPrs - openPRs, listed.length);
   return { openIssues, issuesHidden: listed.length === 0 && openIssues > 0 };
