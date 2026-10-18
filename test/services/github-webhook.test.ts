@@ -170,6 +170,35 @@ describe("github-webhook service", () => {
       await app.close();
     });
 
+    it("subscribes to review-activity events so the sidebar's review state stays live", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_token");
+      seedProject(app);
+
+      fetchMock.mockReset();
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(200, []))
+        .mockResolvedValueOnce(jsonResponse(201, { id: 7 }));
+      await enableWebhooks(app);
+
+      const createCall = fetchMock.mock.calls.find(
+        (call) => (call[1] as RequestInit | undefined)?.method === "POST",
+      );
+      const body = JSON.parse((createCall![1] as RequestInit).body as string) as {
+        events: string[];
+      };
+      expect(body.events).toEqual(
+        expect.arrayContaining([
+          "pull_request_review",
+          "pull_request_review_comment",
+          "pull_request_review_thread",
+          "issue_comment",
+        ]),
+      );
+      await app.close();
+    });
+
     // #667 — an already-registered hook is PATCHed with the current events
     // list on every (re-)registration, not just its first creation — the
     // fix for the event-list-frozen-at-creation gap: without sending

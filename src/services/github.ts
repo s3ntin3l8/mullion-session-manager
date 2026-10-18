@@ -7,6 +7,12 @@
 // independently testable).
 
 import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
+import {
+  derivePrPhase,
+  type PrMergeable,
+  type PrPhase,
+  type PrReviewDecision,
+} from "./github-pr-phase.js";
 export { GitHubApiError };
 
 // GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
@@ -85,6 +91,28 @@ export interface PROrWithChecks {
   baseBranch: string;
   ciStatus: GitHubCiStatus;
   actionsRuns: GitHubActionsRun[];
+  // Review state — filled by github-pr-reviews.ts's GraphQL enrichment in the
+  // background poller. Best-effort: when that fails (or the PR is past the
+  // enriched page) these keep their neutral defaults and `prPhase` is derived
+  // from what is known (CI only).
+  isDraft: boolean;
+  updatedAt: string | null;
+  reviewDecision: PrReviewDecision;
+  mergeable: PrMergeable;
+  mergeStateStatus: string | null;
+  reviewers: { login: string; state: string }[];
+  requestedReviewers: string[];
+  /** null = not fetched (yet), as opposed to a known zero. */
+  unresolvedThreads: number | null;
+  commentCount: number | null;
+  prPhase: PrPhase;
+}
+
+/** Recomputes `prPhase` from the PR's current CI + review fields, in place. */
+export function applyPrPhase(pr: PROrWithChecks): void {
+  // commentCount is only ever set by the GraphQL enrichment, so it doubles as
+  // the "review fields are real, not defaults" marker.
+  pr.prPhase = derivePrPhase({ ...pr, reviewStateKnown: pr.commentCount !== null });
 }
 
 export interface GitHubPRsStatus {
@@ -696,6 +724,8 @@ interface GitHubPullApiItem {
   user: { login: string } | null;
   head: { sha: string; ref: string };
   base: { ref: string };
+  draft?: boolean;
+  updated_at?: string;
 }
 
 interface PRsCacheEntry {
@@ -742,17 +772,31 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
   }
 
   const items = (await res.json()) as GitHubPullApiItem[];
-  return items.map((item) => ({
-    number: item.number,
-    title: item.title,
-    htmlUrl: item.html_url,
-    author: item.user?.login ?? null,
-    headSha: item.head.sha,
-    headBranch: item.head.ref,
-    baseBranch: item.base.ref,
-    ciStatus: null,
-    actionsRuns: [],
-  }));
+  return items.map((item) => {
+    const pr: PROrWithChecks = {
+      number: item.number,
+      title: item.title,
+      htmlUrl: item.html_url,
+      author: item.user?.login ?? null,
+      headSha: item.head.sha,
+      headBranch: item.head.ref,
+      baseBranch: item.base.ref,
+      ciStatus: null,
+      actionsRuns: [],
+      isDraft: item.draft === true,
+      updatedAt: item.updated_at ?? null,
+      reviewDecision: null,
+      mergeable: null,
+      mergeStateStatus: null,
+      reviewers: [],
+      requestedReviewers: [],
+      unresolvedThreads: null,
+      commentCount: null,
+      prPhase: "unknown",
+    };
+    applyPrPhase(pr);
+    return pr;
+  });
 }
 
 // #744 — the release-please routes need the repo's default branch (both to
@@ -1228,6 +1272,7 @@ export async function getRepoPRsStatus(
     if (result.status === "fulfilled") {
       prs[i].actionsRuns = result.value;
       prs[i].ciStatus = computeCiStatus(result.value);
+      applyPrPhase(prs[i]);
     }
   }
 

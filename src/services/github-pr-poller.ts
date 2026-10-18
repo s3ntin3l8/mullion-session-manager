@@ -9,6 +9,9 @@ import {
   setRepoPRsStatus,
 } from "./github.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
+import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
+import { diffPrSnapshots, snapshotPr, type PrSnapshot } from "./github-pr-phase.js";
+import { broadcastToProject } from "./github-ws-broadcast.js";
 import { resolveGitHubPoll, toActivityIntervals } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -63,13 +66,22 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   let cleanupCalled = false;
   const pendingTimers: ReturnType<typeof setTimeout>[] = [];
 
-  async function resolveAllRepos(): Promise<{ repoRef: GitHubRepoRef | null }[]> {
+  // Last poll's per-PR snapshot for each repo, so a poll that changed
+  // something (a review landed, CI flipped) can push the browser instead of
+  // waiting for its next refetch. Process-local; the first poll of a repo has
+  // no baseline and so never pushes.
+  const lastSnapshots = new Map<string, Map<number, PrSnapshot>>();
+
+  async function resolveAllRepos(): Promise<
+    { repoRef: GitHubRepoRef | null; projectId: number }[]
+  > {
     const rows = app.db
       .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
       .from(projects)
       .all();
     return Promise.all(
       rows.map(async (row) => ({
+        projectId: row.id,
         repoRef:
           row.hostId === LOCAL_HOST_ID
             ? parseGitRemote(row.cwd)
@@ -87,14 +99,52 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     owner: string,
     repo: string,
     repoKey: string,
+    projectIds: number[],
   ): Promise<void> {
     const status = await getRepoPRsStatus(token, owner, repo);
+    // Review state (GraphQL) is best-effort and never throws.
+    await enrichPrsWithReviewState(token, owner, repo, status.prs);
     setRepoPRsStatus(owner, repo, status);
+    pushPrChanges(repoKey, status.prs, projectIds);
     activityTracker.recordPollResult(repoKey, repoHasActivity(status));
     await refreshDefaultBranchCi(token, owner, repo);
   }
 
-  async function pollOnce(repoRows: { repoRef: GitHubRepoRef | null }[]): Promise<void> {
+  function pushPrChanges(
+    repoKey: string,
+    prs: Parameters<typeof snapshotPr>[0][],
+    projectIds: number[],
+  ): void {
+    const next = prs.map(snapshotPr);
+    const prev = lastSnapshots.get(repoKey);
+    lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
+    if (!prev) return;
+    const changes = diffPrSnapshots(prev, next);
+    if (changes.length === 0) return;
+    for (const projectId of projectIds) {
+      const pid = String(projectId);
+      broadcastToProject(pid, {
+        type: "pr",
+        action: "sync",
+        projectId: pid,
+        pr: { changed: changes.map((c) => c.number) },
+      });
+    }
+  }
+
+  function projectIdsFor(
+    repoRows: { repoRef: GitHubRepoRef | null; projectId: number }[],
+    owner: string,
+    repo: string,
+  ): number[] {
+    return repoRows
+      .filter((r) => r.repoRef?.owner === owner && r.repoRef?.repo === repo)
+      .map((r) => r.projectId);
+  }
+
+  async function pollOnce(
+    repoRows: { repoRef: GitHubRepoRef | null; projectId: number }[],
+  ): Promise<void> {
     if (running) return;
     running = true;
     try {
@@ -115,7 +165,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         }
 
         try {
-          await refreshRepo(token, owner, repo, repoKey);
+          await refreshRepo(token, owner, repo, repoKey, projectIdsFor(repoRows, owner, repo));
         } catch (err) {
           if (err instanceof GitHubApiError) {
             app.log.warn(
@@ -179,7 +229,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
           const token = await resolveGitHubToken(app, repoRef, "read");
           if (!token) return;
           const repoKey = `${repoRef.owner}/${repoRef.repo}`;
-          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey);
+          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey, [row.id]);
         } catch (err) {
           app.log.warn(
             { err, hostId: row.hostId, cwd: row.cwd },
