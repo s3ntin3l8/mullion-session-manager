@@ -216,6 +216,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           prNumber,
           runId: run.runId,
           runStatus: run.status,
+          replayed: run.replayed,
         };
       } catch (err) {
         return replyReviewError(reply, err);

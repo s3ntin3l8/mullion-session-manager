@@ -1494,6 +1494,12 @@ async function runReview(client, args, opts, io) {
   if (sub === "status") {
     return { json: result, text: formatReviewStatus(result) };
   }
+  if (result.replayed) {
+    return {
+      json: result,
+      text: `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion review status"`,
+    };
+  }
   return {
     json: result,
     text: `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}) — it will post to the PR in a few minutes`,

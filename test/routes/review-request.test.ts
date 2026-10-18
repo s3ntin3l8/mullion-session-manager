@@ -115,7 +115,11 @@ describe("review-request routes", () => {
       number,
       headSha: `sha${number}`,
     }));
-    mocks.requestHermesReview.mockResolvedValue({ runId: "run_1", status: "queued" });
+    mocks.requestHermesReview.mockResolvedValue({
+      runId: "run_1",
+      status: "queued",
+      replayed: false,
+    });
     mocks.assertReviewerConfigured.mockReturnValue("key");
   });
 
@@ -144,6 +148,7 @@ describe("review-request routes", () => {
       prNumber: 42,
       runId: "run_1",
       runStatus: "queued",
+      replayed: false,
     });
     expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
       "ghs_token",

@@ -1138,6 +1138,21 @@ describe("runCommand", () => {
         expect(io.written.join("")).toContain("review requested for acme/widgets#42");
       });
 
+      it("says no new review started when Hermes replayed an earlier run", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            runStatus: "completed",
+            replayed: true,
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("no new review started for acme/widgets#42");
+        expect(out).toContain("run_1 (completed)");
+      });
+
       it("gives the request a longer timeout than the 30s default", async () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
         await runCommand(["review"], { client, io: fakeIo() });

@@ -176,6 +176,7 @@ describe("hermes review relay", () => {
       await expect(requestHermesReview(app, { ...PR, sessionId: 5 })).resolves.toEqual({
         runId: "run_abc",
         status: "queued",
+        replayed: false,
       });
       expect(getReviewRunForPr("ACME", "Widgets", 7)).toMatchObject({
         runId: "run_abc",
@@ -203,6 +204,47 @@ describe("hermes review relay", () => {
       dispatch = async () =>
         new Response('{"error":{"code":"idempotency_key_conflict"}}', { status: 409 });
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewConflictError);
+    });
+
+    it("does not call any other 409 (ownership/identity refusal, odd body) a pending review", async () => {
+      for (const body of ['{"error":{"code":"permission_denied"}}', "not json", "{}"]) {
+        resetHermesReviewState();
+        dispatch = async () => new Response(body, { status: 409 });
+        const err = await requestHermesReview(app, PR).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(HermesUnavailableError);
+        expect(err).not.toBeInstanceOf(ReviewConflictError);
+        expect((err as Error).message).toContain("HTTP 409");
+      }
+    });
+
+    it("flags a replayed run (Idempotency-Replayed) so callers know nothing new started", async () => {
+      dispatch = async () =>
+        new Response('{"run_id":"run_old","status":"completed"}', {
+          status: 202,
+          headers: { "Idempotency-Replayed": "true" },
+        });
+      await expect(requestHermesReview(app, PR)).resolves.toEqual({
+        runId: "run_old",
+        status: "completed",
+        replayed: true,
+      });
+      resetHermesReviewState();
+      dispatch = async () => accepted();
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ replayed: false });
+    });
+
+    it("gives every request a fresh key when the cooldown is disabled", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await requestHermesReview(app, PR);
+      await requestHermesReview(app, PR);
+      const keys = fetchMock.mock.calls
+        .filter(([u]) => String(u).endsWith("/v1/runs"))
+        .map(
+          ([, init]) =>
+            (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
+        );
+      expect(keys).toHaveLength(2);
+      expect(keys[0]).not.toBe(keys[1]);
     });
 
     it("passes Retry-After through on 429/503 from Hermes", async () => {
@@ -398,6 +440,15 @@ describe("hermes review relay", () => {
       await expect(getHermesReviewStatus(app, PR)).resolves.toMatchObject({
         runId: "run_1",
         status: "not_found",
+      });
+    });
+
+    it("reports an unreadable 200 as unknown, not as an expired run", async () => {
+      await requestHermesReview(app, PR);
+      runEndpoint = async () => new Response("<html>bad gateway</html>", { status: 200 });
+      await expect(getHermesReviewStatus(app, PR)).resolves.toMatchObject({
+        runId: "run_1",
+        status: "unknown",
       });
     });
 

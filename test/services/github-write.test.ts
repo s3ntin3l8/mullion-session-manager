@@ -10,6 +10,7 @@ import {
   findPullRequestByHead,
   findMergedPullRequestByHead,
   getPullRequestByNumber,
+  listPullRequestReviews,
   mergePullRequest,
   updatePullRequestBranch,
   deleteRemoteBranch,
@@ -202,6 +203,73 @@ describe("github-write service", () => {
         }),
       }),
     );
+  });
+
+  describe("listPullRequestReviews", () => {
+    const review = (i: number, over: Record<string, unknown> = {}) => ({
+      user: { login: `u${i}`, type: "User" },
+      state: "COMMENTED",
+      commit_id: `sha${i}`,
+      submitted_at: "2026-01-01T00:00:00Z",
+      ...over,
+    });
+
+    it("maps reviews, flags bot authors and tolerates a deleted (null) user", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [
+          review(1, { user: { login: "hermes[bot]", type: "Bot" }, state: "APPROVED" }),
+          review(2, { user: null }),
+        ]),
+      );
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result).toEqual([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha1",
+          submittedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          author: "ghost",
+          authorIsBot: false,
+          state: "COMMENTED",
+          commitId: "sha2",
+          submittedAt: "2026-01-01T00:00:00Z",
+        },
+      ]);
+      expect(fetchMock.mock.calls[0][0]).toContain("/pulls/9/reviews?per_page=100&page=1");
+    });
+
+    it("follows full pages so the newest review (on the last page) is seen", async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse(
+            200,
+            Array.from({ length: 100 }, (_, i) => review(i)),
+          ),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse(200, [review(100, { user: { login: "hermes[bot]", type: "Bot" } })]),
+        );
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result).toHaveLength(101);
+      expect(result.at(-1)?.author).toBe("hermes[bot]");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1][0]).toContain("page=2");
+    });
+
+    it("stops at the page cap", async () => {
+      fetchMock.mockImplementation(async () =>
+        jsonResponse(
+          200,
+          Array.from({ length: 100 }, (_, i) => review(i)),
+        ),
+      );
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result).toHaveLength(1000);
+      expect(fetchMock).toHaveBeenCalledTimes(10);
+    });
   });
 
   it("getPullRequestByNumber GETs /pulls/:number and returns number/htmlUrl/nodeId/headSha", async () => {

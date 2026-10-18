@@ -690,9 +690,13 @@ export interface PullRequestReviewSummary {
   submittedAt: string | null;
 }
 
+const REVIEWS_PAGE_SIZE = 100;
+const REVIEWS_MAX_PAGES = 10;
+
 /**
- * Reviews on a PR (first 100, oldest first), reduced to what "did the review
- * bot's verdict land" needs. Read-only.
+ * Reviews on a PR, oldest first, reduced to what "did the review bot's verdict
+ * land" needs. The endpoint is ascending, so every page is read (up to 1000
+ * reviews): the newest review is on the last one. Read-only.
  */
 export async function listPullRequestReviews(
   token: string,
@@ -700,21 +704,34 @@ export async function listPullRequestReviews(
   repo: string,
   number: number,
 ): Promise<PullRequestReviewSummary[]> {
-  const reviews = await githubRequest<
-    Array<{
-      user: { login: string; type: string } | null;
-      state: string;
-      commit_id: string;
-      submitted_at: string | null;
-    }>
-  >(token, owner, repo, "GET", `/pulls/${number}/reviews?per_page=100`);
-  return reviews.map((r) => ({
-    author: r.user?.login ?? "ghost",
-    authorIsBot: r.user?.type === "Bot",
-    state: r.state,
-    commitId: r.commit_id,
-    submittedAt: r.submitted_at,
-  }));
+  const out: PullRequestReviewSummary[] = [];
+  for (let page = 1; page <= REVIEWS_MAX_PAGES; page += 1) {
+    const reviews = await githubRequest<
+      Array<{
+        user: { login: string; type: string } | null;
+        state: string;
+        commit_id: string;
+        submitted_at: string | null;
+      }>
+    >(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
+    );
+    for (const r of reviews) {
+      out.push({
+        author: r.user?.login ?? "ghost",
+        authorIsBot: r.user?.type === "Bot",
+        state: r.state,
+        commitId: r.commit_id,
+        submittedAt: r.submitted_at,
+      });
+    }
+    if (reviews.length < REVIEWS_PAGE_SIZE) break;
+  }
+  return out;
 }
 
 /**

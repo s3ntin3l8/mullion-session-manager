@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getHermesKey } from "./hermes-integration.js";
 import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
@@ -322,7 +323,7 @@ export function assertReviewerConfigured(app: FastifyInstance): string {
 export async function requestHermesReview(
   app: FastifyInstance,
   { owner, repo, prNumber, headSha, sessionId }: HermesReviewRequest,
-): Promise<{ runId: string; status: string }> {
+): Promise<{ runId: string; status: string; replayed: boolean }> {
   const { apiUrl, model, promptRepo, promptPath, cooldownMinutes } = getStoredSettings(
     app.db,
   ).reviewRelay;
@@ -350,8 +351,10 @@ export async function requestHermesReview(
     // re-request — after a failed or stopped run — silently dispatch nothing.
     // Bucketing by the cooldown window keeps a retry of one request (a failure
     // frees the cooldown slot) idempotent while a later request gets a new key.
-    const windowMs = Math.max(cooldownMinutes, 1) * 60_000;
-    const idempotencyKey = `mullion-review:${owner}/${repo}#${prNumber}@${headSha}:${Math.floor(Date.now() / windowMs)}`;
+    // With the cooldown disabled (0) there is no window: every request is fresh.
+    const bucket =
+      cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
+    const idempotencyKey = `mullion-review:${owner}/${repo}#${prNumber}@${headSha}:${bucket}`;
     const run = await dispatchReview(root, key, {
       idempotencyKey,
       model,
@@ -362,7 +365,7 @@ export async function requestHermesReview(
       promptPath,
     });
     trackRun({ ...run, owner, repo, prNumber, headSha, sessionId, dispatchedAt: Date.now() });
-    return { runId: run.runId, status: run.status };
+    return { runId: run.runId, status: run.status, replayed: run.replayed };
   } catch (err) {
     if (last === undefined) lastRequested.delete(cooldownKey);
     else lastRequested.set(cooldownKey, last);
@@ -436,7 +439,7 @@ async function dispatchReview(
     promptRepo: string;
     promptPath: string;
   },
-): Promise<{ runId: string; status: string }> {
+): Promise<{ runId: string; status: string; replayed: boolean }> {
   const prompt = r.promptRepo
     ? await loadReviewPrompt(r.promptRepo, r.promptPath)
     : BUILTIN_REVIEW_PROMPT;
@@ -454,8 +457,15 @@ async function dispatchReview(
     timeoutMs: DISPATCH_TIMEOUT_MS,
   });
   if (res.status === 409) {
-    void res.body?.cancel().catch(() => undefined);
-    throw new ReviewConflictError();
+    // 409 also covers ownership / generation / identity refusals, which are not
+    // "a review is already coming": only the idempotency conflict means that.
+    const refusal = await readJson<{ error?: { code?: unknown }; code?: unknown }>(res);
+    const code = refusal?.error?.code ?? refusal?.code;
+    if (code === "idempotency_key_conflict") throw new ReviewConflictError();
+    throw new HermesUnavailableError(
+      "Hermes refused the review request (HTTP 409) — review not dispatched",
+      `HTTP 409: ${JSON.stringify(refusal)?.slice(0, 300)}`,
+    );
   }
   if (!res.ok) throw await unavailableFromResponse(res, "review not dispatched");
   const parsed = await readJson<{ run_id?: unknown; status?: unknown }>(res);
@@ -468,6 +478,9 @@ async function dispatchReview(
   return {
     runId: parsed.run_id,
     status: typeof parsed.status === "string" ? parsed.status : "queued",
+    // Hermes answers a repeat of an earlier request with the ORIGINAL run
+    // (possibly already finished) and this header, instead of starting one.
+    replayed: res.headers.get("idempotency-replayed") === "true",
   };
 }
 
@@ -526,7 +539,10 @@ async function fetchRun(
     return toStatus(record, null);
   }
   if (!res.ok) throw await unavailableFromResponse(res, "could not read the run status");
-  return toStatus(record, await readJson<Record<string, unknown>>(res));
+  const run = await readJson<Record<string, unknown>>(res);
+  // An empty / non-JSON / oversized 200 (e.g. a proxy page) is not "the run
+  // does not exist"; keep that to a real 404.
+  return run ? toStatus(record, run) : { ...toStatus(record, null), status: "unknown" };
 }
 
 /** Latest run this Mullion dispatched for a PR, or null (restart, or never requested). */
