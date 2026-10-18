@@ -2123,6 +2123,55 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("a 403'd runs lookup in the real poller path can't make a PR ready or hide 'unknown'", async () => {
+        // Run the real getRepoPRsStatus with /actions/runs answering 403, warm
+        // the cache with its result, then read the detail through the route.
+        const { getRepoPRsStatus, setRepoPRsStatus } = await import("../../src/services/github.js");
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/actions/runs")) {
+            return Promise.resolve(new Response("nope", { status: 403 }));
+          }
+          if (url.includes("/pulls?")) {
+            return Promise.resolve(
+              jsonResponse(200, [
+                {
+                  number: 54,
+                  title: "PR 54",
+                  html_url: "https://github.com/acme/widgets/pull/54",
+                  user: { login: "me" },
+                  head: { sha: "sha54", ref: "feat" },
+                  base: { ref: "main" },
+                },
+              ]),
+            );
+          }
+          return Promise.resolve(jsonResponse(200, {}));
+        });
+        const status = await getRepoPRsStatus("tok", "acme", "widgets");
+        expect(status.prs[0]).toMatchObject({ ciStatus: null, ciFetched: false });
+        // The 403 above recorded a process-wide backoff; later calls must not inherit it.
+        const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
+        resetGitHubRateLimitForTests();
+        setRepoPRsStatus("acme", "widgets", status);
+
+        mockGithub(gqlPr(54, { mergeStateStatus: "UNSTABLE" }));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/54`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "unknown", ciKnown: false });
+        const merge = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/54/merge`,
+          payload: { headSha: "sha54" },
+        });
+        expect(merge.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge says so when no write-scoped token is available", async () => {
         mockGithub(gqlPr(50));
         const app = await makeApp();
