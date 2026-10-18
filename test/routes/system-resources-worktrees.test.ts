@@ -50,52 +50,15 @@ vi.mock("../../src/services/github-write.js", async (importOriginal) => ({
 import { projects, sessions, tasks } from "../../src/db/schema.js";
 import { buildTestApp } from "../helpers/app.js";
 
-/** The options the route hands the service, as built for the latest request. */
+/** The options the route hands the service for a fresh measurement. */
 async function optionsFor(app: Awaited<ReturnType<typeof buildTestApp>>) {
   inspectDevWorktrees.mockClear();
-  // A fresh app has an empty cache; bust it for the second look in a test.
-  await app.inject({ method: "POST", url: "/api/storage/worktrees/prune" });
-  return pruneDevWorktrees.mock.lastCall![0];
+  // Measured once per app and then held; ask for a new measurement each time.
+  await app.inject({ method: "GET", url: "/api/storage/worktrees?refresh=1" });
+  return inspectDevWorktrees.mock.lastCall![0];
 }
 
 describe("/api/storage/worktrees", () => {
-  it("prunes with nothing a client can steer, and returns the result", async () => {
-    const app = await buildTestApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/storage/worktrees/prune",
-      payload: { paths: ["/etc"], projects: [{ id: 1, cwd: "/etc" }] },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({
-      output: "Removed 0 stale developer worktrees.",
-      reclaimedBytes: 3,
-    });
-  });
-
-  it("caches inspection across polls and refreshes after a prune", async () => {
-    inspectDevWorktrees.mockClear();
-    const app = await buildTestApp();
-    await app.inject({ method: "GET", url: "/api/storage/worktrees" });
-    await app.inject({ method: "GET", url: "/api/storage/worktrees" });
-    expect(inspectDevWorktrees).toHaveBeenCalledTimes(1);
-    await app.inject({ method: "POST", url: "/api/storage/worktrees/prune" });
-    await app.inject({ method: "GET", url: "/api/storage/worktrees" });
-    expect(inspectDevWorktrees).toHaveBeenCalledTimes(2);
-  });
-
-  it("maps an in-progress prune to 409 and other failures to 500", async () => {
-    const app = await buildTestApp();
-    pruneDevWorktrees.mockRejectedValueOnce(new Error("DEV_WORKTREE_PRUNE_IN_PROGRESS"));
-    expect(
-      (await app.inject({ method: "POST", url: "/api/storage/worktrees/prune" })).statusCode,
-    ).toBe(409);
-    pruneDevWorktrees.mockRejectedValueOnce(new Error("disk on fire"));
-    expect(
-      (await app.inject({ method: "POST", url: "/api/storage/worktrees/prune" })).statusCode,
-    ).toBe(500);
-  });
-
   it("offers only local projects", async () => {
     const app = await buildTestApp();
     app.db.insert(projects).values({ name: "loc", cwd: "/tmp/wt-route-local" }).run();

@@ -116,12 +116,29 @@ export interface CacheStorageStatus {
 
 export type DockerPruneMode = "safe" | "aggressive";
 
-/** What any cleanup tier (Docker, temp, caches, opencode database) reports back. */
-export interface PruneResult {
-  output: string;
+export type CleanupSource = "docker" | "temp" | "caches" | "opencode" | "worktrees";
+
+/** One source's part of a cleanup job. */
+export interface CleanupStepState {
+  source: CleanupSource;
+  label: string;
+  state: "pending" | "running" | "done" | "skipped" | "error";
   reclaimedBytes: number;
-  error?: string;
+  /** Why it was skipped, what stopped it early, or what went wrong. */
+  note?: string;
 }
+
+/** A disk cleanup the server runs in the background; poll it until `done`. */
+export interface CleanupJob {
+  id: string;
+  mode: DockerPruneMode;
+  state: "running" | "done";
+  startedAt: string;
+  finishedAt?: string;
+  steps: CleanupStepState[];
+}
+
+export type CleanupStatus = CleanupJob | { state: "idle" };
 
 export interface TempStorageStatus {
   available: boolean;

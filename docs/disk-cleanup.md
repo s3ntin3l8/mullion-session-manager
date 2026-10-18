@@ -9,6 +9,35 @@ started being used between the preview and the click is left alone.
 The backend lives in `src/routes/system-resources.ts`; each tier is its own
 service. Everything here is local to the machine the Mullion server runs on.
 
+## Running a cleanup
+
+A cleanup can take minutes (the temp tier re-scans `/tmp` before it deletes
+anything), so it is a job on the server, not a request the page waits on.
+`POST /api/storage/cleanup` (`{ mode, cacheDirs? }`) answers `202` with the job
+and runs the sources one after another in the background; `GET
+/api/storage/cleanup` is its status, and the page polls it every two seconds
+while it runs. A reload or a second tab finds the job where it was (and its
+buttons disabled), and the last finished job stays available so its result can
+still be read. Only one job runs at a time (`409` otherwise).
+
+`services/disk-cleanup-job.ts` holds the job; the route
+(`routes/system-resources.ts`) decides which sources take part:
+
+- Docker and temp files always, in either tier, unless their last measurement
+  said they are unavailable (then they are listed as skipped, with the reason).
+- Aggressive only: the opted-in caches (the ids the client sends **and** the
+  saved settings both contain), opencode's database (skipped with a reason
+  while opencode is running, can't be told, or is already compacting; left out
+  entirely when there is nothing to reclaim), and stale developer worktrees
+  (always, whatever the preview says, since fetching is the first thing it
+  does).
+- A source nobody has measured yet still runs: each prune re-checks its own
+  safety. The measurements are never started just to make this decision.
+
+Each source is independent: one failing (or freeing nothing) never stops the
+next. When a source finishes, its held measurement is dropped, and when the
+whole job finishes the page asks for fresh figures.
+
 ## How the figures are measured
 
 Measuring can be slow (a `/tmp` with a million files takes a while even with
@@ -133,15 +162,12 @@ so it is deliberately narrow:
   doesn't commit changes nothing. The child gets only `PATH`, `HOME`,
   `LD_LIBRARY_PATH` and its temp dir, not the server's whole environment (a
   `NODE_OPTIONS` loader meant for the server shouldn't follow it).
-- **A long request.** The cleanup request stays open until the `VACUUM`
-  finishes, which can be minutes on a large database. A reverse proxy with a
-  short read timeout (nginx's `proxy_read_timeout` defaults to 60 s) will cut
-  the response while the compaction carries on; Settings then says the
-  request ended and that it may still be running. Raise that timeout for
-  `/api/storage/opencode/prune`, or just reload the page: while it runs, the
-  database card shows "being compacted right now" (the compaction's own child
-  process is not mistaken for opencode). Running it as a background job that
-  the page polls is tracked in #1667.
+- **Not a long request.** The compaction runs as part of the cleanup job, so
+  no HTTP request waits on the `VACUUM`, which can take minutes on a large
+  database: a reverse proxy's read timeout (nginx's `proxy_read_timeout`
+  defaults to 60 s) cannot cut it off, and a reload just finds the job still
+  running. While it runs, the database card shows "being compacted right now"
+  (the compaction's own child process is not mistaken for opencode).
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
   checkpointed and truncated afterwards so the file actually shrinks (if a

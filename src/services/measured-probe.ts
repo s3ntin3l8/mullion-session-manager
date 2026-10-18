@@ -17,6 +17,13 @@ export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
 export interface MeasuredProbe<T> {
   read(options?: { refresh?: boolean }): Promise<Measured<T>>;
   /**
+   * The held figures without starting or waiting for a run; undefined if nothing
+   * has been measured yet, or (when `maxAgeMs` is given) the figures are older
+   * than that. For decisions that must not trigger a scan, and must not lean on
+   * a stale answer.
+   */
+  peek(maxAgeMs?: number): T | undefined;
+  /**
    * Drops the held value. A run already in flight can't be stopped, so its
    * result is discarded and the next read waits for it to end before starting
    * a fresh run: runs never overlap.
@@ -114,6 +121,11 @@ export function createMeasuredProbe<T extends object>(
         clearTimeout(timer);
       }
       return snapshot();
+    },
+    peek(maxAgeMs) {
+      if (held?.value === undefined) return undefined;
+      if (maxAgeMs !== undefined && now() - (held.measuredAt ?? 0) > maxAgeMs) return undefined;
+      return held.value;
     },
     invalidate() {
       generation += 1;

@@ -1,9 +1,8 @@
-import { useState } from "react";
 import type { ReactNode } from "react";
-import { api, ApiError } from "../../api/index.js";
 import type {
+  CleanupJob,
+  CleanupStepState,
   DevWorktreeCandidate,
-  DockerPruneMode,
   Measured,
   ProbeMeta,
   SystemStats,
@@ -16,6 +15,8 @@ import { formatBytes } from "../../formatBytes.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { useDashboardStore } from "../../store/index.js";
 import { useStorageProbes } from "../useStorageProbes.js";
+import { useCleanupJob } from "../useCleanupJob.js";
+import { summarizeCleanup } from "../cleanupSummary.js";
 
 function describeWorktree(candidate: DevWorktreeCandidate): string {
   const kind = candidate.kind === "claude-agent" ? "Claude agent" : "worktree";
@@ -110,6 +111,54 @@ function TierCard({
   );
 }
 
+const STEP_STATE_TEXT: Record<CleanupStepState["state"], string> = {
+  pending: "waiting…",
+  running: "cleaning up…",
+  done: "done",
+  skipped: "skipped",
+  error: "failed",
+};
+
+/** The running (or last) cleanup, one line per source, then what it freed. */
+function CleanupProgress({ job, error }: { job: CleanupJob | null; error: string | null }) {
+  if (!job && !error) return null;
+  return (
+    <div className="storage-job" aria-live="polite">
+      {error && <ErrorText>{error}</ErrorText>}
+      {job && (
+        <>
+          <div className="storage-job-head">
+            {job.state === "running"
+              ? `Cleaning up (${job.mode})…`
+              : `Last cleanup (${job.mode}${
+                  job.finishedAt ? `, ${formatRelativeAge(Date.parse(job.finishedAt))}` : ""
+                })`}
+          </div>
+          <div className="storage-tier-rows">
+            {job.steps.map((step) => (
+              <div key={step.source} className="storage-tier-row">
+                <span>{step.label}</span>
+                <span
+                  className={`storage-tier-figure${step.state === "pending" ? " pending" : ""}`}
+                >
+                  {step.state === "done"
+                    ? `freed ${formatBytes(step.reclaimedBytes)}${step.note ? `: ${step.note}` : ""}`
+                    : step.state === "skipped" || step.state === "error"
+                      ? `${STEP_STATE_TEXT[step.state]}${step.note ? `: ${step.note}` : ""}`
+                      : STEP_STATE_TEXT[step.state]}
+                </span>
+              </div>
+            ))}
+          </div>
+          {job.state === "done" && (
+            <div className="settings-footer-note">{summarizeCleanup(job)}</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function DiskRow({ filesystem }: { filesystem: SystemStats["filesystems"][number] }) {
   const usable =
     filesystem.available &&
@@ -157,114 +206,15 @@ export function StorageSection() {
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
-  const hasOpencode = !!opencode?.available && opencode.reclaimableBytes > 0;
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
   const visibleCaches = (caches?.caches ?? []).filter(
     (c) => c.exists || selectedCaches.includes(c.id),
   );
-  const [pruningMode, setPruningMode] = useState<DockerPruneMode | null>(null);
-  const pruning = pruningMode !== null;
-  const [pruneResult, setPruneResult] = useState<string | null>(null);
-
-  // What cleanup reads (is Docker there? is opencode running?) must have been
-  // measured first, or a tier would silently skip a source that merely hasn't
-  // answered yet. Worktrees are exempt: aggressive cleanup doesn't depend on
-  // their preview. A probe that failed has "settled" too.
-  const settled = (probe: ProbeMeta | null) =>
-    probe !== null && (probe.measuredAt !== null || probe.state === "error");
-  const ready =
-    settled(probes.docker) &&
-    settled(probes.temp) &&
-    settled(probes.caches) &&
-    settled(probes.opencode);
-
-  const runPrune = (mode: DockerPruneMode) => {
-    setPruningMode(mode);
-    setPruneResult(null);
-    void (async () => {
-      try {
-        const settle = async (
-          fallback: string,
-          run: () => Promise<{ reclaimedBytes: number; error?: string }>,
-        ) => {
-          try {
-            return await run();
-          } catch (error: unknown) {
-            return {
-              reclaimedBytes: 0,
-              error: error instanceof ApiError ? error.message : fallback,
-            };
-          }
-        };
-        const dockerResult = docker?.available
-          ? await settle("Docker cleanup failed.", () => api.pruneDockerStorage(mode))
-          : null;
-        const tempResult = temp?.available
-          ? await settle("Temp file cleanup failed.", () => api.pruneTempStorage(mode))
-          : null;
-        // Caches are opt-in and aggressive-only; the server reads which ones
-        // from the saved settings.
-        const cacheResult =
-          mode === "aggressive" && caches?.available && selectedCaches.length > 0
-            ? await settle("Cache cleanup failed.", () => api.pruneCacheStorage(selectedCaches))
-            : null;
-        // Aggressive-only, and only while opencode isn't running (the server
-        // re-checks, so a session that started since this loaded is still safe).
-        const opencodeResult =
-          mode === "aggressive" &&
-          hasOpencode &&
-          !opencode?.inUse &&
-          !opencode?.holdersUnknown &&
-          !opencode?.compacting
-            ? await settle(
-                "The request ended before opencode's database cleanup reported back; it may still be running.",
-                () => api.pruneOpencodeStorage(),
-              )
-            : null;
-        // Aggressive-only; the server decides which worktrees are stale.
-        // Always in aggressive mode, whatever the preview says: it may still be
-        // loading (it is the slow one), have failed, or be as of the last fetch,
-        // and fetching is the first thing the cleanup does. The server decides
-        // what is stale.
-        const worktreeResult =
-          mode === "aggressive"
-            ? await settle("Developer worktree cleanup failed.", () => api.pruneDevWorktrees())
-            : null;
-        // Usually nothing, so only worth a mention when it did something.
-        const worktreePart =
-          worktreeResult && (worktreeResult.reclaimedBytes > 0 || worktreeResult.error)
-            ? worktreeResult
-            : null;
-        const parts = [
-          ["Docker", dockerResult],
-          ["temp files", tempResult],
-          ["caches", cacheResult],
-          ["opencode database", opencodeResult],
-          ["developer worktrees", worktreePart],
-        ].filter((part): part is [string, NonNullable<typeof dockerResult>] => part[1] !== null);
-        const total = parts.reduce((sum, [, result]) => sum + result.reclaimedBytes, 0);
-        const errors = parts
-          .map(([, result]) => result.error)
-          .filter(Boolean)
-          .join("; ");
-        let message = `Freed ${formatBytes(total)}`;
-        if (parts.length > 1) {
-          message += ` (${parts
-            .map(([label, result]) => `${label} ${formatBytes(result.reclaimedBytes)}`)
-            .join(", ")})`;
-        }
-        setPruneResult(
-          !errors ? `${message}.` : total === 0 ? errors : `${message}, then stopped: ${errors}`,
-        );
-      } finally {
-        setPruningMode(null);
-        // The server dropped its measurements when it pruned, so this starts
-        // fresh runs; the page keeps working while they finish.
-        void refresh();
-      }
-    })();
-  };
+  // The server runs the cleanup (it can take minutes) and decides which sources
+  // take part; this only starts it and follows its progress. When it finishes
+  // the server has dropped its measurements, so ask for fresh ones.
+  const cleanup = useCleanupJob(() => void refresh());
 
   // These services report their own failures as `available: false` plus an
   // `error` rather than rejecting, so a row for one that failed says why. With no
@@ -335,8 +285,6 @@ export function StorageSection() {
     .map((at) => Date.parse(at));
   const oldest = measuredTimes.length > 0 ? Math.min(...measuredTimes) : null;
 
-  const cleanupTitle = (text: string) => (ready ? text : "Waiting for the measurements above…");
-
   return (
     <>
       <Eyebrow title="Disk usage" desc="Disks used by Mullion's data, sessions, and projects." />
@@ -382,13 +330,11 @@ export function StorageSection() {
             <ConfirmButton
               variant="neutral"
               armedLabel="Confirm safe cleanup"
-              title={cleanupTitle(
-                "Remove dangling images and stale containers, networks, build cache, and temp files",
-              )}
-              disabled={pruning || !ready}
-              onConfirm={() => runPrune("safe")}
+              title="Remove dangling images and stale containers, networks, build cache, and temp files"
+              disabled={cleanup.running}
+              onConfirm={() => void cleanup.start("safe", selectedCaches)}
             >
-              {pruningMode === "safe" ? "Cleaning up…" : "Clean up (safe)…"}
+              {cleanup.activeMode === "safe" ? "Cleaning up…" : "Clean up (safe)…"}
             </ConfirmButton>
           }
         />
@@ -408,18 +354,16 @@ export function StorageSection() {
             <ConfirmButton
               variant="danger"
               armedLabel="Confirm aggressive cleanup"
-              title={cleanupTitle(
-                "Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, free space inside opencode's database, and developer worktrees whose branch is merged or gone",
-              )}
-              disabled={pruning || !ready}
-              onConfirm={() => runPrune("aggressive")}
+              title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, free space inside opencode's database, and developer worktrees whose branch is merged or gone"
+              disabled={cleanup.running}
+              onConfirm={() => void cleanup.start("aggressive", selectedCaches)}
             >
-              {pruningMode === "aggressive" ? "Cleaning up…" : "Aggressive cleanup…"}
+              {cleanup.activeMode === "aggressive" ? "Cleaning up…" : "Aggressive cleanup…"}
             </ConfirmButton>
           }
         />
       </div>
-      {pruneResult && <div className="settings-footer-note">{pruneResult}</div>}
+      <CleanupProgress job={cleanup.job} error={cleanup.error} />
 
       {caches?.available && visibleCaches.length > 0 && (
         <>
