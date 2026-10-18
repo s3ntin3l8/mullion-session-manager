@@ -1122,7 +1122,12 @@ describe("runCommand", () => {
     // the already-working (real session-scope) case takes no extra round
     // trip at all.
     describe("review", () => {
-      const dispatched = { status: "dispatched", repo: "acme/widgets", prNumber: 42 };
+      const dispatched = {
+        status: "dispatched",
+        repo: "acme/widgets",
+        prNumber: 42,
+        runId: "run_1",
+      };
 
       it("requests a review of the session's own PR and prints a confirmation", async () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
@@ -1131,6 +1136,21 @@ describe("runCommand", () => {
         expect(code).toBe(0);
         expect(client.request).toHaveBeenCalledWith("reviews.request", {});
         expect(io.written.join("")).toContain("review requested for acme/widgets#42");
+      });
+
+      it("says no new review started when Hermes replayed an earlier run", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            runStatus: "completed",
+            replayed: true,
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("no new review started for acme/widgets#42");
+        expect(out).toContain("run_1 (completed)");
       });
 
       it("gives the request a longer timeout than the 30s default", async () => {
@@ -1176,6 +1196,81 @@ describe("runCommand", () => {
         io.env = { MULLION_SESSION_ID: "42" };
         expect(await runCommand(["review", "--pr", "7"], { client, io })).toBe(0);
         expect(calls).toBe(2);
+      });
+
+      it("status asks reviews.status and prints the run, reply and whether the review landed", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_1",
+            repo: "acme/widgets",
+            prNumber: 42,
+            status: "completed",
+            shuttingDown: true,
+            error: "boom",
+            output: "no App credentials",
+            github: { checked: true, review: null },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review", "status", "--pr", "42"], { client, io })).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("reviews.status", { prNumber: 42 });
+        const out = io.written.join("");
+        expect(out).toContain("review run run_1 for acme/widgets#42: completed");
+        expect(out).toContain("shutting down");
+        expect(out).toContain("error: boom");
+        expect(out).toContain("reply: no App credentials");
+        expect(out).toContain("nothing from a review bot yet");
+      });
+
+      it("status prints the landed review, and a clear message when no run is known", async () => {
+        const landed = {
+          runId: "run_1",
+          repo: "acme/widgets",
+          prNumber: 42,
+          status: "completed",
+          github: {
+            checked: true,
+            review: { author: "hermes[bot]", state: "APPROVED", commitId: "abc1234" },
+          },
+        };
+        const io = fakeIo();
+        await runCommand(["review", "status"], {
+          client: fakeClient({ request: vi.fn(async () => landed) }),
+          io,
+        });
+        expect(io.written.join("")).toContain("posted: hermes[bot] APPROVED at abc1234");
+        const none = fakeIo();
+        await runCommand(["review", "status"], {
+          client: fakeClient({
+            request: vi.fn(async () => ({
+              status: "not_found",
+              repo: "acme/widgets",
+              prNumber: 42,
+            })),
+          }),
+          io: none,
+        });
+        expect(none.written.join("")).toContain("no review run known for acme/widgets#42");
+      });
+
+      it("stop sends the run id and prints the resulting status", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({ runId: "run_1", status: "stopping" })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review", "stop", "run_1"], { client, io })).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("reviews.stop", { runId: "run_1" });
+        expect(io.written.join("")).toContain("review run run_1: stopping");
+      });
+
+      it("stop without exactly one run id is a usage error", async () => {
+        const client = fakeClient();
+        const io = fakeIo();
+        expect(await runCommand(["review", "stop"], { client, io })).toBe(2);
+        expect(io.stderr.write).toHaveBeenCalledWith(
+          expect.stringContaining("usage: mullion review stop <runId>"),
+        );
+        expect(client.request).not.toHaveBeenCalled();
       });
 
       it("surfaces a server error (e.g. the cooldown) with a non-zero exit", async () => {

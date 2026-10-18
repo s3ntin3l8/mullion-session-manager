@@ -1336,6 +1336,29 @@ export const OPS: Record<string, OpSpec> = {
       payload: json(body?.prNumber === undefined ? {} : { prNumber: body.prNumber }),
     })),
   ),
+  // Status of the latest review run for the caller's PR, and stopping a run the
+  // caller's own session dispatched (routes/review-request.ts enforces that).
+  "reviews.status": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => ({
+      method: "GET",
+      url: `/api/sessions/${enc(id)}/review-request${
+        body?.prNumber === undefined ? "" : `?prNumber=${enc(String(body.prNumber))}`
+      }`,
+    })),
+  ),
+  "reviews.stop": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) =>
+      typeof body?.runId !== "string" || body.runId.length === 0
+        ? bad(400, "'runId' is required")
+        : {
+            method: "POST",
+            url: `/api/sessions/${enc(id)}/review-stop`,
+            payload: json({ runId: body.runId }),
+          },
+    ),
+  ),
   // Reachable at session scope — same target-id shape as sessions.get.
   "sessions.scrollback": routeOp(
     ["full", "session"],

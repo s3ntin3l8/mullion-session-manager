@@ -682,6 +682,58 @@ export async function getPullRequestReviewDecision(
   return null;
 }
 
+export interface PullRequestReviewSummary {
+  author: string;
+  authorIsBot: boolean;
+  state: string;
+  commitId: string;
+  submittedAt: string | null;
+}
+
+const REVIEWS_PAGE_SIZE = 100;
+const REVIEWS_MAX_PAGES = 10;
+
+/**
+ * Reviews on a PR, oldest first, reduced to what "did the review bot's verdict
+ * land" needs. The endpoint is ascending, so every page is read (up to 1000
+ * reviews): the newest review is on the last one. Read-only.
+ */
+export async function listPullRequestReviews(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PullRequestReviewSummary[]> {
+  const out: PullRequestReviewSummary[] = [];
+  for (let page = 1; page <= REVIEWS_MAX_PAGES; page += 1) {
+    const reviews = await githubRequest<
+      Array<{
+        user: { login: string; type: string } | null;
+        state: string;
+        commit_id: string;
+        submitted_at: string | null;
+      }>
+    >(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
+    );
+    for (const r of reviews) {
+      out.push({
+        author: r.user?.login ?? "ghost",
+        authorIsBot: r.user?.type === "Bot",
+        state: r.state,
+        commitId: r.commit_id,
+        submittedAt: r.submitted_at,
+      });
+    }
+    if (reviews.length < REVIEWS_PAGE_SIZE) break;
+  }
+  return out;
+}
+
 /**
  * Closes a PR without merging — used to clean up a draft PR opened at
  * "-> reviewing" when the task is subsequently given up on rather than

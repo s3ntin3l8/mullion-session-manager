@@ -1189,6 +1189,80 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    describe("reviews.status / reviews.stop", () => {
+      it("session scope: status routes to its own pinned session's review-request GET", async () => {
+        app = await buildApp();
+        await app.ready();
+        applySettingsPatch(app, {
+          reviewRelay: { provider: "hermes", apiUrl: "http://192.168.2.6:8643" },
+        });
+        setHermesKey(app, "test-key"); // pragma: allowlist secret
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "reviews.status", body: { prNumber: 5 } })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.status).toBe(412); // past the reviewer gate, stops at "no GitHub remote"
+        const forwarded = injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string })
+          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/review-request`));
+        expect(forwarded).toMatchObject({
+          method: "GET",
+          url: `/api/sessions/${sessionId}/review-request?prNumber=5`,
+        });
+        socket.destroy();
+      });
+
+      it("session scope: status without a prNumber sends no query string", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "reviews.status", body: {} })}\n`);
+        await waitForReply(socket);
+        expect(
+          injectSpy.mock.calls.some(
+            ([opts]) =>
+              (opts as { url?: string }).url === `/api/sessions/${sessionId}/review-request`,
+          ),
+        ).toBe(true);
+        socket.destroy();
+      });
+
+      it("session scope: stop requires a runId and rejects targeting another session", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "reviews.stop", body: {} })}\n`);
+        expect((await waitForReply(socket)).status).toBe(400);
+        socket.write(
+          `${JSON.stringify({ id: 2, op: "reviews.stop", body: { runId: "r", sessionId: otherSessionId } })}\n`,
+        );
+        expect((await waitForReply(socket)).status).toBe(403);
+        socket.destroy();
+      });
+
+      it("session scope: stop forwards the runId for the pinned session", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "reviews.stop", body: { runId: "run_1" } })}\n`,
+        );
+        await waitForReply(socket);
+        const forwarded = injectSpy.mock.calls
+          .map(([opts]) => opts as { url?: string; payload?: unknown })
+          .find((o) => o.url === `/api/sessions/${sessionId}/review-stop`);
+        expect(JSON.parse(String(forwarded!.payload))).toEqual({ runId: "run_1" });
+        socket.destroy();
+      });
+    });
+
     describe("sessions.rename", () => {
       it("full scope: renames by explicit sessionId", async () => {
         app = await buildApp();

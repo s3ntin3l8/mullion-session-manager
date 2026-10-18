@@ -539,24 +539,39 @@ export class MullionClient {
     }
   }
 
-  /** Asks the Mullion server to relay a Hermes review request for this
-   * session's PR. `prNumber` is optional — the server resolves the PR from
-   * the session's branch when omitted. Same "try direct, retry only on the
+  /** Runs a session-pinned `reviews.*` op. Same "try direct, retry only on the
    * specific no-pin 400" shape as getScrollback above. */
-  async requestReview(prNumber) {
-    const body = prNumber === undefined ? {} : { prNumber };
+  async reviewOp(op, body) {
     try {
-      return await this.controlRequest("reviews.request", body, REVIEW_REQUEST_TIMEOUT_MS);
+      return await this.controlRequest(op, body, REVIEW_REQUEST_TIMEOUT_MS);
     } catch (err) {
       if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
         throw err;
       }
       return this.controlRequest(
-        "reviews.request",
+        op,
         { ...body, sessionId: this.ownSessionId },
         REVIEW_REQUEST_TIMEOUT_MS,
       );
     }
+  }
+
+  /** Asks the Mullion server to relay a Hermes review request for this
+   * session's PR. `prNumber` is optional — the server resolves the PR from
+   * the session's branch when omitted. */
+  async requestReview(prNumber) {
+    return this.reviewOp("reviews.request", prNumber === undefined ? {} : { prNumber });
+  }
+
+  /** Status of the latest review run for this session's PR (Hermes status plus
+   * whether the bot's review landed on GitHub). */
+  async reviewStatus(prNumber) {
+    return this.reviewOp("reviews.status", prNumber === undefined ? {} : { prNumber });
+  }
+
+  /** Stops a review run this session dispatched. */
+  async stopReview(runId) {
+    return this.reviewOp("reviews.stop", { runId });
   }
 
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview

@@ -110,6 +110,7 @@ export type {
   SetGitHubAppResult,
   GitHubIntegration,
   HermesIntegration,
+  ReviewRun,
   DeviceFlowState,
   DeviceFlowStatus,
   BrowserCookieProfile,

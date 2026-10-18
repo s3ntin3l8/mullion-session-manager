@@ -173,8 +173,8 @@ const browserAction = {
 // agent to read). They work when `mullion mcp` is run directly with
 // MULLION_AUTH_TOKEN set. get_scrollback (defaults to the caller's own
 // session), list_actions (defaults to the caller's own project) and
-// request_review (always the caller's own session's PR) are reachable at
-// session scope too.
+// request_review / review_status / stop_review (always the caller's own
+// session's PR and runs) are reachable at session scope too.
 
 const listSessions = {
   name: "list_sessions",
@@ -619,7 +619,8 @@ const requestReview = {
     "Ask the Mullion server to request an automated Hermes review of this session's pull " +
     "request. Reachable from inside a normal agent session (session scope). The review is " +
     "dispatched asynchronously and posts to the PR as the review bot within a few minutes — " +
-    "wait for it rather than requesting again; repeat requests for the same PR are refused " +
+    "wait for it rather than requesting again (the result carries a runId; use review_status " +
+    "only to troubleshoot a review that never shows up); repeat requests for the same PR are refused " +
     "for a cooldown period. Omit pr_number to use the open PR for the session's current " +
     "branch. Fails with a clear message if the relay isn't configured in Mullion's " +
     "Settings → Integrations, the project is on a remote host, or no PR exists yet. Use this " +
@@ -637,6 +638,48 @@ const requestReview = {
   async handler(args, client) {
     const result = await client.requestReview(args?.pr_number);
     return JSON.stringify(result);
+  },
+};
+
+const reviewStatus = {
+  name: "review_status",
+  description:
+    "Troubleshoot a review requested with request_review: returns the run's Hermes status " +
+    "(queued, running, stopping, completed, failed, cancelled, interrupted, unknown, not_found), the review " +
+    "bot's reply or error, and whether the bot's review actually landed on the PR. Use it " +
+    "when a requested review has not appeared after several minutes — not to poll in a loop. " +
+    "Omit pr_number to use the open PR for the session's current branch. not_found means " +
+    "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      pr_number: {
+        type: "integer",
+        minimum: 1,
+        description: "PR number. Defaults to the open PR for the current branch.",
+      },
+    },
+  },
+  async handler(args, client) {
+    return JSON.stringify(await client.reviewStatus(args?.pr_number));
+  },
+};
+
+const stopReview = {
+  name: "stop_review",
+  description:
+    "Stop a review run that this session started with request_review (pass its runId). " +
+    "Runs started by other sessions are refused. Stopping is rarely needed — use it only for " +
+    "a review that is stuck or was requested by mistake.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      run_id: { type: "string", description: "The runId returned by request_review." },
+    },
+    required: ["run_id"],
+  },
+  async handler(args, client) {
+    return JSON.stringify(await client.stopReview(args?.run_id));
   },
 };
 
@@ -1014,6 +1057,8 @@ export const TOOLS = [
   stopDockSession,
   getScrollback,
   requestReview,
+  reviewStatus,
+  stopReview,
   listProjects,
   listActions,
   createPreview,

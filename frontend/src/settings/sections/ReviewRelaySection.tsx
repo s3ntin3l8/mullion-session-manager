@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
-import type { HermesIntegration } from "../../api/index.js";
+import type { HermesIntegration, ReviewRun } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
 import {
   GroupHeading,
@@ -12,6 +12,7 @@ import {
   StyledList,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { ConfirmButton } from "../../ui/ConfirmButton.js";
 
 // Hermes review relay (src/services/hermes-review.ts): lets an agent's
 // `request_review` ask the Mullion server to POST a review request straight to
@@ -76,6 +77,97 @@ function CooldownField({ value, onCommit }: { value: number; onCommit: (v: numbe
       max={1440}
       suffix="minutes"
     />
+  );
+}
+
+// A run Hermes can still be asked to stop.
+const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
+
+// Runs this Mullion dispatched (in memory server-side, so a restart empties the
+// list). Loaded once and on demand — a review takes minutes, so no polling.
+function RecentReviews() {
+  const [runs, setRuns] = useState<ReviewRun[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchRuns = () =>
+    api
+      .listReviews()
+      .then((r) => {
+        setRuns(r.runs);
+        setError(null);
+      })
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Could not load recent reviews");
+      });
+
+  // setState only happens in the promise callbacks, never synchronously in the
+  // effect body.
+  useEffect(() => {
+    void fetchRuns();
+  }, []);
+
+  const load = () => {
+    setLoading(true);
+    return fetchRuns().finally(() => setLoading(false));
+  };
+
+  const stop = (runId: string) =>
+    api
+      .stopReview(runId)
+      .then(load)
+      .catch((err: unknown) => {
+        setError(err instanceof ApiError ? err.message : "Could not stop the review");
+      });
+
+  return (
+    <div style={{ marginTop: 16 }} data-testid="review-relay-recent">
+      <GroupHeading
+        title="Recent reviews"
+        desc="Review runs requested from this Mullion since it last started. Stop cancels a run that is stuck or was requested by mistake."
+      />
+      {runs && runs.length === 0 && (
+        <div style={{ opacity: 0.7, fontSize: 12 }}>No reviews requested yet.</div>
+      )}
+      {runs && runs.length > 0 && (
+        <StyledList>
+          {runs.map((run) => (
+            <ListRow
+              key={run.runId}
+              testId={`review-run-${run.runId}`}
+              dot={
+                run.status === "completed"
+                  ? "on"
+                  : ACTIVE_RUN_STATUSES.has(run.status)
+                    ? "warn"
+                    : "off"
+              }
+              title={`${run.repo}#${run.prNumber}`}
+              subtitle={`${run.status} · ${new Date(run.dispatchedAt).toLocaleTimeString()}${
+                run.error ? ` · ${run.error}` : ""
+              }`}
+              trailing={
+                ACTIVE_RUN_STATUSES.has(run.status) ? (
+                  <ConfirmButton
+                    title={`Stop the review of ${run.repo}#${run.prNumber}`}
+                    armedLabel="Confirm stop"
+                    onConfirm={() => void stop(run.runId)}
+                  >
+                    Stop
+                  </ConfirmButton>
+                ) : undefined
+              }
+            />
+          ))}
+        </StyledList>
+      )}
+      <div style={{ marginTop: 8 }}>
+        <SecondaryButton onClick={() => void load()} disabled={loading}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </SecondaryButton>
+      </div>
+      {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+    </div>
   );
 }
 
@@ -261,6 +353,7 @@ export function ReviewRelaySection() {
             )}
           </div>
           {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+          {ready && <RecentReviews />}
         </>
       )}
     </div>

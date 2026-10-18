@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   getGitStatus: vi.fn(),
   requestHermesReview: vi.fn(),
   assertReviewerConfigured: vi.fn(),
+  getHermesReviewStatus: vi.fn(),
+  getReviewRunForPr: vi.fn(),
+  stopHermesReview: vi.fn(),
+  listPullRequestReviews: vi.fn(),
 }));
 
 vi.mock("../../src/services/host-git.js", async (orig) => ({
@@ -32,6 +36,7 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
   ...(await orig<typeof GithubWrite>()),
   findPullRequestByHead: mocks.findPullRequestByHead,
   getPullRequestByNumber: mocks.getPullRequestByNumber,
+  listPullRequestReviews: mocks.listPullRequestReviews,
 }));
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
@@ -41,6 +46,9 @@ vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   ...(await orig<typeof HermesReview>()),
   requestHermesReview: mocks.requestHermesReview,
   assertReviewerConfigured: mocks.assertReviewerConfigured,
+  getHermesReviewStatus: mocks.getHermesReviewStatus,
+  getReviewRunForPr: mocks.getReviewRunForPr,
+  stopHermesReview: mocks.stopHermesReview,
 }));
 
 import { buildApp } from "../../src/app.js";
@@ -51,12 +59,15 @@ import {
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
+  ReviewConflictError,
   ReviewCooldownError,
+  ReviewRunForbiddenError,
+  ReviewRunNotFoundError,
 } from "../../src/services/hermes-review.js";
 
 const tmpDb = path.join(os.tmpdir(), `review-request-test-${process.pid}.db`);
 
-describe("POST /api/sessions/:id/review-request", () => {
+describe("review-request routes", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
   let sessionId: number;
   let remoteSessionId: number;
@@ -100,8 +111,15 @@ describe("POST /api/sessions/:id/review-request", () => {
     mocks.resolveGitHubToken.mockResolvedValue("ghs_token");
     mocks.getGitStatus.mockResolvedValue({ branch: "feat/thing" });
     mocks.findPullRequestByHead.mockResolvedValue({ number: 42 });
-    mocks.getPullRequestByNumber.mockResolvedValue({ number: 99 });
-    mocks.requestHermesReview.mockResolvedValue(undefined);
+    mocks.getPullRequestByNumber.mockImplementation(async (_t, _o, _r, number: number) => ({
+      number,
+      headSha: `sha${number}`,
+    }));
+    mocks.requestHermesReview.mockResolvedValue({
+      runId: "run_1",
+      status: "queued",
+      replayed: false,
+    });
     mocks.assertReviewerConfigured.mockReturnValue("key");
   });
 
@@ -124,17 +142,27 @@ describe("POST /api/sessions/:id/review-request", () => {
   it("detects the PR from the session's branch and dispatches", async () => {
     const res = await post(sessionId, {});
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: "dispatched", repo: "acme/widgets", prNumber: 42 });
+    expect(res.json()).toEqual({
+      status: "dispatched",
+      repo: "acme/widgets",
+      prNumber: 42,
+      runId: "run_1",
+      runStatus: "queued",
+      replayed: false,
+    });
     expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
       "ghs_token",
       "acme",
       "widgets",
       "acme:feat/thing",
     );
+    expect(mocks.getPullRequestByNumber).toHaveBeenCalledWith("ghs_token", "acme", "widgets", 42);
     expect(mocks.requestHermesReview).toHaveBeenCalledWith(expect.anything(), {
       owner: "acme",
       repo: "widgets",
       prNumber: 42,
+      headSha: "sha42",
+      sessionId,
     });
   });
 
@@ -147,7 +175,7 @@ describe("POST /api/sessions/:id/review-request", () => {
     );
     expect(mocks.getPullRequestByNumber).toHaveBeenCalledWith("ghs_token", "acme", "widgets", 99);
     expect(mocks.findPullRequestByHead).not.toHaveBeenCalled();
-    expect(res.json()).toEqual({ status: "dispatched", repo: "acme/widgets", prNumber: 99 });
+    expect(res.json()).toMatchObject({ status: "dispatched", repo: "acme/widgets", prNumber: 99 });
   });
 
   it("ignores an attacker-chosen repo in the body (Fastify strips unknown fields)", async () => {
@@ -158,6 +186,8 @@ describe("POST /api/sessions/:id/review-request", () => {
       owner: "acme",
       repo: "widgets",
       prNumber: 99,
+      headSha: "sha99",
+      sessionId,
     });
   });
 
@@ -298,6 +328,7 @@ describe("POST /api/sessions/:id/review-request", () => {
       ["not configured", new HermesNotConfiguredError("not set up"), 412],
       ["bad key", new HermesAuthError(401), 502],
       ["unreachable", new HermesUnavailableError("down"), 503],
+      ["commit already requested", new ReviewConflictError(), 409],
     ])("%s", async (_label, err, status) => {
       mocks.requestHermesReview.mockRejectedValue(err);
       const res = await post(sessionId, {});
@@ -311,9 +342,164 @@ describe("POST /api/sessions/:id/review-request", () => {
       expect(res.headers["retry-after"]).toBe("240");
     });
 
+    it("passes Hermes' Retry-After through on a busy gateway", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new HermesUnavailableError("busy", "d", 30));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(503);
+      expect(res.headers["retry-after"]).toBe("30");
+    });
+
     it("an unexpected error is a 500, not swallowed", async () => {
       mocks.requestHermesReview.mockRejectedValue(new Error("kaboom"));
       expect((await post(sessionId, {})).statusCode).toBe(500);
+    });
+  });
+
+  describe("GET status", () => {
+    const get = (id: number | string, query = "") =>
+      app.inject({
+        method: "GET",
+        url: `/api/sessions/${id}/review-request${query}`,
+        remoteAddress: `10.3.0.${nextAddr++}`,
+      });
+
+    beforeEach(() => {
+      mocks.getHermesReviewStatus.mockResolvedValue({
+        provider: "hermes",
+        runId: "run_1",
+        status: "completed",
+      });
+      mocks.getReviewRunForPr.mockReturnValue({
+        runId: "run_1",
+        dispatchedAt: 1_000_000,
+        headSha: "ccccccc3",
+      });
+      mocks.listPullRequestReviews.mockResolvedValue([]);
+    });
+
+    it("returns the run status for the branch's PR plus the landed review", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "old-bot[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "aaaaaaa1",
+          submittedAt: new Date(100_000).toISOString(), // before dispatch
+        },
+        {
+          author: "alice",
+          authorIsBot: false,
+          state: "COMMENTED",
+          commitId: "bbbbbbb2",
+          submittedAt: new Date(1_000_500).toISOString(), // human, ignored
+        },
+        {
+          author: "ci[bot]",
+          authorIsBot: true,
+          state: "COMMENTED",
+          commitId: "ddddddd4", // another commit, ignored
+          submittedAt: new Date(1_000_950).toISOString(),
+        },
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "ccccccc3",
+          submittedAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await get(sessionId);
+      expect(res.statusCode).toBe(200);
+      expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(expect.anything(), {
+        owner: "acme",
+        repo: "widgets",
+        prNumber: 42,
+      });
+      expect(res.json()).toMatchObject({
+        runId: "run_1",
+        status: "completed",
+        github: {
+          checked: true,
+          review: { author: "hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
+        },
+      });
+    });
+
+    it("reports that nothing landed when no bot review follows the dispatch", async () => {
+      const res = await get(sessionId, "?prNumber=99");
+      expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ prNumber: 99 }),
+      );
+      expect(res.json().github).toEqual({ checked: true, review: null });
+    });
+
+    it("skips the GitHub check when no run is tracked here", async () => {
+      mocks.getReviewRunForPr.mockReturnValue(null);
+      const res = await get(sessionId);
+      expect(res.json().github).toEqual({ checked: false });
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+
+    it("keeps the Hermes status when the GitHub review lookup fails", async () => {
+      mocks.listPullRequestReviews.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await get(sessionId);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "completed", github: { checked: false } });
+    });
+
+    it("412s an unconfigured reviewer first, and maps service errors", async () => {
+      mocks.getHermesReviewStatus.mockRejectedValue(new HermesUnavailableError("down"));
+      expect((await get(sessionId)).statusCode).toBe(503);
+      mocks.assertReviewerConfigured.mockImplementation(() => {
+        throw new HermesNotConfiguredError("No reviewer is configured");
+      });
+      mocks.resolveRepoRef.mockClear();
+      expect((await get(sessionId)).statusCode).toBe(412);
+      expect(mocks.resolveRepoRef).not.toHaveBeenCalled();
+    });
+
+    it("404s an unknown session and 400s a malformed id or prNumber", async () => {
+      expect((await get(999_999)).statusCode).toBe(404);
+      expect((await get("abc")).statusCode).toBe(400);
+      expect((await get(sessionId, "?prNumber=0")).statusCode).toBe(400);
+    });
+  });
+
+  describe("POST review-stop", () => {
+    const stop = (id: number | string, payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: `/api/sessions/${id}/review-stop`,
+        payload,
+        remoteAddress: `10.4.0.${nextAddr++}`,
+      });
+
+    it("stops the named run on behalf of the session", async () => {
+      mocks.stopHermesReview.mockResolvedValue({ runId: "run_1", status: "stopping" });
+      const res = await stop(sessionId, { runId: "run_1" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ runId: "run_1", status: "stopping" });
+      expect(mocks.stopHermesReview).toHaveBeenCalledWith(expect.anything(), "run_1", sessionId);
+    });
+
+    it.each([
+      ["another session's run", new ReviewRunForbiddenError(), 403],
+      ["an unknown run", new ReviewRunNotFoundError(), 404],
+      ["an unreachable Hermes", new HermesUnavailableError("down"), 503],
+    ])("maps %s", async (_label, err, status) => {
+      mocks.stopHermesReview.mockRejectedValue(err);
+      expect((await stop(sessionId, { runId: "run_1" })).statusCode).toBe(status);
+    });
+
+    it("requires a runId, and 412s an unconfigured reviewer", async () => {
+      expect((await stop(sessionId, {})).statusCode).toBe(400);
+      expect((await stop("abc", { runId: "r" })).statusCode).toBe(400);
+      mocks.assertReviewerConfigured.mockImplementation(() => {
+        throw new HermesNotConfiguredError("No reviewer is configured");
+      });
+      expect((await stop(sessionId, { runId: "run_1" })).statusCode).toBe(412);
+      expect(mocks.stopHermesReview).not.toHaveBeenCalled();
     });
   });
 });
