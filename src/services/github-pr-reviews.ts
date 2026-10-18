@@ -143,6 +143,9 @@ async function graphql<T>(
   query: string,
   variables: Record<string, unknown>,
   log?: ReviewLog,
+  // Only the primary list query re-arms the warning: the secondary thread
+  // query is clean even when the list query keeps failing partially.
+  rearmOnClean = false,
 ): Promise<T | null> {
   // Don't pile onto a REST rate limit either — same GitHub account, and the
   // caller (the poller) will simply retry next tick.
@@ -186,6 +189,7 @@ async function graphql<T>(
     return null;
   }
   if (json.errors?.length) noteFailure(log, json.errors[0].type ?? json.errors[0].message);
+  else if (rearmOnClean) lastWarnedFailure = null; // a clean list response re-arms the warning
   if (json.errors?.some((e) => e.type === "RATE_LIMITED")) {
     graphqlBackoffUntil = Date.now() + DEFAULT_BACKOFF_MS;
     return null;
@@ -240,10 +244,9 @@ export async function enrichPrsWithReviewState(
   const data = await graphql<{
     rateLimit?: RateLimitNode;
     repository: { pullRequests: { nodes: Array<GqlPrNode | null> | null } | null } | null;
-  }>(token, PR_LIST_QUERY, { owner, repo }, log);
+  }>(token, PR_LIST_QUERY, { owner, repo }, log, true);
   if (!data?.repository) return reuseLastKnown();
   noteBudget(data.rateLimit, log);
-  lastWarnedFailure = null;
 
   const byNumber = new Map<number, GqlPrNode>();
   for (const node of data.repository.pullRequests?.nodes ?? []) {

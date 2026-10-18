@@ -283,6 +283,25 @@ describe("enrichPrsWithReviewState", () => {
     );
   });
 
+  it("warns once for a partial response (data + errors) across ticks", async () => {
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    const partial = () =>
+      new Response(
+        JSON.stringify({
+          data: { repository: { pullRequests: { nodes: [gqlNode(1)] } } },
+          errors: [{ type: "FORBIDDEN", message: "denied" }],
+        }),
+        { status: 200 },
+      );
+    fetchMock.mockImplementation(async (_u: unknown, init: { body: string }) =>
+      init.body.includes("reviewThreads") ? threadsResponse({ 1: 0 }) : partial(),
+    );
+    await enrichPrsWithReviewState("tok", "o", "partial-warn-repo", [pr(1)], log);
+    await enrichPrsWithReviewState("tok", "o", "partial-warn-repo", [pr(1)], log);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0][0]).toMatchObject({ reason: "FORBIDDEN" });
+  });
+
   it("makes no request when there are no PRs", async () => {
     await enrichPrsWithReviewState("tok", "o", "empty-repo", []);
     expect(fetchMock).not.toHaveBeenCalled();

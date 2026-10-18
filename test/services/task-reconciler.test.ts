@@ -8051,6 +8051,7 @@ describe("reconcileTasks", () => {
             title: "test pr",
             htmlUrl: `https://github.com/o/r/pull/${prNumber}`,
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha,
             headBranch: "feature",
             baseBranch: "main",
