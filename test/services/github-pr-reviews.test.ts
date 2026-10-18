@@ -302,6 +302,19 @@ describe("enrichPrsWithReviewState", () => {
     expect(log.warn.mock.calls[0][0]).toMatchObject({ reason: "FORBIDDEN" });
   });
 
+  it("warns once for a persistent thread-query failure while the list query is clean", async () => {
+    const log = { warn: vi.fn(), debug: vi.fn() };
+    fetchMock.mockImplementation(async (_u: unknown, init: { body: string }) =>
+      init.body.includes("reviewThreads")
+        ? new Response("denied", { status: 500 })
+        : listResponse([gqlNode(1, { updatedAt: `t${Math.random()}` })]),
+    );
+    await enrichPrsWithReviewState("tok", "o", "thread-warn-repo", [pr(1)], log);
+    await enrichPrsWithReviewState("tok", "o", "thread-warn-repo", [pr(1)], log);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0][0]).toMatchObject({ query: "threads", reason: "http 500" });
+  });
+
   it("makes no request when there are no PRs", async () => {
     await enrichPrsWithReviewState("tok", "o", "empty-repo", []);
     expect(fetchMock).not.toHaveBeenCalled();

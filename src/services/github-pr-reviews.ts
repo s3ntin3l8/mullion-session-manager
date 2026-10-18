@@ -32,26 +32,28 @@ const DEFAULT_BACKOFF_MS = 60_000;
 let graphqlBackoffUntil = 0;
 
 /** The poller's logger, narrowed to what this module uses. */
+type QueryKind = "list" | "threads";
+
 export interface ReviewLog {
   warn(obj: object, msg: string): void;
   debug(obj: object, msg: string): void;
 }
 // Last failure reason that was warned about, so a permanent failure (e.g. a
 // token that can't read these fields) logs once, not every 15s tick.
-let lastWarnedFailure: string | null = null;
+const lastWarnedFailure = new Map<QueryKind, string>();
 
-function noteFailure(log: ReviewLog | undefined, reason: string, extra: object = {}): void {
-  if (!log || lastWarnedFailure === reason) return;
-  lastWarnedFailure = reason;
+function noteFailure(log: ReviewLog | undefined, kind: QueryKind, reason: string): void {
+  if (!log || lastWarnedFailure.get(kind) === reason) return;
+  lastWarnedFailure.set(kind, reason);
   log.warn(
-    { reason, ...extra },
+    { query: kind, reason },
     "[github-pr-reviews] review-state lookup failed; PR phases fall back to last known / unknown",
   );
 }
 
 export function resetGraphqlBackoffForTests(): void {
   graphqlBackoffUntil = 0;
-  lastWarnedFailure = null;
+  lastWarnedFailure.clear();
   threadCache.clear();
   lastKnown.clear();
 }
@@ -143,9 +145,9 @@ async function graphql<T>(
   query: string,
   variables: Record<string, unknown>,
   log?: ReviewLog,
-  // Only the primary list query re-arms the warning: the secondary thread
-  // query is clean even when the list query keeps failing partially.
-  rearmOnClean = false,
+  // Each query kind dedupes and re-arms its own warning, so a persistent
+  // failure of one isn't masked (or re-warned) by the other's clean response.
+  kind: QueryKind = "list",
 ): Promise<T | null> {
   // Don't pile onto a REST rate limit either — same GitHub account, and the
   // caller (the poller) will simply retry next tick.
@@ -165,12 +167,12 @@ async function graphql<T>(
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch {
-    noteFailure(log, "network");
+    noteFailure(log, kind, "network");
     return null;
   }
 
   if (res.status === 429 || res.status === 403) {
-    noteFailure(log, `http ${res.status}`);
+    noteFailure(log, kind, `http ${res.status}`);
     const retryAfter = Number(res.headers.get("retry-after"));
     graphqlBackoffUntil =
       Date.now() +
@@ -178,7 +180,7 @@ async function graphql<T>(
     return null;
   }
   if (!res.ok) {
-    noteFailure(log, `http ${res.status}`);
+    noteFailure(log, kind, `http ${res.status}`);
     return null;
   }
 
@@ -188,8 +190,8 @@ async function graphql<T>(
   } catch {
     return null;
   }
-  if (json.errors?.length) noteFailure(log, json.errors[0].type ?? json.errors[0].message);
-  else if (rearmOnClean) lastWarnedFailure = null; // a clean list response re-arms the warning
+  if (json.errors?.length) noteFailure(log, kind, json.errors[0].type ?? json.errors[0].message);
+  else lastWarnedFailure.delete(kind); // a clean response re-arms this query's warning
   if (json.errors?.some((e) => e.type === "RATE_LIMITED")) {
     graphqlBackoffUntil = Date.now() + DEFAULT_BACKOFF_MS;
     return null;
@@ -244,7 +246,7 @@ export async function enrichPrsWithReviewState(
   const data = await graphql<{
     rateLimit?: RateLimitNode;
     repository: { pullRequests: { nodes: Array<GqlPrNode | null> | null } | null } | null;
-  }>(token, PR_LIST_QUERY, { owner, repo }, log, true);
+  }>(token, PR_LIST_QUERY, { owner, repo }, log, "list");
   if (!data?.repository) return reuseLastKnown();
   noteBudget(data.rateLimit, log);
 
@@ -312,6 +314,7 @@ export async function enrichPrsWithReviewState(
       }`,
       { owner, repo },
       log,
+      "threads",
     );
     noteBudget(threads?.rateLimit, log);
     for (const n of needThreads) {
