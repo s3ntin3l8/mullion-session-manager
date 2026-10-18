@@ -448,6 +448,17 @@ describe("hermes review relay", () => {
       });
     });
 
+    it("keeps the original owner when a replay returns an already-tracked run id", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await requestHermesReview(app, { ...PR, sessionId: 5 });
+      await requestHermesReview(app, { ...PR, sessionId: 6 }); // Hermes replays run_1
+      expect(getReviewRunForPr("acme", "widgets", 7)?.sessionId).toBe(5);
+      runEndpoint = async () => new Response('{"status":"stopping"}', { status: 200 });
+      await expect(stopHermesReview(app, "run_1", 6)).rejects.toBeInstanceOf(
+        ReviewRunForbiddenError,
+      );
+    });
+
     it("lets a session stop only its own run", async () => {
       await requestHermesReview(app, { ...PR, sessionId: 5 });
       runEndpoint = async () => new Response('{"status":"stopping"}', { status: 200 });

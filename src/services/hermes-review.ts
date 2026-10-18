@@ -157,7 +157,12 @@ function prKey(owner: string, repo: string, prNumber: number): string {
   return `${owner}/${repo}#${prNumber}`.toLowerCase();
 }
 
-function trackRun(record: ReviewRunRecord): void {
+function trackRun(incoming: ReviewRunRecord): void {
+  // Hermes returns the same run id when it replays an identical request, so
+  // the id can already be tracked: keep its original owner, or a second
+  // session's replay would take over (and could stop) the first one's run.
+  const existing = runsById.get(incoming.runId);
+  const record = existing ? { ...incoming, sessionId: existing.sessionId } : incoming;
   runsById.delete(record.runId);
   runsById.set(record.runId, record);
   latestRunByPr.set(prKey(record.owner, record.repo, record.prNumber), record.runId);

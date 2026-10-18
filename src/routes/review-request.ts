@@ -243,7 +243,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
         const record = getReviewRunForPr(owner, repo, prNumber);
         return {
           ...status,
-          github: await findLandedReview(app, token, target, record?.dispatchedAt),
+          github: await findLandedReview(app, token, target, record),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -275,19 +275,25 @@ type LandedReview =
   | { checked: false };
 
 // Best effort: the newest review by a bot account submitted after the run was
-// dispatched. A GitHub failure must not hide the Hermes status.
+// dispatched and pinned to the commit it was dispatched for. A GitHub failure
+// must not hide the Hermes status.
 async function findLandedReview(
   app: FastifyInstance,
   token: string,
   t: ReviewTarget,
-  dispatchedAt: number | undefined,
+  record: { dispatchedAt: number; headSha: string } | null,
 ): Promise<LandedReview> {
-  if (dispatchedAt === undefined) return { checked: false };
+  if (!record) return { checked: false };
+  const { dispatchedAt, headSha } = record;
   try {
     const reviews = await listPullRequestReviews(token, t.owner, t.repo, t.prNumber);
     const landed = reviews
       .filter(
-        (r) => r.authorIsBot && r.submittedAt && Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
+        (r) =>
+          r.authorIsBot &&
+          r.commitId === headSha &&
+          r.submittedAt &&
+          Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
       )
       .at(-1);
     return {

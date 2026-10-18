@@ -364,7 +364,11 @@ describe("review-request routes", () => {
         runId: "run_1",
         status: "completed",
       });
-      mocks.getReviewRunForPr.mockReturnValue({ runId: "run_1", dispatchedAt: 1_000_000 });
+      mocks.getReviewRunForPr.mockReturnValue({
+        runId: "run_1",
+        dispatchedAt: 1_000_000,
+        headSha: "ccccccc3",
+      });
       mocks.listPullRequestReviews.mockResolvedValue([]);
     });
 
@@ -383,6 +387,13 @@ describe("review-request routes", () => {
           state: "COMMENTED",
           commitId: "bbbbbbb2",
           submittedAt: new Date(1_000_500).toISOString(), // human, ignored
+        },
+        {
+          author: "ci[bot]",
+          authorIsBot: true,
+          state: "COMMENTED",
+          commitId: "ddddddd4", // another commit, ignored
+          submittedAt: new Date(1_000_950).toISOString(),
         },
         {
           author: "hermes[bot]",
