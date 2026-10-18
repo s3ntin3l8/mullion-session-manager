@@ -140,7 +140,7 @@ const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
   }
 }`;
 
-async function graphql<T>(
+export async function graphql<T>(
   token: string,
   query: string,
   variables: Record<string, unknown>,

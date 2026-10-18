@@ -42,6 +42,13 @@ export interface PrPhaseInput {
    *  repo with no required-review rule even when someone asked for changes). */
   reviewers: readonly { state: string }[];
   ciStatus: GitHubCiStatus;
+  /**
+   * True when the PR's head runs were actually fetched. A null `ciStatus`
+   * is ambiguous (no runs / all skipped / lookup failed), so "ready" needs
+   * either this or GitHub's own CLEAN merge state. Omitted = assume known
+   * (callers that never track it keep their behaviour).
+   */
+  ciFetched?: boolean;
 }
 
 export function derivePrPhase(pr: PrPhaseInput): PrPhase {
@@ -65,6 +72,7 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return "review_pending";
   if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") return "review_pending";
   if (pr.ciStatus === "in_progress") return "ci_pending";
+  if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";
   return "ready_to_merge";
 }
 

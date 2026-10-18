@@ -84,7 +84,13 @@ import {
   getCachedReleasePullRequestStatus,
   GitHubWriteScopeError,
   invalidateReleaseCache,
+  mergePullRequest,
 } from "../services/github-write.js";
+import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js";
+import { derivePrPhase } from "../services/github-pr-phase.js";
+import { buildHandoffPrompt } from "../services/pr-handoff.js";
+import { assertReviewerConfigured, requestHermesReview } from "../services/hermes-review.js";
+import { replyReviewError } from "./review-request.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
@@ -2007,6 +2013,200 @@ export async function projectsRoute(app: FastifyInstance) {
           return reply.code(502).send({ message: "Could not label the issue", statusCode: 502 });
         }
         throw err;
+      }
+    },
+  );
+
+  // PR drill-in: one PR's header, reviews, threads, conversation and files
+  // (GraphQL, 30s cached), merged with the poller's CI view so the sidebar
+  // shows one coherent status.
+  async function loadPrDetail(
+    projectId: number,
+    number: number,
+    ctx: { repoRef: GitHubRepoRef; token: string },
+  ) {
+    const detail = await getPrDetail(ctx.token, ctx.repoRef.owner, ctx.repoRef.repo, number);
+    // The poller's entry is keyed by PR number; trust it only if it describes
+    // the head the user is looking at — after a push, its CI answer and runs
+    // belong to the old commit.
+    const entry = getPRsStatus(ctx.repoRef.owner, ctx.repoRef.repo)?.prs.find(
+      (p) => p.number === number,
+    );
+    const cached = entry?.headSha === detail.headSha ? entry : undefined;
+    const ciStatus = cached?.ciStatus ?? null;
+    // "Ready" needs a real CI answer: either the poller fetched this PR's head
+    // runs (even if there are none) or GitHub's own merge state is CLEAN —
+    // the same rule the poller's list pill uses (derivePrPhase). Review and
+    // conflict phases don't depend on CI knowledge.
+    const ciKnown = cached?.ciFetched === true;
+    const prPhase = derivePrPhase({
+      reviewStateKnown: true,
+      ciFetched: ciKnown,
+      isDraft: detail.isDraft,
+      mergeable: detail.mergeable,
+      mergeStateStatus: detail.mergeStateStatus,
+      reviewDecision: detail.reviewDecision,
+      requestedReviewers: detail.requestedReviewers,
+      reviewers: detail.reviewers,
+      ciStatus,
+    });
+    return {
+      detail,
+      ciStatus,
+      ciKnown,
+      actionsRuns: cached?.actionsRuns ?? [],
+      prPhase,
+      projectId,
+    };
+  }
+
+  app.get<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/prs/:number",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr detail",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      try {
+        const { detail, ciStatus, ciKnown, actionsRuns, prPhase } = await loadPrDetail(
+          projectId,
+          number,
+          ctx,
+        );
+        return { ...detail, ciStatus, ciKnown, actionsRuns, prPhase };
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        if (err.statusCode === 404) return reply.notFound("Pull request not found");
+        app.log.warn({ statusCode: err.statusCode, projectId, number }, "github pr unavailable");
+        return reply
+          .code(502)
+          .send({ message: "GitHub pull request unavailable", statusCode: 502 });
+      }
+    },
+  );
+
+  // Ask the review bot for another pass on this PR's current head.
+  app.post<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/prs/:number/re-review",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr re-review",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      try {
+        assertReviewerConfigured(app);
+        const { detail } = await loadPrDetail(projectId, number, ctx);
+        const run = await requestHermesReview(app, {
+          owner: ctx.repoRef.owner,
+          repo: ctx.repoRef.repo,
+          prNumber: number,
+          headSha: detail.headSha,
+        });
+        return { status: "dispatched", runId: run.runId, replayed: run.replayed };
+      } catch (err) {
+        if (err instanceof GitHubApiError) {
+          return reply
+            .code(502)
+            .send({ message: "GitHub pull request unavailable", statusCode: 502 });
+        }
+        return replyReviewError(reply, err);
+      }
+    },
+  );
+
+  // Squash-merge — only when the PR is ready (nothing left to wait for), and
+  // pinned to the head SHA the user was looking at so a push in between makes
+  // GitHub refuse rather than merge unseen code.
+  app.post<{ Params: { id: string; number: string }; Body: { headSha?: string } }>(
+    "/api/projects/:id/github/prs/:number/merge",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr merge",
+        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+        noTokenMessage: "No GitHub token with write access is available to merge this pull request",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      const expectedSha = request.body?.headSha;
+      if (!expectedSha) return reply.badRequest("headSha is required");
+      try {
+        // Read with the read-scoped token, as the sidebar did.
+        const readToken = (await resolveGitHubToken(app, ctx.repoRef, "read")) ?? ctx.token;
+        invalidatePrDetail(ctx.repoRef.owner, ctx.repoRef.repo, number);
+        const { detail, prPhase } = await loadPrDetail(projectId, number, {
+          repoRef: ctx.repoRef,
+          token: readToken,
+        });
+        if (detail.state !== "OPEN") return reply.conflict("This pull request is not open");
+        if (detail.headSha !== expectedSha) {
+          return reply.conflict("The pull request changed since you loaded it — reload and retry");
+        }
+        if (detail.mergeable !== "MERGEABLE") {
+          return reply.conflict("GitHub has not confirmed this pull request is mergeable yet");
+        }
+        if (prPhase !== "ready_to_merge") {
+          return reply.conflict(`Not ready to merge (${prPhase.replace(/_/g, " ")})`);
+        }
+        const result = await mergePullRequest(
+          ctx.token,
+          ctx.repoRef.owner,
+          ctx.repoRef.repo,
+          number,
+          { sha: detail.headSha, commitTitle: `${detail.title} (#${number})` },
+        );
+        invalidatePrDetail(ctx.repoRef.owner, ctx.repoRef.repo, number);
+        return result;
+      } catch (err) {
+        if (err instanceof GitHubWriteScopeError) {
+          return reply.code(403).send({ message: err.message, statusCode: 403 });
+        }
+        if (err instanceof GitHubApiError) {
+          if (err.statusCode === 405 || err.statusCode === 409 || err.statusCode === 422) {
+            return reply.conflict("GitHub refused the merge — the PR is not mergeable right now");
+          }
+          return reply.code(502).send({ message: "GitHub merge failed", statusCode: 502 });
+        }
+        throw err;
+      }
+    },
+  );
+
+  // The text a session should be given to work through this PR's open
+  // feedback; the sidebar starts (or copies it for) a session on the branch.
+  app.get<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/prs/:number/handoff",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr handoff",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      try {
+        const { detail, actionsRuns } = await loadPrDetail(projectId, number, ctx);
+        const failing = actionsRuns
+          .filter((r) => r.status === "completed" && r.conclusion === "failure")
+          .map((r) => r.name);
+        return { prompt: buildHandoffPrompt(detail, failing), branch: detail.headBranch };
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        if (err.statusCode === 404) return reply.notFound("Pull request not found");
+        return reply
+          .code(502)
+          .send({ message: "GitHub pull request unavailable", statusCode: 502 });
       }
     },
   );

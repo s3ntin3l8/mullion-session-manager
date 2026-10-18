@@ -108,6 +108,8 @@ export interface PROrWithChecks {
   /** True once the GraphQL enrichment filled this PR's review fields; false
    *  while they are still the REST-side defaults. */
   reviewStateKnown: boolean;
+  /** True once this PR's head-run lookup succeeded (runs may legitimately be empty). */
+  ciFetched: boolean;
   prPhase: PrPhase;
 }
 
@@ -794,6 +796,7 @@ async function fetchOpenPRs(token: string, owner: string, repo: string): Promise
       unresolvedThreads: null,
       commentCount: null,
       reviewStateKnown: false,
+      ciFetched: false,
       prPhase: "unknown",
     };
     applyPrPhase(pr);
@@ -843,6 +846,21 @@ export async function fetchRunsForHead(
   repo: string,
   headSha: string,
 ): Promise<GitHubActionsRun[]> {
+  return (await fetchRunsForHeadChecked(token, owner, repo, headSha)).runs;
+}
+
+/**
+ * Same lookup as `fetchRunsForHead`, but says whether GitHub actually
+ * answered: `ok: false` for a non-2xx response or a network failure (where
+ * `runs` is `[]`), `ok: true` for a real answer — including a PR that simply
+ * has no runs. Callers that must tell "no CI" from "couldn't ask" use this.
+ */
+export async function fetchRunsForHeadChecked(
+  token: string,
+  owner: string,
+  repo: string,
+  headSha: string,
+): Promise<{ ok: boolean; runs: GitHubActionsRun[] }> {
   validateGitHubRepoRef(owner, repo);
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -853,7 +871,7 @@ export async function fetchRunsForHead(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/actions/runs?head_sha=${encodeURIComponent(headSha)}&per_page=100`,
       { headers },
     );
-    if (!runsRes.ok) return [];
+    if (!runsRes.ok) return { ok: false, runs: [] };
     const runsData = (await runsRes.json()) as { workflow_runs?: GitHubWorkflowRunItem[] };
 
     // GitHub returns these ordered most-recent-first, so the first time a
@@ -873,9 +891,9 @@ export async function fetchRunsForHead(
         headSha: run.head_sha,
       });
     }
-    return latest;
+    return { ok: true, runs: latest };
   } catch {
-    return [];
+    return { ok: false, runs: [] };
   }
 }
 
@@ -1266,14 +1284,17 @@ export async function getRepoPRsStatus(
 
   // Fetch runs for all PR heads in parallel.
   const runsResults = await Promise.allSettled(
-    prs.map((pr) => fetchRunsForHead(token, owner, repo, pr.headSha)),
+    prs.map((pr) => fetchRunsForHeadChecked(token, owner, repo, pr.headSha)),
   );
 
   for (let i = 0; i < prs.length; i++) {
     const result = runsResults[i];
     if (result.status === "fulfilled") {
-      prs[i].actionsRuns = result.value;
-      prs[i].ciStatus = computeCiStatus(result.value);
+      prs[i].actionsRuns = result.value.runs;
+      prs[i].ciStatus = computeCiStatus(result.value.runs);
+      // Only a real answer counts: a 403/429/network failure also yields no
+      // runs, but means "couldn't ask", not "no CI".
+      prs[i].ciFetched = result.value.ok;
       applyPrPhase(prs[i]);
     }
   }

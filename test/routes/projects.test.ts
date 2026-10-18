@@ -1856,6 +1856,424 @@ describe("projects route", () => {
       });
     });
 
+    describe("PR detail routes", () => {
+      async function connectedProject(app: Awaited<ReturnType<typeof buildApp>>) {
+        const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-prdetail-"));
+        fs.mkdirSync(path.join(projectCwd, ".git"));
+        fs.writeFileSync(
+          path.join(projectCwd, ".git", "config"),
+          '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
+        );
+        await app.inject({
+          method: "PUT",
+          url: "/api/integrations/github/token",
+          payload: { token: "ghp_connected" },
+        });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "pr-detail", cwd: projectCwd },
+        });
+        return { projectCwd, id: created.json().id as number };
+      }
+
+      const gqlPr = (number: number, over: Record<string, unknown> = {}) => ({
+        number,
+        title: `PR ${number}`,
+        url: `https://github.com/acme/widgets/pull/${number}`,
+        bodyHTML: "<p>b</p>",
+        state: "OPEN",
+        isDraft: false,
+        baseRefName: "main",
+        headRefName: "feat",
+        headRefOid: `sha${number}`,
+        additions: 1,
+        deletions: 1,
+        changedFiles: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+        author: { login: "me" },
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
+        reviewDecision: "APPROVED",
+        commits: { totalCount: 0, nodes: [] },
+        reviewRequests: { nodes: [] },
+        latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
+        reviews: { nodes: [] },
+        reviewThreads: {
+          nodes: [
+            {
+              isResolved: false,
+              isOutdated: false,
+              path: "a.ts",
+              line: 2,
+              comments: {
+                nodes: [{ author: { login: "bob" }, bodyHTML: "<p>fix</p>", createdAt: "t" }],
+              },
+            },
+          ],
+        },
+        comments: { nodes: [] },
+        ...over,
+      });
+
+      // The poller's CI view for a PR; without it the phase can't be "ready".
+      async function warmCiCache(
+        number: number,
+        ciStatus: "success" | "failure" | null,
+        // Whether the head-run lookup answered. Independent of ciStatus: an
+        // answered-but-empty lookup is { ciStatus: null, ciFetched: true }, and
+        // a failed one is { ciStatus: null, ciFetched: false }. Always explicit.
+        ciFetched: boolean,
+        headSha: string = `sha${number}`,
+        actionsRuns: Array<{
+          name: string;
+          status: string;
+          conclusion: string | null;
+          htmlUrl: string;
+          headSha: string;
+        }> = [],
+      ) {
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [
+            {
+              ...PR_REVIEW_DEFAULTS,
+              number,
+              title: `PR ${number}`,
+              htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
+              author: "me",
+              headSha,
+              headBranch: "feat",
+              baseBranch: "main",
+              ciStatus,
+              ciFetched,
+              actionsRuns,
+            },
+          ],
+          prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+        });
+      }
+
+      function mockGithub(
+        pr: Record<string, unknown>,
+        extra?: (url: string, init?: RequestInit) => Response | null,
+      ) {
+        fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+          const url = String(input);
+          const custom = extra?.(url, init);
+          if (custom) return Promise.resolve(custom);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.endsWith("/graphql")) {
+            return Promise.resolve(
+              jsonResponse(200, { data: { repository: { pullRequest: pr } } }),
+            );
+          }
+          if (url.includes("/pulls/") && url.includes("/files")) {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+      }
+
+      it("returns the PR detail with the derived phase", async () => {
+        mockGithub(gqlPr(41));
+        await warmCiCache(41, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/41` });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          number: 41,
+          headSha: "sha41",
+          prPhase: "ready_to_merge",
+          threads: [{ path: "a.ts" }],
+        });
+        const bad = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/x` });
+        expect(bad.statusCode).toBe(400);
+
+        // Cold poller cache: no CI knowledge, so the phase must not claim "ready".
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [],
+          prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+        });
+        mockGithub(gqlPr(47, { mergeStateStatus: "UNSTABLE" }));
+        const cold = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/47` });
+        expect(cold.json().prPhase).toBe("unknown");
+
+        expect(cold.json().ciKnown).toBe(false);
+
+        // Review-derived phases don't need CI knowledge, even with a cold cache.
+        mockGithub(gqlPr(51, { reviewDecision: "CHANGES_REQUESTED" }));
+        const changes = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/51`,
+        });
+        expect(changes.json().prPhase).toBe("changes_requested");
+
+        // A warm entry with no CI answer (null) is unknown unless GitHub itself
+        // calls the PR CLEAN; anything else can't be called ready.
+        mockGithub(gqlPr(52, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(52, null, false);
+        const warmNoCi = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/52`,
+        });
+        expect(warmNoCi.json()).toMatchObject({ prPhase: "unknown", ciKnown: false });
+        const refused = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/52/merge`,
+          payload: { headSha: "sha52" },
+        });
+        expect(refused.statusCode).toBe(409);
+
+        mockGithub(gqlPr(53));
+        await warmCiCache(53, null, false);
+        const clean = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/53` });
+        // ciKnown reports the poller's fetch, not GitHub's CLEAN tie-break.
+        expect(clean.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: false });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("404s a missing PR", async () => {
+        mockGithub(null as unknown as Record<string, unknown>);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/404` });
+        expect(res.statusCode).toBe(404);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("hand-off returns a prompt built from the open threads, plus the branch", async () => {
+        mockGithub(gqlPr(42));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/42/handoff`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().branch).toBe("feat");
+        expect(res.json().prompt).toContain("a.ts:2");
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge: refuses a stale head, an unready PR, and merges a ready one", async () => {
+        let merged: unknown = null;
+        mockGithub(gqlPr(43), (url, init) => {
+          if (url.endsWith("/pulls/43/merge")) {
+            merged = JSON.parse(String(init?.body));
+            return jsonResponse(200, { merged: true, sha: "mergesha" });
+          }
+          return null;
+        });
+        await warmCiCache(43, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = `/api/projects/${id}/github/prs/43/merge`;
+
+        const noSha = await app.inject({ method: "POST", url, payload: {} });
+        expect(noSha.statusCode).toBe(400);
+        const stale = await app.inject({ method: "POST", url, payload: { headSha: "old" } });
+        expect(stale.statusCode).toBe(409);
+        expect(merged).toBeNull();
+
+        const ok = await app.inject({ method: "POST", url, payload: { headSha: "sha43" } });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toEqual({ merged: true, sha: "mergesha" });
+        expect(merged).toMatchObject({ merge_method: "squash", sha: "sha43" });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge refuses a PR that is not ready (changes requested)", async () => {
+        mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
+        await warmCiCache(44, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/44/merge`,
+          payload: { headSha: "sha44" },
+        });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toMatch(/changes requested/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge refuses when CI knowledge is cold or mergeability is unconfirmed", async () => {
+        mockGithub(gqlPr(48, { mergeStateStatus: "UNSTABLE" }));
+        const { setRepoPRsStatus } = await import("../../src/services/github.js");
+        setRepoPRsStatus("acme", "widgets", {
+          prs: [],
+          prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = (n: number) => `/api/projects/${id}/github/prs/${n}/merge`;
+
+        const cold = await app.inject({
+          method: "POST",
+          url: url(48),
+          payload: { headSha: "sha48" },
+        });
+        expect(cold.statusCode).toBe(409);
+        expect(cold.json().message).toMatch(/unknown/);
+
+        mockGithub(gqlPr(49, { mergeable: "UNKNOWN" }));
+        await warmCiCache(49, "success", true);
+        const unconfirmed = await app.inject({
+          method: "POST",
+          url: url(49),
+          payload: { headSha: "sha49" },
+        });
+        expect(unconfirmed.statusCode).toBe(409);
+        expect(unconfirmed.json().message).toMatch(/mergeable/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("a 403'd runs lookup in the real poller path can't make a PR ready or hide 'unknown'", async () => {
+        // Run the real getRepoPRsStatus with /actions/runs answering 403, warm
+        // the cache with its result, then read the detail through the route.
+        const { getRepoPRsStatus, setRepoPRsStatus } = await import("../../src/services/github.js");
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes("/actions/runs")) {
+            return Promise.resolve(new Response("nope", { status: 403 }));
+          }
+          if (url.includes("/pulls?")) {
+            return Promise.resolve(
+              jsonResponse(200, [
+                {
+                  number: 54,
+                  title: "PR 54",
+                  html_url: "https://github.com/acme/widgets/pull/54",
+                  user: { login: "me" },
+                  head: { sha: "sha54", ref: "feat" },
+                  base: { ref: "main" },
+                },
+              ]),
+            );
+          }
+          return Promise.resolve(jsonResponse(200, {}));
+        });
+        const status = await getRepoPRsStatus("tok", "acme", "widgets");
+        expect(status.prs[0]).toMatchObject({ ciStatus: null, ciFetched: false });
+        // The 403 above recorded a process-wide backoff; later calls must not inherit it.
+        const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
+        resetGitHubRateLimitForTests();
+        setRepoPRsStatus("acme", "widgets", status);
+
+        mockGithub(gqlPr(54, { mergeStateStatus: "UNSTABLE" }));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/54`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "unknown", ciKnown: false });
+        const merge = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/54/merge`,
+          payload: { headSha: "sha54" },
+        });
+        expect(merge.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("ignores a poller entry for an older head: no ready, no old runs, merge refused", async () => {
+        // The poller last saw sha-old with green CI; the live PR is at sha55
+        // (UNSTABLE). The old answer must not vouch for the new commit.
+        mockGithub(gqlPr(55, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(55, "success", true, "sha-old", [
+          {
+            name: "CI",
+            status: "completed",
+            conclusion: "success",
+            htmlUrl: "https://github.com/acme/widgets/actions/runs/1",
+            headSha: "sha-old",
+          },
+        ]);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/55`,
+        });
+        expect(detail.json()).toMatchObject({
+          prPhase: "unknown",
+          ciStatus: null,
+          ciKnown: false,
+          actionsRuns: [],
+        });
+        const merge = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/55/merge`,
+          payload: { headSha: "sha55" },
+        });
+        expect(merge.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("an answered-but-empty lookup (no runs) is a CI answer and can be ready", async () => {
+        mockGithub(gqlPr(56, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(56, null, true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/56`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: true });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge says so when no write-scoped token is available", async () => {
+        mockGithub(gqlPr(50));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        await app.inject({ method: "DELETE", url: "/api/integrations/github" });
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/50/merge`,
+          payload: { headSha: "sha50" },
+        });
+        expect(res.statusCode).toBe(502);
+        expect(res.json().message).toMatch(/write access/);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("merge maps a GitHub refusal to 409", async () => {
+        await warmCiCache(45, "success", true);
+        mockGithub(gqlPr(45), (url) =>
+          url.endsWith("/pulls/45/merge") ? jsonResponse(405, { message: "not mergeable" }) : null,
+        );
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/45/merge`,
+          payload: { headSha: "sha45" },
+        });
+        expect(res.statusCode).toBe(409);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("re-review reports an unconfigured reviewer as a precondition failure", async () => {
+        mockGithub(gqlPr(46));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/46/re-review`,
+        });
+        expect(res.statusCode).toBe(412);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       // Unlike every other test in this block, this needs a real (failing)
       // network connection to 127.0.0.1:1, not the api.github.com fetch

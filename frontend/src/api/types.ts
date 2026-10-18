@@ -953,6 +953,8 @@ export interface GitHubPROrWithChecks {
   /** null = not fetched (yet), as opposed to a known zero. */
   unresolvedThreads?: number | null;
   commentCount?: number | null;
+  /** True once the poller fetched this PR's head runs (possibly none). */
+  ciFetched?: boolean;
   prPhase?: GitHubPrPhase;
 }
 
@@ -965,6 +967,55 @@ export type GitHubPrPhase =
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
+
+export interface GitHubPrDetailComment {
+  author: string | null;
+  /** GitHub-rendered HTML — sanitize before inserting. */
+  bodyHtml: string;
+  createdAt: string;
+}
+
+export interface GitHubPrDetailThread {
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string | null;
+  line: number | null;
+  comments: GitHubPrDetailComment[];
+}
+
+export interface GitHubPrDetail {
+  number: number;
+  title: string;
+  htmlUrl: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  isDraft: boolean;
+  author: string | null;
+  bodyHtml: string;
+  baseBranch: string;
+  headBranch: string;
+  headSha: string;
+  createdAt: string;
+  updatedAt: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  commitCount: number;
+  commits: { oid: string; headline: string; author: string | null; committedDate: string }[];
+  files: { filename: string; status: string; additions: number; deletions: number }[];
+  mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
+  mergeStateStatus: string | null;
+  reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  requestedReviewers: string[];
+  reviewers: { login: string; state: string }[];
+  reviews: (GitHubPrDetailComment & { state: string })[];
+  threads: GitHubPrDetailThread[];
+  comments: GitHubPrDetailComment[];
+  ciStatus: GitHubCiStatus;
+  /** False when there is no real CI answer yet — distinct from "no checks". */
+  ciKnown: boolean;
+  actionsRuns: GitHubActionsRun[];
+  prPhase: GitHubPrPhase;
+}
 
 export interface GitHubPRsStatus {
   prs: GitHubPROrWithChecks[];

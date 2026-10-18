@@ -83,6 +83,27 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...unknown, isDraft: true })).toBe("draft");
   });
 
+  it("won't call a PR ready without a CI answer, unless GitHub says CLEAN", () => {
+    // Head runs never fetched: nothing proves CI is fine.
+    const unconfirmed = { ...base, mergeStateStatus: "UNSTABLE" };
+    expect(derivePrPhase({ ...unconfirmed, ciStatus: null, ciFetched: false })).toBe("unknown");
+    expect(
+      derivePrPhase({ ...base, ciStatus: null, ciFetched: false, mergeStateStatus: "CLEAN" }),
+    ).toBe("ready_to_merge");
+    // Fetched (even with no runs) or not tracked: ready as before.
+    expect(derivePrPhase({ ...unconfirmed, ciStatus: null, ciFetched: true })).toBe(
+      "ready_to_merge",
+    );
+    expect(derivePrPhase({ ...unconfirmed, ciStatus: null })).toBe("ready_to_merge");
+    // Review/conflict/CI-failure phases never depend on it.
+    expect(derivePrPhase({ ...base, ciFetched: false, reviewDecision: "CHANGES_REQUESTED" })).toBe(
+      "changes_requested",
+    );
+    expect(derivePrPhase({ ...base, ciFetched: false, mergeable: "CONFLICTING" })).toBe(
+      "conflicts",
+    );
+  });
+
   it("does not call an UNKNOWN mergeable a conflict", () => {
     expect(derivePrPhase({ ...base, mergeable: "UNKNOWN" })).toBe("ready_to_merge");
   });

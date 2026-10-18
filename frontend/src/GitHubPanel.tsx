@@ -1,3 +1,6 @@
+import { checkDotClass } from "./github/checkDot.js";
+import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./github/prPhase.js";
+import { PrDetailView } from "./github/PrDetailView.js";
 import { IssueDetailView, IssuesSection, type TaskMasterInfo } from "./github/IssuesView.js";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
@@ -24,17 +27,6 @@ export interface GitHubPanelParams {
 function runIdFromUrl(url: string): number | null {
   const match = url.match(/\/actions\/runs\/(\d+)/);
   return match ? parseInt(match[1], 10) : null;
-}
-
-type DotClass = "good" | "bad" | "pending" | "none";
-
-const SKIPPED_CONCLUSIONS = new Set(["skipped", "cancelled", "neutral"]);
-
-function checkDotClass(status: string, conclusion: string | null): DotClass {
-  if (status !== "completed") return "pending";
-  if (conclusion === "success") return "good";
-  if (conclusion != null && SKIPPED_CONCLUSIONS.has(conclusion)) return "none";
-  return "bad";
 }
 
 function checkGlyph(status: string, conclusion: string | null): string {
@@ -219,7 +211,15 @@ function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs
   return `${pr.actionsRuns.length} run${pr.actionsRuns.length === 1 ? "" : "s"}`;
 }
 
-function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number }) {
+function PRCard({
+  pr,
+  projectId,
+  onOpen,
+}: {
+  pr: GitHubPROrWithChecks;
+  projectId: number;
+  onOpen: (number: number) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [jobsByRun, setJobsByRun] = useState<Record<number, RunJobs>>({});
   // Run ids already requested (in flight or settled): a collapse/re-expand
@@ -257,6 +257,16 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
           #{pr.number}
         </a>
         <span className="github-panel-row-title">{pr.title}</span>
+        {pr.prPhase && pr.prPhase !== "unknown" && (
+          <span className={`gh-phase-pill ${phaseTone(pr.prPhase)}`}>
+            {PHASE_LABEL[pr.prPhase]}
+          </span>
+        )}
+        {pr.unresolvedThreads != null && pr.unresolvedThreads > 0 && (
+          <span className="github-panel-row-number" title="Unresolved review threads">
+            💬 {pr.unresolvedThreads}
+          </span>
+        )}
         {pr.author && <span className="github-panel-pr-author">{pr.author}</span>}
         {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
         <ChevronDownIcon
@@ -266,6 +276,9 @@ function PRCard({ pr, projectId }: { pr: GitHubPROrWithChecks; projectId: number
       </button>
       <div className="github-panel-branch-labels">
         {pr.baseBranch} <span className="github-panel-branch-arrow">←</span> {pr.headBranch}
+        <button type="button" className="gh-link-button" onClick={() => onOpen(pr.number)}>
+          Details
+        </button>
       </div>
       <CollapsibleSection expanded={expanded}>
         {pr.actionsRuns.length === 0 && (
@@ -528,6 +541,8 @@ export function GitHubPanel({
   // "explicitly out of scope" list). Bumping this alone re-fetches only
   // the release section, not the PR/issue lists too.
   const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
+  // Drill-in: an open PR replaces the list until the user goes back.
+  const [openPr, setOpenPr] = useState<number | null>(null);
   // Drill-in: an open issue replaces the list until the user goes back.
   const [openIssue, setOpenIssue] = useState<number | null>(null);
   const [taskMaster, setTaskMaster] = useState<TaskMasterInfo | null>(null);
@@ -576,6 +591,14 @@ export function GitHubPanel({
         No GitHub status available for this project. Connect an account in Settings → Integrations,
         and make sure this project's <code>origin</code> remote points at github.com.
       </EmptyStateNote>
+    );
+  }
+
+  if (openPr !== null) {
+    return (
+      <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
+        <PrDetailView projectId={params.projectId} number={openPr} onBack={() => setOpenPr(null)} />
+      </div>
     );
   }
 
@@ -635,8 +658,8 @@ export function GitHubPanel({
           <div className="github-panel-section-title">
             Pull requests ({prSummaryText(effectivePrs.prSummary)})
           </div>
-          {effectivePrs.prs.map((pr) => (
-            <PRCard key={pr.number} pr={pr} projectId={params.projectId} />
+          {sortPrsByAttention(effectivePrs.prs).map((pr) => (
+            <PRCard key={pr.number} pr={pr} projectId={params.projectId} onOpen={setOpenPr} />
           ))}
         </div>
       )}

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { resetGitHubRateLimitForTests } from "../../src/services/github-fetch.js";
 import {
   getRepoPRsStatus,
   setRepoPRsStatus,
@@ -6,6 +7,8 @@ import {
   getWorkflowRunJobs,
   getJobLogs,
   fetchRunsForHead,
+  fetchRunsForHeadChecked,
+  applyPrPhase,
   computeCiStatus,
 } from "../../src/services/github.js";
 
@@ -27,9 +30,14 @@ function mockGithubApi(opts: {
   pulls?: unknown[];
   headRuns?: Record<string, unknown[]>;
   pullsOk?: boolean;
+  /** Status to answer /actions/runs with instead of a 200 (e.g. 403/429). */
+  runsStatus?: number;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/actions/runs") && opts.runsStatus) {
+      return Promise.resolve(new Response("nope", { status: opts.runsStatus }));
+    }
     if (url.includes("/actions/runs")) {
       // /actions/runs?head_sha=...
       const sha = new URL(url).searchParams.get("head_sha");
@@ -125,6 +133,8 @@ describe("getRepoPRsStatus", () => {
       unresolvedThreads: null,
       commentCount: null,
       reviewStateKnown: false,
+      // The head-run lookup answered (with no runs), which is still an answer.
+      ciFetched: true,
       prPhase: "unknown",
     });
   });
@@ -180,6 +190,67 @@ describe("getRepoPRsStatus", () => {
 // Exported for task-reconciler.ts's review-spawn CI gate (see github.ts's
 // own doc comments on both) — getRepoPRsStatus above already exercises them
 // indirectly; these pin the two functions' own direct contracts.
+describe("ciFetched from the real run lookups", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    // A 429 above trips the process-wide rate-limit budget.
+    resetGitHubRateLimitForTests();
+  });
+
+  it("is true for a real answer, even an empty one, and false when the lookup failed", async () => {
+    vi.stubGlobal("fetch", mockGithubApi({ pulls: [PULL_OK], headRuns: {} }));
+    const answered = await getRepoPRsStatus("tok", "ci-owner", "ok-repo");
+    expect(answered.prs[0]).toMatchObject({ ciStatus: null, ciFetched: true });
+
+    for (const status of [403, 429, 500]) {
+      resetGitHubRateLimitForTests();
+      vi.stubGlobal("fetch", mockGithubApi({ pulls: [PULL_OK], runsStatus: status }));
+      const failed = await getRepoPRsStatus("tok", "ci-owner", `fail-${status}`);
+      expect(failed.prs[0]).toMatchObject({ ciStatus: null, ciFetched: false });
+    }
+
+    resetGitHubRateLimitForTests();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) =>
+        String(input).includes("/actions/runs")
+          ? Promise.reject(new Error("network down"))
+          : Promise.resolve(jsonResponse(200, [PULL_OK])),
+      ),
+    );
+    const offline = await getRepoPRsStatus("tok", "ci-owner", "net-repo");
+    expect(offline.prs[0]).toMatchObject({ ciStatus: null, ciFetched: false });
+  });
+
+  it("a failed lookup keeps an otherwise-ready PR from being called ready", async () => {
+    vi.stubGlobal("fetch", mockGithubApi({ pulls: [PULL_OK], runsStatus: 403 }));
+    const { prs } = await getRepoPRsStatus("tok", "ci-owner", "ready-repo");
+    const pr = prs[0];
+    // As if the review enrichment had run and found nothing outstanding.
+    Object.assign(pr, {
+      reviewStateKnown: true,
+      reviewDecision: "APPROVED",
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "UNSTABLE",
+    });
+    applyPrPhase(pr);
+    expect(pr.prPhase).toBe("unknown");
+    // GitHub calling it CLEAN is the tie-break that makes it ready.
+    pr.mergeStateStatus = "CLEAN";
+    applyPrPhase(pr);
+    expect(pr.prPhase).toBe("ready_to_merge");
+  });
+
+  it("fetchRunsForHeadChecked reports the outcome; fetchRunsForHead stays lenient", async () => {
+    vi.stubGlobal("fetch", mockGithubApi({ headRuns: { sha1: [RUN_SUCCESS] } }));
+    expect(await fetchRunsForHeadChecked("tok", "o", "r", "sha1")).toMatchObject({ ok: true });
+    expect((await fetchRunsForHeadChecked("tok", "o", "r", "sha-none")).ok).toBe(true);
+    vi.stubGlobal("fetch", mockGithubApi({ runsStatus: 403 }));
+    expect(await fetchRunsForHeadChecked("tok", "o", "r", "sha1")).toEqual({ ok: false, runs: [] });
+    expect(await fetchRunsForHead("tok", "o", "r", "sha1")).toEqual([]);
+  });
+});
+
 describe("fetchRunsForHead", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
