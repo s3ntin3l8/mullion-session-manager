@@ -540,6 +540,12 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // Optional cgroup v2 CPUQuota override applied to manual session scopes (e.g. "400%").
+    // Unset by default (""), preserving 100% burst capacity on manual sessions.
+    MULLION_SESSION_CPU_QUOTA: {
+      type: "string",
+      default: "",
+    },
     // Comma-separated GitHub logins (e.g. bot accounts, whose
     // author_association is never OWNER/MEMBER/COLLABORATOR) whose issues and
     // comments Task Master trusts in addition to repo owners/members/
@@ -986,6 +992,7 @@ declare module "fastify" {
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
+      MULLION_SESSION_CPU_QUOTA: string;
       MULLION_TASK_TRUSTED_LOGINS: string;
       BROWSER_ENABLED: boolean;
       BROWSER_MAX_INSTANCES: number;

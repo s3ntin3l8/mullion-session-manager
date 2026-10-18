@@ -33,6 +33,7 @@ import {
   resolveForwarderPath,
 } from "./hook-adapters/index.js";
 import { deriveInstanceId, scopeUnitName } from "./session-process.js";
+import { getAvailableHostCores, computeTaskMasterCpuQuota } from "./host-resources.js";
 
 // Per-agent skip-permissions flag lookup. Anchored at the start of the
 // trimmed command (optionally path-qualified), same conservative "no
@@ -471,6 +472,24 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     ? `${withResume} ${initialPromptArgs}`.trimEnd()
     : withResume;
 
+  const isTaskSession = session.taskId !== undefined;
+  const totalCores = getAvailableHostCores();
+  const taskQuotaPercent = computeTaskMasterCpuQuota(totalCores);
+  const manualQuota = process.env.MULLION_SESSION_CPU_QUOTA;
+  const quotaArgs = isTaskSession
+    ? ["-p", `CPUQuota=${taskQuotaPercent}%`]
+    : manualQuota
+      ? ["-p", `CPUQuota=${manualQuota}`]
+      : [];
+
+  const cgroupArgs = [
+    "-p",
+    isTaskSession ? "CPUWeight=25" : "CPUWeight=100",
+    "-p",
+    isTaskSession ? "IOWeight=25" : "IOWeight=100",
+    ...quotaArgs,
+  ];
+
   return {
     shell,
     unitName,
@@ -481,6 +500,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
       "--collect",
       "-u",
       unitName,
+      ...cgroupArgs,
       "--",
       "dtach",
       "-n",

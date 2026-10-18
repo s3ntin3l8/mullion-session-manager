@@ -150,4 +150,28 @@ describe("applyShellIntegrationEnv", () => {
     expect(env.PROMPT_COMMAND).toBeUndefined();
     expect(fs.existsSync(path.join(sessionsDir, "shell-integration"))).toBe(false);
   });
+
+  it("injects MULLION_HOST_CORES into the environment", () => {
+    const sessionsDir = mkTmpDir("shell-integration-env-cores-");
+    const env: NodeJS.ProcessEnv = { HOME: "/home/user" };
+
+    applyShellIntegrationEnv("/bin/zsh", env, sessionsDir);
+
+    expect(env.MULLION_HOST_CORES).toBeDefined();
+    expect(Number.parseInt(env.MULLION_HOST_CORES!, 10)).toBeGreaterThan(0);
+  });
+});
+
+describe("ensureShellIntegrationFiles — adaptive resource governor", () => {
+  it("injects adaptive resource governor snippet into .zshenv with host cores", () => {
+    const sessionsDir = mkTmpDir("shell-integration-adaptive-");
+    const zdotdir = ensureShellIntegrationFiles(sessionsDir, 14);
+    const content = fs.readFileSync(path.join(zdotdir, ".zshenv"), "utf8");
+
+    expect(content).toContain("Mullion Adaptive Resource Governor");
+    expect(content).toContain("local cores=14");
+    expect(content).toContain('export PYTEST_ADDOPTS="-n $(_mullion_calc_workers)"');
+    expect(content).toContain("export VITEST_MAX_THREADS=$(_mullion_calc_workers)");
+    expect(content).toContain('export MAKEFLAGS="-j 14 -l 14"');
+  });
 });

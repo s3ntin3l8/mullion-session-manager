@@ -1,5 +1,6 @@
 import { mkdirSync, openSync, writeSync, closeSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
+import { getAvailableHostCores } from "./host-resources.js";
 
 // Injects an OSC 7 ("here is my current working directory") announcement
 // into a session's interactive shell — issue: sidebar worktree display.
@@ -69,6 +70,34 @@ function sourceUserDotfile(file: string): string {
   return `[ -f "$MULLION_USER_ZDOTDIR/${file}" ] && source "$MULLION_USER_ZDOTDIR/${file}"\n`;
 }
 
+function adaptiveZshenvContent(totalCores: number): string {
+  return (
+    sourceUserDotfile(".zshenv") +
+    `
+# Mullion Adaptive Resource Governor
+# Dynamically adapts build and test tool concurrency to available host cores (${totalCores}) and system load.
+_mullion_calc_workers() {
+  local cores=${totalCores}
+  local load_1m
+  load_1m=$(awk '{printf("%d", $1)}' /proc/loadavg 2>/dev/null || uptime 2>/dev/null | awk -F'load average: ' '{print $2}' | awk -F, '{printf("%d", $1)}' || echo 0)
+
+  if (( load_1m < (cores * 35) / 100 )); then
+    echo $cores
+  elif (( load_1m < (cores * 75) / 100 )); then
+    echo $(( (cores + 1) / 2 ))
+  else
+    local conservative=$(( cores / 4 ))
+    echo $(( conservative > 2 ? conservative : 2 ))
+  fi
+}
+
+[[ -z "$PYTEST_ADDOPTS" ]] && export PYTEST_ADDOPTS="-n $(_mullion_calc_workers)"
+[[ -z "$VITEST_MAX_THREADS" ]] && export VITEST_MAX_THREADS=$(_mullion_calc_workers)
+[[ -z "$MAKEFLAGS" ]] && export MAKEFLAGS="-j ${totalCores} -l ${totalCores}"
+`
+  );
+}
+
 /**
  * Writes the four zsh ZDOTDIR shim files under `<sessionsDir>/shell-
  * integration/zsh/`. Idempotent and cheap (a handful of small text files) —
@@ -87,10 +116,13 @@ function sourceUserDotfile(file: string): string {
  * `.zshenv`/`.zprofile`/`.zlogin` lookup pointed at an empty directory,
  * silently dropping whatever PATH/env setup the user keeps in those files.
  */
-export function ensureShellIntegrationFiles(sessionsDir: string): string {
+export function ensureShellIntegrationFiles(
+  sessionsDir: string,
+  totalCores: number = getAvailableHostCores(),
+): string {
   const zdotdir = path.join(sessionsDir, "shell-integration", "zsh");
   mkdirSync(zdotdir, { recursive: true });
-  writeShimFileSync(path.join(zdotdir, ".zshenv"), sourceUserDotfile(".zshenv"));
+  writeShimFileSync(path.join(zdotdir, ".zshenv"), adaptiveZshenvContent(totalCores));
   writeShimFileSync(path.join(zdotdir, ".zprofile"), sourceUserDotfile(".zprofile"));
   writeShimFileSync(path.join(zdotdir, ".zlogin"), sourceUserDotfile(".zlogin"));
   writeShimFileSync(path.join(zdotdir, ".zshrc"), zshrcContent());
@@ -138,13 +170,18 @@ export function applyShellIntegrationEnv(
   env: NodeJS.ProcessEnv,
   sessionsDir: string,
 ): void {
+  const totalCores = getAvailableHostCores();
+  env.MULLION_HOST_CORES = String(totalCores);
   const shellName = path.basename(shell);
   if (shellName === "zsh") {
     env.MULLION_USER_ZDOTDIR = env.ZDOTDIR || env.HOME || "";
-    env.ZDOTDIR = ensureShellIntegrationFiles(sessionsDir);
+    env.ZDOTDIR = ensureShellIntegrationFiles(sessionsDir, totalCores);
   } else if (shellName === "bash") {
     env.PROMPT_COMMAND = env.PROMPT_COMMAND
       ? `${env.PROMPT_COMMAND}; ${OSC7_BASH_SNIPPET}`
       : OSC7_BASH_SNIPPET;
+    if (!env.MAKEFLAGS) {
+      env.MAKEFLAGS = `-j ${totalCores} -l ${totalCores}`;
+    }
   }
 }
