@@ -56,7 +56,7 @@ import {
   type SessionLiveness,
 } from "./session-process.js";
 import { buildLaunchPlan } from "./launch-plan.js";
-import { cleanupSessionFiles } from "./session-files-cleanup.js";
+import { cleanupSessionFiles, sweepOrphanedSessionTmpDirs } from "./session-files-cleanup.js";
 import { TitleChangeDebouncer } from "./title-change-debouncer.js";
 import { loadOrCreateHookToken } from "./hook-token.js";
 import { isGenuineUserInput } from "./terminal-input-classify.js";
@@ -4256,5 +4256,13 @@ export class PtyManager {
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
     return isMasterAliveBatchProcess(this.sessionsDir, this.instanceId, ids);
+  }
+
+  /**
+   * Issue #1677 — sweeps orphaned `<id>.tmp` directories under `sessionsDir` whose
+   * session is no longer active in this manager.
+   */
+  sweepOrphanedTmpDirs(): Promise<number> {
+    return sweepOrphanedSessionTmpDirs(this.sessionsDir, new Set(this.sessions.keys()));
   }
 }

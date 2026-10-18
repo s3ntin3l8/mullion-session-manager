@@ -725,3 +725,31 @@ describe("buildLaunchPlan — shell integration (real applyShellIntegrationEnv, 
     expect(plan.env.PROMPT_COMMAND).toEqual(expect.stringContaining("\\033]7;"));
   });
 });
+
+describe("buildLaunchPlan — session TMPDIR isolation", () => {
+  it("injects TMPDIR, TEMP, and TMP pointing to <sessionsDir>/<id>.tmp and creates the dir", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-");
+    const plan = buildLaunchPlan(baseSession({ id: "99", sessionsDir }));
+    const expectedTmp = path.join(sessionsDir, "99.tmp");
+
+    expect(plan.env.TMPDIR).toBe(expectedTmp);
+    expect(plan.env.TEMP).toBe(expectedTmp);
+    expect(plan.env.TMP).toBe(expectedTmp);
+    expect(fs.existsSync(expectedTmp)).toBe(true);
+  });
+
+  it("preserves caller-supplied TMPDIR when provided in session.env", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-custom-");
+    const customTmp = "/custom/tmp/dir";
+    const plan = buildLaunchPlan(
+      baseSession({
+        id: "100",
+        sessionsDir,
+        env: { TMPDIR: customTmp },
+      }),
+    );
+
+    expect(plan.env.TMPDIR).toBe(customTmp);
+    expect(fs.existsSync(path.join(sessionsDir, "100.tmp"))).toBe(false);
+  });
+});

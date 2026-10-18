@@ -451,6 +451,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
       } catch (err) {
         app.log.error({ err }, "stale-state sweep failed");
       }
+
+      // Issue #1677 — sweeps orphaned `<id>.tmp` directories under sessionsDir
+      // left behind by aborted spawns, crashed processes, or hard restarts.
+      manager.sweepOrphanedTmpDirs().catch((err) => {
+        app.log.warn({ err }, "orphaned session tmp sweep failed");
+      });
     }, safeIntervalMs);
     reconcileTimer.unref();
   }
@@ -464,6 +470,11 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   let devServerDetectTimer: ReturnType<typeof setInterval> | null = null;
   if (app.config.MULLION_ROLE === "primary") {
     armReconcileTimer(readReconcileIntervalMs(app));
+    app.addHook("onReady", () => {
+      manager.sweepOrphanedTmpDirs().catch((err) => {
+        app.log.warn({ err }, "initial orphaned session tmp sweep failed");
+      });
+    });
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);
     });

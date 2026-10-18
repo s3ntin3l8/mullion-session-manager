@@ -18,12 +18,14 @@
 // runs. Splitting the I/O out would just move that ordering hazard onto
 // every caller instead of keeping it as one documented invariant here.
 import path from "node:path";
+import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
 import { buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { writeSessionBriefing } from "./project-briefing.js";
 import { writeSessionWorkflowConventions } from "./workflow-conventions.js";
+import { sessionTmpDirPath } from "./session-files-cleanup.js";
 import {
   applyHookAdapters,
   getAdapterInitialPromptArgs,
@@ -281,6 +283,23 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // existed.
   if (session.sshAuthSock) {
     sessionEnv.SSH_AUTH_SOCK = session.sshAuthSock;
+  }
+
+  // Issue #1677 — isolate temporary files per session (`<sessionsDir>/<id>.tmp`).
+  // Prevents test runners (Vitest SSR transforms, Jest, cargo, go) and build
+  // tools from leaking thousands of orphaned files/folders into host `/tmp`.
+  // Cleaned up when the session terminates via cleanupSessionFiles.
+  // Preserves an explicit caller-supplied TMPDIR (from session.env) when set.
+  if (!session.env.TMPDIR) {
+    const tmpDir = sessionTmpDirPath(session.sessionsDir, session.id);
+    try {
+      mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+      sessionEnv.TMPDIR = tmpDir;
+      sessionEnv.TEMP = tmpDir;
+      sessionEnv.TMP = tmpDir;
+    } catch {
+      // Fail-open: leave ambient TMPDIR if directory creation fails
+    }
   }
 
   // Issue #405 — writes this session's own copy of the shipped agent guide
