@@ -55,35 +55,88 @@ export async function cleanupSessionFiles(sessionsDir: string, id: string): Prom
 /** Minimum age before an untracked session temp dir is considered orphaned (1 minute). */
 export const MIN_ORPHAN_TMP_AGE_MS = 60_000;
 
+export interface SweepLogger {
+  warn(obj: unknown, msg: string): void;
+  info?(obj: unknown, msg: string): void;
+}
+
+/**
+ * Filter function to confirm which candidate session IDs are safe to sweep.
+ * Callers should only return IDs confirmed "dead", skipping "alive" and "unknown"
+ * to prevent deleting the TMPDIR of a live dtach session after a restart.
+ */
+export type DeadSessionFilter = (candidateIds: string[]) => Promise<Set<string>> | Set<string>;
+
 /**
  * Sweeps orphaned `<id>.tmp` directories under `sessionsDir` whose session ID is
- * not in `activeSessionIds` and whose mtime is older than `minAgeMs` (default 1 minute).
+ * confirmed dead and whose mtime is older than `minAgeMs` (default 1 minute).
  * Returns the number of swept directories. Never throws.
  */
 export async function sweepOrphanedSessionTmpDirs(
   sessionsDir: string,
-  activeSessionIds: Set<string>,
+  isDead: DeadSessionFilter,
+  activeSessionIds: Set<string> = new Set(),
   minAgeMs: number = MIN_ORPHAN_TMP_AGE_MS,
+  log?: SweepLogger,
 ): Promise<number> {
+  let entries;
   try {
-    const entries = await readdirAsync(sessionsDir, { withFileTypes: true });
-    let swept = 0;
-    const now = Date.now();
-    await Promise.allSettled(
-      entries
-        .filter((entry) => entry.isDirectory() && entry.name.endsWith(".tmp"))
-        .map(async (entry) => {
-          const id = entry.name.slice(0, -".tmp".length);
-          if (activeSessionIds.has(id)) return;
-          const fullPath = path.join(sessionsDir, entry.name);
-          const st = await statAsync(fullPath).catch(() => null);
-          if (!st || now - st.mtimeMs < minAgeMs) return;
-          await rmAsync(fullPath, { recursive: true, force: true });
-          swept++;
-        }),
-    );
-    return swept;
-  } catch {
+    entries = await readdirAsync(sessionsDir, { withFileTypes: true });
+  } catch (err) {
+    log?.warn({ err, sessionsDir }, "sweepOrphanedSessionTmpDirs: failed to readdir");
     return 0;
   }
+
+  const now = Date.now();
+  const candidateIds: string[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.endsWith(".tmp")) continue;
+    const id = entry.name.slice(0, -".tmp".length);
+    if (!id || activeSessionIds.has(id)) continue;
+
+    const fullPath = path.join(sessionsDir, entry.name);
+    try {
+      const st = await statAsync(fullPath);
+      if (now - st.mtimeMs >= minAgeMs) {
+        candidateIds.push(id);
+      }
+    } catch (err) {
+      log?.warn(
+        { err, path: fullPath },
+        "sweepOrphanedSessionTmpDirs: failed to stat candidate tmp dir",
+      );
+    }
+  }
+
+  if (candidateIds.length === 0) return 0;
+
+  let confirmedDead: Set<string>;
+  try {
+    confirmedDead = await isDead(candidateIds);
+  } catch (err) {
+    log?.warn(
+      { err, candidateIds },
+      "sweepOrphanedSessionTmpDirs: failed to check session liveness",
+    );
+    return 0;
+  }
+
+  let swept = 0;
+  await Promise.allSettled(
+    [...confirmedDead].map(async (id) => {
+      const fullPath = sessionTmpDirPath(sessionsDir, id);
+      try {
+        await rmAsync(fullPath, { recursive: true, force: true });
+        swept++;
+      } catch (err) {
+        log?.warn(
+          { err, id, fullPath },
+          "sweepOrphanedSessionTmpDirs: failed to rm candidate tmp dir",
+        );
+      }
+    }),
+  );
+
+  return swept;
 }

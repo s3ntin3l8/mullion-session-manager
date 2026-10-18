@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +6,7 @@ import {
   sessionTmpDirPath,
   cleanupSessionFiles,
   sweepOrphanedSessionTmpDirs,
+  type SweepLogger,
 } from "../../src/services/session-files-cleanup.js";
 
 describe("session-files-cleanup", () => {
@@ -46,31 +47,52 @@ describe("session-files-cleanup", () => {
   });
 
   describe("sweepOrphanedSessionTmpDirs", () => {
-    it("sweeps orphaned tmp directories older than minAgeMs whose session is not active", async () => {
+    it("sweeps only confirmed dead sessions older than minAgeMs", async () => {
       const activeId = "active-1";
-      const orphanOldId = "orphan-old";
-      const orphanRecentId = "orphan-recent";
+      const deadId = "orphan-dead";
+      const aliveUntrackedId = "orphan-alive-dtach";
+      const recentDeadId = "orphan-recent-dead";
 
       const activeDir = sessionTmpDirPath(tmpDir, activeId);
-      const orphanOldDir = sessionTmpDirPath(tmpDir, orphanOldId);
-      const orphanRecentDir = sessionTmpDirPath(tmpDir, orphanRecentId);
+      const deadDir = sessionTmpDirPath(tmpDir, deadId);
+      const aliveDir = sessionTmpDirPath(tmpDir, aliveUntrackedId);
+      const recentDir = sessionTmpDirPath(tmpDir, recentDeadId);
 
       fs.mkdirSync(activeDir, { recursive: true });
-      fs.mkdirSync(orphanOldDir, { recursive: true });
-      fs.mkdirSync(orphanRecentDir, { recursive: true });
+      fs.mkdirSync(deadDir, { recursive: true });
+      fs.mkdirSync(aliveDir, { recursive: true });
+      fs.mkdirSync(recentDir, { recursive: true });
 
-      // Backdate orphanOldDir and activeDir by 2 minutes
+      // Backdate deadDir, aliveDir, and activeDir by 2 minutes
       const twoMinutesAgo = new Date(Date.now() - 120_000);
-      fs.utimesSync(orphanOldDir, twoMinutesAgo, twoMinutesAgo);
+      fs.utimesSync(deadDir, twoMinutesAgo, twoMinutesAgo);
+      fs.utimesSync(aliveDir, twoMinutesAgo, twoMinutesAgo);
       fs.utimesSync(activeDir, twoMinutesAgo, twoMinutesAgo);
 
-      // orphanRecentDir has current mtime (< 60s)
-      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, new Set([activeId]), 60_000);
+      // recentDir has current mtime (< 60s)
+      const mockIsDead = vi.fn((ids: string[]) => {
+        // aliveUntrackedId is "alive", deadId is "dead"
+        return new Set(ids.filter((id) => id === deadId));
+      });
+
+      const swept = await sweepOrphanedSessionTmpDirs(
+        tmpDir,
+        mockIsDead,
+        new Set([activeId]),
+        60_000,
+      );
 
       expect(swept).toBe(1);
-      expect(fs.existsSync(orphanOldDir)).toBe(false);
+      expect(fs.existsSync(deadDir)).toBe(false);
       expect(fs.existsSync(activeDir)).toBe(true);
-      expect(fs.existsSync(orphanRecentDir)).toBe(true);
+      expect(fs.existsSync(aliveDir)).toBe(true); // preserved because it's still alive in dtach!
+      expect(fs.existsSync(recentDir)).toBe(true); // preserved because it's recent (< 60s)!
+
+      // Candidate IDs checked for liveness did NOT include activeId or recentDeadId
+      expect(mockIsDead).toHaveBeenCalledTimes(1);
+      const checkedIds = mockIsDead.mock.calls[0][0];
+      expect(checkedIds).toEqual(expect.arrayContaining([deadId, aliveUntrackedId]));
+      expect(checkedIds).toHaveLength(2);
     });
 
     it("ignores non-directory files and directories not matching *.tmp", async () => {
@@ -81,15 +103,55 @@ describe("session-files-cleanup", () => {
       fs.utimesSync(path.join(tmpDir, "file.tmp"), twoMinutesAgo, twoMinutesAgo);
       fs.utimesSync(path.join(tmpDir, "not-tmp-dir"), twoMinutesAgo, twoMinutesAgo);
 
-      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, new Set(), 60_000);
+      const mockIsDead = vi.fn((ids: string[]) => new Set(ids));
+      const swept = await sweepOrphanedSessionTmpDirs(tmpDir, mockIsDead, new Set(), 60_000);
+
       expect(swept).toBe(0);
+      expect(mockIsDead).not.toHaveBeenCalled();
       expect(fs.existsSync(path.join(tmpDir, "file.tmp"))).toBe(true);
       expect(fs.existsSync(path.join(tmpDir, "not-tmp-dir"))).toBe(true);
     });
 
-    it("handles non-existent or inaccessible directory gracefully", async () => {
-      const swept = await sweepOrphanedSessionTmpDirs("/nonexistent/path", new Set());
+    it("logs warning and returns 0 when readdir fails", async () => {
+      const mockLogger: SweepLogger = {
+        warn: vi.fn(),
+      };
+      const swept = await sweepOrphanedSessionTmpDirs(
+        "/nonexistent/directory/path",
+        () => new Set(),
+        new Set(),
+        60_000,
+        mockLogger,
+      );
       expect(swept).toBe(0);
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    it("logs warning when liveness check rejects", async () => {
+      const orphanId = "orphan-test";
+      const orphanDir = sessionTmpDirPath(tmpDir, orphanId);
+      fs.mkdirSync(orphanDir, { recursive: true });
+      const twoMinutesAgo = new Date(Date.now() - 120_000);
+      fs.utimesSync(orphanDir, twoMinutesAgo, twoMinutesAgo);
+
+      const mockLogger: SweepLogger = {
+        warn: vi.fn(),
+      };
+      const failingIsDead = () => Promise.reject(new Error("liveness check exploded"));
+
+      const swept = await sweepOrphanedSessionTmpDirs(
+        tmpDir,
+        failingIsDead,
+        new Set(),
+        60_000,
+        mockLogger,
+      );
+      expect(swept).toBe(0);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        expect.stringContaining("failed to check session liveness"),
+      );
+      expect(fs.existsSync(orphanDir)).toBe(true);
     });
   });
 });

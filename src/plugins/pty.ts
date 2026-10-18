@@ -454,9 +454,18 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
 
       // Issue #1677 — sweeps orphaned `<id>.tmp` directories under sessionsDir
       // left behind by aborted spawns, crashed processes, or hard restarts.
-      manager.sweepOrphanedTmpDirs().catch((err) => {
-        app.log.warn({ err }, "orphaned session tmp sweep failed");
-      });
+      // Primary-role only (matches all other periodic sweeps); remote agent-role
+      // hosts rely on terminate()-time cleanupSessionFiles.
+      manager
+        .sweepOrphanedTmpDirs(app.log)
+        .then((swept) => {
+          if (swept > 0) {
+            app.log.info({ swept }, "swept orphaned session tmp directories");
+          }
+        })
+        .catch((err) => {
+          app.log.error({ err }, "orphaned session tmp sweep failed");
+        });
     }, safeIntervalMs);
     reconcileTimer.unref();
   }
@@ -471,9 +480,16 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE === "primary") {
     armReconcileTimer(readReconcileIntervalMs(app));
     app.addHook("onReady", () => {
-      manager.sweepOrphanedTmpDirs().catch((err) => {
-        app.log.warn({ err }, "initial orphaned session tmp sweep failed");
-      });
+      manager
+        .sweepOrphanedTmpDirs(app.log)
+        .then((swept) => {
+          if (swept > 0) {
+            app.log.info({ swept }, "initial orphaned session tmp sweep finished");
+          }
+        })
+        .catch((err) => {
+          app.log.error({ err }, "initial orphaned session tmp sweep failed");
+        });
     });
     app.decorate("reconfigureReconciler", (intervalSeconds: number) => {
       armReconcileTimer(intervalSeconds * 1000);

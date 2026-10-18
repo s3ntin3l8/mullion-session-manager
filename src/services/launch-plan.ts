@@ -289,16 +289,29 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // Prevents test runners (Vitest SSR transforms, Jest, cargo, go) and build
   // tools from leaking thousands of orphaned files/folders into host `/tmp`.
   // Cleaned up when the session terminates via cleanupSessionFiles.
-  // Preserves an explicit caller-supplied TMPDIR (from session.env) when set.
-  if (!session.env.TMPDIR) {
+  //
+  // Contract for caller-supplied temp overrides: if the caller explicitly
+  // specifies any of TMPDIR, TEMP, or TMP in session.env, that custom location
+  // is honoured and mirrored across all three variables without allocating a
+  // per-session tmp directory. Otherwise, allocate `<sessionsDir>/<id>.tmp` and
+  // inject it into TMPDIR, TEMP, and TMP.
+  const callerTmp = session.env.TMPDIR || session.env.TEMP || session.env.TMP;
+  if (callerTmp) {
+    sessionEnv.TMPDIR = session.env.TMPDIR ?? callerTmp;
+    sessionEnv.TEMP = session.env.TEMP ?? callerTmp;
+    sessionEnv.TMP = session.env.TMP ?? callerTmp;
+  } else {
     const tmpDir = sessionTmpDirPath(session.sessionsDir, session.id);
     try {
       mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
       sessionEnv.TMPDIR = tmpDir;
       sessionEnv.TEMP = tmpDir;
       sessionEnv.TMP = tmpDir;
-    } catch {
-      // Fail-open: leave ambient TMPDIR if directory creation fails
+    } catch (err) {
+      console.warn(
+        `[launch-plan] failed to create session tmp dir for session ${session.id}:`,
+        err,
+      );
     }
   }
 

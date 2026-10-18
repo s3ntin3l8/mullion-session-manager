@@ -750,6 +750,45 @@ describe("buildLaunchPlan — session TMPDIR isolation", () => {
     );
 
     expect(plan.env.TMPDIR).toBe(customTmp);
+    expect(plan.env.TEMP).toBe(customTmp);
+    expect(plan.env.TMP).toBe(customTmp);
     expect(fs.existsSync(path.join(sessionsDir, "100.tmp"))).toBe(false);
+  });
+
+  it("preserves caller-supplied TEMP or TMP and mirrors across all three", () => {
+    const sessionsDir = mkTmpDir("launch-plan-tmp-temp-");
+    const customTmp = "/custom/temp/dir";
+    const plan = buildLaunchPlan(
+      baseSession({
+        id: "101",
+        sessionsDir,
+        env: { TEMP: customTmp },
+      }),
+    );
+
+    expect(plan.env.TMPDIR).toBe(customTmp);
+    expect(plan.env.TEMP).toBe(customTmp);
+    expect(plan.env.TMP).toBe(customTmp);
+    expect(fs.existsSync(path.join(sessionsDir, "101.tmp"))).toBe(false);
+  });
+
+  it("logs warning if creating session tmp dir fails", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Point sessionsDir to a path where creating a directory will fail (e.g. an existing regular file)
+    const filePath = path.join(mkTmpDir("launch-plan-blocked-"), "blocked");
+    fs.writeFileSync(filePath, "file");
+
+    buildLaunchPlan(
+      baseSession({
+        id: "102",
+        sessionsDir: filePath,
+      }),
+    );
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to create session tmp dir for session 102"),
+      expect.any(Error),
+    );
+    warnSpy.mockRestore();
   });
 });
