@@ -27,7 +27,7 @@ function worstSeverity(stats: SystemStats | null): ResourceSeverity {
   return "normal";
 }
 
-export function ResourceAlertBanner({ onOpenServer }: { onOpenServer: () => void }) {
+export function ResourceAlertBanner({ onOpenStorage }: { onOpenStorage: () => void }) {
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [dismissed, setDismissed] = useState(dismissedRecently);
 
@@ -54,11 +54,11 @@ export function ResourceAlertBanner({ onOpenServer }: { onOpenServer: () => void
   return (
     <div
       className={`update-banner resource-alert ${severity}`}
-      onClick={onOpenServer}
+      onClick={onOpenStorage}
       role="button"
       tabIndex={0}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onOpenServer();
+        if (event.key === "Enter" || event.key === " ") onOpenStorage();
       }}
     >
       <WarningTriangleIcon size={16} style={{ flexShrink: 0 }} />

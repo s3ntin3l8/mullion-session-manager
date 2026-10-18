@@ -72,6 +72,20 @@ export interface SystemStats {
   }>;
 }
 
+/**
+ * Every slow storage measurement (Docker, temp files, caches, opencode,
+ * worktrees) runs in the background on the server. `measuring` means a run is
+ * in progress; its last known figures, if any, ride along. A first run that has
+ * not finished has no figures, only this metadata.
+ */
+export interface ProbeMeta {
+  state: "measuring" | "ready" | "error";
+  /** ISO time of the figures below; null until a first run lands. */
+  measuredAt: string | null;
+  error?: string;
+}
+export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
+
 export interface DockerStorageStatus {
   available: boolean;
   rows: Array<{
@@ -112,7 +126,12 @@ export interface PruneResult {
 export interface TempStorageStatus {
   available: boolean;
   root: string;
-  estimates: { safeBytes: number; aggressiveBytes: number };
+  estimates: {
+    safeBytes: number;
+    aggressiveBytes: number;
+    /** Part of `aggressiveBytes`: the npm cache, which aggressive cleanup also clears. */
+    npmCacheBytes: number;
+  };
   candidates: { safe: number; aggressive: number };
   claudeScratch: {
     /** Why Claude's scratch is left alone entirely (running sessions couldn't be told apart). */

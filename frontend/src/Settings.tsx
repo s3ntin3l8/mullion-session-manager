@@ -22,6 +22,7 @@ import { SessionsSection } from "./settings/sections/SessionsSection.js";
 import { TaskMasterSection } from "./settings/sections/TaskMasterSection.js";
 import { IntegrationsSection } from "./settings/sections/IntegrationsSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
+import { StorageSection } from "./settings/sections/StorageSection.js";
 import { AccountSection } from "./settings/sections/AccountSection.js";
 import { DevicesSection } from "./settings/sections/DevicesSection.js";
 import { InputSection } from "./settings/sections/InputSection.js";
@@ -281,6 +282,7 @@ export function Settings({
               {section === "devices" && <DevicesSection />}
               {section === "hosts" && <HostsSection />}
               {section === "integrations" && <IntegrationsSection />}
+              {section === "storage" && <StorageSection />}
               {section === "server" && <ServerInfoSection />}
             </div>
           </div>

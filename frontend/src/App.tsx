@@ -1587,7 +1587,7 @@ export function App() {
               </button>
             </div>
           )}
-          <ResourceAlertBanner onOpenServer={() => openSettings("server")} />
+          <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
           {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
             <div
               className="update-banner"

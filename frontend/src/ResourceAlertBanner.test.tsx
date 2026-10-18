@@ -34,7 +34,7 @@ describe("resource alert banner", () => {
   it("navigates to Server info and persists warning dismissal", async () => {
     vi.spyOn(api, "getSystemStats").mockResolvedValue(stats("warning"));
     const open = vi.fn();
-    render(<ResourceAlertBanner onOpenServer={open} />);
+    render(<ResourceAlertBanner onOpenStorage={open} />);
     await userEvent.click(await screen.findByText(/Low disk space/));
     expect(open).toHaveBeenCalledOnce();
     await userEvent.click(screen.getByTitle("Dismiss for 24 hours"));
@@ -45,7 +45,7 @@ describe("resource alert banner", () => {
   it("critical escalation overrides an existing warning dismissal", async () => {
     localStorage.setItem("mullion:storage-warning-dismissed-at", String(Date.now()));
     vi.spyOn(api, "getSystemStats").mockResolvedValue(stats("critical"));
-    render(<ResourceAlertBanner onOpenServer={vi.fn()} />);
+    render(<ResourceAlertBanner onOpenStorage={vi.fn()} />);
     expect(await screen.findByText(/Critical disk space/)).toBeInTheDocument();
     expect(screen.queryByTitle("Dismiss for 24 hours")).not.toBeInTheDocument();
   });
@@ -55,7 +55,7 @@ describe("resource alert banner", () => {
     vi.spyOn(api, "getSystemStats")
       .mockResolvedValueOnce(stats("warning"))
       .mockResolvedValueOnce(stats("normal"));
-    render(<ResourceAlertBanner onOpenServer={vi.fn()} />);
+    render(<ResourceAlertBanner onOpenStorage={vi.fn()} />);
     await act(async () => {
       await Promise.resolve();
     });

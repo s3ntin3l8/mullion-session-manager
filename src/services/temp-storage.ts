@@ -69,7 +69,12 @@ export interface ClaudeScratchStatus {
 export interface TempStorageStatus {
   available: boolean;
   root: string;
-  estimates: { safeBytes: number; aggressiveBytes: number };
+  estimates: {
+    safeBytes: number;
+    aggressiveBytes: number;
+    /** Part of `aggressiveBytes`: the npm cache, which aggressive cleanup also clears. */
+    npmCacheBytes: number;
+  };
   candidates: { safe: number; aggressive: number };
   claudeScratch: ClaudeScratchStatus;
   error?: string;
@@ -109,33 +114,105 @@ interface WalkResult {
 // Allocated bytes, matching what deleting actually frees.
 const diskBytes = (st: Stats) => st.blocks * 512;
 
+// A /tmp with a million files spends minutes waiting on one lstat at a time, so
+// the walks run their syscalls concurrently. Every stat/readdir/lstat this
+// module's walks make goes through this one limiter, so however many
+// directories are being walked at once the disk sees at most FS_CONCURRENCY of
+// them in flight. (The Claude-scratch scan in claude-scratch.ts makes its own
+// few, sequential calls and is not counted.)
+const FS_CONCURRENCY = 16;
+// Top-level entries are expanded a few at a time: each one fans out into a whole
+// tree of pending promises, and a handful in flight is plenty to keep the
+// limiter saturated.
+const TOP_LEVEL_CONCURRENCY = 8;
+// Entries of one directory are visited this many at a time. The limiter above
+// bounds syscalls in flight; this bounds the promises (and suspended frames)
+// allocated for a directory with a hundred thousand entries.
+const DIR_ENTRY_CONCURRENCY = FS_CONCURRENCY;
+let activeFsCalls = 0;
+// A queue with a moving head: `Array#shift` is O(length), which made a wide
+// directory quadratic.
+const fsWaiters: Array<() => void> = [];
+let fsWaitersHead = 0;
+
+async function limited<T>(call: () => Promise<T>): Promise<T> {
+  if (activeFsCalls < FS_CONCURRENCY) activeFsCalls++;
+  else await new Promise<void>((resolve) => fsWaiters.push(resolve));
+  try {
+    return await call();
+  } finally {
+    // Hand the slot straight to the next waiter; only free it if nobody waits.
+    if (fsWaitersHead < fsWaiters.length) {
+      const next = fsWaiters[fsWaitersHead++] as () => void;
+      if (fsWaitersHead === fsWaiters.length) {
+        fsWaiters.length = 0;
+        fsWaitersHead = 0;
+      }
+      next();
+    } else {
+      activeFsCalls--;
+    }
+  }
+}
+
+/** Like `Promise.all(items.map(fn))`, with at most `limit` calls running; results keep input order. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function walk(dir: string, rootDev: number, budget: { left: number }): Promise<WalkResult> {
-  const result: WalkResult = { bytes: 0, newestMtimeMs: 0, unsafe: false };
   let names: string[];
   try {
-    names = await fs.readdir(dir);
+    names = await limited(() => fs.readdir(dir));
   } catch {
-    return { ...result, unsafe: true };
+    return { bytes: 0, newestMtimeMs: 0, unsafe: true };
   }
-  for (const name of names) {
-    if (--budget.left < 0) return { ...result, unsafe: true };
+  const parts = await mapLimit(names, DIR_ENTRY_CONCURRENCY, async (name): Promise<WalkResult> => {
+    const part: WalkResult = { bytes: 0, newestMtimeMs: 0, unsafe: false };
+    if (--budget.left < 0) return { ...part, unsafe: true };
     let st: Stats;
     try {
-      st = await fs.lstat(path.join(dir, name));
+      st = await limited(() => fs.lstat(path.join(dir, name)));
     } catch {
-      continue; // vanished between readdir and lstat
+      return part; // vanished between readdir and lstat
     }
-    if (st.isSocket() || st.dev !== rootDev) return { ...result, unsafe: true };
-    result.bytes += diskBytes(st);
-    result.newestMtimeMs = Math.max(result.newestMtimeMs, st.mtimeMs);
+    if (st.isSocket() || st.dev !== rootDev) {
+      // This entry is not removable at all, so the rest of its walk is wasted:
+      // exhausting the budget makes every sibling still in flight bail out.
+      budget.left = -1;
+      return { ...part, unsafe: true };
+    }
+    part.bytes = diskBytes(st);
+    part.newestMtimeMs = st.mtimeMs;
     if (st.isDirectory()) {
       const child = await walk(path.join(dir, name), rootDev, budget);
-      result.bytes += child.bytes;
-      result.newestMtimeMs = Math.max(result.newestMtimeMs, child.newestMtimeMs);
-      if (child.unsafe) result.unsafe = true;
+      part.bytes += child.bytes;
+      part.newestMtimeMs = Math.max(part.newestMtimeMs, child.newestMtimeMs);
+      part.unsafe = child.unsafe;
     }
-  }
-  return result;
+    return part;
+  });
+  return parts.reduce<WalkResult>(
+    (total, part) => ({
+      bytes: total.bytes + part.bytes,
+      newestMtimeMs: Math.max(total.newestMtimeMs, part.newestMtimeMs),
+      unsafe: total.unsafe || part.unsafe,
+    }),
+    { bytes: 0, newestMtimeMs: 0, unsafe: false },
+  );
 }
 
 async function evaluateEntry(
@@ -148,7 +225,7 @@ async function evaluateEntry(
   const fullPath = path.join(root, name);
   let st: Stats;
   try {
-    st = await fs.lstat(fullPath);
+    st = await limited(() => fs.lstat(fullPath));
   } catch {
     return null;
   }
@@ -168,13 +245,12 @@ async function listCandidates(
   root: string,
   uid: number,
 ): Promise<{ entries: Candidate[]; names: string[]; rootDev: number }> {
-  const rootDev = (await fs.stat(root)).dev;
-  const entries: Candidate[] = [];
-  const names = await fs.readdir(root);
-  for (const name of names) {
-    const entry = await evaluateEntry(root, rootDev, uid, name);
-    if (entry) entries.push(entry);
-  }
+  const rootDev = (await limited(() => fs.stat(root))).dev;
+  const names = await limited(() => fs.readdir(root));
+  const evaluated = await mapLimit(names, TOP_LEVEL_CONCURRENCY, (name) =>
+    evaluateEntry(root, rootDev, uid, name),
+  );
+  const entries = evaluated.filter((entry): entry is Candidate => entry !== null);
   return { entries, names, rootDev };
 }
 
@@ -239,7 +315,7 @@ async function gatherTargets(
       // First stat of this entry (the generic pass above skips claude-* on the
       // denylist before statting): also guards against it having been swapped
       // for a symlink or moved across filesystems since listCandidates.
-      const st = await fs.lstat(claudeDir);
+      const st = await limited(() => fs.lstat(claudeDir));
       if (!st.isDirectory() || st.uid !== uid || st.dev !== rootDev) continue;
     } catch {
       continue;
@@ -285,23 +361,21 @@ async function gatherTargets(
 }
 
 export async function dirSize(dir: string): Promise<number> {
-  let total = 0;
   let names: string[];
   try {
-    names = await fs.readdir(dir);
+    names = await limited(() => fs.readdir(dir));
   } catch {
     return 0;
   }
-  for (const name of names) {
+  const sizes = await mapLimit(names, DIR_ENTRY_CONCURRENCY, async (name) => {
     try {
-      const st = await fs.lstat(path.join(dir, name));
-      total += diskBytes(st);
-      if (st.isDirectory()) total += await dirSize(path.join(dir, name));
+      const st = await limited(() => fs.lstat(path.join(dir, name)));
+      return diskBytes(st) + (st.isDirectory() ? await dirSize(path.join(dir, name)) : 0);
     } catch {
-      // vanished mid-walk
+      return 0; // vanished mid-walk
     }
-  }
-  return total;
+  });
+  return sizes.reduce((sum, size) => sum + size, 0);
 }
 
 function npmCachePath(options: TempStorageOptions): string {
@@ -351,6 +425,7 @@ export async function inspectTempStorage(
       estimates: {
         safeBytes: safe.reduce((sum, t) => sum + t.entry.bytes, 0),
         aggressiveBytes: aggressive.reduce((sum, t) => sum + t.entry.bytes, 0) + npmBytes,
+        npmCacheBytes: npmBytes,
       },
       candidates: { safe: safe.length, aggressive: aggressive.length },
       claudeScratch,
@@ -359,7 +434,7 @@ export async function inspectTempStorage(
     return {
       available: false,
       root,
-      estimates: { safeBytes: 0, aggressiveBytes: 0 },
+      estimates: { safeBytes: 0, aggressiveBytes: 0, npmCacheBytes: 0 },
       candidates: { safe: 0, aggressive: 0 },
       claudeScratch: { warnings: [] },
       error: error instanceof Error ? error.message : "Temp directory is unavailable",

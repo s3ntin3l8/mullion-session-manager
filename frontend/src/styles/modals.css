@@ -1344,3 +1344,152 @@
 .settings-status-matrix {
   grid-template-columns: minmax(140px, 1fr) 60px 60px 60px;
 }
+
+/* Settings -> Storage: disk usage rows and the two cleanup tier cards. */
+.storage-disks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.storage-disk {
+  padding: 11px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.storage-disk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+  margin-bottom: 7px;
+}
+.storage-disk-name {
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.storage-disk-figure {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: right;
+}
+.storage-disk-figure.resource-warning {
+  color: var(--y);
+}
+.storage-disk-figure.resource-critical {
+  color: var(--r);
+}
+.storage-disk-figure.resource-unavailable {
+  color: var(--dim);
+}
+.storage-disk-paths {
+  margin-top: 6px;
+  font-family: "Geist Mono", monospace;
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.storage-meter {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.storage-meter-fill {
+  height: 100%;
+  background: var(--g);
+}
+.storage-meter-fill.warning {
+  background: var(--y);
+}
+.storage-meter-fill.critical {
+  background: var(--r);
+}
+.storage-refresh {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+}
+.storage-refresh-age {
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.storage-tiers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.storage-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 11px;
+}
+.storage-tier.aggressive {
+  border-color: color-mix(in srgb, var(--r) 35%, var(--border-soft));
+}
+.storage-tier-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.storage-tier-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.storage-tier-total {
+  font-family: "Geist Mono", monospace;
+  font-size: 15px;
+}
+.storage-tier-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.storage-tier-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.storage-tier-note {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.storage-tier-figure {
+  font-family: "Geist Mono", monospace;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.storage-tier-figure.pending {
+  color: var(--dim);
+}
+.storage-tier-actions {
+  margin-top: auto;
+}
+.storage-subhead {
+  margin-top: 18px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  font-weight: 700;
+}
+.storage-details {
+  margin-top: 16px;
+}
+.storage-details summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+}
