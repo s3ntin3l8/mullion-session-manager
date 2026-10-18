@@ -458,11 +458,12 @@ export async function resolveGitHubToken(
   repo: { owner: string; repo: string },
   // #489 remaining scope — "write" (the original slice: Task Master's own
   // sync/promote/push), "read" (the base integration's repo-status widget
-  // and PR/CI poller), or "dispatch" (#744, the release-please trigger).
-  // Three flavors, not one widened token: a single token covering all of
+  // and PR/CI poller), "issues" (the sidebar's issue list), or "dispatch"
+  // (#744, the release-please trigger).
+  // Four flavors, not one widened token: a single token covering all of
   // them would hand every Task Master *write* an `actions` scope it has no
   // use for, undermining the least-privilege property #489 shipped for.
-  // See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS/DISPATCH_PERMISSIONS.
+  // See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS/ISSUES_READ_PERMISSIONS/DISPATCH_PERMISSIONS.
   scope: InstallationTokenScope = "write",
 ): Promise<string | null> {
   try {

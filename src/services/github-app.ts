@@ -213,7 +213,7 @@ export interface InstallationToken {
   expiresAt: Date;
 }
 
-// #489 (round 2, issue #489 remaining scope) — three permission sets, not
+// #489 (round 2, issue #489 remaining scope) — four permission sets, not
 // one widened one. Task Master's write paths need exactly WRITE_PERMISSIONS
 // and nothing more; the base integration's read-only surfaces (repo-status
 // widget, PR/CI poller) need Actions/PRs read access WRITE_PERMISSIONS

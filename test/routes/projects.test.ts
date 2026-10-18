@@ -9,7 +9,9 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import type * as GithubIntegration from "../../src/services/github-integration.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import { resolveGitHubToken } from "../../src/services/github-integration.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -35,6 +37,13 @@ import { gitEnv } from "../../src/services/git-env.js";
 // real scope once systemd-run is faked, and doesn't `.kill()` its child)
 // and everything else passes through to the real `spawn`.
 vi.mock("node-pty", () => plainNodePtyMock());
+
+// Passthrough wrapper so a test can assert which token scopes a route asks
+// for, while every other test still gets the real resolver.
+vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof GithubIntegration>();
+  return { ...actual, resolveGitHubToken: vi.fn(actual.resolveGitHubToken) };
+});
 
 // Marker substring a target cwd can contain to make runGitInit's own `git
 // init` spawn fail deterministically (real `git init` essentially never
@@ -1616,6 +1625,8 @@ describe("projects route", () => {
         openIssues: 1,
         openPRs: 1,
       });
+      // The issue list is fetched with the dedicated "issues" token scope.
+      expect(vi.mocked(resolveGitHubToken).mock.calls.map((c) => c[2])).toContain("issues");
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
     });
