@@ -266,6 +266,12 @@ export function StorageSection() {
     })();
   };
 
+  // These services report their own failures as `available: false` plus an
+  // `error` rather than rejecting, so a row for one that failed says why. With no
+  // error it simply isn't there (opencode not installed), and stays out of the way.
+  const failed = (data: { available: boolean; error?: string }) =>
+    !data.available && data.error ? { bytes: null, note: data.error } : null;
+
   const dockerSafeRow = tierRow("Docker", probes.docker, (data) =>
     data.available ? { bytes: data.estimates?.safeBytes ?? null, note: undefined } : null,
   );
@@ -273,12 +279,12 @@ export function StorageSection() {
     data.available ? { bytes: data.estimates?.aggressiveBytes ?? data.reclaimableBytes } : null,
   );
   const tempSafeRow = tierRow("Temp files", probes.temp, (data) =>
-    data.available ? { bytes: data.estimates.safeBytes } : null,
+    data.available ? { bytes: data.estimates.safeBytes } : failed(data),
   );
   const tempAggressiveRow = tierRow("Temp files", probes.temp, (data) =>
     data.available
       ? { bytes: data.estimates.aggressiveBytes - data.estimates.npmCacheBytes }
-      : null,
+      : failed(data),
   );
   const npmRow = tierRow("npm cache", probes.temp, (data) =>
     data.available && data.estimates.npmCacheBytes > 0
@@ -295,7 +301,8 @@ export function StorageSection() {
     };
   });
   const opencodeRow = tierRow("opencode database", probes.opencode, (data) => {
-    if (!data.available || data.reclaimableBytes === 0) return null;
+    if (!data.available) return failed(data);
+    if (data.reclaimableBytes === 0) return null;
     const blocked = data.compacting
       ? "compacting now"
       : data.inUse
@@ -306,7 +313,11 @@ export function StorageSection() {
     return { bytes: blocked ? 0 : data.reclaimableBytes, note: blocked };
   });
   const worktreeRow = tierRow("Developer worktrees", probes.worktrees, (data) =>
-    data.available && data.candidates.length > 0 ? { bytes: data.totalBytes } : null,
+    data.available
+      ? data.candidates.length > 0
+        ? { bytes: data.totalBytes }
+        : null
+      : failed(data),
   );
   const present = (rows: Array<TierRow | null>) =>
     rows.filter((row): row is TierRow => row !== null);

@@ -115,9 +115,11 @@ interface WalkResult {
 const diskBytes = (st: Stats) => st.blocks * 512;
 
 // A /tmp with a million files spends minutes waiting on one lstat at a time, so
-// the walks run their syscalls concurrently. Every readdir/lstat goes through
-// this one limiter, so however many directories are being walked at once the
-// disk sees at most FS_CONCURRENCY calls in flight.
+// the walks run their syscalls concurrently. Every stat/readdir/lstat this
+// module's walks make goes through this one limiter, so however many
+// directories are being walked at once the disk sees at most FS_CONCURRENCY of
+// them in flight. (The Claude-scratch scan in claude-scratch.ts makes its own
+// few, sequential calls and is not counted.)
 const FS_CONCURRENCY = 16;
 // Top-level entries are expanded a few at a time: each one fans out into a whole
 // tree of pending promises, and a handful in flight is plenty to keep the
@@ -243,8 +245,8 @@ async function listCandidates(
   root: string,
   uid: number,
 ): Promise<{ entries: Candidate[]; names: string[]; rootDev: number }> {
-  const rootDev = (await fs.stat(root)).dev;
-  const names = await fs.readdir(root);
+  const rootDev = (await limited(() => fs.stat(root))).dev;
+  const names = await limited(() => fs.readdir(root));
   const evaluated = await mapLimit(names, TOP_LEVEL_CONCURRENCY, (name) =>
     evaluateEntry(root, rootDev, uid, name),
   );
@@ -313,7 +315,7 @@ async function gatherTargets(
       // First stat of this entry (the generic pass above skips claude-* on the
       // denylist before statting): also guards against it having been swapped
       // for a symlink or moved across filesystems since listCandidates.
-      const st = await fs.lstat(claudeDir);
+      const st = await limited(() => fs.lstat(claudeDir));
       if (!st.isDirectory() || st.uid !== uid || st.dev !== rootDev) continue;
     } catch {
       continue;

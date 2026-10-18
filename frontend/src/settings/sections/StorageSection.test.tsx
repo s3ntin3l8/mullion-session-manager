@@ -242,6 +242,32 @@ describe("Settings -> Storage", () => {
       );
     });
 
+    it.each([
+      ["temp files", "getTempStorage", { available: false, root: "/tmp", error: "EACCES: /tmp" }],
+      ["opencode", "getOpencodeStorage", { available: false, path: "/x", error: "db unreadable" }],
+      ["worktrees", "getDevWorktrees", { available: false, candidates: [], error: "git failed" }],
+    ] as const)(
+      "keeps the %s row and says why when it reports an error",
+      async (_label, method, payload) => {
+        setup();
+        vi.spyOn(api, method).mockResolvedValue({
+          ...payload,
+          state: "ready",
+          measuredAt: new Date().toISOString(),
+        } as never);
+        render(<StorageSection />);
+        const message = payload.error;
+        expect((await screen.findAllByText(new RegExp(message))).length).toBeGreaterThan(0);
+      },
+    );
+
+    it("leaves opencode out when it simply isn't there", async () => {
+      setup();
+      render(<StorageSection />);
+      await screen.findByText("Home, Working directory");
+      expect(screen.queryByText("opencode database")).not.toBeInTheDocument();
+    });
+
     it("shows a failed request for a probe instead of measuring forever", async () => {
       setup();
       vi.spyOn(api, "getTempStorage").mockRejectedValue(new Error("network"));
