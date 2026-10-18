@@ -411,11 +411,14 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 
 ### review
 
-- `review [--pr <n>]` — asks the Mullion server to relay a Hermes review
-  request for the PR of the session's project (the `reviews.request` op,
+- `review [--pr <n>]` — asks the Mullion server to relay a review request
+  to the configured reviewer (Settings → Integrations → Review relay;
+  currently Hermes, a review-bot that posts under its own GitHub App
+  identity) for the PR of the session's project (the `reviews.request` op,
   `request_review` over MCP). Without `--pr`, the open PR for the session's
-  current branch is used. The Hermes API URL and key are configured in
-  Settings → Integrations → Review relay and never reach the session. The
+  current branch is used. With the reviewer set to None the command exits non-zero (412). The
+  Hermes API URL and key never reach the session; the prompt repository is
+  optional, and an empty one uses Mullion's built-in review prompt. The
   review is dispatched asynchronously and posts to the PR within a few
   minutes; a repeat request for the same PR inside the configured cooldown
   exits non-zero with a 409. Local-host projects only.

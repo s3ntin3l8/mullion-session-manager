@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   getPullRequestByNumber: vi.fn(),
   getGitStatus: vi.fn(),
   requestHermesReview: vi.fn(),
+  assertReviewerConfigured: vi.fn(),
 }));
 
 vi.mock("../../src/services/host-git.js", async (orig) => ({
@@ -39,6 +40,7 @@ vi.mock("../../src/services/git-status.js", async (orig) => ({
 vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   ...(await orig<typeof HermesReview>()),
   requestHermesReview: mocks.requestHermesReview,
+  assertReviewerConfigured: mocks.assertReviewerConfigured,
 }));
 
 import { buildApp } from "../../src/app.js";
@@ -100,6 +102,7 @@ describe("POST /api/sessions/:id/review-request", () => {
     mocks.findPullRequestByHead.mockResolvedValue({ number: 42 });
     mocks.getPullRequestByNumber.mockResolvedValue({ number: 99 });
     mocks.requestHermesReview.mockResolvedValue(undefined);
+    mocks.assertReviewerConfigured.mockReturnValue("key");
   });
 
   // The route is rate-limited per client IP (10/min); a distinct address per
@@ -156,6 +159,24 @@ describe("POST /api/sessions/:id/review-request", () => {
       repo: "widgets",
       prNumber: 99,
     });
+  });
+
+  it("412s an unconfigured reviewer before touching GitHub or the git remote", async () => {
+    mocks.assertReviewerConfigured.mockImplementation(() => {
+      throw new HermesNotConfiguredError("No reviewer is configured");
+    });
+    const res = await post(sessionId, {});
+    expect(res.statusCode).toBe(412);
+    expect(res.json().message).toContain("No reviewer is configured");
+    expect(mocks.resolveRepoRef).not.toHaveBeenCalled();
+    expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
+  });
+
+  it("rethrows an unexpected error from the configuration gate", async () => {
+    mocks.assertReviewerConfigured.mockImplementation(() => {
+      throw new Error("db down");
+    });
+    expect((await post(sessionId, {})).statusCode).toBe(500);
   });
 
   it("rejects a non-positive or non-integer prNumber", async () => {

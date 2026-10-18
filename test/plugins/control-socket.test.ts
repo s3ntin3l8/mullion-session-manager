@@ -7,6 +7,8 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
 import { MullionClient } from "../../src/mcp/client.mjs";
+import { applySettingsPatch } from "../../src/services/settings.js";
+import { setHermesKey } from "../../src/services/hermes-integration.js";
 
 // Real integration test against the actual listening Unix socket — same
 // "app.inject() can't drive this, so build a real app and connect a real
@@ -1117,13 +1119,19 @@ describe("controlSocketPlugin (issue #185)", () => {
 
     // The test project is /tmp (no git remote), so a request that is routed
     // and pinned correctly reaches the real route and stops at its own 412
-    // "no GitHub remote" — enough to prove scope + pinning without GitHub or
+    // "no GitHub remote" (once a reviewer is configured) — enough to prove scope + pinning without GitHub or
     // Hermes. The route's own behavior is covered in
     // test/routes/review-request.test.ts.
     describe("reviews.request", () => {
       it("session scope: defaults to its own pinned session and reaches the route", async () => {
         app = await buildApp();
         await app.ready();
+        // Past the route's reviewer-configured gate, so it reaches the
+        // remote lookup this test asserts on.
+        applySettingsPatch(app, {
+          reviewRelay: { provider: "hermes", apiUrl: "http://192.168.2.6:8643" },
+        });
+        setHermesKey(app, "test-key"); // pragma: allowlist secret
         const { hookToken } = await createRealSession();
         const socket = await sessionScopeSocket(hookToken);
         socket.write(`${JSON.stringify({ id: 1, op: "reviews.request", body: {} })}\n`);

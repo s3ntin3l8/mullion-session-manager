@@ -12,6 +12,7 @@ import {
   HermesNotConfiguredError,
   HermesUnavailableError,
   ReviewCooldownError,
+  assertReviewerConfigured,
   requestHermesReview,
 } from "../services/hermes-review.js";
 
@@ -41,6 +42,15 @@ export async function reviewRequestRoute(app: FastifyInstance) {
     async (request, reply) => {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+      // Cheapest gate first, so an unconfigured install isn't told about
+      // remotes or GitHub credentials it can't use anyway.
+      try {
+        assertReviewerConfigured(app);
+      } catch (err) {
+        if (err instanceof HermesNotConfiguredError) return reply.preconditionFailed(err.message);
+        throw err;
+      }
 
       const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!session) return reply.notFound("Session not found");
