@@ -1991,19 +1991,36 @@ describe("projects route", () => {
         const cold = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/47` });
         expect(cold.json().prPhase).toBe("unknown");
 
-        // A warm entry whose CI lookup failed (ciStatus null) is just as unknown.
-        await warmCiCache(47, null);
+        expect(cold.json().ciKnown).toBe(false);
+
+        // Review-derived phases don't need CI knowledge, even with a cold cache.
+        mockGithub(gqlPr(51, { reviewDecision: "CHANGES_REQUESTED" }));
+        const changes = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/51`,
+        });
+        expect(changes.json().prPhase).toBe("changes_requested");
+
+        // A warm entry with no CI answer (null) is unknown unless GitHub itself
+        // calls the PR CLEAN; anything else can't be called ready.
+        mockGithub(gqlPr(52, { mergeStateStatus: "UNSTABLE" }));
+        await warmCiCache(52, null);
         const warmNoCi = await app.inject({
           method: "GET",
-          url: `/api/projects/${id}/github/prs/47`,
+          url: `/api/projects/${id}/github/prs/52`,
         });
-        expect(warmNoCi.json().prPhase).toBe("unknown");
+        expect(warmNoCi.json()).toMatchObject({ prPhase: "unknown", ciKnown: false });
         const refused = await app.inject({
           method: "POST",
-          url: `/api/projects/${id}/github/prs/47/merge`,
-          payload: { headSha: "sha47" },
+          url: `/api/projects/${id}/github/prs/52/merge`,
+          payload: { headSha: "sha52" },
         });
         expect(refused.statusCode).toBe(409);
+
+        mockGithub(gqlPr(53));
+        await warmCiCache(53, null);
+        const clean = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/53` });
+        expect(clean.json()).toMatchObject({ prPhase: "ready_to_merge", ciKnown: true });
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 

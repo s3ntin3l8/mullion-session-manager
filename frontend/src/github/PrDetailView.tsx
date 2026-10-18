@@ -103,7 +103,7 @@ function checksSummary(pr: GitHubPrDetail): {
     return {
       tone: "dim",
       glyph: "○",
-      text: pr.ciStatus === null ? "Checks unknown" : "No checks reported",
+      text: pr.ciKnown ? "No checks reported" : "Checks unknown",
     };
   }
   if (failing > 0) {
@@ -319,6 +319,11 @@ export function PrDetailView({
           {pr.changedFiles} files changed <span className="gh-add">+{pr.additions}</span>{" "}
           <span className="gh-del">−{pr.deletions}</span>
         </button>
+        {showFiles && pr.files.length < pr.changedFiles && (
+          <div className="github-panel-empty-row">
+            Showing the first {pr.files.length} of {pr.changedFiles} files
+          </div>
+        )}
         {showFiles &&
           pr.files.map((f) => (
             <div key={f.filename} className="github-panel-row">

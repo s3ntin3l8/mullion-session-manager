@@ -59,6 +59,7 @@ const PR: GitHubPrDetail = {
   ],
   comments: [{ author: "carol", bodyHtml: "<p>nice</p>", createdAt: "2026-01-03T00:00:00Z" }],
   ciStatus: "success",
+  ciKnown: true,
   actionsRuns: [
     {
       name: "CI",
@@ -99,6 +100,7 @@ describe("PrDetailView", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /1 files changed/ }));
     expect(screen.getByText("src/a.ts")).toBeInTheDocument();
+    expect(screen.queryByText(/Showing the first/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "1 commit" }));
     expect(screen.getByText("feat: thing")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Reviews/ }));
@@ -228,6 +230,13 @@ describe("PrDetailView", () => {
     await waitFor(() => expect(prFetches()).toBe(2));
   });
 
+  it("says when the file list is partial", async () => {
+    stub({ ...PR, changedFiles: 250 });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /250 files changed/ }));
+    expect(screen.getByText("Showing the first 1 of 250 files")).toBeInTheDocument();
+  });
+
   it("polls while visible and skips ticks while the tab is hidden", async () => {
     const fn = stub(PR);
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -250,9 +259,15 @@ describe("PrDetailView", () => {
   });
 
   it("says checks are unknown (not absent) when the poller has no CI answer", async () => {
-    stub({ ...PR, ciStatus: null, actionsRuns: [], prPhase: "unknown" });
-    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    stub({ ...PR, ciStatus: null, ciKnown: false, actionsRuns: [], prPhase: "unknown" });
+    const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText("Checks unknown")).toBeInTheDocument();
+    unmount();
+
+    // A PR with no runs that GitHub itself calls clean has an answer: none.
+    stub({ ...PR, ciStatus: null, ciKnown: true, actionsRuns: [] });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText("No checks reported")).toBeInTheDocument();
   });
 
   it("shows an error and a back button when the PR cannot be loaded", async () => {

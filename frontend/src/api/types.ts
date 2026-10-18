@@ -1009,6 +1009,8 @@ export interface GitHubPrDetail {
   threads: GitHubPrDetailThread[];
   comments: GitHubPrDetailComment[];
   ciStatus: GitHubCiStatus;
+  /** False when there is no real CI answer yet — distinct from "no checks". */
+  ciKnown: boolean;
   actionsRuns: GitHubActionsRun[];
   prPhase: GitHubPrPhase;
 }

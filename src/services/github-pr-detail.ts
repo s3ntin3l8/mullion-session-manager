@@ -14,6 +14,9 @@ import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 
 const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 100;
+// 100 files per page; a PR bigger than this shows the first MAX_FILE_PAGES × 100
+// and the UI says the list is partial (the header count is GitHub's own).
+const MAX_FILE_PAGES = 3;
 
 export interface PrDetailComment {
   author: string | null;
@@ -195,23 +198,30 @@ async function fetchFiles(
   repo: string,
   number: number,
 ): Promise<PrDetailFile[]> {
-  const res = await githubApiFetch(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/files?per_page=100`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (!res.ok) return [];
-  const raw = (await res.json()) as Array<{
-    filename: string;
-    status: string;
-    additions: number;
-    deletions: number;
-  }>;
-  return raw.map((f) => ({
-    filename: f.filename,
-    status: f.status,
-    additions: f.additions,
-    deletions: f.deletions,
-  }));
+  const out: PrDetailFile[] = [];
+  for (let page = 1; page <= MAX_FILE_PAGES; page++) {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}/files?per_page=100&page=${page}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return out;
+    const raw = (await res.json()) as Array<{
+      filename: string;
+      status: string;
+      additions: number;
+      deletions: number;
+    }>;
+    for (const f of raw) {
+      out.push({
+        filename: f.filename,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+      });
+    }
+    if (raw.length < 100) break;
+  }
+  return out;
 }
 
 export async function getPrDetail(

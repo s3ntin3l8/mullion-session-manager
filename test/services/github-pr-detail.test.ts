@@ -142,6 +142,45 @@ describe("getPrDetail", () => {
     await expect(getPrDetail("tok", "o", "r", 5)).rejects.toMatchObject({ statusCode: 502 });
   });
 
+  it("pages through the file list and keeps what it has if a later page fails", async () => {
+    const file = (n: number) => ({
+      filename: `f${n}.ts`,
+      status: "added",
+      additions: 1,
+      deletions: 0,
+    });
+    const page1 = Array.from({ length: 100 }, (_, i) => file(i));
+    const page2 = [file(100), file(101)];
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/graphql")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: { repository: { pullRequest: GQL_PR } } })),
+        );
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(url.includes("page=2") ? page2 : page1), { status: 200 }),
+      );
+    });
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.files).toHaveLength(102);
+
+    resetPrDetailCacheForTests();
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/graphql")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: { repository: { pullRequest: GQL_PR } } })),
+        );
+      }
+      return Promise.resolve(
+        url.includes("page=2")
+          ? new Response("no", { status: 403 })
+          : new Response(JSON.stringify(page1), { status: 200 }),
+      );
+    });
+    const partial = await getPrDetail("tok", "o", "r", 5);
+    expect(partial.files).toHaveLength(100);
+  });
+
   it("returns no files when the files call fails", async () => {
     fetchMock.mockImplementation((url: string) =>
       Promise.resolve(

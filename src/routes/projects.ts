@@ -2030,11 +2030,15 @@ export async function projectsRoute(app: FastifyInstance) {
       (p) => p.number === number,
     );
     const ciStatus = cached?.ciStatus ?? null;
-    // No CI knowledge — no poller entry, or one whose head-run lookup failed
-    // (ciStatus null) — means "ready" can't be claimed: the phase stays
-    // unknown until the poller has a real CI answer for this PR.
-    const prPhase = derivePrPhase({
-      reviewStateKnown: cached !== undefined && cached.ciStatus !== null,
+    // "Ready" needs a real CI answer. The poller's `ciStatus` is null both when
+    // its lookup hasn't answered and when a PR simply has no (or only skipped)
+    // runs, so for that case GitHub's own merge state is the tie-break: CLEAN
+    // means no required check is outstanding. Review/conflict phases don't
+    // depend on CI knowledge and are always derived from the live review data.
+    const ciKnown =
+      cached !== undefined && (cached.ciStatus !== null || detail.mergeStateStatus === "CLEAN");
+    const derived = derivePrPhase({
+      reviewStateKnown: true,
       isDraft: detail.isDraft,
       mergeable: detail.mergeable,
       mergeStateStatus: detail.mergeStateStatus,
@@ -2043,7 +2047,15 @@ export async function projectsRoute(app: FastifyInstance) {
       reviewers: detail.reviewers,
       ciStatus,
     });
-    return { detail, ciStatus, actionsRuns: cached?.actionsRuns ?? [], prPhase, projectId };
+    const prPhase = derived === "ready_to_merge" && !ciKnown ? "unknown" : derived;
+    return {
+      detail,
+      ciStatus,
+      ciKnown,
+      actionsRuns: cached?.actionsRuns ?? [],
+      prPhase,
+      projectId,
+    };
   }
 
   app.get<{ Params: { id: string; number: string } }>(
@@ -2058,12 +2070,12 @@ export async function projectsRoute(app: FastifyInstance) {
       const number = Number(request.params.number);
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
       try {
-        const { detail, ciStatus, actionsRuns, prPhase } = await loadPrDetail(
+        const { detail, ciStatus, ciKnown, actionsRuns, prPhase } = await loadPrDetail(
           projectId,
           number,
           ctx,
         );
-        return { ...detail, ciStatus, actionsRuns, prPhase };
+        return { ...detail, ciStatus, ciKnown, actionsRuns, prPhase };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         if (err.statusCode === 404) return reply.notFound("Pull request not found");
