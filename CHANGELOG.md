@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.42](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.41...v0.3.42) (2026-10-18)
+
+
+### Features
+
+* adaptive multi-session CPU resource governance ([#1680](https://github.com/s3ntin3l8/mullion-session-manager/issues/1680)) ([e52c45a](https://github.com/s3ntin3l8/mullion-session-manager/commit/e52c45aa0be711ecc31ef9c6a2c6b274fd2f509d))
+* broaden Claude scratch cleanup beyond registered session dirs ([#1665](https://github.com/s3ntin3l8/mullion-session-manager/issues/1665)) ([2c3fea6](https://github.com/s3ntin3l8/mullion-session-manager/commit/2c3fea68a2c09a9ff3e39f8d2e50ef4a0d6f5870))
+* compact opencode.db in aggressive disk cleanup ([#1666](https://github.com/s3ntin3l8/mullion-session-manager/issues/1666)) ([8f2332d](https://github.com/s3ntin3l8/mullion-session-manager/commit/8f2332d754d293937cc85937c2bcf5657c08a4a3))
+* dedicated Storage settings tab with non-blocking disk measurement ([#1674](https://github.com/s3ntin3l8/mullion-session-manager/issues/1674)) ([1c6e911](https://github.com/s3ntin3l8/mullion-session-manager/commit/1c6e911f30d5ca25b9d1df39c3ff943a0551be4e))
+* dispatch Hermes reviews via the Runs API, with review status and stop ([#1675](https://github.com/s3ntin3l8/mullion-session-manager/issues/1675)) ([a324b4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/a324b4b2bb02124f6016e2034a8a0b4c7ce84077))
+* drag & drop any file type and multiple files into the terminal ([#1622](https://github.com/s3ntin3l8/mullion-session-manager/issues/1622)) ([625d41e](https://github.com/s3ntin3l8/mullion-session-manager/commit/625d41ee7a608ba87b85eb85d3b815db46ddef02))
+* events.subscribe can include the caller's children ([#1626](https://github.com/s3ntin3l8/mullion-session-manager/issues/1626)) ([#1646](https://github.com/s3ntin3l8/mullion-session-manager/issues/1646)) ([df88a87](https://github.com/s3ntin3l8/mullion-session-manager/commit/df88a87801590e7367b0c0c55c641b7ab1ca084a))
+* git view with branches, worktrees and commit graph ([#1684](https://github.com/s3ntin3l8/mullion-session-manager/issues/1684)) ([5732121](https://github.com/s3ntin3l8/mullion-session-manager/commit/57321214cac7aa8c05576eecc886c6364d61b656))
+* harden file-drop uploads (retention, rate limit, agent gate, path quoting) ([#1643](https://github.com/s3ntin3l8/mullion-session-manager/issues/1643)) ([4f6f5a9](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f6f5a983999b4385b1535018e5744aaff71595a))
+* isolate session TMPDIR and automate temporary file cleanup ([#1679](https://github.com/s3ntin3l8/mullion-session-manager/issues/1679)) ([b9371ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/b9371aeec9827113bcd89d3e7d5b9d232eae9c9a))
+* issues view with filters, detail and start-work ([#1683](https://github.com/s3ntin3l8/mullion-session-manager/issues/1683)) ([fda8e93](https://github.com/s3ntin3l8/mullion-session-manager/commit/fda8e932a1ca5d989dd8d20bb987060363fd7078))
+* mullion status / report_status — self-reported state for CLIs without a hook adapter ([#1647](https://github.com/s3ntin3l8/mullion-session-manager/issues/1647)) ([3563405](https://github.com/s3ntin3l8/mullion-session-manager/commit/3563405f43b81bce4c9cc5fc4d35c2a157fe7d9e))
+* PR drill-in with conversation, reviews and actions ([#1685](https://github.com/s3ntin3l8/mullion-session-manager/issues/1685)) ([bba00b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/bba00b958f45d61e6dd6f1d1c721173c3d259563))
+* PR review state in the poller, with push on change ([#1676](https://github.com/s3ntin3l8/mullion-session-manager/issues/1676)) ([cf9ddc1](https://github.com/s3ntin3l8/mullion-session-manager/commit/cf9ddc15cea83d126845c42ab995c417f961e755))
+* PR/review state in session status and notifications ([#1686](https://github.com/s3ntin3l8/mullion-session-manager/issues/1686)) ([ade9f3b](https://github.com/s3ntin3l8/mullion-session-manager/commit/ade9f3b05f6970d107151239ab063ae03ec2bbe4))
+* remove stale developer worktrees in aggressive disk cleanup ([#1671](https://github.com/s3ntin3l8/mullion-session-manager/issues/1671)) ([060c467](https://github.com/s3ntin3l8/mullion-session-manager/commit/060c467fc5a29e1caaf1f3bae77e45429762238c))
+* review provider setting and built-in Hermes prompt for request_review ([#1670](https://github.com/s3ntin3l8/mullion-session-manager/issues/1670)) ([b7c8bc6](https://github.com/s3ntin3l8/mullion-session-manager/commit/b7c8bc63834e8e89e4485e3b82faef9453bd1bca))
+* run disk cleanup as a background job with polled status ([#1678](https://github.com/s3ntin3l8/mullion-session-manager/issues/1678)) ([e44ef8e](https://github.com/s3ntin3l8/mullion-session-manager/commit/e44ef8e767b1be128f9fdd5841addd080f57dffc))
+* sessions.prompt — type a prompt into a running child agent ([#1635](https://github.com/s3ntin3l8/mullion-session-manager/issues/1635)) ([cfa28f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/cfa28f0f869ae6f5f16c68e894960182d82f9712))
+* sessions.wait_for_output — wait for a child to print a string ([#1654](https://github.com/s3ntin3l8/mullion-session-manager/issues/1654)) ([379e809](https://github.com/s3ntin3l8/mullion-session-manager/commit/379e80977cd93ac07e8db78cb849486e072b06d6))
+* spawn_child can open the child's panel beside its parent ([#1655](https://github.com/s3ntin3l8/mullion-session-manager/issues/1655)) ([8591744](https://github.com/s3ntin3l8/mullion-session-manager/commit/8591744ba166bc22b2001f787348b79f152eb1da))
+
+
+### Bug Fixes
+
+* attach one close/error listener per socket in ws broadcast channels ([#1658](https://github.com/s3ntin3l8/mullion-session-manager/issues/1658)) ([d27cf11](https://github.com/s3ntin3l8/mullion-session-manager/commit/d27cf11e9f549d06399e0d653cfb671b0895fc30)), closes [#1640](https://github.com/s3ntin3l8/mullion-session-manager/issues/1640)
+* **demo:** tear down cleanly when a child fails to spawn ([#1648](https://github.com/s3ntin3l8/mullion-session-manager/issues/1648)) ([281d3b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/281d3b5accf20765e0d66389ce774acab9262c6e))
+* events.subscribe includeChildren — keep seen pinned, bound lookups, fix docs ([#1661](https://github.com/s3ntin3l8/mullion-session-manager/issues/1661)) ([4ddb8b4](https://github.com/s3ntin3l8/mullion-session-manager/commit/4ddb8b425afa09bf2bbe02728e91935f7ea40e96))
+* **frontend:** theme the git history and issue-sort selects, fit all kanban columns at 1600px ([#1687](https://github.com/s3ntin3l8/mullion-session-manager/issues/1687)) ([25c3e94](https://github.com/s3ntin3l8/mullion-session-manager/commit/25c3e9431cd87099fe81ad9ee014462fa1facaea))
+* keep SSH-agent bridge sessions alive across laptop sleep ([#1644](https://github.com/s3ntin3l8/mullion-session-manager/issues/1644)) ([0b6ebae](https://github.com/s3ntin3l8/mullion-session-manager/commit/0b6ebae22db564237f700ff51d97e0752ed7434a))
+* keep the previous bridge session id valid until the rotated one is used ([#1660](https://github.com/s3ntin3l8/mullion-session-manager/issues/1660)) ([050dcc1](https://github.com/s3ntin3l8/mullion-session-manager/commit/050dcc1db445a48d5e9aa121e5d3bc4aeff992a9))
+* list issues with an issues-capable token ([#1673](https://github.com/s3ntin3l8/mullion-session-manager/issues/1673)) ([5e7f853](https://github.com/s3ntin3l8/mullion-session-manager/commit/5e7f8531efbcb9145b02b6ab59541a27c22ab540))
+* log rejected /ws/agent-bridge upgrades and document proxy troubleshooting ([#1659](https://github.com/s3ntin3l8/mullion-session-manager/issues/1659)) ([816c4c2](https://github.com/s3ntin3l8/mullion-session-manager/commit/816c4c27e27b17bab2cf91692df184b62b4a10eb))
+* reject parent→child control for remote-host sessions cleanly ([#1657](https://github.com/s3ntin3l8/mullion-session-manager/issues/1657)) ([b2d1aab](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2d1aab00b958c56c7269d53bd86d52c638ec61c))
+* strip GIT_CONFIG from git subprocesses and trip on checkout config changes ([#1663](https://github.com/s3ntin3l8/mullion-session-manager/issues/1663)) ([78faf95](https://github.com/s3ntin3l8/mullion-session-manager/commit/78faf95836b7e4d50752aaa214db636857fa7d47)), closes [#1649](https://github.com/s3ntin3l8/mullion-session-manager/issues/1649)
+* **workspaces:** guarantee a default workspace on a fresh database ([#1636](https://github.com/s3ntin3l8/mullion-session-manager/issues/1636)) ([1825337](https://github.com/s3ntin3l8/mullion-session-manager/commit/182533727113b982063eb84daa3a74fb4518f149))
+
 ## [0.3.41](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.40...v0.3.41) (2026-10-16)
 
 
