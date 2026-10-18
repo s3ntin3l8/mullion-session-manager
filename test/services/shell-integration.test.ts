@@ -150,4 +150,35 @@ describe("applyShellIntegrationEnv", () => {
     expect(env.PROMPT_COMMAND).toBeUndefined();
     expect(fs.existsSync(path.join(sessionsDir, "shell-integration"))).toBe(false);
   });
+
+  it("injects MULLION_HOST_CORES and initial worker limits into the environment", () => {
+    const sessionsDir = mkTmpDir("shell-integration-env-cores-");
+    const env: NodeJS.ProcessEnv = { HOME: "/home/user" };
+
+    applyShellIntegrationEnv("/bin/zsh", env, sessionsDir);
+
+    expect(env.MULLION_HOST_CORES).toBeDefined();
+    expect(Number.parseInt(env.MULLION_HOST_CORES!, 10)).toBeGreaterThan(0);
+    expect(env.VITEST_MAX_WORKERS).toBeDefined();
+    expect(Number.parseInt(env.VITEST_MAX_WORKERS!, 10)).toBeGreaterThan(0);
+    expect(env.PYTEST_XDIST_AUTO_NUM_WORKERS).toBeDefined();
+    expect(Number.parseInt(env.PYTEST_XDIST_AUTO_NUM_WORKERS!, 10)).toBeGreaterThan(0);
+    expect(env.MAKEFLAGS).toContain("-j");
+  });
+
+  it("preserves pre-existing worker limits in applyShellIntegrationEnv", () => {
+    const sessionsDir = mkTmpDir("shell-integration-env-preset-");
+    const env: NodeJS.ProcessEnv = {
+      HOME: "/home/user",
+      VITEST_MAX_WORKERS: "2",
+      PYTEST_XDIST_AUTO_NUM_WORKERS: "3",
+      MAKEFLAGS: "-j 4",
+    };
+
+    applyShellIntegrationEnv("/bin/zsh", env, sessionsDir);
+
+    expect(env.VITEST_MAX_WORKERS).toBe("2");
+    expect(env.PYTEST_XDIST_AUTO_NUM_WORKERS).toBe("3");
+    expect(env.MAKEFLAGS).toBe("-j 4");
+  });
 });

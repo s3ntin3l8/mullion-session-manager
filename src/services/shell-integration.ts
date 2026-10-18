@@ -1,5 +1,7 @@
 import { mkdirSync, openSync, writeSync, closeSync, constants as fsConstants } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { computeAdaptiveWorkers, getAvailableHostCores } from "./host-resources.js";
 
 // Injects an OSC 7 ("here is my current working directory") announcement
 // into a session's interactive shell — issue: sidebar worktree display.
@@ -123,21 +125,45 @@ function writeShimFileSync(filePath: string, content: string): void {
 }
 
 /**
- * Mutates `env` in place to inject the OSC 7 shell-integration hook for
- * `shell` (the session's `$SHELL`, e.g. "/bin/zsh" or "zsh") — a no-op for
- * any shell this doesn't know how to instrument (see this file's own doc
- * comment). Must be called AFTER `env.HOME` is already set to the real
- * value (buildSessionEnv/session-env.ts doesn't strip it) — `MULLION_USER_
- * ZDOTDIR` captures whatever `env.ZDOTDIR` already pointed at (or falls
- * back to `env.HOME`) BEFORE this overwrites `env.ZDOTDIR` with the shim
- * directory, since that capture is what every shim file (ensureShellIntegrationFiles
- * above) uses to still reach the user's own real dotfiles.
+ * Injects resource governor variables and the OSC 7 shell-integration hook
+ * for `shell` (the session's `$SHELL`, e.g. "/bin/zsh" or "zsh") into `env`
+ * in place.
+ *
+ * Resource governor concurrency caps (`VITEST_MAX_WORKERS` and
+ * `PYTEST_XDIST_AUTO_NUM_WORKERS`) are computed once at session launch from
+ * host cores and 1-minute load average (`os.loadavg()`) via
+ * `computeAdaptiveWorkers()`, while `MAKEFLAGS` is sized to `-j <cores> -l <cores>`
+ * from raw cores with make's native load-limiting backoff, preserving any
+ * caller-pre-set values. `MULLION_HOST_CORES` is published as a convenience.
+ *
+ * Shell integration hook injection is a no-op for any shell this doesn't know
+ * how to instrument (see this file's own doc comment). Must be called AFTER
+ * `env.HOME` is already set to the real value (buildSessionEnv/session-env.ts
+ * doesn't strip it) — `MULLION_USER_ZDOTDIR` captures whatever `env.ZDOTDIR`
+ * already pointed at (or falls back to `env.HOME`) BEFORE this overwrites
+ * `env.ZDOTDIR` with the shim directory, since that capture is what every shim
+ * file (ensureShellIntegrationFiles above) uses to still reach the user's own
+ * real dotfiles.
  */
 export function applyShellIntegrationEnv(
   shell: string,
   env: NodeJS.ProcessEnv,
   sessionsDir: string,
 ): void {
+  const totalCores = getAvailableHostCores();
+  env.MULLION_HOST_CORES = String(totalCores);
+  const initialWorkers = computeAdaptiveWorkers(totalCores, os.loadavg()[0] ?? 0);
+  if (!env.VITEST_MAX_WORKERS) {
+    env.VITEST_MAX_WORKERS = String(initialWorkers);
+  }
+  if (!env.PYTEST_XDIST_AUTO_NUM_WORKERS) {
+    env.PYTEST_XDIST_AUTO_NUM_WORKERS = String(initialWorkers);
+  }
+  if (!env.MAKEFLAGS) {
+    // MAKEFLAGS uses raw core capacity for -j with -l load-limiting, so make itself backs off under load.
+    env.MAKEFLAGS = `-j ${totalCores} -l ${totalCores}`;
+  }
+
   const shellName = path.basename(shell);
   if (shellName === "zsh") {
     env.MULLION_USER_ZDOTDIR = env.ZDOTDIR || env.HOME || "";

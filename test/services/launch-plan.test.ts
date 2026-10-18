@@ -652,6 +652,21 @@ describe("buildLaunchPlan — initial-prompt composition", () => {
 });
 
 describe("buildLaunchPlan — shell/unitName/argv shape", () => {
+  let ambientQuota: string | undefined;
+
+  beforeEach(() => {
+    ambientQuota = process.env.MULLION_SESSION_CPU_QUOTA;
+    delete process.env.MULLION_SESSION_CPU_QUOTA;
+  });
+
+  afterEach(() => {
+    if (ambientQuota === undefined) {
+      delete process.env.MULLION_SESSION_CPU_QUOTA;
+    } else {
+      process.env.MULLION_SESSION_CPU_QUOTA = ambientQuota;
+    }
+  });
+
   it("resolves shell from process.env.SHELL, falling back to /bin/bash", () => {
     process.env.SHELL = "/usr/bin/zsh";
     expect(buildLaunchPlan(baseSession()).shell).toBe("/usr/bin/zsh");
@@ -674,7 +689,7 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
     expect(planA.unitName).not.toBe(planB.unitName);
   });
 
-  it("argv is the exact systemd-run/dtach invocation bootstrapMaster used to build inline", () => {
+  it("argv includes systemd-run cgroup properties and dtach invocation", () => {
     const plan = buildLaunchPlan(
       baseSession({ id: "55", socketPath: "/tmp/sessions/55.sock", command: "bash" }),
     );
@@ -685,6 +700,10 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
       "--collect",
       "-u",
       plan.unitName,
+      "-p",
+      "CPUWeight=100",
+      "-p",
+      "IOWeight=100",
       "--",
       "dtach",
       "-n",
@@ -693,6 +712,52 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
       "-lc",
       "bash",
     ]);
+  });
+
+  it("manual sessions have full burst capacity (CPUWeight=100 and no CPUQuota)", () => {
+    const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
+    expect(plan.argv).toContain("CPUWeight=100");
+    expect(plan.argv).toContain("IOWeight=100");
+    expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(false);
+  });
+
+  it("Task Master sessions have lower CPUWeight (25) and dynamic CPUQuota ceiling", () => {
+    const plan = buildLaunchPlan(baseSession({ taskId: 123 }));
+    expect(plan.argv).toContain("CPUWeight=25");
+    expect(plan.argv).toContain("IOWeight=25");
+    expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(true);
+  });
+
+  it("applies MULLION_SESSION_CPU_QUOTA override to manual sessions when configured", () => {
+    const prior = process.env.MULLION_SESSION_CPU_QUOTA;
+    process.env.MULLION_SESSION_CPU_QUOTA = "350%";
+    try {
+      const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
+      expect(plan.argv).toContain("CPUQuota=350%");
+    } finally {
+      if (prior === undefined) {
+        delete process.env.MULLION_SESSION_CPU_QUOTA;
+      } else {
+        process.env.MULLION_SESSION_CPU_QUOTA = prior;
+      }
+    }
+  });
+
+  it("ignores invalid MULLION_SESSION_CPU_QUOTA formats", () => {
+    const prior = process.env.MULLION_SESSION_CPU_QUOTA;
+    try {
+      for (const invalid of ["0%", "00%", "350", "400cores", "invalid", "%", " 350% "]) {
+        process.env.MULLION_SESSION_CPU_QUOTA = invalid;
+        const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
+        expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(false);
+      }
+    } finally {
+      if (prior === undefined) {
+        delete process.env.MULLION_SESSION_CPU_QUOTA;
+      } else {
+        process.env.MULLION_SESSION_CPU_QUOTA = prior;
+      }
+    }
   });
 });
 
