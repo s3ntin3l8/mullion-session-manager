@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   api,
@@ -552,6 +552,54 @@ describe("Settings -> Storage", () => {
   });
 
   describe("a cleanup that runs in the background", () => {
+    it("says so when the status of a cleanup it joined can't be read", async () => {
+      setup();
+      vi.spyOn(api, "startCleanup").mockRejectedValue(
+        new ApiError("A cleanup is already running", 409),
+      );
+      render(<StorageSection />);
+      await screen.findByText("Safe");
+      vi.mocked(api.getCleanupStatus).mockRejectedValue(new Error("network"));
+      await confirm("Clean up (safe)…");
+      expect(
+        await screen.findByText(
+          "A cleanup is already running, but its progress could not be read.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    it("picks up a cleanup another tab started when the idle tab regains focus", async () => {
+      setup();
+      render(<StorageSection />);
+      await screen.findByText("Safe");
+      expect(screen.getByRole("button", { name: "Aggressive cleanup…" })).toBeEnabled();
+      vi.mocked(api.getCleanupStatus).mockResolvedValue(
+        jobOf({
+          state: "running",
+          finishedAt: undefined,
+          steps: [stepOf("docker", { state: "running" })],
+        }),
+      );
+      act(() => {
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(await screen.findByText("Cleaning up (safe)…")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Aggressive cleanup…" })).toBeDisabled();
+    });
+
+    it("keeps a finished step's note next to its figure", async () => {
+      setup();
+      vi.mocked(api.getCleanupStatus).mockResolvedValue(
+        jobOf({
+          steps: [
+            stepOf("temp", { state: "done", reclaimedBytes: 2 * GIB, note: "stopped early" }),
+          ],
+        }),
+      );
+      render(<StorageSection />);
+      expect(await screen.findByText("freed 2.0 GiB: stopped early")).toBeInTheDocument();
+    });
+
     const running = (steps: CleanupStepState[]) =>
       jobOf({ state: "running", finishedAt: undefined, steps });
 

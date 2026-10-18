@@ -142,7 +142,7 @@ function CleanupProgress({ job, error }: { job: CleanupJob | null; error: string
                   className={`storage-tier-figure${step.state === "pending" ? " pending" : ""}`}
                 >
                   {step.state === "done"
-                    ? `freed ${formatBytes(step.reclaimedBytes)}`
+                    ? `freed ${formatBytes(step.reclaimedBytes)}${step.note ? `: ${step.note}` : ""}`
                     : step.state === "skipped" || step.state === "error"
                       ? `${STEP_STATE_TEXT[step.state]}${step.note ? `: ${step.note}` : ""}`
                       : STEP_STATE_TEXT[step.state]}
