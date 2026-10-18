@@ -18,13 +18,19 @@ function generateSecret(): string {
 // projects with no hook at all (see its own doc comment). Bump this,
 // and only this, when adding/removing an event below; there is
 // deliberately no per-event versioning — one hook, one list, one version.
-export const WEBHOOK_EVENTS_VERSION = 1;
+export const WEBHOOK_EVENTS_VERSION = 2;
 const WEBHOOK_EVENTS = [
   "pull_request",
   "push",
   "issues",
   "workflow_run",
   "release",
+  // Review activity on PRs — drives the sidebar's review/thread state
+  // (routes/webhooks.ts nudges the browser; the poller carries the data).
+  "pull_request_review",
+  "pull_request_review_comment",
+  "pull_request_review_thread",
+  "issue_comment",
   // #667 — blocked_by_added/removed drives the "a dependency edge changed"
   // push refresh (routes/webhooks.ts); blocking_added/removed is unused
   // today but comes along for free on the same subscription.

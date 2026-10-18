@@ -941,7 +941,30 @@ export interface GitHubPROrWithChecks {
   baseBranch: string;
   ciStatus: GitHubCiStatus;
   actionsRuns: GitHubActionsRun[];
+  // Review state (backend github-pr-reviews.ts). Optional: absent from a
+  // server that predates it, and from the many hand-built test fixtures.
+  isDraft?: boolean;
+  updatedAt?: string | null;
+  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
+  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
+  mergeStateStatus?: string | null;
+  reviewers?: { login: string; state: string }[];
+  requestedReviewers?: string[];
+  /** null = not fetched (yet), as opposed to a known zero. */
+  unresolvedThreads?: number | null;
+  commentCount?: number | null;
+  prPhase?: GitHubPrPhase;
 }
+
+export type GitHubPrPhase =
+  | "draft"
+  | "conflicts"
+  | "ci_failing"
+  | "changes_requested"
+  | "review_pending"
+  | "ci_pending"
+  | "ready_to_merge"
+  | "unknown";
 
 export interface GitHubPRsStatus {
   prs: GitHubPROrWithChecks[];

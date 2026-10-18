@@ -9,6 +9,7 @@ import type * as TaskPromoteModule from "../../src/services/task-promote.js";
 import type * as GitHubIntegrationModule from "../../src/services/github-integration.js";
 import type * as GitHubWriteModule from "../../src/services/github-write.js";
 import type * as GitHubModule from "../../src/services/github.js";
+import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
@@ -6998,6 +6999,7 @@ describe("reconcileTasks", () => {
             title: "test pr",
             htmlUrl: "https://github.com/o/r/pull/9",
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha: "sha-ingested",
             headBranch: "feature",
             baseBranch: "main",
@@ -8049,6 +8051,7 @@ describe("reconcileTasks", () => {
             title: "test pr",
             htmlUrl: `https://github.com/o/r/pull/${prNumber}`,
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha,
             headBranch: "feature",
             baseBranch: "main",

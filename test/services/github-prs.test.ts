@@ -113,6 +113,19 @@ describe("getRepoPRsStatus", () => {
       baseBranch: "main",
       ciStatus: null,
       actionsRuns: [],
+      // Review fields stay neutral until the poller's GraphQL enrichment
+      // runs (github-pr-reviews.ts); the REST list only knows draft/updated.
+      isDraft: false,
+      updatedAt: null,
+      reviewDecision: null,
+      mergeable: null,
+      mergeStateStatus: null,
+      reviewers: [],
+      requestedReviewers: [],
+      unresolvedThreads: null,
+      commentCount: null,
+      reviewStateKnown: false,
+      prPhase: "unknown",
     });
   });
 

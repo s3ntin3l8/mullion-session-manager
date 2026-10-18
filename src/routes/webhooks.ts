@@ -63,7 +63,7 @@ interface GitHubPushPayload {
   action?: string;
   pull_request?: Record<string, unknown>;
   workflow_run?: Record<string, unknown>;
-  issue?: GitHubIssuePayload;
+  issue?: GitHubIssuePayload & { pull_request?: Record<string, unknown> };
   // Present alongside `issue` on "labeled"/"unlabeled" deliveries — the
   // single label that was added/removed, a sibling of `issue`, not nested
   // inside it. `issue.labels` (above) is the issue's CURRENT full label
@@ -274,6 +274,25 @@ export async function webhookRoutes(app: FastifyInstance) {
                   .run();
               }
             }
+            break;
+          }
+          // Review activity on a PR: the open-PR list's review state (reviews,
+          // threads, comments) lives in the poller's cache, so this only
+          // nudges the browser to refetch and the next poll (seconds away —
+          // the webhook just marked the repo active) carries the new data
+          // and pushes again when it differs. An `issue_comment` on a plain
+          // issue (no `pull_request` key) isn't PR review state.
+          case "pull_request_review":
+          case "pull_request_review_comment":
+          case "pull_request_review_thread":
+          case "issue_comment": {
+            if (event === "issue_comment" && !payload.issue?.pull_request) break;
+            broadcastToProject(pid, {
+              type: "pr",
+              action: "sync",
+              projectId: pid,
+              pr: { event },
+            });
             break;
           }
           case "workflow_run": {

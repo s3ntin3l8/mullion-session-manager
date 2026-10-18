@@ -12,6 +12,7 @@ import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
+import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -1870,6 +1871,7 @@ describe("projects route", () => {
             title: "Add CI badge",
             htmlUrl: "https://github.com/cached/pr-repo/pull/7",
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha: "abc",
             headBranch: "add-badge",
             baseBranch: "main",
@@ -1880,6 +1882,7 @@ describe("projects route", () => {
                 status: "completed",
                 conclusion: "success",
                 htmlUrl: "https://github.com/cached/pr-repo/actions/runs/1",
+                ...PR_REVIEW_DEFAULTS,
                 headSha: "abc",
               },
             ],
@@ -1937,6 +1940,7 @@ describe("projects route", () => {
         title: "PR A",
         htmlUrl: "https://github.com/branch/filter/pull/1",
         author: "dev",
+        ...PR_REVIEW_DEFAULTS,
         headSha: "a1",
         headBranch: "feature/a",
         baseBranch: "main",
@@ -1948,6 +1952,7 @@ describe("projects route", () => {
         title: "PR B",
         htmlUrl: "https://github.com/branch/filter/pull/2",
         author: "dev",
+        ...PR_REVIEW_DEFAULTS,
         headSha: "b1",
         headBranch: "feature/b",
         baseBranch: "main",
@@ -2098,6 +2103,7 @@ describe("projects route", () => {
             title: "Remote PR",
             htmlUrl: "https://github.com/remote/pr-repo/pull/3",
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha: "def",
             headBranch: "remote-branch",
             baseBranch: "main",
@@ -2876,6 +2882,7 @@ describe("projects route", () => {
             title: "Batch it",
             htmlUrl: "https://github.com/batch-refs/repo/pull/3",
             author: "dev",
+            ...PR_REVIEW_DEFAULTS,
             headSha: "abc",
             headBranch: "feature",
             baseBranch: "main",

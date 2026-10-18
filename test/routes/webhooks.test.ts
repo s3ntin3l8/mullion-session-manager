@@ -11,6 +11,10 @@ import { integrations, projects, tasks } from "../../src/db/schema.js";
 import { GITHUB_PROVIDER } from "../../src/services/github-integration.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
+  clearSubscribersForTests,
+  subscribeToProject,
+} from "../../src/services/github-ws-broadcast.js";
+import {
   subscribeToTaskEvents,
   clearTaskEventSubscribersForTests,
 } from "../../src/services/task-events.js";
@@ -1228,6 +1232,91 @@ describe("webhook routes", () => {
 
   // #1015 (archive) — the ONLY place a PR merged directly on github.com
   // (not through Mullion's own merge-on-approve sweep) is ever observed.
+  describe("review-activity events nudge the browser", () => {
+    function subscribedSocket(projectId: number) {
+      const send = vi.fn();
+      subscribeToProject(String(projectId), {
+        readyState: 1,
+        OPEN: 1,
+        bufferedAmount: 0,
+        send,
+        on: vi.fn(),
+        close: vi.fn(),
+      } as unknown as Parameters<typeof subscribeToProject>[1]);
+      return send;
+    }
+
+    async function deliver(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      event: string,
+      body: Record<string, unknown>,
+    ) {
+      const payload = JSON.stringify({ repository: { full_name: "acme/widgets-review" }, ...body });
+      return app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": event,
+        },
+        payload,
+      });
+    }
+
+    it.each(["pull_request_review", "pull_request_review_comment", "pull_request_review_thread"])(
+      "broadcasts a pr sync for %s",
+      async (event) => {
+        const cwd = createMatchingGitRepo("acme", "widgets-review");
+        const app = await buildApp();
+        const [project] = app.db
+          .insert(projects)
+          .values({ name: `webhook-review-${event}`, cwd })
+          .returning()
+          .all();
+        const send = subscribedSocket(project.id);
+
+        const res = await deliver(app, event, { action: "submitted" });
+        expect(res.statusCode).toBe(200);
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(JSON.parse(send.mock.calls[0][0] as string)).toMatchObject({
+          type: "pr",
+          action: "sync",
+          projectId: String(project.id),
+          pr: { event },
+        });
+
+        clearSubscribersForTests();
+        await app.close();
+        fs.rmSync(cwd, { recursive: true, force: true });
+      },
+    );
+
+    it("broadcasts issue_comment only when the comment is on a PR", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-review");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-review-issue-comment", cwd })
+        .returning()
+        .all();
+      const send = subscribedSocket(project.id);
+
+      await deliver(app, "issue_comment", { action: "created", issue: { number: 1 } });
+      expect(send).not.toHaveBeenCalled();
+
+      await deliver(app, "issue_comment", {
+        action: "created",
+        issue: { number: 2, pull_request: { url: "x" } },
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+
+      clearSubscribersForTests();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+  });
+
   describe("pull_request merge signal (#1015)", () => {
     it("sets mergedAt and archivedAt on a done task when its PR merges", async () => {
       const cwd = createMatchingGitRepo("acme", "widgets-merge-signal");

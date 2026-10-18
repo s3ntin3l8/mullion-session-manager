@@ -7,6 +7,8 @@ const mockRefreshDefaultBranchCi = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
 const mockResolveGitHubRepo = vi.hoisted(() => vi.fn());
 const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
+const mockEnrich = vi.hoisted(() => vi.fn());
+const mockBroadcast = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/github.js", () => ({
   GitHubApiError: class extends Error {
@@ -20,6 +22,16 @@ vi.mock("../../src/services/github.js", () => ({
   getRepoPRsStatus: mockGetRepoPRsStatus,
   setRepoPRsStatus: vi.fn(),
   refreshDefaultBranchCi: mockRefreshDefaultBranchCi,
+}));
+
+// Review-state enrichment has its own tests (github-pr-reviews.test.ts); here
+// it's a stub so the poller's own wiring (enrich → push on change) is isolated.
+vi.mock("../../src/services/github-pr-reviews.js", () => ({
+  enrichPrsWithReviewState: mockEnrich,
+}));
+
+vi.mock("../../src/services/github-ws-broadcast.js", () => ({
+  broadcastToProject: mockBroadcast,
 }));
 
 vi.mock("../../src/services/github-integration.js", () => ({
@@ -78,6 +90,9 @@ describe("startGitHubPRPoller", () => {
       prs: [],
       prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
+    mockEnrich.mockReset();
+    mockEnrich.mockResolvedValue(undefined);
+    mockBroadcast.mockReset();
     mockRefreshDefaultBranchCi.mockReset();
     mockRefreshDefaultBranchCi.mockResolvedValue(undefined);
     mockResolveGitHubToken.mockReset();
@@ -143,6 +158,93 @@ describe("startGitHubPRPoller", () => {
     vi.useRealTimers();
   });
 
+  // A poll that finds a PR's review/CI state changed pushes the browser,
+  // rather than leaving it to its own next refetch. The first poll of a repo
+  // has no baseline and must stay silent.
+  it("pushes a pr sync to the repo's projects only when a later poll differs", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    const pr = (ciStatus: string) => ({
+      number: 7,
+      headSha: "abc",
+      isDraft: false,
+      ciStatus,
+      reviewDecision: null,
+      mergeable: null,
+      unresolvedThreads: null,
+      commentCount: null,
+      prPhase: "ready_to_merge",
+    });
+    const status = (ciStatus: string) => ({
+      prs: [pr(ciStatus)],
+      prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+    });
+    mockGetRepoPRsStatus
+      .mockResolvedValueOnce(status("success"))
+      .mockResolvedValueOnce(status("success"))
+      .mockResolvedValueOnce(status("failure"));
+    const app = mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]);
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(app);
+
+    // Initial fetch: no baseline, no push.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockEnrich).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+
+    // Sweep poll: identical snapshot, still no push.
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+
+    // Next poll (a repo with open PRs is polled on the active cadence, 15s):
+    // CI flipped red → one push for the project.
+    mockGetRepoPRsStatus.mockResolvedValue(status("failure"));
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledWith("1", {
+      type: "pr",
+      action: "sync",
+      projectId: "1",
+      pr: { changed: [7] },
+    });
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // Two projects on one repo: the initial per-project sweep may only have
+  // covered one of them, so it seeds a baseline but must never push.
+  it("never pushes from the initial sweep, even when projects share a repo", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    const prWith = (ciStatus: string) => ({
+      number: 7,
+      headSha: "abc",
+      isDraft: false,
+      ciStatus,
+      reviewDecision: null,
+      mergeable: null,
+      unresolvedThreads: null,
+      commentCount: null,
+      prPhase: "ready_to_merge",
+    });
+    mockGetRepoPRsStatus
+      .mockResolvedValueOnce({ prs: [prWith("success")], prSummary: { total: 1 } })
+      .mockResolvedValueOnce({ prs: [prWith("failure")], prSummary: { total: 1 } });
+    const app = mockApp([
+      { id: 1, cwd: "/tmp/one", hostId: "local" },
+      { id: 2, cwd: "/tmp/two", hostId: "local" },
+    ]);
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(app);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(2);
+    expect(mockBroadcast).not.toHaveBeenCalled();
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("sweepTimer fires after margin then sets up interval", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     const rows = [
@@ -163,13 +265,14 @@ describe("startGitHubPRPoller", () => {
     // Advance to sweep margin: (2-1)*2000 + 60000*2 = 122000ms.
     // At 2001ms now, advance 119999ms.
     await vi.advanceTimersByTimeAsync(119_999);
-    // sweepTimer fires pollOnce which iterates all 2 rows.
-    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(staggeredCalls + 2);
+    // sweepTimer fires pollOnce; both rows share one repo, so it is
+    // refreshed once, not once per project.
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(staggeredCalls + 1);
 
-    // Interval fires after 60s — pollOnce again iterates 2 rows.
+    // Interval fires after 60s — one more refresh of the shared repo.
     const intervalFiredAt = mockGetRepoPRsStatus.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(intervalFiredAt + 2);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(intervalFiredAt + 1);
 
     cleanup();
     vi.useRealTimers();
