@@ -56,6 +56,8 @@ export async function withDemo({
       await demo.stop();
     } catch (err) {
       console.warn(`[demo] stopping the demo failed: ${err}`);
+      // A run that succeeded must not exit 0 with the demo possibly still up.
+      process.exitCode ||= 1;
     } finally {
       signals.off("SIGINT", onSignal);
       signals.off("SIGTERM", onSignal);
