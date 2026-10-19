@@ -24,7 +24,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
-import { AUTH_TRANSCRIPT, MOBILE_TRANSCRIPT, agentTranscriptScript } from "./demo/seed.mjs";
+import {
+  AUTH_TRANSCRIPT,
+  MOBILE_TRANSCRIPT,
+  ORDERS_TRANSCRIPT,
+  agentTranscriptScript,
+  lastTranscriptLine,
+} from "./demo/seed.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const README_DIR = path.join(__dirname, "..", "frontend", "public", "screenshots");
@@ -89,6 +95,81 @@ async function newContext(browser, options) {
   return context;
 }
 
+/**
+ * Polls until `check` returns a truthy value or `timeoutMs` elapses. Every
+ * shot below waits on a real condition rather than a fixed sleep alone: on a
+ * loaded host a fixed sleep lands mid-render (a half-printed transcript, a
+ * panel still loading), which is exactly what the stills must never show.
+ */
+async function waitUntil(check, what, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    // A transient API error on a loaded host is "not yet", not a failure.
+    const value = await check().catch(() => false);
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
+/**
+ * Waits until the session running `scriptName` has printed its whole
+ * transcript (its last line is in the backend's scrollback). The seeded
+ * agents start printing the moment the demo boots, so without this the
+ * dashboard and git-panel shots catch them at whatever point the host's load
+ * allows, sometimes still scrolling.
+ */
+async function findSession(demo, scriptName) {
+  const sessions = await demo.api("/api/sessions");
+  return sessions.find((s) => s.command?.endsWith(`/${scriptName}`));
+}
+
+async function waitForTranscript(demo, scriptName, lines) {
+  const last = lastTranscriptLine(lines);
+  await waitUntil(async () => {
+    const session = await findSession(demo, scriptName);
+    if (!session) return false;
+    const { b64 } = await demo.api(`/api/sessions/${session.id}/scrollback`);
+    return Buffer.from(b64, "base64").toString("utf8").includes(last);
+  }, `${scriptName} to finish its transcript`);
+}
+
+/**
+ * Waits until the browser's terminal is attached to `scriptName`'s session (a
+ * live subscriber on its PTY, no "Connecting…" overlay) and its geometry has
+ * held still for SETTLE_MS: web fonts loaded and the `.xterm-screen` box (cell
+ * size × cols/rows) unchanged. The PTY's own size isn't in the sessions API,
+ * so the fitted terminal in the page is what's measured. Output printed before
+ * then lands at an interim geometry (a pre-fit row count or font size) and the
+ * shot shows it scrolled or clipped.
+ */
+const SETTLE_MS = 1500;
+async function waitForSettledTerminal(page, demo, scriptName) {
+  let last = null;
+  let since = 0;
+  await waitUntil(async () => {
+    const session = await findSession(demo, scriptName);
+    const geometry = await page.evaluate(() => {
+      // Runs in the page; this file's lint env is Node, hence globalThis.
+      const doc = globalThis.document;
+      const screen = doc.querySelector(".xterm-screen");
+      if (!screen || doc.querySelector(".terminal-status-overlay")) return null;
+      if (doc.fonts.status !== "loaded") return null;
+      return `${screen.offsetWidth}x${screen.offsetHeight}`;
+    });
+    if (!(session?.subscriberCount > 0) || geometry === null) {
+      last = null;
+      return false;
+    }
+    if (geometry !== last) {
+      last = geometry;
+      since = Date.now();
+      return false;
+    }
+    return Date.now() - since >= SETTLE_MS;
+  }, `the terminal attached to ${scriptName} to settle`);
+}
+
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
 async function collapseDock(page) {
   const collapse = page.getByRole("button", { name: "Collapse dock" });
@@ -99,6 +180,9 @@ async function collapseDock(page) {
 }
 
 async function captureDesktop(browser, demo) {
+  // fake-agent2.sh isn't opened in any shot, only listed; let it finish so
+  // its row is in its final state.
+  await waitForTranscript(demo, "fake-agent2.sh", ORDERS_TRANSCRIPT);
   const context = await newContext(browser, profile.desktop);
   const page = await context.newPage();
   await page.goto(demo.frontendUrl, { waitUntil: "networkidle" });
@@ -107,21 +191,29 @@ async function captureDesktop(browser, demo) {
 
   // 1. Tiled dashboard: a live terminal session docked, sidebar populated with
   //    multiple projects/sessions and a real, undiscovered project suggestion.
+  // The seeded agent holds its transcript (startDemo's holdTranscripts) until
+  // the session is open here and its terminal sized, then prints it into the
+  // live terminal; the shot waits for the whole transcript.
   await page.locator(".session-item", { hasText: "fake-agent.sh" }).first().click();
-  await page.waitForTimeout(2000);
+  await waitForSettledTerminal(page, demo, "fake-agent.sh");
+  await writeFile(demo.seeded.authReleaseFile, "");
+  await waitForTranscript(demo, "fake-agent.sh", AUTH_TRANSCRIPT);
+  await page.waitForTimeout(1000);
   await shot(page, "desktop-dashboard.png");
 
   // 2. Git panel, from the right-hand rail; toggled closed again afterwards so
   //    it doesn't sit over the sidebar for the next shot.
   await page.getByRole("button", { name: "Git", exact: true }).click();
-  await page.waitForTimeout(1200);
+  await page.getByText("Initial commit").first().waitFor();
+  await page.waitForTimeout(500);
   await shot(page, "desktop-git-panel.png");
   await page.getByRole("button", { name: "Git", exact: true }).click();
   await page.waitForTimeout(500);
 
   // 3. Kanban task board.
   await page.getByText("Tasks", { exact: true }).click();
-  await page.waitForTimeout(1000);
+  await page.getByText("Add rate limiting to the login route").first().waitFor();
+  await page.waitForTimeout(500);
   await shot(page, "desktop-kanban.png");
 
   await context.close();
@@ -162,7 +254,8 @@ async function captureMobile(browser, demo) {
   //    during page load and drawer opening, so its attach/resize is done
   //    before the transcript starts printing.
   await page.locator(".session-item", { hasText: "mobile-demo.sh" }).first().click();
-  await page.waitForTimeout(5000);
+  await waitForTranscript(demo, "mobile-demo.sh", MOBILE_TRANSCRIPT);
+  await page.waitForTimeout(1000);
   await shot(page, "mobile-terminal.png");
   await context.close();
 }
@@ -248,7 +341,7 @@ async function recordLoop(browser, demo) {
 }
 
 async function main() {
-  const demo = await startDemo({ quiet: true, keep: values.keep });
+  const demo = await startDemo({ quiet: true, keep: values.keep, holdTranscripts: true });
   const browser = await chromium.launch();
   try {
     await captureDesktop(browser, demo);

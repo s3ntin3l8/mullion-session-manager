@@ -67,11 +67,37 @@ function shellSingleQuote(s) {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 }
 
-export function agentTranscriptScript({ startDelay, lines }) {
+// Once the transcript is out, the script keeps the session "working" the way
+// a real agent's spinner does, by writing an SGR reset (an invisible no-op)
+// every KEEPALIVE_INTERVAL_S. Without it the session falls silent after a
+// sustained streak and the backend's silence watchdog (pty-manager.ts's
+// SUSTAINED_SILENCE_MS, 10 s) raises a "Gone quiet — <last line>" attention
+// badge, which then sits in the sidebar and the kanban's ad-hoc list of
+// every later shot and through the landing loop. The interval stays under
+// the backend's IDLE_THRESHOLD_MS (2 s) so the row keeps reading "Working".
+export const KEEPALIVE_INTERVAL_S = 1;
+
+// `releaseFile`, when given, holds the transcript until that file exists, for
+// the same reason as `startDelay` but without guessing a duration: the
+// screenshot pipeline creates it once its client has the session open and
+// sized, so every line prints into the real terminal (a transcript printed in
+// full before any client attached comes back without its first line).
+export function agentTranscriptScript({ startDelay, lines, releaseFile }) {
+  const hold = releaseFile
+    ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n`
+    : "";
   const body = lines
     .map((l) => (l === "" ? "echo" : `echo ${shellSingleQuote(l)}`))
     .join("\nsleep 0.25\n");
-  return `#!/usr/bin/env bash\nset -u\nclear\nsleep ${startDelay}\n${body}\nsleep 100000 &\nwait\n`;
+  const keepalive = `while :; do printf '\\033[0m'; sleep ${KEEPALIVE_INTERVAL_S}; done`;
+  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}sleep ${startDelay}\n${body}\n${keepalive}\n`;
+}
+
+/** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
+export function lastTranscriptLine(lines) {
+  const last = lines.findLast((l) => l.trim() !== "");
+  if (last === undefined) throw new Error("transcript has no non-blank line");
+  return last;
 }
 
 export const AUTH_TRANSCRIPT = [
@@ -143,7 +169,7 @@ export const MOBILE_TRANSCRIPT = [
   "",
 ];
 
-const ORDERS_TRANSCRIPT = [
+export const ORDERS_TRANSCRIPT = [
   "Codex CLI",
   "",
   "> Add an index on orders.customer_id, queries are slow",
@@ -164,7 +190,12 @@ const ORDERS_TRANSCRIPT = [
  * files under `root`. The sessions it starts keep running (dtach under systemd
  * scopes) until the demo instance is torn down.
  */
-export async function seedDemo({ api, root }) {
+/**
+ * `holdTranscripts`: the aurora-web agent (fake-agent.sh) waits for
+ * `authReleaseFile` (returned) before printing; see agentTranscriptScript.
+ * Off for `make demo`, where nothing would ever release it.
+ */
+export async function seedDemo({ api, root, holdTranscripts = false }) {
   const scratchRoot = root;
   const scriptsDir = path.join(scratchRoot, "scripts");
   await mkdir(scriptsDir, { recursive: true });
@@ -212,10 +243,15 @@ export async function seedDemo({ api, root }) {
   });
 
   const authScriptPath = path.join(scriptsDir, "fake-agent.sh");
+  const authReleaseFile = path.join(scriptsDir, "fake-agent.release");
   const ordersScriptPath = path.join(scriptsDir, "fake-agent2.sh");
   await writeFile(
     authScriptPath,
-    agentTranscriptScript({ startDelay: 0, lines: AUTH_TRANSCRIPT }),
+    agentTranscriptScript({
+      startDelay: 0,
+      lines: AUTH_TRANSCRIPT,
+      releaseFile: holdTranscripts ? authReleaseFile : undefined,
+    }),
     { mode: 0o755 },
   );
   await writeFile(
@@ -274,5 +310,5 @@ export async function seedDemo({ api, root }) {
     });
   }
 
-  return { scratchRoot, scriptsDir, auroraProject, orbitProject };
+  return { scratchRoot, scriptsDir, auroraProject, orbitProject, authReleaseFile };
 }

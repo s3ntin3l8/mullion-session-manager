@@ -107,7 +107,13 @@ async function waitForHttp(url, signal, timeoutMs = 90_000) {
   throw new Error(`Timed out waiting for ${url}${lastError ? `: ${lastError}` : ""}`);
 }
 
-export async function startDemo({ quiet = false, keep = false, seed = true, bins } = {}) {
+export async function startDemo({
+  quiet = false,
+  keep = false,
+  seed = true,
+  holdTranscripts = false,
+  bins,
+} = {}) {
   bins ??= demoBins();
   preflight(bins);
   await assertPortsFree([DEMO_BACKEND_PORT, DEMO_FRONTEND_PORT]);
@@ -238,7 +244,9 @@ export async function startDemo({ quiet = false, keep = false, seed = true, bins
     await waitForHttp(`${backendUrl}/api/sessions`, aborted.signal);
     await waitForHttp(frontendUrl, aborted.signal);
     await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme: "dark" }) });
-    return seed ? await seedDemo({ api, root: path.join(demoDir, "projects") }) : null;
+    return seed
+      ? await seedDemo({ api, root: path.join(demoDir, "projects"), holdTranscripts })
+      : null;
   };
 
   // Everything after mkdtemp runs inside the try, so any failure (a refused
