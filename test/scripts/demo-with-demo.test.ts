@@ -141,6 +141,20 @@ describe("withDemo", () => {
     expect(demo.stop).toHaveBeenCalledOnce();
   });
 
+  it("keeps the launch error when stopping the demo also fails", async () => {
+    const { demo, signals, startDemo } = fakes();
+    demo.stop.mockRejectedValueOnce(new Error("stopScope failed"));
+    const launchBrowser = async () => {
+      throw new Error("Executable doesn't exist");
+    };
+
+    await expect(withDemo({ startDemo, launchBrowser, run: vi.fn(), signals })).rejects.toThrow(
+      "Executable doesn't exist",
+    );
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("stopScope failed"));
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+  });
+
   it("closes the browser before stopping the demo", async () => {
     const { demo, browser, signals, startDemo } = fakes();
 

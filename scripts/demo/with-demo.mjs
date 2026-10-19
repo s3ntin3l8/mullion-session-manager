@@ -52,7 +52,10 @@ export async function withDemo({
     if (browser) await closeQuietly(browser);
     console.log("[demo] tearing down the demo...");
     try {
+      // Don't let a teardown error replace the one that ended the run.
       await demo.stop();
+    } catch (err) {
+      console.warn(`[demo] stopping the demo failed: ${err}`);
     } finally {
       signals.off("SIGINT", onSignal);
       signals.off("SIGTERM", onSignal);
