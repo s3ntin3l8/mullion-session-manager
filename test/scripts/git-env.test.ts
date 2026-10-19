@@ -9,9 +9,11 @@ import path from "node:path";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
   assertConfigUnchanged,
+  assertIndexIntact,
   diffConfigSnapshot,
   resolveConfigPath,
   snapshotConfig,
+  snapshotIndex,
 } from "../helpers/checkout-config.js";
 
 describe("scripts/git-env.mjs", () => {
@@ -52,7 +54,7 @@ describe("checkout-config tripwire (test/global-setup.ts)", () => {
 
     beforeEach(() => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-config-"));
-      git("init", "-q");
+      git("init", "-q", "-b", "main");
     });
     afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -72,6 +74,52 @@ describe("checkout-config tripwire (test/global-setup.ts)", () => {
       expect(() => assertConfigUnchanged(file, before)).not.toThrow();
       git("config", "--local", "core.ignorecase", "true");
       expect(() => assertConfigUnchanged(file, before)).toThrow(/\+ core\.ignorecase true/);
+    });
+
+    it("throws only when over half of the index entries disappear", () => {
+      for (const name of ["a", "b", "c", "d"]) fs.writeFileSync(path.join(dir, name), name);
+      git("add", "-A");
+      git("commit", "-q", "-m", "init");
+      const before = snapshotIndex(dir);
+      expect(before).toEqual({ head: "refs/heads/main", entries: 4 });
+      git("rm", "-q", "--cached", "a");
+      expect(() => assertIndexIntact(dir, before)).not.toThrow(); // a developer's edit
+      git("rm", "-q", "--cached", "b", "c");
+      expect(() => assertIndexIntact(dir, before)).toThrow(/index emptied: 4 -> 1 entries/);
+    });
+
+    it("throws when HEAD moves to another branch, not when it gains a commit", () => {
+      fs.writeFileSync(path.join(dir, "a"), "a");
+      git("add", "-A");
+      git("commit", "-q", "-m", "init");
+      const before = snapshotIndex(dir);
+      git("commit", "-q", "--allow-empty", "-m", "mid-run commit");
+      expect(() => assertIndexIntact(dir, before)).not.toThrow();
+      git("checkout", "-q", "-b", "feat");
+      expect(() => assertIndexIntact(dir, before)).toThrow(
+        /HEAD moved: refs\/heads\/main -> refs\/heads\/feat/,
+      );
+    });
+
+    it("snapshots a detached HEAD by its commit", () => {
+      fs.writeFileSync(path.join(dir, "a"), "a");
+      git("add", "-A");
+      git("commit", "-q", "-m", "init");
+      git("checkout", "-q", "--detach");
+      expect(snapshotIndex(dir)?.head).toMatch(/^detached at [0-9a-f]{40}$/);
+    });
+
+    it("skips the check outside a git checkout, and an empty index never trips it", () => {
+      const bare = fs.mkdtempSync(path.join(os.tmpdir(), "no-git-"));
+      try {
+        expect(snapshotIndex(bare)).toBeNull();
+        expect(() => assertIndexIntact(bare, null)).not.toThrow();
+        const unborn = snapshotIndex(dir);
+        expect(unborn).toEqual({ head: "refs/heads/main", entries: 0 });
+        expect(() => assertIndexIntact(dir, unborn)).not.toThrow();
+      } finally {
+        fs.rmSync(bare, { recursive: true, force: true });
+      }
     });
 
     it("treats a config with no watched keys as an empty snapshot", () => {

@@ -7,7 +7,7 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { GIT_ENV_KEYS_TO_STRIP } from "../src/services/git-env.js";
+import { GIT_ENV_KEYS_TO_STRIP, gitEnv } from "../src/services/git-env.js";
 
 const ROOT = path.resolve(__dirname, "..");
 // \w* on both sides also catches promisified wrappers (execFileAsync("git", …)).
@@ -17,8 +17,33 @@ describe("git child processes scrub the ambient git environment", () => {
   // test/setup.ts strips the hook env (pre-push exports GIT_DIR in a linked
   // worktree) before any test runs, so even a spawn that copies process.env
   // can't reach the real checkout.
+  // Vacuous on its own in CI, which has no ambient GIT_* to find; the two
+  // tests below prove the scrub with a leaked GIT_DIR actually present.
   it("runs every test file with the hook's git env already scrubbed", () => {
     expect(GIT_ENV_KEYS_TO_STRIP.filter((key) => key in process.env)).toEqual([]);
+  });
+
+  it("test/setup.ts scrubs the hook env before any test runs", () => {
+    const setup = readFileSync(path.join(ROOT, "test/setup.ts"), "utf8");
+    expect(setup).toMatch(/^scrubGitHookEnv\(\);$/m);
+  });
+
+  it("scrubGitHookEnv strips a hook's GIT_DIR in a fresh process", () => {
+    const leaked = Object.fromEntries(GIT_ENV_KEYS_TO_STRIP.map((key) => [key, "/leaked"]));
+    const script =
+      'const { scrubGitHookEnv } = await import("./test/helpers/git-hook-env.ts");' +
+      'const before = Object.keys(process.env).filter((k) => k.startsWith("GIT_"));' +
+      "scrubGitHookEnv();" +
+      'const after = Object.keys(process.env).filter((k) => k.startsWith("GIT_"));' +
+      "console.log(JSON.stringify({ before, after }));";
+    const out = execFileSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      { cwd: ROOT, env: { ...gitEnv(), ...leaked }, encoding: "utf8" },
+    );
+    const { before, after } = JSON.parse(out.trim().split("\n").pop()!);
+    expect(before).toEqual(expect.arrayContaining(["GIT_DIR", "GIT_INDEX_FILE"]));
+    expect(after.filter((k: string) => k in leaked)).toEqual([]);
   });
 
   it("passes env: gitEnv() (or an explicit env not built from process.env) at every git spawn in src/, test/ and scripts/", () => {

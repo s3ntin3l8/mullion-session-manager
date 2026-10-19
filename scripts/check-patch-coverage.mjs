@@ -248,6 +248,9 @@ export function runPatchCoverageCheck(options = {}) {
 
   // Get git diff
   let diffText = options.diffText;
+  // Every source path at the diff base: lets a damaged index (all of them
+  // staged as deleted) fail loudly instead of passing as an empty patch.
+  let baseSourceFiles = options.baseSourceFiles ?? [];
   if (diffText === undefined) {
     if (!baseRef) {
       console.error(
@@ -290,6 +293,13 @@ export function runPatchCoverageCheck(options = {}) {
         env: gitEnv(),
         maxBuffer: 256 * 1024 * 1024,
       });
+      baseSourceFiles = execFileSync(
+        "git",
+        ["ls-tree", "-r", "-z", "--name-only", diffBase, "--", "src", "frontend/src"],
+        { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
+      )
+        .split("\0")
+        .filter(Boolean);
     } catch (err) {
       console.error(`ERROR: Failed to diff against ${baseRef}:`, err.message);
       return { ok: false, overallPercent: 0, error: "diff-failed" };
@@ -299,6 +309,15 @@ export function runPatchCoverageCheck(options = {}) {
   const modifiedFiles = parseGitDiffHunks(diffText);
   if (modifiedFiles.size === 0) {
     const deleted = deletedFiles(diffText);
+    const deletedSet = new Set(deleted);
+    if (baseSourceFiles.length > 0 && baseSourceFiles.every((f) => deletedSet.has(f))) {
+      console.error(
+        `ERROR: the patch deletes every source file (${baseSourceFiles.length}), which means the ` +
+          "git index is damaged, not that the code is gone. Check `git status`; `git reset` " +
+          "restores the index from HEAD without touching your working tree.",
+      );
+      return { ok: false, overallPercent: 0, error: "index-damaged" };
+    }
     if (deleted.length > 0)
       console.warn(
         `WARNING: the patch only deletes ${deleted.length} source file(s) (e.g. ${deleted[0]}). ` +

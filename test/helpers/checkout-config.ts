@@ -62,3 +62,56 @@ export function assertConfigUnchanged(file: string, before: string): void {
       "then find the spawn missing `env: gitEnv()` or a `-C <tmp>`.",
   );
 }
+
+// Index/HEAD tripwire: the config snapshot above can't see the other damage a
+// leaked GIT_DIR does. On pre-push a fixture's `git add` left a worktree's
+// index holding just its own file (every real one staged as deleted), and a
+// fixture's `git checkout -b` / `checkout main` moved the worktree's HEAD
+// onto another branch, swapping its index for that branch's tree. Watches the
+// branch HEAD is on (not its sha, so committing mid-run is fine) and the
+// entry count, which only trips on losing over half of them (staging or
+// removing a few files mid-run never does).
+export interface IndexSnapshot {
+  head: string;
+  entries: number;
+}
+
+const git = (root: string, args: string[]) =>
+  execFileSync("git", args, {
+    cwd: root,
+    env: gitEnv(),
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 64 * 1024 * 1024,
+  }).toString();
+
+export function snapshotIndex(root: string): IndexSnapshot | null {
+  try {
+    let head: string;
+    try {
+      head = git(root, ["symbolic-ref", "-q", "HEAD"]).trim();
+    } catch {
+      head = `detached at ${git(root, ["rev-parse", "HEAD"]).trim()}`;
+    }
+    const entries = git(root, ["ls-files", "-z"]).split("\0").filter(Boolean).length;
+    return { head, entries };
+  } catch {
+    return null; // not a git checkout
+  }
+}
+
+export function assertIndexIntact(root: string, before: IndexSnapshot | null): void {
+  if (!before) return;
+  const after = snapshotIndex(root);
+  const problems: string[] = [];
+  if (!after || after.head !== before.head)
+    problems.push(`HEAD moved: ${before.head} -> ${after?.head ?? "unreadable"}`);
+  if (before.entries > 0 && (after?.entries ?? 0) * 2 < before.entries)
+    problems.push(`index emptied: ${before.entries} -> ${after?.entries ?? 0} entries`);
+  if (problems.length === 0) return;
+  throw new Error(
+    `The test run rewrote the checkout's git state (${root}):\n${problems.join("\n")}\n\n` +
+      "A test ran git against the real repo instead of its temp fixture, most likely via a " +
+      "GIT_DIR leaked from a git hook. Check out your branch again / `git reset` the index " +
+      "(your working tree is untouched), then find the git spawn missing `env: gitEnv()`.",
+  );
+}
