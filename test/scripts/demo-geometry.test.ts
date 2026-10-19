@@ -67,6 +67,13 @@ describe("terminalGeometryProblems", () => {
     ]);
   });
 
+  it("flags a box that isn't laid out", () => {
+    const empty = { width: 0, height: 0 };
+    expect(terminalGeometryProblems({ ...good, screen: empty, canvases: [] })).toEqual([
+      { kind: "canvas", message: "the terminal box is 0x0" },
+    ]);
+  });
+
   it("tolerates a sub-pixel box", () => {
     const close = { ...canvas, cssWidth: 1248.5 };
     expect(terminalGeometryProblems({ ...good, canvases: [close] })).toEqual([]);
@@ -133,5 +140,19 @@ describe("checkTerminalGeometry", () => {
     const r = run([measured], null);
     await expect(r.result).resolves.toBeDefined();
     expect(r.logs[0]).toContain("no PTY size recorded");
+  });
+
+  it("refuses a missing or non-numeric font size rather than skipping the cell check", async () => {
+    const check = (fontSize: unknown) =>
+      checkTerminalGeometry({
+        name: "shot.png",
+        measure: async () => measured,
+        refit: async () => {},
+        pty: good.pty,
+        fontSize,
+        log: () => {},
+      });
+    await expect(check(undefined)).rejects.toThrow("no usable terminal font size (undefined)");
+    await expect(check(Number.NaN)).rejects.toThrow("(NaN)");
   });
 });

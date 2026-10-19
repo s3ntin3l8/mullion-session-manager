@@ -27,7 +27,8 @@ const DPR_TOLERANCE = 0.05;
 /**
  * Checks a terminal's measured geometry before it's shot, returning what's
  * wrong as `{ kind, message }` (empty when it's fine): kind "cells" for
- * oversized cells, "canvas" for a drawing surface out of step. `screen` is the `.xterm-screen` box (cols x
+ * oversized cells, "canvas" for a drawing surface out of step or a box that
+ * isn't laid out (0x0, which would otherwise pass and shoot blank). `screen` is the `.xterm-screen` box (cols x
  * cell width by rows x cell height), `canvases` the renderer's drawing
  * surfaces (none under the DOM renderer), `pty` the size the session's
  * transcript printed at, or null when it wasn't recorded.
@@ -40,6 +41,9 @@ const DPR_TOLERANCE = 0.05;
  */
 export function terminalGeometryProblems({ screen, canvases, dpr, pty, fontSize }) {
   const problems = [];
+  if (!(screen.width > 0 && screen.height > 0)) {
+    return [{ kind: "canvas", message: `the terminal box is ${screen.width}x${screen.height}` }];
+  }
   if (pty) {
     const cellWidth = screen.width / pty.cols;
     const cellHeight = screen.height / pty.rows;
@@ -92,6 +96,11 @@ export async function checkTerminalGeometry({
   log,
   maxRefits = 2,
 }) {
+  // A moved or non-numeric settings field would turn the cell check into NaN
+  // comparisons that never fire.
+  if (!(Number.isFinite(fontSize) && fontSize > 0)) {
+    throw new Error(`${name}: no usable terminal font size (${fontSize})`);
+  }
   if (!pty) log(`[screenshots] ${name}: no PTY size recorded; checking the canvases only`);
   for (let attempt = 0; ; attempt++) {
     const { terminals, ...measured } = await measure();
