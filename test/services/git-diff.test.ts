@@ -303,4 +303,17 @@ describe("getFileDiff", () => {
     initRepo(tmpDir);
     expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
   });
+
+  it("returns unified diff for an untracked new file", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "init.txt"), "hello\n");
+    commitAll(tmpDir, "initial");
+    fs.writeFileSync(path.join(tmpDir, "untracked.txt"), "new file content\n");
+
+    const patch = await getFileDiff(tmpDir, "untracked.txt");
+    expect(patch).toBeTruthy();
+    expect(patch!).toContain("--- /dev/null");
+    expect(patch!).toContain("+++ b/untracked.txt");
+    expect(patch!).toContain("+new file content");
+  });
 });

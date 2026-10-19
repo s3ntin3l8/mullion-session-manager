@@ -1,4 +1,6 @@
 import { spawn as spawnChild, spawnSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 // GitDiffStats now physically lives in src/shared/types.ts (hand-mirrored
@@ -223,23 +225,10 @@ const FILE_DIFF_TRUNCATED_MARKER =
  * user-click-triggered fetch (not a poll loop), and the patch is inherently
  * single-use.
  */
-export async function getFileDiff(
-  cwd: string,
-  filePath: string,
-  baseRef?: string,
-): Promise<string | null> {
-  if (!isGitRepo(cwd)) return null;
-
-  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
-  const pending = fileDiffInFlight.get(key);
-  if (pending) return pending;
-
-  const promise = new Promise<string | null>((resolve) => {
+function runDiffProcess(cwd: string, args: string[]): Promise<string | null> {
+  return new Promise<string | null>((resolve) => {
     let stdout = "";
     let settled = false;
-    const args = baseRef
-      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
-      : ["-C", cwd, "diff", "HEAD", "--", filePath];
     const child = spawnChild("git", args, {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
@@ -303,7 +292,62 @@ export async function getFileDiff(
       // patch in both cases (empty when exit 0, populated when exit 1).
       finish(code != null && code <= 1 ? stdout || null : null);
     });
-  }).finally(() => {
+  });
+}
+
+export async function getFileDiff(
+  cwd: string,
+  filePath: string,
+  baseRef?: string,
+): Promise<string | null> {
+  if (!isGitRepo(cwd)) return null;
+
+  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
+  const pending = fileDiffInFlight.get(key);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
+      : ["-C", cwd, "diff", "HEAD", "--", filePath];
+    const patch = await runDiffProcess(cwd, args);
+    if (patch) return patch;
+
+    // If working-tree diff against HEAD returned nothing, check if filePath
+    // is an untracked new file on disk (not known to git index).
+    if (!baseRef) {
+      try {
+        const fullPath = path.resolve(cwd, filePath);
+        const resolvedCwd = path.resolve(cwd);
+        if (
+          (fullPath === resolvedCwd || fullPath.startsWith(resolvedCwd + path.sep)) &&
+          fs.existsSync(fullPath) &&
+          fs.statSync(fullPath).isFile()
+        ) {
+          const lsCheck = spawnSync(
+            "git",
+            ["-C", cwd, "ls-files", "--error-unmatch", "--", filePath],
+            { env: gitEnv(), stdio: "ignore" },
+          );
+          if (lsCheck.status !== 0) {
+            const untrackedPatch = await runDiffProcess(cwd, [
+              "-C",
+              cwd,
+              "diff",
+              "--no-index",
+              "--",
+              "/dev/null",
+              filePath,
+            ]);
+            if (untrackedPatch) return untrackedPatch;
+          }
+        }
+      } catch {
+        // Fall through to null on any filesystem error
+      }
+    }
+    return null;
+  })().finally(() => {
     fileDiffInFlight.delete(key);
   });
 

@@ -29,6 +29,8 @@ function mockFetch(opts: {
   branches?: () => Response | Promise<Response>;
   pull?: () => Response | Promise<Response>;
   fetch?: () => Response | Promise<Response>;
+  fileDiff?: () => Response | Promise<Response>;
+  log?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
@@ -37,6 +39,16 @@ function mockFetch(opts: {
     }
     if (url.includes("/git-fetch")) {
       return Promise.resolve(opts.fetch ? opts.fetch() : jsonResponse(200, { success: true }));
+    }
+    if (url.includes("/git-file-diff")) {
+      return Promise.resolve(
+        opts.fileDiff ? opts.fileDiff() : jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" }),
+      );
+    }
+    if (url.includes("/git-log")) {
+      return Promise.resolve(
+        opts.log ? opts.log() : jsonResponse(200, { commits: [], hasMore: false }),
+      );
     }
     if (url.includes("/git-status")) {
       return Promise.resolve(opts.status ? opts.status() : new Response(null, { status: 204 }));
@@ -838,6 +850,79 @@ describe("GitPanel", () => {
       expect(
         await screen.findByText("Working tree has uncommitted changes or conflicts."),
       ).toBeInTheDocument();
+    });
+
+    it("expands and collapses inline diff when a changed file row is clicked", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () =>
+            jsonResponse(200, {
+              ...CLEAN_STATUS,
+              isClean: false,
+              files: [{ path: "src/a.ts", status: "M" }],
+            }),
+          fileDiff: () => jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<GitPanel params={{ projectId: 23 }} />);
+
+      const fileRow = await screen.findByText("src/a.ts");
+      await user.click(fileRow);
+      expect(await screen.findByText("+new")).toBeInTheDocument();
+
+      // Clicking again collapses the diff
+      await user.click(fileRow);
+      expect(screen.queryByText("+new")).toBeNull();
+    });
+
+    it("renders History section with git history", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, CLEAN_STATUS),
+          log: () =>
+            jsonResponse(200, {
+              commits: [
+                {
+                  sha: "a".repeat(40),
+                  parents: [],
+                  author: "Tester",
+                  time: 1_700_000_000,
+                  subject: "feat: history commit",
+                  refs: [],
+                },
+              ],
+              hasMore: false,
+            }),
+        }),
+      );
+      render(<GitPanel params={{ projectId: 24 }} />);
+
+      expect(await screen.findByText("History")).toBeInTheDocument();
+      expect(await screen.findByText("feat: history commit")).toBeInTheDocument();
+    });
+
+    it("displays upstream tracking tooltip on branch", async () => {
+      const branchesResult: GitBranchesResult = {
+        branches: [{ name: "main", isCurrent: true, upstream: "origin/main" }],
+        worktrees: [],
+        remoteBranches: [],
+      };
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          status: () => jsonResponse(200, CLEAN_STATUS),
+          branches: () => jsonResponse(200, branchesResult),
+        }),
+      );
+      render(<GitPanel params={{ projectId: 25 }} />);
+
+      await screen.findByText("Branches (1)");
+      const branchTitle = screen.getByTitle(/main[\s\S]*Tracks: origin\/main/);
+      expect(branchTitle).toBeInTheDocument();
+      expect(branchTitle).toHaveTextContent("main");
     });
   });
 });

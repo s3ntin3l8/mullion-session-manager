@@ -170,6 +170,7 @@ describe("listBranches enrichment (issue #442)", () => {
     const branches = await listBranches(tmpDir, { detail: true });
     expect(branches?.find((b) => b.name === "merged-branch")?.isMerged).toBe(true);
     expect(branches?.find((b) => b.name === "unmerged-branch")?.isMerged).toBe(false);
+    expect(branches?.find((b) => b.name === "main")?.isMerged).toBe(false);
   });
 
   it("suppresses isMerged (leaves it undefined) when the base-ref chain falls through to HEAD", async () => {

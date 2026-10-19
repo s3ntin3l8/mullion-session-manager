@@ -46,17 +46,12 @@ function syncSummary(status: GitStatus): string {
     .join(" ");
 }
 
-interface ProjectFileDiffProps {
+export interface ProjectFileDiffProps {
   projectId: number;
   filePath: string;
 }
 
-// Sibling of Sidebar.tsx's own SessionFileDiff, not a shared abstraction —
-// same "small guards get duplicated, not shared" precedent as
-// lib/sidebarStatus.ts's sessionGitDotClass doc comment (PR 27 phase 1),
-// and the two fetch from genuinely different endpoints (project- vs
-// session-scoped).
-function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
+export function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
   const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
 
   // No explicit "reset to undefined on filePath change" here — the call

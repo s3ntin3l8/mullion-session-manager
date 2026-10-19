@@ -20,8 +20,6 @@ const PAGE = 100;
 function refKind(ref: string, remotes: ReadonlySet<string>): "head" | "tag" | "remote" | "branch" {
   if (ref.startsWith("HEAD")) return "head";
   if (ref.startsWith("tag: ")) return "tag";
-  // A bare slash isn't enough ("feature/x" is a local branch): a remote ref is
-  // one the repo lists as remote-tracking, or the conventional origin/ prefix.
   if (remotes.has(ref) || ref.startsWith("origin/")) return "remote";
   return "branch";
 }
@@ -34,8 +32,6 @@ function CommitFiles({ projectId, sha, cwd }: { projectId: number; sha: string; 
   const [detail, setDetail] = useState<GitCommitDetail | null | undefined>(undefined);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<DiffLine[] | null | undefined>(undefined);
-  // The file whose diff is currently wanted; a response for an earlier click
-  // must not land under a different open row.
   const openFileRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -78,13 +74,20 @@ function CommitFiles({ projectId, sha, cwd }: { projectId: number; sha: string; 
         </pre>
       )}
       {detail.files.map((f) => (
-        <div key={f.path}>
-          <button type="button" className="github-panel-row" onClick={() => toggleFile(f.path)}>
-            <span className="github-panel-row-title" title={f.path}>
+        <div key={f.path} className="gh-commit-file-card">
+          <button
+            type="button"
+            className="github-panel-row gh-commit-file-row"
+            onClick={() => toggleFile(f.path)}
+          >
+            <span className="github-panel-row-title gh-commit-file-path" title={f.path}>
               {f.path}
             </span>
-            <span className="gh-add">{f.additions === null ? "bin" : `+${f.additions}`}</span>
-            <span className="gh-del">{f.deletions === null ? "" : `−${f.deletions}`}</span>
+            <span className="gh-file-stats">
+              {f.additions !== null && <span className="gh-add">+{f.additions}</span>}
+              {f.deletions !== null && <span className="gh-del">−{f.deletions}</span>}
+              {f.additions === null && f.deletions === null && <span className="gh-bin">bin</span>}
+            </span>
           </button>
           {openFile === f.path && (
             <div className="session-file-change-diff">
@@ -106,10 +109,12 @@ function CommitFiles({ projectId, sha, cwd }: { projectId: number; sha: string; 
 export function GitHistorySection({
   projectId,
   cwd,
+  onClearCwd,
 }: {
   projectId: number;
   /** A worktree path to scope the history to; omitted = the project root. */
   cwd?: string;
+  onClearCwd?: () => void;
 }) {
   const [scope, setScope] = useState<"all" | "head">("all");
   const [commits, setCommits] = useState<GitLogCommit[] | null | undefined>(undefined);
@@ -121,9 +126,9 @@ export function GitHistorySection({
   const remoteBranches = useDashboardStore(
     (s) => s.gitBranchesByProject[projectId]?.remoteBranches,
   );
+  const gitRefreshTrigger = useDashboardStore((s) => s.gitRefreshTrigger);
   const remotes = useMemo(() => new Set(remoteBranches ?? []), [remoteBranches]);
-  // The scope/worktree the list currently shows; a page that was already in
-  // flight for an earlier selection must not be merged into the new list.
+
   const viewKey = `${projectId}|${scope}|${cwd ?? ""}`;
   const viewKeyRef = useRef(viewKey);
   useEffect(() => {
@@ -149,7 +154,7 @@ export function GitHistorySection({
     return () => {
       cancelled = true;
     };
-  }, [projectId, scope, cwd]);
+  }, [projectId, scope, cwd, gitRefreshTrigger]);
 
   const layout = useMemo(() => computeGraphLayout(commits ?? []), [commits]);
   const prByBranch = useMemo(() => {
@@ -170,8 +175,6 @@ export function GitHistorySection({
       .getProjectGitLog(projectId, { skip: commits.length, limit: PAGE, scope, cwd })
       .then((r) => {
         if (!r || viewKeyRef.current !== requestedFor) return;
-        // skip-based paging over a live repo can return a commit twice if one
-        // landed in between; keep the first occurrence of each sha.
         setCommits((prev) => {
           const seen = new Set((prev ?? []).map((c) => c.sha));
           return [...(prev ?? []), ...r.commits.filter((c) => !seen.has(c.sha))];
@@ -184,9 +187,11 @@ export function GitHistorySection({
       .finally(() => setLoadingMore(false));
   };
 
+  const worktreeBasename = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : null;
+
   return (
     <div className="gh-history">
-      <div className="gh-issue-filters">
+      <div className="gh-history-toolbar">
         <Dropdown
           small
           ariaLabel="History scope"
@@ -194,7 +199,25 @@ export function GitHistorySection({
           onChange={setScope}
           options={HISTORY_SCOPE_OPTIONS}
         />
+        {worktreeBasename && (
+          <div className="gh-history-scope-banner">
+            <span>
+              Worktree: <strong>{worktreeBasename}</strong>
+            </span>
+            {onClearCwd && (
+              <button
+                type="button"
+                className="gh-history-clear-scope"
+                onClick={onClearCwd}
+                title="Clear worktree filter (show project root history)"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
       {error && <ErrorText>{error}</ErrorText>}
       {commits === undefined && <div className="github-panel-empty-row">Loading…</div>}
       {commits === null && !error && (
@@ -214,28 +237,32 @@ export function GitHistorySection({
             >
               <HistoryGraph row={row} columns={layout.width} />
               <span className="gh-commit-main">
-                <span className="github-panel-row-title">{commit.subject}</span>
-                <span className="gh-commit-refs">
-                  {commit.refs.map((ref) => {
-                    const pr = prByBranch.get(cleanRef(ref));
-                    return (
-                      <span key={ref} className={`gh-ref gh-ref-${refKind(ref, remotes)}`}>
-                        {cleanRef(ref)}
-                        {pr && (
-                          <span
-                            className={`gh-phase-pill ${pr.phase ? phaseTone(pr.phase) : "dim"}`}
-                            title={pr.phase ? PHASE_LABEL[pr.phase] : undefined}
-                          >
-                            #{pr.number}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
+                <span className="gh-commit-header">
+                  <span className="github-panel-row-title gh-commit-subject">{commit.subject}</span>
+                  <span className="github-panel-row-number gh-commit-meta" title={commit.author}>
+                    {commit.sha.slice(0, 7)} · {formatRelativeAge(commit.time * 1000)}
+                  </span>
                 </span>
-              </span>
-              <span className="github-panel-row-number" title={commit.author}>
-                {commit.sha.slice(0, 7)} · {formatRelativeAge(commit.time * 1000)}
+                {commit.refs.length > 0 && (
+                  <span className="gh-commit-refs">
+                    {commit.refs.map((ref) => {
+                      const pr = prByBranch.get(cleanRef(ref));
+                      return (
+                        <span key={ref} className={`gh-ref gh-ref-${refKind(ref, remotes)}`}>
+                          {cleanRef(ref)}
+                          {pr && (
+                            <span
+                              className={`gh-phase-pill ${pr.phase ? phaseTone(pr.phase) : "dim"}`}
+                              title={pr.phase ? PHASE_LABEL[pr.phase] : undefined}
+                            >
+                              #{pr.number}
+                            </span>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </span>
+                )}
               </span>
             </button>
             {open && <CommitFiles projectId={projectId} sha={commit.sha} cwd={cwd} />}
