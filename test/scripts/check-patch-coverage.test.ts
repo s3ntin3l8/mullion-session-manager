@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   cli,
   deletedFiles,
+  isSourceFile,
   evaluatePatchCoverage,
   loadCoverageReports,
   parseGitDiffHunks,
@@ -15,6 +16,16 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("check-patch-coverage", () => {
+  it("isSourceFile keeps coverable code and skips tests, specs and fixtures", () => {
+    expect(isSourceFile("src/a.ts")).toBe(true);
+    expect(isSourceFile("frontend/src/b.tsx")).toBe(true);
+    expect(isSourceFile("src/a.test.ts")).toBe(false);
+    expect(isSourceFile("frontend/src/b.spec.tsx")).toBe(false);
+    expect(isSourceFile("src/fixtures/x.ts")).toBe(false);
+    expect(isSourceFile("src/data.json")).toBe(false);
+    expect(isSourceFile("docs/a.ts")).toBe(false);
+  });
+
   it("deletedFiles lists only files the diff deletes", () => {
     const diff = [
       "diff --git a/src/gone.ts b/src/gone.ts",
@@ -60,6 +71,14 @@ describe("check-patch-coverage", () => {
         }),
       ).toEqual({ ok: false, overallPercent: 0, error: "index-damaged" });
       expect(error).toHaveBeenCalledWith(expect.stringContaining("git index is damaged"));
+      // Tests and fixtures at the base don't count: the coverable set is.
+      expect(
+        runPatchCoverageCheck({
+          diffText,
+          noRun: true,
+          baseSourceFiles: ["src/a.ts", "frontend/src/b.tsx", "src/a.test.ts", "src/fixtures/x.ts"],
+        }).error,
+      ).toBe("index-damaged");
       // Deleting only some of them is a real (if unusual) patch.
       const partial = runPatchCoverageCheck({
         diffText,
