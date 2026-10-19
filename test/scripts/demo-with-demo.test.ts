@@ -155,6 +155,21 @@ describe("withDemo", () => {
     expect(signals.listenerCount("SIGINT")).toBe(0);
   });
 
+  it("fails the exit code when the demo can't be stopped after a successful run", async () => {
+    const { demo, browser, signals, startDemo } = fakes();
+    demo.stop.mockRejectedValueOnce(new Error("stopScope failed"));
+    const before = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      await expect(
+        withDemo({ startDemo, launchBrowser: async () => browser, run: async () => "ok", signals }),
+      ).resolves.toBe("ok");
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = before;
+    }
+  });
+
   it("closes the browser before stopping the demo", async () => {
     const { demo, browser, signals, startDemo } = fakes();
 

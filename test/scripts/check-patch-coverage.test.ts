@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   cli,
+  deletedFiles,
   evaluatePatchCoverage,
   loadCoverageReports,
   parseGitDiffHunks,
@@ -14,6 +15,49 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("check-patch-coverage", () => {
+  it("deletedFiles lists only files the diff deletes", () => {
+    const diff = [
+      "diff --git a/src/gone.ts b/src/gone.ts",
+      "deleted file mode 100644",
+      "--- a/src/gone.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-export const x = 1;",
+      "diff --git a/src/kept.ts b/src/kept.ts",
+      "--- a/src/kept.ts",
+      "+++ b/src/kept.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "diff --git a/src/new.ts b/src/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/src/new.ts",
+    ].join("\n");
+    expect(deletedFiles(diff)).toEqual(["src/gone.ts"]);
+    expect(deletedFiles("")).toEqual([]);
+  });
+
+  it("warns instead of passing silently when the patch only deletes source files", () => {
+    const diffText = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "deleted file mode 100644",
+      "--- a/src/app.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-x",
+    ].join("\n");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(runPatchCoverageCheck({ diffText, noRun: true }).ok).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("index may be damaged"));
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  });
+
   it("parses git diff hunks into file line sets, ignoring tests and non-src files", () => {
     const diff = `
 diff --git a/src/services/example.ts b/src/services/example.ts

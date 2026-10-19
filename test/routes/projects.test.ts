@@ -2280,7 +2280,7 @@ describe("projects route", () => {
         execFileSync("git", ["-C", cwd, ...args], {
           encoding: "utf8",
           env: {
-            ...process.env,
+            ...gitEnv(),
             GIT_AUTHOR_NAME: "T",
             GIT_AUTHOR_EMAIL: "t@example.com",
             GIT_COMMITTER_NAME: "T",
