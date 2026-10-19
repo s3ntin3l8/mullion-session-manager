@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
+import { lastChangeSeconds } from "./demo/freeze.mjs";
 import {
   AUTH_TRANSCRIPT,
   MOBILE_TRANSCRIPT,
@@ -80,6 +81,33 @@ async function shot(page, name) {
 function ffmpeg(args) {
   const res = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...args], { stdio: "inherit" });
   if (res.error || res.status !== 0) throw new Error(`ffmpeg ${args.join(" ")} failed`);
+}
+
+/**
+ * When the video at `src` last changed, in seconds, or null if it never
+ * settles (see lastChangeSeconds). The loop is cut from this rather than from
+ * when the backend's scrollback reports the last line, which on a loaded host
+ * trails the page by many seconds.
+ */
+function videoLastChange(src) {
+  const res = spawnSync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-i",
+      src,
+      "-vf",
+      "freezedetect=n=-60dB:d=1",
+      "-map",
+      "0:v",
+      "-f",
+      "null",
+      "-",
+    ],
+    { encoding: "utf8" },
+  );
+  if (res.error || res.status !== 0) throw new Error(`ffmpeg freezedetect on ${src} failed`);
+  return lastChangeSeconds(res.stderr);
 }
 
 /**
@@ -145,17 +173,19 @@ async function waitForTranscript(demo, scriptName, lines) {
  *
  * The page has no per-session marker on a terminal pane, so the gate requires
  * exactly one mounted terminal (every shot that uses it shows one) and fails
- * on more, rather than measuring a pane other than the attached one. Only a
- * count that persists across two polls fails, so a pane remounting during a
- * layout change doesn't abort the run.
+ * on more, rather than measuring a pane other than the attached one. It fails
+ * only once extra terminals have stayed mounted for EXTRA_TERMINAL_GRACE_MS,
+ * so a pane remounting during a slow layout change doesn't abort the run.
  * A box that hasn't been laid out yet (0×0) doesn't count as settled.
  */
 const SETTLE_MS = 1500;
+const EXTRA_TERMINAL_GRACE_MS = 5000;
 async function waitForSettledTerminal(page, demo, scriptName) {
   let last = null;
   let since = 0;
   let terminals = 0;
-  let extraTerminalPolls = 0;
+  let extraSince = null;
+  let extraPersisted = false;
   await waitUntil(async () => {
     const session = await findSession(demo, scriptName);
     const measured = await page.evaluate(() => {
@@ -173,11 +203,15 @@ async function waitForSettledTerminal(page, demo, scriptName) {
       return { terminals: 1, geometry };
     });
     terminals = measured.terminals;
-    extraTerminalPolls = terminals > 1 ? extraTerminalPolls + 1 : 0;
-    // Ends the wait so the throw below fails loudly. Throwing here instead
-    // would be swallowed by waitUntil's catch into a slow, misleading timeout.
-    if (extraTerminalPolls >= 2) return true;
-    if (terminals > 1) return false;
+    if (terminals > 1) {
+      extraSince ??= Date.now();
+      last = null;
+      // Ends the wait so the throw below fails loudly. Throwing here instead
+      // would be swallowed by waitUntil's catch into a slow, misleading timeout.
+      extraPersisted = Date.now() - extraSince >= EXTRA_TERMINAL_GRACE_MS;
+      return extraPersisted;
+    }
+    extraSince = null;
     const { geometry } = measured;
     if (!(session?.subscriberCount > 0) || geometry === null) {
       last = null;
@@ -190,7 +224,7 @@ async function waitForSettledTerminal(page, demo, scriptName) {
     }
     return Date.now() - since >= SETTLE_MS;
   }, `the terminal attached to ${scriptName} to settle`);
-  if (extraTerminalPolls >= 2) {
+  if (extraPersisted) {
     throw new Error(
       `expected one mounted terminal while waiting for ${scriptName}, found ${terminals}`,
     );
@@ -312,6 +346,10 @@ async function captureMobile(browser, demo) {
   await context.close();
 }
 
+const LOOP_LEAD_MS = 1000;
+// A beat on the finished transcript before the loop restarts.
+const LOOP_TAIL_S = 1.5;
+
 /** An agent session streaming into the terminal, recorded from session start. */
 async function recordLoop(browser, demo) {
   if (spawnSync("ffmpeg", ["-version"]).status !== 0) {
@@ -320,10 +358,13 @@ async function recordLoop(browser, demo) {
   }
   const { scriptsDir, auroraProject } = demo.seeded;
   const scriptPath = path.join(scriptsDir, "loop-demo.sh");
-  // startDelay leaves time to open the session before the first line prints.
-  await writeFile(scriptPath, agentTranscriptScript({ startDelay: 3, lines: AUTH_TRANSCRIPT }), {
-    mode: 0o755,
-  });
+  const releaseFile = path.join(scriptsDir, "loop-demo.release");
+  // Held until the session is open and its terminal settled, like the stills.
+  await writeFile(
+    scriptPath,
+    agentTranscriptScript({ startDelay: 0, lines: AUTH_TRANSCRIPT, releaseFile }),
+    { mode: 0o755 },
+  );
 
   // Playwright records in viewport (CSS) pixels regardless of deviceScaleFactor,
   // so the loop is 1x while the stills are 2x; fine for a muted loop.
@@ -348,20 +389,26 @@ async function recordLoop(browser, demo) {
     }),
   });
   await page.locator(".session-item", { hasText: "loop-demo.sh" }).first().click();
-  await page.waitForTimeout(1500);
-  // Taken once the session is open, still inside the script's startDelay, so
-  // the trimmed loop begins on an empty terminal just before the first line.
-  // Wall-clock, so on a loaded machine the trim can land a little early or
-  // late; landing about 1.5 s before the first line absorbs normal drift.
+  await waitForSettledTerminal(page, demo, "loop-demo.sh");
+  // The trimmed loop starts here, on the settled empty terminal, LOOP_LEAD_MS
+  // before the release; the transcript can't print before then whatever the
+  // host's load, so the trim never cuts into it.
   const offset = (Date.now() - recordingStarted) / 1000;
-  // 35 transcript lines at 0.25 s each, plus a beat at the end.
-  await page.waitForTimeout(3000 + AUTH_TRANSCRIPT.length * 250 + 1500);
+  await page.waitForTimeout(LOOP_LEAD_MS);
+  await writeFile(releaseFile, "");
+  // The recording must hold the whole transcript plus its tail; the encode
+  // below cuts the end back to the last on-screen change + LOOP_TAIL_S.
+  await waitForTranscript(demo, "loop-demo.sh", AUTH_TRANSCRIPT);
+  await page.waitForTimeout(LOOP_TAIL_S * 1000);
   await context.close();
 
   const [raw] = await readdir(videoDir);
   const src = path.join(videoDir, raw);
   const base = path.join(profile.outDir, "terminal-stream");
-  const input = ["-ss", offset.toFixed(2), "-i", src, "-an"];
+  // End LOOP_TAIL_S after the transcript's last line landed on screen.
+  const lastChange = videoLastChange(src);
+  const end = lastChange === null ? [] : ["-to", (lastChange + LOOP_TAIL_S).toFixed(2)];
+  const input = ["-ss", offset.toFixed(2), ...end, "-i", src, "-an"];
   ffmpeg([
     ...input,
     "-c:v",

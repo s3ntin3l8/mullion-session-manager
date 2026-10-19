@@ -49,13 +49,8 @@ async function seedGitRepo(dir, { readme, files, commitMessages }) {
 
 // A plausible-looking agent transcript, entirely synthetic — printed with
 // small delays so it looks live rather than dumped instantly. `startDelay`
-// (seconds) is critical for the mobile shot: dtach starts this script
-// running the instant the session is created, before any client has
-// attached — a client's terminal-fit resize only affects output printed
-// *after* it lands, xterm doesn't reflow already-printed scrollback. A
-// long enough pre-print pause lets the mobile client attach and resize the
-// PTY before any of these lines exist, so what's on screen isn't clipped
-// mid-word to a stale (desktop-sized) column count.
+// (seconds) is a plain pre-print pause; the screenshot pipeline doesn't rely
+// on it (see `releaseFile` below for why a duration can't be trusted).
 // Single-quoted, not JSON.stringify'd (double-quoted): several transcript
 // lines below contain literal `$`/backtick characters (e.g. template-literal
 // snippets in the fake diffs), and bash still expands `$…`/`` ` `` inside
@@ -77,11 +72,15 @@ function shellSingleQuote(s) {
 // the backend's IDLE_THRESHOLD_MS (2 s) so the row keeps reading "Working".
 export const KEEPALIVE_INTERVAL_S = 1;
 
-// `releaseFile`, when given, holds the transcript until that file exists, for
-// the same reason as `startDelay` but without guessing a duration: the
-// screenshot pipeline creates it once its client has the session open and
-// sized, so every line prints into the real terminal (a transcript printed in
-// full before any client attached comes back without its first line).
+// `releaseFile`, when given, holds the transcript until that file exists. dtach
+// starts this script the instant the session is created, before any client
+// has attached, and a client's terminal-fit resize only affects output
+// printed *after* it lands (xterm doesn't reflow printed scrollback). So the
+// screenshot pipeline creates the file once its client has the session open
+// and its terminal settled, and every line prints at the real geometry
+// (otherwise lines come back clipped to a stale column count, scrolled, or,
+// printed before any client attached, without the first line). Holding on an
+// observed state rather than a pause means a loaded host can't outrun it.
 export function agentTranscriptScript({ startDelay, lines, releaseFile }) {
   const hold = releaseFile
     ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n`
