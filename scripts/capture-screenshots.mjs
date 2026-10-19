@@ -145,7 +145,9 @@ async function waitForTranscript(demo, scriptName, lines) {
  *
  * The page has no per-session marker on a terminal pane, so the gate requires
  * exactly one mounted terminal (every shot that uses it shows one) and fails
- * outright on more, rather than measuring a pane other than the attached one.
+ * on more, rather than measuring a pane other than the attached one. Only a
+ * count that persists across two polls fails, so a pane remounting during a
+ * layout change doesn't abort the run.
  * A box that hasn't been laid out yet (0×0) doesn't count as settled.
  */
 const SETTLE_MS = 1500;
@@ -153,6 +155,7 @@ async function waitForSettledTerminal(page, demo, scriptName) {
   let last = null;
   let since = 0;
   let terminals = 0;
+  let extraTerminalPolls = 0;
   await waitUntil(async () => {
     const session = await findSession(demo, scriptName);
     const measured = await page.evaluate(() => {
@@ -170,7 +173,11 @@ async function waitForSettledTerminal(page, demo, scriptName) {
       return { terminals: 1, geometry };
     });
     terminals = measured.terminals;
-    if (terminals > 1) return true;
+    extraTerminalPolls = terminals > 1 ? extraTerminalPolls + 1 : 0;
+    // Ends the wait so the throw below fails loudly. Throwing here instead
+    // would be swallowed by waitUntil's catch into a slow, misleading timeout.
+    if (extraTerminalPolls >= 2) return true;
+    if (terminals > 1) return false;
     const { geometry } = measured;
     if (!(session?.subscriberCount > 0) || geometry === null) {
       last = null;
@@ -183,11 +190,22 @@ async function waitForSettledTerminal(page, demo, scriptName) {
     }
     return Date.now() - since >= SETTLE_MS;
   }, `the terminal attached to ${scriptName} to settle`);
-  if (terminals > 1) {
+  if (extraTerminalPolls >= 2) {
     throw new Error(
       `expected one mounted terminal while waiting for ${scriptName}, found ${terminals}`,
     );
   }
+}
+
+/**
+ * The contract both terminal shots share: the session (already opened in the
+ * page) holds its transcript until its terminal has settled, is released
+ * through `releaseFile`, and the shot waits for the whole transcript.
+ */
+async function releaseIntoSettledTerminal(page, demo, scriptName, lines, releaseFile) {
+  await waitForSettledTerminal(page, demo, scriptName);
+  await writeFile(releaseFile, "");
+  await waitForTranscript(demo, scriptName, lines);
 }
 
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
@@ -215,9 +233,13 @@ async function captureDesktop(browser, demo) {
   // the session is open here and its terminal sized, then prints it into the
   // live terminal; the shot waits for the whole transcript.
   await page.locator(".session-item", { hasText: "fake-agent.sh" }).first().click();
-  await waitForSettledTerminal(page, demo, "fake-agent.sh");
-  await writeFile(demo.seeded.authReleaseFile, "");
-  await waitForTranscript(demo, "fake-agent.sh", AUTH_TRANSCRIPT);
+  await releaseIntoSettledTerminal(
+    page,
+    demo,
+    "fake-agent.sh",
+    AUTH_TRANSCRIPT,
+    demo.seeded.authReleaseFile,
+  );
   await page.waitForTimeout(1000);
   await shot(page, "desktop-dashboard.png");
 
@@ -278,9 +300,13 @@ async function captureMobile(browser, demo) {
   // 5. Mobile terminal with the key bar, released through the same settled
   //    gate as the dashboard so the transcript prints at the fitted width.
   await page.locator(".session-item", { hasText: "mobile-demo.sh" }).first().click();
-  await waitForSettledTerminal(page, demo, "mobile-demo.sh");
-  await writeFile(mobileReleaseFile, "");
-  await waitForTranscript(demo, "mobile-demo.sh", MOBILE_TRANSCRIPT);
+  await releaseIntoSettledTerminal(
+    page,
+    demo,
+    "mobile-demo.sh",
+    MOBILE_TRANSCRIPT,
+    mobileReleaseFile,
+  );
   await page.waitForTimeout(1000);
   await shot(page, "mobile-terminal.png");
   await context.close();
