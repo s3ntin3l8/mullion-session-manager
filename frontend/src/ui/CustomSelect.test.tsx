@@ -94,4 +94,26 @@ describe("ui/CustomSelect caps against the visible viewport", () => {
       });
     }
   });
+
+  it("floors maxHeight when the trigger is flush with the visible edge", async () => {
+    installFakeVisualViewport(400, 100);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 460,
+      bottom: 500,
+      left: 0,
+      right: 120,
+      width: 120,
+      height: 40,
+      x: 0,
+      y: 460,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<CustomSelect value="a" onChange={vi.fn()} options={OPTIONS} label="Pick" />);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Pick" }));
+      expect(screen.getByRole("listbox").style.maxHeight).toBe("120px");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
 });

@@ -3,7 +3,11 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
 import { OverflowIcon } from "./icons.js";
-import { useVisualViewportChange, visibleViewport } from "../hooks/useVisualViewportChange.js";
+import {
+  useVisualViewportChange,
+  visibleViewport,
+  menuMaxHeight,
+} from "../hooks/useVisualViewportChange.js";
 
 // Generic ⋯ trigger + portaled dropdown, extracted from PaneTab.tsx's own
 // overflow menu (Phase 4b/4c) so group/workspace/project rows get the same
@@ -22,11 +26,6 @@ import { useVisualViewportChange, visibleViewport } from "../hooks/useVisualView
 // pass — it already works, no reason to churn it.
 const ARM_MS = 3000;
 const ARM_SECONDS = ARM_MS / 1000;
-
-// Floor for getMenuStyle's own `maxHeight` cap — see that function's doc
-// comment for why an unfloored value can go negative and get silently
-// dropped by the browser.
-const MIN_MENU_MAX_HEIGHT = 120;
 
 export interface KebabMenuItem {
   key: string;
@@ -164,13 +163,11 @@ export function KebabMenu({
   // The "top" placement's `bottom` offset stays in layout-viewport
   // coordinates (`innerHeight`): `position: fixed; bottom` is distance from
   // the layout viewport's bottom edge, and the trigger's rect is already in
-  // those coordinates. Floored at MIN_MENU_MAX_HEIGHT rather than
-  // used raw: a trigger within a few px of the edge it opens toward (the
-  // Dock at its minimum height is exactly this case) makes the raw
-  // `rect.top - 8`/`... - rect.bottom - 8` go negative, and a negative
-  // `max-height` is an invalid CSS length — the browser silently drops the
-  // whole declaration, un-capping the menu right back to the bug this cap
-  // exists to fix.
+  // those coordinates. A non-positive max-height is an invalid CSS length
+  // (the browser drops it and the menu goes uncapped), so `menuMaxHeight`
+  // falls back to MENU_MAX_HEIGHT_FLOOR only then. A small *positive* gap is
+  // used as-is: flooring it back up to 120px hid the menu behind the
+  // keyboard, which is the bug this cap exists to fix.
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
@@ -184,11 +181,11 @@ export function KebabMenu({
     if (menuPlacement === "top") {
       style.bottom = window.innerHeight - rect.top + 4;
       style.top = "auto";
-      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, rect.top - visible.top - 8);
+      style.maxHeight = menuMaxHeight(rect.top - visible.top - 8);
     } else {
       style.top = rect.bottom + 4;
       style.bottom = "auto";
-      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, visible.bottom - rect.bottom - 8);
+      style.maxHeight = menuMaxHeight(visible.bottom - rect.bottom - 8);
     }
     return style;
   };

@@ -154,6 +154,33 @@ describe("ui/KebabMenu maxHeight floor", () => {
       });
     }
   });
+
+  // A free gap under the 120px floor must stay that gap. Flooring it back
+  // up hid the menu behind the keyboard.
+  it("does not floor a small positive gap back up to 120px", async () => {
+    const user = userEvent.setup();
+    installFakeVisualViewport(400, 100);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 458,
+      bottom: 478,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: 20,
+      x: 0,
+      y: 458,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<KebabMenu items={items} />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.maxHeight).toBe("14px");
+    } finally {
+      rectSpy.mockRestore();
+      uninstallFakeVisualViewport();
+    }
+  });
 });
 
 // Issue #1106 — an item's `disabled` used to map straight to the native

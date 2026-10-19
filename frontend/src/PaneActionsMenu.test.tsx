@@ -836,4 +836,25 @@ describe("PaneActionsMenu — visual-viewport pan (issue #1399)", () => {
       });
     }
   });
+
+  // The trigger itself is past the visible bottom, so the flip lands below
+  // visible.top + margin. A cap of visible.height - 2*margin (384) would
+  // leave this 300px menu running past the keyboard; the cap has to start
+  // from the resolved top.
+  it("caps a flipped menu from its resolved top, not the visible height", async () => {
+    installFakeVisualViewport(400, 100);
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      trigger.getBoundingClientRect = () =>
+        ({ top: 560, bottom: 580, left: 300, right: 344, width: 44, height: 20 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe("256px");
+      expect(menu.style.maxHeight).toBe("236px");
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
+    }
+  });
 });

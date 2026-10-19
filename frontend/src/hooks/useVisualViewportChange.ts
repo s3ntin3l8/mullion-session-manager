@@ -23,6 +23,18 @@ export function visibleViewport(): VisibleViewport {
   return { top, bottom: top + height, height };
 }
 
+// A non-positive `max-height` is an invalid length: the browser drops the
+// declaration and the menu goes uncapped. Use the free space whenever it is
+// positive — flooring a small positive gap back up to `floor` hides that
+// much of the menu behind the keyboard (issue #1402). Fall back to `floor`
+// only when nothing is actually free. 120px is enough to still show a few
+// items when the trigger is flush with the edge (the Dock at its minimum).
+export const MENU_MAX_HEIGHT_FLOOR = 120;
+
+export function menuMaxHeight(available: number, floor = MENU_MAX_HEIGHT_FLOOR): number {
+  return available > 0 ? available : floor;
+}
+
 // Issue #1399 — since #1398, `.app` pins its `top` to the visual viewport's
 // `offsetTop` under `(pointer: coarse)` (tablet.css's `--shell-top`, fed by
 // useVisualViewportInset.ts), so the toolbar *moves* whenever iOS pans the

@@ -374,7 +374,7 @@ export function PaneActionsMenu({
               position: "fixed",
               top: overflowPos.top,
               right: overflowPos.right,
-              maxHeight: `${Math.max(0, visibleViewport().height - 2 * VIEWPORT_MARGIN_PX)}px`,
+              maxHeight: `${Math.max(0, visibleViewport().bottom - overflowPos.top - VIEWPORT_MARGIN_PX)}px`,
               overflowY: "auto",
             }}
             role="menu"
