@@ -40,6 +40,17 @@ export function resolveBaseRef(explicitRef) {
   return null;
 }
 
+/** A coverable source file: src/ or frontend/src/ code, not tests or fixtures. */
+export function isSourceFile(file) {
+  return (
+    (file.startsWith("src/") || file.startsWith("frontend/src/")) &&
+    /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(file) &&
+    !file.includes(".test.") &&
+    !file.includes(".spec.") &&
+    !file.includes("/fixtures/")
+  );
+}
+
 export function parseGitDiffHunks(diffText) {
   // Returns Map<filePath, Set<lineNumber>>
   const files = new Map();
@@ -51,15 +62,7 @@ export function parseGitDiffHunks(diffText) {
       currentFile = null;
     } else if (line.startsWith("+++ b/")) {
       currentFile = line.slice(6).trim();
-      // Only check source files, ignore tests and fixtures
-      const isSource =
-        (currentFile.startsWith("src/") || currentFile.startsWith("frontend/src/")) &&
-        /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(currentFile) &&
-        !currentFile.includes(".test.") &&
-        !currentFile.includes(".spec.") &&
-        !currentFile.includes("/fixtures/");
-
-      if (!isSource) {
+      if (!isSourceFile(currentFile)) {
         currentFile = null;
       } else if (!files.has(currentFile)) {
         files.set(currentFile, new Set());
@@ -248,6 +251,9 @@ export function runPatchCoverageCheck(options = {}) {
 
   // Get git diff
   let diffText = options.diffText;
+  // Every source path at the diff base: lets a damaged index (all of them
+  // staged as deleted) fail loudly instead of passing as an empty patch.
+  let baseSourceFiles = options.baseSourceFiles ?? [];
   if (diffText === undefined) {
     if (!baseRef) {
       console.error(
@@ -255,13 +261,13 @@ export function runPatchCoverageCheck(options = {}) {
       );
       return { ok: false, overallPercent: 0, error: "no-base-ref" };
     }
+    // Use the merge-base (common ancestor of baseRef and HEAD) rather than
+    // baseRef's tip, so the diff correctly reflects only what diverged from
+    // the branch point — not extra commits on main that advanced after the
+    // branch was cut. git diff origin/main..HEAD and a pre-rebase run would
+    // both over-count if baseRef has advanced past the fork point.
+    let diffBase = baseRef; // fallback: diff against baseRef tip if merge-base fails
     try {
-      // Use the merge-base (common ancestor of baseRef and HEAD) rather than
-      // baseRef's tip, so the diff correctly reflects only what diverged from
-      // the branch point — not extra commits on main that advanced after the
-      // branch was cut. git diff origin/main..HEAD and a pre-rebase run would
-      // both over-count if baseRef has advanced past the fork point.
-      let diffBase = baseRef; // fallback: diff against baseRef tip if merge-base fails
       try {
         diffBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
           cwd: root,
@@ -294,11 +300,36 @@ export function runPatchCoverageCheck(options = {}) {
       console.error(`ERROR: Failed to diff against ${baseRef}:`, err.message);
       return { ok: false, overallPercent: 0, error: "diff-failed" };
     }
+    // Its own try: a failure here is a skipped sanity check, not a diff failure.
+    try {
+      baseSourceFiles = execFileSync(
+        "git",
+        ["ls-tree", "-r", "-z", "--name-only", diffBase, "--", "src", "frontend/src"],
+        { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
+      )
+        .split("\0")
+        .filter(Boolean);
+    } catch (err) {
+      console.warn(
+        `WARNING: could not list ${diffBase}'s source tree (git ls-tree), so the ` +
+          `damaged-index check is skipped: ${err.message}`,
+      );
+    }
   }
 
   const modifiedFiles = parseGitDiffHunks(diffText);
   if (modifiedFiles.size === 0) {
     const deleted = deletedFiles(diffText);
+    const deletedSet = new Set(deleted);
+    const baseSources = baseSourceFiles.filter(isSourceFile);
+    if (baseSources.length > 0 && baseSources.every((f) => deletedSet.has(f))) {
+      console.error(
+        `ERROR: the patch deletes every source file (${baseSources.length}), which means the ` +
+          "git index is damaged, not that the code is gone. Check `git status`; `git reset` " +
+          "restores the index from HEAD without touching your working tree.",
+      );
+      return { ok: false, overallPercent: 0, error: "index-damaged" };
+    }
     if (deleted.length > 0)
       console.warn(
         `WARNING: the patch only deletes ${deleted.length} source file(s) (e.g. ${deleted[0]}). ` +
