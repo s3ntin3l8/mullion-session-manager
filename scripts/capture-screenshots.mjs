@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
+import { withDemo } from "./demo/with-demo.mjs";
 import {
   AUTH_TRANSCRIPT,
   MOBILE_TRANSCRIPT,
@@ -436,18 +437,19 @@ async function recordLoop(browser, demo) {
 }
 
 async function main() {
-  const demo = await startDemo({ quiet: true, keep: values.keep, holdTranscripts: true });
-  const browser = await chromium.launch();
-  try {
-    await captureDesktop(browser, demo);
-    await captureMobile(browser, demo);
-    if (profile.loop) await recordLoop(browser, demo);
-    console.log(`[screenshots] done: ${profile.outDir}`);
-  } finally {
-    await browser.close();
-    console.log("[screenshots] tearing down the demo...");
-    await demo.stop();
-  }
+  // withDemo stops the demo on every exit path, including a failed browser
+  // launch and Ctrl-C, which would otherwise leave its servers and session
+  // scopes running on the demo ports.
+  await withDemo({
+    startDemo: () => startDemo({ quiet: true, keep: values.keep, holdTranscripts: true }),
+    launchBrowser: () => chromium.launch(),
+    run: async (browser, demo) => {
+      await captureDesktop(browser, demo);
+      await captureMobile(browser, demo);
+      if (profile.loop) await recordLoop(browser, demo);
+      console.log(`[screenshots] done: ${profile.outDir}`);
+    },
+  });
 }
 
 main().catch((err) => {
