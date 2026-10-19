@@ -26,7 +26,8 @@ const DPR_TOLERANCE = 0.05;
 
 /**
  * Checks a terminal's measured geometry before it's shot, returning what's
- * wrong (empty when it's fine). `screen` is the `.xterm-screen` box (cols x
+ * wrong as `{ kind, message }` (empty when it's fine): kind "cells" for
+ * oversized cells, "canvas" for a drawing surface out of step. `screen` is the `.xterm-screen` box (cols x
  * cell width by rows x cell height), `canvases` the renderer's drawing
  * surfaces (none under the DOM renderer), `pty` the size the session's
  * transcript printed at, or null when it wasn't recorded.
@@ -43,10 +44,12 @@ export function terminalGeometryProblems({ screen, canvases, dpr, pty, fontSize 
     const cellWidth = screen.width / pty.cols;
     const cellHeight = screen.height / pty.rows;
     if (cellWidth > fontSize * MAX_CELL_WIDTH_EM || cellHeight > fontSize * MAX_CELL_HEIGHT_EM) {
-      problems.push(
-        `${pty.cols}x${pty.rows} cells in a ${screen.width}x${screen.height} box ` +
+      problems.push({
+        kind: "cells",
+        message:
+          `${pty.cols}x${pty.rows} cells in a ${screen.width}x${screen.height} box ` +
           `(${cellWidth.toFixed(1)}x${cellHeight.toFixed(1)} px cells at a ${fontSize} px font)`,
-      );
+      });
     }
   }
   for (const [i, c] of canvases.entries()) {
@@ -54,15 +57,56 @@ export function terminalGeometryProblems({ screen, canvases, dpr, pty, fontSize 
       Math.abs(c.cssWidth - screen.width) > PX_TOLERANCE ||
       Math.abs(c.cssHeight - screen.height) > PX_TOLERANCE
     ) {
-      problems.push(
-        `canvas ${i} is ${c.cssWidth}x${c.cssHeight} css px in a ${screen.width}x${screen.height} box`,
-      );
+      problems.push({
+        kind: "canvas",
+        message: `canvas ${i} is ${c.cssWidth}x${c.cssHeight} css px in a ${screen.width}x${screen.height} box`,
+      });
     }
     if (c.cssWidth > 0 && Math.abs(c.width / c.cssWidth - dpr) > DPR_TOLERANCE) {
-      problems.push(
-        `canvas ${i} is drawn at ${(c.width / c.cssWidth).toFixed(2)}x for a devicePixelRatio of ${dpr}`,
-      );
+      problems.push({
+        kind: "canvas",
+        message: `canvas ${i} is drawn at ${(c.width / c.cssWidth).toFixed(2)}x for a devicePixelRatio of ${dpr}`,
+      });
     }
   }
   return problems;
+}
+
+/**
+ * The check a terminal shot runs before shooting. `measure` returns the
+ * page's terminals (`{ terminals, screen, canvases, dpr }`); like the settled
+ * gate, it must find exactly one, since a pane can't be told apart from
+ * another on the page and measuring the wrong one would pass a broken shot.
+ * Oversized cells throw at once: the transcript already printed at them and
+ * xterm doesn't reflow printed output, so re-fitting can't repair the still.
+ * A canvas out of step gets `refit` (a viewport nudge and re-settle) up to
+ * `maxRefits` times. Logs one geometry line per measurement and returns the
+ * geometry that passed.
+ */
+export async function checkTerminalGeometry({
+  name,
+  measure,
+  refit,
+  pty,
+  fontSize,
+  log,
+  maxRefits = 2,
+}) {
+  if (!pty) log(`[screenshots] ${name}: no PTY size recorded; checking the canvases only`);
+  for (let attempt = 0; ; attempt++) {
+    const { terminals, ...measured } = await measure();
+    if (terminals !== 1) {
+      throw new Error(`${name}: expected one mounted terminal, found ${terminals}`);
+    }
+    const geometry = { ...measured, pty, fontSize };
+    log(`[screenshots] ${name} terminal: ${JSON.stringify(geometry)}`);
+    const problems = terminalGeometryProblems(geometry);
+    if (problems.length === 0) return geometry;
+    const summary = problems.map((p) => p.message).join("; ");
+    if (problems.some((p) => p.kind === "cells") || attempt >= maxRefits) {
+      throw new Error(`${name}: terminal geometry is off: ${summary}`);
+    }
+    log(`[screenshots] ${name}: re-fitting the terminal (${summary})`);
+    await refit();
+  }
 }

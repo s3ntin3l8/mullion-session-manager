@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkTerminalGeometry,
   parseSttySize,
   ptySizeFile,
   terminalGeometryProblems,
@@ -47,24 +48,90 @@ describe("terminalGeometryProblems", () => {
   it("flags cells twice the font's size in an unchanged box", () => {
     const problems = terminalGeometryProblems({ ...good, pty: { rows: 24, cols: 76 } });
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain("76x24 cells");
+    expect(problems[0].kind).toBe("cells");
+    expect(problems[0].message).toContain("76x24 cells");
   });
 
   it("flags a drawing surface out of step with the box", () => {
     const wide = { cssWidth: 2496, cssHeight: 1728, width: 4992, height: 3456 };
     const problems = terminalGeometryProblems({ ...good, canvases: [wide] });
-    expect(problems).toEqual(["canvas 0 is 2496x1728 css px in a 1248x864 box"]);
+    expect(problems).toEqual([
+      { kind: "canvas", message: "canvas 0 is 2496x1728 css px in a 1248x864 box" },
+    ]);
   });
 
   it("flags a surface drawn for the wrong devicePixelRatio", () => {
     const blurry = { ...canvas, width: 1248, height: 864 };
     expect(terminalGeometryProblems({ ...good, canvases: [blurry] })).toEqual([
-      "canvas 0 is drawn at 1.00x for a devicePixelRatio of 2",
+      { kind: "canvas", message: "canvas 0 is drawn at 1.00x for a devicePixelRatio of 2" },
     ]);
   });
 
   it("tolerates a sub-pixel box", () => {
     const close = { ...canvas, cssWidth: 1248.5 };
     expect(terminalGeometryProblems({ ...good, canvases: [close] })).toEqual([]);
+  });
+});
+
+describe("checkTerminalGeometry", () => {
+  const measured = { terminals: 1, screen, canvases: [canvas], dpr: 2 };
+  const wide = { cssWidth: 2496, cssHeight: 1728, width: 4992, height: 3456 };
+
+  /** Runs the check over a scripted sequence of measurements. */
+  function run(measurements: object[], pty: { rows: number; cols: number } | null = good.pty) {
+    const logs: string[] = [];
+    let refits = 0;
+    let i = 0;
+    const result = checkTerminalGeometry({
+      name: "shot.png",
+      measure: async () => measurements[Math.min(i++, measurements.length - 1)],
+      refit: async () => {
+        refits++;
+      },
+      pty,
+      fontSize: 14,
+      log: (line: string) => logs.push(line),
+    });
+    return { result, logs, refits: () => refits };
+  }
+
+  it("passes a good terminal without re-fitting, logging its geometry", async () => {
+    const r = run([measured]);
+    await expect(r.result).resolves.toMatchObject({ pty: good.pty, fontSize: 14 });
+    expect(r.refits()).toBe(0);
+    expect(r.logs).toHaveLength(1);
+    expect(r.logs[0]).toContain("shot.png terminal:");
+  });
+
+  it("throws on anything but exactly one mounted terminal", async () => {
+    await expect(run([{ terminals: 2 }]).result).rejects.toThrow(
+      "expected one mounted terminal, found 2",
+    );
+    await expect(run([{ terminals: 0 }]).result).rejects.toThrow("found 0");
+  });
+
+  it("fails oversized cells at once rather than re-fitting", async () => {
+    const r = run([measured], { rows: 24, cols: 76 });
+    await expect(r.result).rejects.toThrow("terminal geometry is off: 76x24 cells");
+    expect(r.refits()).toBe(0);
+  });
+
+  it("re-fits a canvas out of step and passes once it's back", async () => {
+    const r = run([{ ...measured, canvases: [wide] }, measured]);
+    await expect(r.result).resolves.toBeDefined();
+    expect(r.refits()).toBe(1);
+    expect(r.logs.some((l) => l.includes("re-fitting the terminal"))).toBe(true);
+  });
+
+  it("gives up after the bounded re-fits", async () => {
+    const r = run([{ ...measured, canvases: [wide] }]);
+    await expect(r.result).rejects.toThrow("canvas 0 is 2496x1728 css px");
+    expect(r.refits()).toBe(2);
+  });
+
+  it("says so when there's no PTY size, and checks the canvases alone", async () => {
+    const r = run([measured], null);
+    await expect(r.result).resolves.toBeDefined();
+    expect(r.logs[0]).toContain("no PTY size recorded");
   });
 });

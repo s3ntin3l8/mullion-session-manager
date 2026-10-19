@@ -25,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
-import { parseSttySize, ptySizeFile, terminalGeometryProblems } from "./demo/geometry.mjs";
+import { checkTerminalGeometry, parseSttySize, ptySizeFile } from "./demo/geometry.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
 import {
   AUTH_TRANSCRIPT,
@@ -260,13 +260,15 @@ async function releaseIntoSettledTerminal(page, demo, scriptName, lines, release
   await waitForTranscript(demo, scriptName, lines);
 }
 
-/** The terminal's measured geometry, for terminalGeometryProblems. */
+/** The page's terminals and, when there's exactly one, its geometry. */
 function measureTerminal(page) {
   return page.evaluate(() => {
     // Runs in the page; this file's lint env is Node, hence globalThis.
-    const screen = globalThis.document.querySelector(".xterm-screen");
-    if (!screen) return null;
+    const screens = globalThis.document.querySelectorAll(".xterm-screen");
+    if (screens.length !== 1) return { terminals: screens.length };
+    const [screen] = screens;
     return {
+      terminals: 1,
       screen: { width: screen.offsetWidth, height: screen.offsetHeight },
       canvases: [...screen.querySelectorAll("canvas")].map((c) => ({
         cssWidth: c.getBoundingClientRect().width,
@@ -281,34 +283,26 @@ function measureTerminal(page) {
 
 /**
  * Shoots a still showing the terminal released through `releaseFile`, once
- * its geometry checks out (terminalGeometryProblems). A drawing surface out
- * of step with the layout gets a viewport nudge to re-fit it, a bounded
- * number of times. A transcript printed at an oversized cell can't be fixed
- * by re-fitting (xterm doesn't reflow printed output), so that fails the run
- * instead of shipping a still of it. Logs one geometry line per shot.
+ * its geometry checks out (checkTerminalGeometry). A re-fit is a 1 px
+ * viewport nudge, which makes the terminal fit and redraw, then a re-settle.
  */
-const REFIT_ATTEMPTS = 2;
 async function terminalShot(page, demo, name, scriptName, releaseFile) {
   const { terminal } = await demo.api("/api/settings");
   const pty = parseSttySize(await readFile(ptySizeFile(releaseFile), "utf8").catch(() => ""));
-  for (let attempt = 0; ; attempt++) {
-    const measured = await measureTerminal(page);
-    if (!measured) throw new Error(`no terminal on the page for ${name}`);
-    const geometry = { ...measured, pty, fontSize: terminal.fontSize };
-    const problems = terminalGeometryProblems(geometry);
-    console.log(`[screenshots] ${name} terminal: ${JSON.stringify(geometry)}`);
-    if (problems.length === 0) break;
-    const printedWrong = problems.some((p) => p.includes(" cells in a "));
-    if (printedWrong || attempt >= REFIT_ATTEMPTS) {
-      throw new Error(`${name}: terminal geometry is off: ${problems.join("; ")}`);
-    }
-    console.log(`[screenshots] ${name}: re-fitting the terminal (${problems.join("; ")})`);
-    const viewport = page.viewportSize();
-    await page.setViewportSize({ ...viewport, width: viewport.width - 1 });
-    await page.waitForTimeout(300);
-    await page.setViewportSize(viewport);
-    await waitForSettledTerminal(page, demo, scriptName);
-  }
+  await checkTerminalGeometry({
+    name,
+    measure: () => measureTerminal(page),
+    refit: async () => {
+      const viewport = page.viewportSize();
+      await page.setViewportSize({ ...viewport, width: viewport.width - 1 });
+      await page.waitForTimeout(300);
+      await page.setViewportSize(viewport);
+      await waitForSettledTerminal(page, demo, scriptName);
+    },
+    pty,
+    fontSize: terminal.fontSize,
+    log: (line) => console.log(line),
+  });
   await shot(page, name);
 }
 
