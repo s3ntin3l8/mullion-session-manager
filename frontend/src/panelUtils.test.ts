@@ -15,6 +15,8 @@ import {
   hasTiledPanels,
   isTiledGroup,
   isTiledPanel,
+  shouldWarnTabletPaneCap,
+  tiledColumnCount,
   maximizeIfTiled,
   focusPanelForTier,
   stripFloatingPanels,
@@ -1081,6 +1083,35 @@ describe("isTiledPanel", () => {
 
   it("is false for a floating panel", () => {
     expect(isTiledPanel(mockPanel("session-1", "floating")!)).toBe(false);
+  });
+});
+
+describe("tablet pane-cap notice (issue #1555)", () => {
+  const grid = (id: string, groupId: string) => mockPanel(id, "grid", { group: { id: groupId } })!;
+  const floating = (id: string) => mockPanel(id, "floating", { group: { id: "float" } })!;
+
+  it("counts tiled groups, not panels or floats", () => {
+    expect(
+      tiledColumnCount([grid("a", "g1"), grid("b", "g1"), grid("c", "g2"), floating("d")]),
+    ).toBe(2);
+  });
+
+  it("warns only on tablet, only past the cap, and only once", () => {
+    expect(
+      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 3, cap: 2, alreadyWarned: false }),
+    ).toBe(true);
+    expect(
+      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 2, cap: 2, alreadyWarned: false }),
+    ).toBe(false);
+    expect(
+      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 4, cap: 2, alreadyWarned: true }),
+    ).toBe(false);
+    expect(
+      shouldWarnTabletPaneCap({ tier: "phone", columnCount: 4, cap: 2, alreadyWarned: false }),
+    ).toBe(false);
+    expect(
+      shouldWarnTabletPaneCap({ tier: "desktop", columnCount: 4, cap: 2, alreadyWarned: false }),
+    ).toBe(false);
   });
 });
 

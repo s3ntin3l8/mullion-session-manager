@@ -41,6 +41,8 @@ import {
   freshHintedChildIds,
   shouldAutoOpenChildPanels,
   isTiledPanel,
+  tiledColumnCount,
+  shouldWarnTabletPaneCap,
   canLaunchTerminal,
   shouldShowCodexHookTrustBanner,
 } from "./panelUtils.js";
@@ -111,6 +113,8 @@ const DEFAULT_WORKSPACE_NAME = "Default";
 // round starts on `online`/tab-visible after giving up).
 const WORKSPACE_LOAD_MAX_ATTEMPTS = 5;
 const WORKSPACE_LOAD_RETRY_BASE_MS = 500;
+// Issue #1555 — long enough to read, short enough not to sit on the grid.
+const PANE_CAP_NOTICE_MS = 6000;
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
 // to decide whether to surface the hook-trust banner (issue #259) for a
 // currently-active session, never to make any backend decision. The
@@ -287,6 +291,10 @@ export function App() {
   // state-setters don't re-run the check reliably) and from the fetch race
   // below (workspacesLoaded flips exactly once).
   const bootstrappedRef = useRef(false);
+  // Workspace ids that have already seen the tablet pane-cap notice this
+  // page load (issue #1555). Not persisted: a reload may say it again.
+  const paneCapWarnedRef = useRef(new Set<number>());
+  const [paneCapNotice, setPaneCapNotice] = useState(false);
   // restoringRef/restoredWorkspaceIdRef used to be declared here, but now
   // come from useWorkspacePersistence's return value (see the hook call
   // further down, at the exact position the restore/autosave effects used
@@ -1186,15 +1194,46 @@ export function App() {
           params: { sessionId: session.id },
           ...(referencePanel ? { position: { referencePanel, direction: req.direction } } : {}),
         });
+        // Explicit splits ignore tabletPositioning's cap (issue #1555).
+        // Count after addPanel — dockview updates the grid synchronously.
+        const workspaceKey = activeWorkspaceId ?? -1;
+        if (
+          shouldWarnTabletPaneCap({
+            tier: layoutTier,
+            columnCount: tiledColumnCount(dockviewApi.panels),
+            cap: settings.tabletPaneCap,
+            alreadyWarned: paneCapWarnedRef.current.has(workspaceKey),
+          })
+        ) {
+          paneCapWarnedRef.current.add(workspaceKey);
+          setPaneCapNotice(true);
+        }
       }
       setSidebarOpen(false);
     },
-    [dockviewApi, splitRequest, onOpenSession, projects],
+    [
+      dockviewApi,
+      splitRequest,
+      onOpenSession,
+      projects,
+      activeWorkspaceId,
+      layoutTier,
+      settings.tabletPaneCap,
+    ],
   );
+
+  useEffect(() => {
+    if (!paneCapNotice) return;
+    const timer = setTimeout(() => setPaneCapNotice(false), PANE_CAP_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [paneCapNotice]);
 
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
     useDashboardStore.getState().showWorkspace(workspaceId);
     setSidebarOpen(false);
+    // The notice is one boolean, the warned set is per workspace. Leaving it
+    // up across a switch showed workspace B a split that happened in A.
+    setPaneCapNotice(false);
   }, []);
 
   // One toggle, two meanings depending on breakpoint: phone/tablet's
@@ -1615,6 +1654,22 @@ export function App() {
                 onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
               >
                 Retry
+              </button>
+            </div>
+          )}
+          {paneCapNotice && (
+            <div className="pane-cap-notice">
+              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+              <span className="pane-cap-notice-title" role="status">
+                This split is past the tablet pane cap, so panes may get small.
+              </span>
+              <button
+                type="button"
+                className="pane-cap-notice-dismiss"
+                aria-label="Dismiss"
+                onClick={() => setPaneCapNotice(false)}
+              >
+                ×
               </button>
             </div>
           )}

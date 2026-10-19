@@ -173,6 +173,31 @@ export function isTiledPanel(panel: Pick<IDockviewPanel, "api">): boolean {
   return panel.api.location.type === "grid";
 }
 
+// Issue #1555 — columns, not panels. Two tabs in one tiled group are one
+// column, matching tabletPositioning's cap. Floating panels are not columns.
+export function tiledColumnCount(
+  panels: readonly (Pick<IDockviewPanel, "api"> & { group: { id: string } })[],
+): number {
+  const ids = new Set<string>();
+  for (const panel of panels) {
+    if (isTiledPanel(panel)) ids.add(panel.group.id);
+  }
+  return ids.size;
+}
+
+// Explicit splits bypass tabletPositioning's cap. Warn once the resulting
+// tiled columns are past it, and only on the tablet tier, and only until
+// this workspace has already been told (the caller owns that set).
+export function shouldWarnTabletPaneCap(args: {
+  tier: LayoutTier;
+  columnCount: number;
+  cap: number;
+  alreadyWarned: boolean;
+}): boolean {
+  if (args.tier !== "tablet" || args.alreadyWarned) return false;
+  return args.columnCount > args.cap;
+}
+
 // A panel opened from the sidebar/launcher should only ever *peek* (float)
 // when there's already a tiled layout to peek across — the first panel in an
 // empty workspace should dock full-screen instead (issue #121). Checking
@@ -302,8 +327,7 @@ function tabletPositioning(
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
   const tiledPanels = api.panels.filter(isTiledPanel);
-  const tiledGroupIds = new Set(tiledPanels.map((p) => p.group.id));
-  if (tiledGroupIds.size < cap) return { position: { direction: "right" } };
+  if (tiledColumnCount(api.panels) < cap) return { position: { direction: "right" } };
   const target =
     api.activePanel && isTiledPanel(api.activePanel) ? api.activePanel : tiledPanels[0];
   if (!target) return {};
