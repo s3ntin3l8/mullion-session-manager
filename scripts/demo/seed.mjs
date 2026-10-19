@@ -48,9 +48,7 @@ async function seedGitRepo(dir, { readme, files, commitMessages }) {
 }
 
 // A plausible-looking agent transcript, entirely synthetic — printed with
-// small delays so it looks live rather than dumped instantly. `startDelay`
-// (seconds) is a plain pre-print pause; the screenshot pipeline doesn't rely
-// on it (see `releaseFile` below for why a duration can't be trusted).
+// small delays so it looks live rather than dumped instantly.
 // Single-quoted, not JSON.stringify'd (double-quoted): several transcript
 // lines below contain literal `$`/backtick characters (e.g. template-literal
 // snippets in the fake diffs), and bash still expands `$…`/`` ` `` inside
@@ -81,7 +79,7 @@ export const KEEPALIVE_INTERVAL_S = 1;
 // (otherwise lines come back clipped to a stale column count, scrolled, or,
 // printed before any client attached, without the first line). Holding on an
 // observed state rather than a pause means a loaded host can't outrun it.
-export function agentTranscriptScript({ startDelay, lines, releaseFile }) {
+export function agentTranscriptScript({ lines, releaseFile }) {
   const hold = releaseFile
     ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n`
     : "";
@@ -89,7 +87,7 @@ export function agentTranscriptScript({ startDelay, lines, releaseFile }) {
     .map((l) => (l === "" ? "echo" : `echo ${shellSingleQuote(l)}`))
     .join("\nsleep 0.25\n");
   const keepalive = `while :; do printf '\\033[0m'; sleep ${KEEPALIVE_INTERVAL_S}; done`;
-  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}sleep ${startDelay}\n${body}\n${keepalive}\n`;
+  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${body}\n${keepalive}\n`;
 }
 
 /** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
@@ -247,17 +245,14 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   await writeFile(
     authScriptPath,
     agentTranscriptScript({
-      startDelay: 0,
       lines: AUTH_TRANSCRIPT,
       releaseFile: holdTranscripts ? authReleaseFile : undefined,
     }),
     { mode: 0o755 },
   );
-  await writeFile(
-    ordersScriptPath,
-    agentTranscriptScript({ startDelay: 0, lines: ORDERS_TRANSCRIPT }),
-    { mode: 0o755 },
-  );
+  await writeFile(ordersScriptPath, agentTranscriptScript({ lines: ORDERS_TRANSCRIPT }), {
+    mode: 0o755,
+  });
   await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({

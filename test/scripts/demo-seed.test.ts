@@ -36,13 +36,13 @@ function runFor(script: string, ms: number): Promise<string> {
 describe("agentTranscriptScript", () => {
   it("prints the transcript verbatim, including shell metacharacters", async () => {
     const lines = ["Claude Code v2.1.0", "", "const key = `${req.ip}`;", "it's done"];
-    const out = await runFor(agentTranscriptScript({ startDelay: 0, lines }), 2_000);
+    const out = await runFor(agentTranscriptScript({ lines }), 2_000);
     expect(out).toContain("Claude Code v2.1.0\n\nconst key = `${req.ip}`;\nit's done\n");
   });
 
   it("keeps writing an invisible SGR reset after the transcript", async () => {
     // Two keepalives at a 1 s cadence, with margin for a loaded host.
-    const out = await runFor(agentTranscriptScript({ startDelay: 0, lines: ["done"] }), 3_600);
+    const out = await runFor(agentTranscriptScript({ lines: ["done"] }), 3_600);
     const tail = out.slice(out.indexOf("done\n") + "done\n".length);
     // Nothing but keepalives after the last line, and more than one of them.
     expect(tail.replaceAll("\u001b[0m", "")).toBe("");
@@ -51,7 +51,7 @@ describe("agentTranscriptScript", () => {
 
   it("holds the transcript until its release file exists", async () => {
     const releaseFile = path.join(dir, "release-me");
-    const script = agentTranscriptScript({ startDelay: 0, lines: ["held line"], releaseFile });
+    const script = agentTranscriptScript({ lines: ["held line"], releaseFile });
     const before = runFor(script, 1_500);
     expect(await before).not.toContain("held line");
     writeFileSync(releaseFile, "");

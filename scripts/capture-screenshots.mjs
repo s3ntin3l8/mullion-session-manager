@@ -24,7 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
-import { lastChangeSeconds } from "./demo/freeze.mjs";
+import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
 import {
   AUTH_TRANSCRIPT,
   MOBILE_TRANSCRIPT,
@@ -304,7 +304,6 @@ async function captureMobile(browser, demo) {
   await writeFile(
     mobileScriptPath,
     agentTranscriptScript({
-      startDelay: 0,
       lines: MOBILE_TRANSCRIPT,
       releaseFile: mobileReleaseFile,
     }),
@@ -360,11 +359,9 @@ async function recordLoop(browser, demo) {
   const scriptPath = path.join(scriptsDir, "loop-demo.sh");
   const releaseFile = path.join(scriptsDir, "loop-demo.release");
   // Held until the session is open and its terminal settled, like the stills.
-  await writeFile(
-    scriptPath,
-    agentTranscriptScript({ startDelay: 0, lines: AUTH_TRANSCRIPT, releaseFile }),
-    { mode: 0o755 },
-  );
+  await writeFile(scriptPath, agentTranscriptScript({ lines: AUTH_TRANSCRIPT, releaseFile }), {
+    mode: 0o755,
+  });
 
   // Playwright records in viewport (CSS) pixels regardless of deviceScaleFactor,
   // so the loop is 1x while the stills are 2x; fine for a muted loop.
@@ -406,8 +403,7 @@ async function recordLoop(browser, demo) {
   const src = path.join(videoDir, raw);
   const base = path.join(profile.outDir, "terminal-stream");
   // End LOOP_TAIL_S after the transcript's last line landed on screen.
-  const lastChange = videoLastChange(src);
-  const end = lastChange === null ? [] : ["-to", (lastChange + LOOP_TAIL_S).toFixed(2)];
+  const end = loopEnd(videoLastChange(src), offset, LOOP_TAIL_S);
   const input = ["-ss", offset.toFixed(2), ...end, "-i", src, "-an"];
   ffmpeg([
     ...input,

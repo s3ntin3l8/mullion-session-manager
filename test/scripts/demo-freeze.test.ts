@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lastChangeSeconds } from "../../scripts/demo/freeze.mjs";
+import { lastChangeSeconds, loopEnd } from "../../scripts/demo/freeze.mjs";
 
 const line = (key: string, value: number) =>
   `[freezedetect @ 0x5e53] lavfi.freezedetect.freeze_${key}: ${value}`;
@@ -22,5 +22,21 @@ describe("lastChangeSeconds", () => {
 
   it("returns null with no freezes at all", () => {
     expect(lastChangeSeconds("frame=  600 fps=0.0 q=-0.0 size=0kB")).toBeNull();
+  });
+});
+
+describe("loopEnd", () => {
+  it("cuts the tail after the last change, on the input timeline", () => {
+    expect(loopEnd(10, 2.5, 1.5)).toEqual(["-to", "11.50"]);
+  });
+
+  it("keeps the whole recording when the video never settles", () => {
+    expect(loopEnd(null, 2.5, 1.5)).toEqual([]);
+  });
+
+  it("never emits a -to at or before -ss, which ffmpeg rejects", () => {
+    expect(loopEnd(1, 2.5, 1.5)).toEqual([]);
+    expect(loopEnd(0.5, 2, 1.5)).toEqual([]);
+    expect(loopEnd(0.51, 2, 1.5)).toEqual(["-to", "2.01"]);
   });
 });
