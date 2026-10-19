@@ -408,4 +408,27 @@ describe("App workspace bootstrap", () => {
       expect.any(Error),
     );
   });
+
+  it("surfaces a given-up workspace load and clears it from Retry", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshWorkspaces = vi.fn().mockRejectedValue(new Error("offline"));
+    const createWorkspace = vi.fn().mockResolvedValue(workspace);
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
+
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load workspaces");
+    expect(createWorkspace).not.toHaveBeenCalled();
+
+    refreshWorkspaces.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(6);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(createWorkspace).toHaveBeenCalledTimes(1);
+  });
 });
