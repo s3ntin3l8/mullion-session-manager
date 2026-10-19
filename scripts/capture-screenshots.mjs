@@ -124,6 +124,9 @@ async function newContext(browser, options) {
   return context;
 }
 
+/** Aborts when withDemo is interrupted or tearing down (set in main). */
+let captureSignal;
+
 /**
  * Polls until `check` returns a truthy value or `timeoutMs` elapses. Every
  * shot below waits on a real condition rather than a fixed sleep alone: on a
@@ -133,6 +136,8 @@ async function newContext(browser, options) {
 async function waitUntil(check, what, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    // Interrupted or torn down: stop polling a closed browser until the deadline.
+    captureSignal?.throwIfAborted();
     // A transient API error on a loaded host is "not yet", not a failure.
     const value = await check().catch(() => false);
     if (value) return value;
@@ -443,7 +448,8 @@ async function main() {
   await withDemo({
     startDemo: () => startDemo({ quiet: true, keep: values.keep, holdTranscripts: true }),
     launchBrowser: () => chromium.launch(),
-    run: async (browser, demo) => {
+    run: async (browser, demo, signal) => {
+      captureSignal = signal;
       await captureDesktop(browser, demo);
       await captureMobile(browser, demo);
       if (profile.loop) await recordLoop(browser, demo);
@@ -454,5 +460,7 @@ async function main() {
 
 main().catch((err) => {
   console.error("[screenshots] failed:", err);
-  process.exitCode = 1;
+  // The demo is already down (withDemo awaits its teardown before rejecting);
+  // exit now rather than wait on whatever capture step was abandoned.
+  process.exit(1);
 });

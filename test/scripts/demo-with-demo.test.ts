@@ -24,7 +24,7 @@ describe("withDemo", () => {
       withDemo({ startDemo, launchBrowser: async () => browser, run, signals }),
     ).resolves.toBe("captured");
 
-    expect(run).toHaveBeenCalledWith(browser, demo);
+    expect(run).toHaveBeenCalledWith(browser, demo, expect.any(AbortSignal));
     expect(browser.close).toHaveBeenCalledOnce();
     expect(demo.stop).toHaveBeenCalledOnce();
     expect(signals.listenerCount("SIGINT")).toBe(0);
@@ -100,7 +100,7 @@ describe("withDemo", () => {
     expect(signals.listenerCount("SIGINT")).toBe(0);
   });
 
-  it("closes a browser whose launch lands after a SIGTERM", async () => {
+  it("waits for a launch that lands after a SIGTERM and closes that browser first", async () => {
     const { demo, browser, signals, startDemo } = fakes();
     let land!: (b: typeof browser) => void;
     let launched!: () => void;
@@ -113,11 +113,107 @@ describe("withDemo", () => {
     const result = withDemo({ startDemo, launchBrowser, run: vi.fn(), signals });
     await launchStarted;
     signals.emit("SIGTERM", "SIGTERM");
-    await expect(result).rejects.toThrow("interrupted by SIGTERM");
-    expect(demo.stop).toHaveBeenCalledOnce();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(demo.stop).not.toHaveBeenCalled();
 
     land(browser);
-    await vi.waitFor(() => expect(browser.close).toHaveBeenCalledOnce());
+    await expect(result).rejects.toThrow("interrupted by SIGTERM");
+    expect(browser.close).toHaveBeenCalledOnce();
+    expect(browser.close.mock.invocationCallOrder[0]).toBeLessThan(
+      demo.stop.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("gives up on a launch that never lands and still stops the demo", async () => {
+    const { demo, signals, startDemo } = fakes();
+    let launched!: () => void;
+    const launchStarted = new Promise<void>((r) => (launched = r));
+    const launchBrowser = () => {
+      launched();
+      return new Promise(() => {});
+    };
+
+    const result = withDemo({ startDemo, launchBrowser, run: vi.fn(), signals, lateLaunchMs: 20 });
+    await launchStarted;
+    signals.emit("SIGINT", "SIGINT");
+
+    await expect(result).rejects.toThrow("interrupted by SIGINT");
+    expect(demo.stop).toHaveBeenCalledOnce();
+  });
+
+  it("closes the browser before stopping the demo", async () => {
+    const { demo, browser, signals, startDemo } = fakes();
+
+    await withDemo({ startDemo, launchBrowser: async () => browser, run: async () => {}, signals });
+
+    expect(browser.close.mock.invocationCallOrder[0]).toBeLessThan(
+      demo.stop.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("keeps handling signals until the demo has stopped", async () => {
+    const { demo, browser, signals, startDemo } = fakes();
+    let finishStop!: () => void;
+    let stopping!: () => void;
+    const stopStarted = new Promise<void>((r) => (stopping = r));
+    demo.stop.mockImplementation(() => {
+      stopping();
+      return new Promise<void>((r) => (finishStop = r));
+    });
+    let entered!: () => void;
+    const running = new Promise<void>((r) => (entered = r));
+    const run = () => {
+      entered();
+      return new Promise(() => {});
+    };
+
+    const result = withDemo({ startDemo, launchBrowser: async () => browser, run, signals });
+    await running;
+    signals.emit("SIGINT", "SIGINT");
+    await stopStarted;
+
+    // A second Ctrl-C mid-teardown must hit our handler, not Node's default
+    // (which would kill the process and leave the demo up).
+    expect(signals.listenerCount("SIGINT")).toBe(1);
+    expect(() => signals.emit("SIGINT", "SIGINT")).not.toThrow();
+
+    finishStop();
+    await expect(result).rejects.toThrow("interrupted by SIGINT");
+    expect(demo.stop).toHaveBeenCalledOnce();
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("aborts the run's signal on an interrupt so an abandoned step stops polling", async () => {
+    const { browser, signals, startDemo } = fakes();
+    let runSignal!: AbortSignal;
+    let entered!: () => void;
+    const running = new Promise<void>((r) => (entered = r));
+    const run = (_b: unknown, _d: unknown, signal: AbortSignal) => {
+      runSignal = signal;
+      entered();
+      return new Promise(() => {});
+    };
+
+    const result = withDemo({ startDemo, launchBrowser: async () => browser, run, signals });
+    await running;
+    expect(runSignal.aborted).toBe(false);
+    signals.emit("SIGTERM", "SIGTERM");
+
+    await expect(result).rejects.toThrow("interrupted by SIGTERM");
+    expect(runSignal.aborted).toBe(true);
+    expect(() => runSignal.throwIfAborted()).toThrow("interrupted by SIGTERM");
+  });
+
+  it("aborts the run's signal once the run is over", async () => {
+    const { browser, signals, startDemo } = fakes();
+    let runSignal!: AbortSignal;
+    const run = async (_b: unknown, _d: unknown, signal: AbortSignal) => {
+      runSignal = signal;
+    };
+
+    await withDemo({ startDemo, launchBrowser: async () => browser, run, signals });
+    expect(runSignal.aborted).toBe(true);
   });
 
   it("propagates a startDemo failure without launching a browser", async () => {
