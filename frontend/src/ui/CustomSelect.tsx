@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
+import { menuMaxHeight, visibleViewport } from "../hooks/useVisualViewportChange.js";
 import { useDashboardStore } from "../store/index.js";
 
 export interface CustomSelectOption {
@@ -185,16 +186,26 @@ export function CustomSelect({
   function getMenuStyle(): React.CSSProperties {
     const rect = triggerRect;
     if (!rect) return {};
+    // Same visible-region cap as KebabMenu (issue #1402). This listbox still
+    // closes on a visual-viewport pan; the cap matters when it is opened
+    // while the keyboard is already up. `bottom` stays in layout-viewport
+    // coordinates — see KebabMenu's getMenuStyle. A trigger flush with the
+    // visible edge used to produce max-height 0 (an open, empty listbox);
+    // menuMaxHeight keeps the floor for that case only.
+    const visible = visibleViewport();
     const style: React.CSSProperties = {
       position: "fixed",
       minWidth: Math.max(140, rect.width),
+      overflowY: "auto",
     };
     if (menuPlacement === "top") {
       style.bottom = window.innerHeight - rect.top + 4;
       style.top = "auto";
+      style.maxHeight = menuMaxHeight(rect.top - visible.top - 8);
     } else {
       style.top = rect.bottom + 4;
       style.bottom = "auto";
+      style.maxHeight = menuMaxHeight(visible.bottom - rect.bottom - 8);
     }
     if (menuAlign === "right") {
       style.right = window.innerWidth - rect.right;

@@ -119,6 +119,68 @@ describe("ui/KebabMenu maxHeight floor", () => {
       });
     }
   });
+
+  // Issue #1402 — innerHeight stays the layout viewport when the iOS keyboard
+  // is open. A downward cap must stop at the visible bottom.
+  it("caps a downward menu against the visible viewport, not innerHeight", async () => {
+    const user = userEvent.setup();
+    installFakeVisualViewport(400, 100);
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 120,
+      bottom: 140,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: 20,
+      x: 0,
+      y: 120,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<KebabMenu items={items} />);
+      await user.click(screen.getByRole("button"));
+
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      // visible bottom is 100 + 400 = 500, not innerHeight 800.
+      expect(menu.style.maxHeight).toBe(`${500 - 140 - 8}px`);
+    } finally {
+      rectSpy.mockRestore();
+      uninstallFakeVisualViewport();
+      Object.defineProperty(window, "innerHeight", {
+        value: originalInnerHeight,
+        configurable: true,
+      });
+    }
+  });
+
+  // A free gap under the 120px floor must stay that gap. Flooring it back
+  // up hid the menu behind the keyboard.
+  it("does not floor a small positive gap back up to 120px", async () => {
+    const user = userEvent.setup();
+    installFakeVisualViewport(400, 100);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 458,
+      bottom: 478,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: 20,
+      x: 0,
+      y: 458,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<KebabMenu items={items} />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.maxHeight).toBe("14px");
+    } finally {
+      rectSpy.mockRestore();
+      uninstallFakeVisualViewport();
+    }
+  });
 });
 
 // Issue #1106 — an item's `disabled` used to map straight to the native

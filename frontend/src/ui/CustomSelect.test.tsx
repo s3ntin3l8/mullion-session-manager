@@ -59,3 +59,61 @@ describe("ui/CustomSelect closes on a visual-viewport change", () => {
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
 });
+
+describe("ui/CustomSelect caps against the visible viewport", () => {
+  afterEach(() => {
+    uninstallFakeVisualViewport();
+  });
+
+  it("caps maxHeight at the visible bottom, not innerHeight", async () => {
+    installFakeVisualViewport(400, 100);
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 160,
+      bottom: 200,
+      left: 0,
+      right: 120,
+      width: 120,
+      height: 40,
+      x: 0,
+      y: 160,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<CustomSelect value="a" onChange={vi.fn()} options={OPTIONS} label="Pick" />);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Pick" }));
+      const menu = screen.getByRole("listbox");
+      expect(menu.style.maxHeight).toBe(`${100 + 400 - 200 - 8}px`);
+      expect(menu.style.overflowY).toBe("auto");
+    } finally {
+      rectSpy.mockRestore();
+      Object.defineProperty(window, "innerHeight", {
+        value: originalInnerHeight,
+        configurable: true,
+      });
+    }
+  });
+
+  it("floors maxHeight when the trigger is flush with the visible edge", async () => {
+    installFakeVisualViewport(400, 100);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 460,
+      bottom: 500,
+      left: 0,
+      right: 120,
+      width: 120,
+      height: 40,
+      x: 0,
+      y: 460,
+      toJSON: () => ({}),
+    });
+    try {
+      render(<CustomSelect value="a" onChange={vi.fn()} options={OPTIONS} label="Pick" />);
+      await userEvent.setup().click(screen.getByRole("button", { name: "Pick" }));
+      expect(screen.getByRole("listbox").style.maxHeight).toBe("120px");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+});

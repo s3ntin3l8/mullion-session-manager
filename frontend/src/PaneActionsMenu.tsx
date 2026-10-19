@@ -29,7 +29,7 @@ import {
 import { liveChildCount } from "./sidebarHierarchy.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
-import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
+import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
 import { useLayoutContext } from "./lib/layoutTier.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
@@ -298,15 +298,18 @@ export function PaneActionsMenu({
     const menu = overflowMenuRef.current;
     if (!menu) return;
     const rect = menu.getBoundingClientRect();
+    const visible = visibleViewport();
     const overflowBy = rect.left < VIEWPORT_MARGIN_PX ? VIEWPORT_MARGIN_PX - rect.left : 0;
-    // A trigger near the bottom of the viewport (the phone session sheet's
-    // active row, MobileSessionSwitcher.tsx) would drop the menu off-screen —
-    // flip it above the trigger instead, clamped to the top margin (the
-    // menu's own max-height below keeps it scrollable if even that can't fit).
+    // A trigger near the bottom of the *visible* region (the phone session
+    // sheet's active row, or a toolbar with the iOS keyboard open — issue
+    // #1402) would drop the menu behind the keyboard. `innerHeight` does not
+    // shrink then. Flip above the trigger, clamped to the visible top.
     let flippedTop: number | null = null;
-    if (rect.bottom > window.innerHeight - VIEWPORT_MARGIN_PX) {
+    if (rect.bottom > visible.bottom - VIEWPORT_MARGIN_PX) {
       const trigger = overflowBtnRef.current?.getBoundingClientRect();
-      if (trigger) flippedTop = Math.max(VIEWPORT_MARGIN_PX, trigger.top - 4 - rect.height);
+      if (trigger) {
+        flippedTop = Math.max(visible.top + VIEWPORT_MARGIN_PX, trigger.top - 4 - rect.height);
+      }
     }
     if (overflowBy === 0 && flippedTop === null) return;
     setOverflowPos((pos) =>
@@ -371,7 +374,7 @@ export function PaneActionsMenu({
               position: "fixed",
               top: overflowPos.top,
               right: overflowPos.right,
-              maxHeight: `calc(100dvh - ${2 * VIEWPORT_MARGIN_PX}px)`,
+              maxHeight: `${Math.max(0, visibleViewport().bottom - overflowPos.top - VIEWPORT_MARGIN_PX)}px`,
               overflowY: "auto",
             }}
             role="menu"

@@ -808,4 +808,53 @@ describe("PaneActionsMenu — visual-viewport pan (issue #1399)", () => {
       uninstallFakeVisualViewport();
     }
   });
+
+  // Issue #1402 — innerHeight 800 would not flip a menu ending at 528, and
+  // would clamp a flip to y=8. The visible region here is [100, 500].
+  it("flips against the visible viewport, not innerHeight", async () => {
+    installFakeVisualViewport(400, 100);
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      trigger.getBoundingClientRect = () =>
+        ({ top: 180, bottom: 224, left: 300, right: 344, width: 44, height: 44 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      // Menu would start at 228 and run to 528, past the visible bottom (492).
+      // Flipping above the trigger (180 - 4 - 300) is above the visible top,
+      // so the clamp is offsetTop + margin, not the layout-viewport margin.
+      expect(menu.style.top).toBe("108px");
+      expect(menu.style.maxHeight).toBe("384px");
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
+      Object.defineProperty(window, "innerHeight", {
+        value: originalInnerHeight,
+        configurable: true,
+      });
+    }
+  });
+
+  // The trigger itself is past the visible bottom, so the flip lands below
+  // visible.top + margin. A cap of visible.height - 2*margin (384) would
+  // leave this 300px menu running past the keyboard; the cap has to start
+  // from the resolved top.
+  it("caps a flipped menu from its resolved top, not the visible height", async () => {
+    installFakeVisualViewport(400, 100);
+    const restore = stubMenuRect();
+    try {
+      const trigger = renderMenu();
+      trigger.getBoundingClientRect = () =>
+        ({ top: 560, bottom: 580, left: 300, right: 344, width: 44, height: 20 }) as DOMRect;
+      await userEvent.setup().click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu.style.top).toBe("256px");
+      expect(menu.style.maxHeight).toBe("236px");
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
+    }
+  });
 });

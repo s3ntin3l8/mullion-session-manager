@@ -4,7 +4,11 @@
 // as useVisualViewportInset.test.tsx's own header comment.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
-import { useVisualViewportChange } from "./useVisualViewportChange.js";
+import {
+  menuMaxHeight,
+  useVisualViewportChange,
+  visibleViewport,
+} from "./useVisualViewportChange.js";
 import {
   flushRaf,
   installFakeVisualViewport,
@@ -117,5 +121,34 @@ describe("useVisualViewportChange", () => {
     });
     expect(first).not.toHaveBeenCalled();
     expect(second).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("visibleViewport", () => {
+  it("falls back to innerHeight when visualViewport is missing", () => {
+    uninstallFakeVisualViewport();
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 640, configurable: true });
+    try {
+      expect(visibleViewport()).toEqual({ top: 0, bottom: 640, height: 640 });
+    } finally {
+      Object.defineProperty(window, "innerHeight", {
+        value: originalInnerHeight,
+        configurable: true,
+      });
+    }
+  });
+
+  it("reports offsetTop + height when visualViewport exists", () => {
+    installFakeVisualViewport(400, 100);
+    expect(visibleViewport()).toEqual({ top: 100, bottom: 500, height: 400 });
+  });
+});
+
+describe("menuMaxHeight", () => {
+  it("keeps a small positive gap and floors only a non-positive one", () => {
+    expect(menuMaxHeight(22)).toBe(22);
+    expect(menuMaxHeight(0)).toBe(120);
+    expect(menuMaxHeight(-8)).toBe(120);
   });
 });
