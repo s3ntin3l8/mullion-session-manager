@@ -7,13 +7,21 @@ import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { GIT_ENV_KEYS_TO_STRIP } from "../src/services/git-env.js";
 
 const ROOT = path.resolve(__dirname, "..");
 // \w* on both sides also catches promisified wrappers (execFileAsync("git", …)).
 const GIT_SPAWN = /\b\w*(execFile|exec|spawn)\w*\(\s*["']git["']/;
 
 describe("git child processes scrub the ambient git environment", () => {
-  it("passes env: gitEnv() (or an explicit env) at every git spawn in src/, test/ and scripts/", () => {
+  // test/setup.ts strips the hook env (pre-push exports GIT_DIR in a linked
+  // worktree) before any test runs, so even a spawn that copies process.env
+  // can't reach the real checkout.
+  it("runs every test file with the hook's git env already scrubbed", () => {
+    expect(GIT_ENV_KEYS_TO_STRIP.filter((key) => key in process.env)).toEqual([]);
+  });
+
+  it("passes env: gitEnv() (or an explicit env not spread from process.env) at every git spawn in src/, test/ and scripts/", () => {
     const files = execFileSync("git", ["ls-files", "src", "test", "scripts"], { cwd: ROOT })
       .toString()
       .split("\n")
@@ -30,7 +38,10 @@ describe("git child processes scrub the ambient git environment", () => {
         let end = i;
         while (end < lines.length - 1 && !/\)\s*;?\s*$/.test(lines[end].trimEnd())) end++;
         const call = lines.slice(i, end + 1).join("\n");
-        if (!/\benv\s*:/.test(call)) offenders.push(`${file}:${i + 1}`);
+        // An explicit env that spreads process.env passes a leaked GIT_DIR
+        // straight through; it must start from gitEnv() instead.
+        if (!/\benv\s*:/.test(call) || /\.\.\.process\.env\b/.test(call))
+          offenders.push(`${file}:${i + 1}`);
       });
     }
     expect(offenders).toEqual([]);

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { afterAll } from "vitest";
 import { schema } from "../src/plugins/env.js";
+import { GIT_ENV_KEYS_TO_STRIP } from "../src/services/git-env.js";
 
 // Give every test file an isolated SQLite database so parallel workers never
 // contend on the default ./data/app.db file. Tests that need specific values
@@ -113,6 +114,19 @@ for (const key of Object.keys(schema.properties)) {
 // here: agent-rules.test.ts already deletes/restores it per-test, and other
 // suites set it intentionally within their own scope.
 for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR"]) {
+  delete process.env[key];
+}
+
+// The git hook env the pre-push stage runs this suite under. In a linked
+// worktree git exports GIT_DIR=<repo>/.git/worktrees/<name> to the hook, so
+// any git child that copies process.env (instead of gitEnv()) runs its
+// fixture's `git add` / `git config` against the real checkout: a pre-push
+// run left a worktree's index holding only a fixture's a.txt (every real file
+// staged as deleted, which then overflowed check-patch-coverage's diff buffer)
+// and flipped the shared config to core.bare = true. gitEnv() strips these
+// per call; stripping them here too closes the gap for any spawn that misses
+// it. Tests that need a leaked GIT_DIR set it themselves, after this runs.
+for (const key of GIT_ENV_KEYS_TO_STRIP) {
   delete process.env[key];
 }
 

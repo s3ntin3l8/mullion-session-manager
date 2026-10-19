@@ -10,12 +10,13 @@ import {
   isSafeRepoPath,
   isValidSha,
 } from "../../src/services/git-log.js";
+import { gitEnv } from "../../src/services/git-env.js";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...gitEnv(),
       GIT_AUTHOR_NAME: "T",
       GIT_AUTHOR_EMAIL: "t@example.com",
       GIT_COMMITTER_NAME: "T",

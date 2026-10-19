@@ -262,11 +262,14 @@ export function runPatchCoverageCheck(options = {}) {
             "if it has advanced past this branch's fork point.",
         );
       }
-      diffText = execFileSync("git", ["diff", "-U0", diffBase], {
+      // Only the paths parseDiff keeps: a whole-repo diff (a large docs or
+      // lockfile change, or a damaged index that stages every file as
+      // deleted) used to overflow the buffer with ENOBUFS.
+      diffText = execFileSync("git", ["diff", "-U0", diffBase, "--", "src", "frontend/src"], {
         cwd: root,
         encoding: "utf8",
         env: gitEnv(),
-        maxBuffer: 10 * 1024 * 1024,
+        maxBuffer: 256 * 1024 * 1024,
       });
     } catch (err) {
       console.error(`ERROR: Failed to diff against ${baseRef}:`, err.message);
