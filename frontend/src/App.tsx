@@ -1231,6 +1231,9 @@ export function App() {
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
     useDashboardStore.getState().showWorkspace(workspaceId);
     setSidebarOpen(false);
+    // The notice is one boolean, the warned set is per workspace. Leaving it
+    // up across a switch showed workspace B a split that happened in A.
+    setPaneCapNotice(false);
   }, []);
 
   // One toggle, two meanings depending on breakpoint: phone/tablet's
@@ -1655,16 +1658,16 @@ export function App() {
             </div>
           )}
           {paneCapNotice && (
-            <div className="pane-cap-notice" role="status">
+            <div className="pane-cap-notice">
               <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="pane-cap-notice-title">
+              <span className="pane-cap-notice-title" role="status">
                 This split is past the tablet pane cap, so panes may get small.
               </span>
               <button
                 type="button"
                 className="pane-cap-notice-dismiss"
+                aria-label="Dismiss"
                 onClick={() => setPaneCapNotice(false)}
-                title="Dismiss"
               >
                 ×
               </button>

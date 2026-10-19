@@ -327,8 +327,7 @@ function tabletPositioning(
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
   const tiledPanels = api.panels.filter(isTiledPanel);
-  const tiledGroupIds = new Set(tiledPanels.map((p) => p.group.id));
-  if (tiledGroupIds.size < cap) return { position: { direction: "right" } };
+  if (tiledColumnCount(api.panels) < cap) return { position: { direction: "right" } };
   const target =
     api.activePanel && isTiledPanel(api.activePanel) ? api.activePanel : tiledPanels[0];
   if (!target) return {};
