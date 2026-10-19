@@ -142,21 +142,36 @@ async function waitForTranscript(demo, scriptName, lines) {
  * so the fitted terminal in the page is what's measured. Output printed before
  * then lands at an interim geometry (a pre-fit row count or font size) and the
  * shot shows it scrolled or clipped.
+ *
+ * The page has no per-session marker on a terminal pane, so the gate requires
+ * exactly one mounted terminal (every shot that uses it shows one) and fails
+ * outright on more, rather than measuring a pane other than the attached one.
+ * A box that hasn't been laid out yet (0×0) doesn't count as settled.
  */
 const SETTLE_MS = 1500;
 async function waitForSettledTerminal(page, demo, scriptName) {
   let last = null;
   let since = 0;
+  let terminals = 0;
   await waitUntil(async () => {
     const session = await findSession(demo, scriptName);
-    const geometry = await page.evaluate(() => {
+    const measured = await page.evaluate(() => {
       // Runs in the page; this file's lint env is Node, hence globalThis.
       const doc = globalThis.document;
-      const screen = doc.querySelector(".xterm-screen");
-      if (!screen || doc.querySelector(".terminal-status-overlay")) return null;
-      if (doc.fonts.status !== "loaded") return null;
-      return `${screen.offsetWidth}x${screen.offsetHeight}`;
+      const screens = doc.querySelectorAll(".xterm-screen");
+      if (screens.length !== 1) return { terminals: screens.length, geometry: null };
+      const [screen] = screens;
+      const ready =
+        !doc.querySelector(".terminal-status-overlay") &&
+        doc.fonts.status === "loaded" &&
+        screen.offsetWidth > 0 &&
+        screen.offsetHeight > 0;
+      const geometry = ready ? `${screen.offsetWidth}x${screen.offsetHeight}` : null;
+      return { terminals: 1, geometry };
     });
+    terminals = measured.terminals;
+    if (terminals > 1) return true;
+    const { geometry } = measured;
     if (!(session?.subscriberCount > 0) || geometry === null) {
       last = null;
       return false;
@@ -168,6 +183,11 @@ async function waitForSettledTerminal(page, demo, scriptName) {
     }
     return Date.now() - since >= SETTLE_MS;
   }, `the terminal attached to ${scriptName} to settle`);
+  if (terminals > 1) {
+    throw new Error(
+      `expected one mounted terminal while waiting for ${scriptName}, found ${terminals}`,
+    );
+  }
 }
 
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
@@ -220,13 +240,18 @@ async function captureDesktop(browser, demo) {
 }
 
 async function captureMobile(browser, demo) {
-  // A dedicated session, gated behind a startDelay (see agentTranscriptScript)
-  // so nothing prints before the mobile client attaches and resizes the PTY.
+  // A dedicated session that holds its transcript until the mobile client
+  // has attached and fitted its terminal (see agentTranscriptScript).
   const { scriptsDir, auroraProject } = demo.seeded;
   const mobileScriptPath = path.join(scriptsDir, "mobile-demo.sh");
+  const mobileReleaseFile = path.join(scriptsDir, "mobile-demo.release");
   await writeFile(
     mobileScriptPath,
-    agentTranscriptScript({ startDelay: 1, lines: MOBILE_TRANSCRIPT }),
+    agentTranscriptScript({
+      startDelay: 0,
+      lines: MOBILE_TRANSCRIPT,
+      releaseFile: mobileReleaseFile,
+    }),
     {
       mode: 0o755,
     },
@@ -250,10 +275,11 @@ async function captureMobile(browser, demo) {
   await page.waitForTimeout(800);
   await shot(page, "mobile-session-list.png");
 
-  // 5. Mobile terminal with the key bar. The session's startDelay has elapsed
-  //    during page load and drawer opening, so its attach/resize is done
-  //    before the transcript starts printing.
+  // 5. Mobile terminal with the key bar, released through the same settled
+  //    gate as the dashboard so the transcript prints at the fitted width.
   await page.locator(".session-item", { hasText: "mobile-demo.sh" }).first().click();
+  await waitForSettledTerminal(page, demo, "mobile-demo.sh");
+  await writeFile(mobileReleaseFile, "");
   await waitForTranscript(demo, "mobile-demo.sh", MOBILE_TRANSCRIPT);
   await page.waitForTimeout(1000);
   await shot(page, "mobile-terminal.png");
