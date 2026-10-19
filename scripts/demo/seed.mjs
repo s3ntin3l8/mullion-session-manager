@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { gitEnv } from "../git-env.mjs";
+import { ptySizeFile } from "./geometry.mjs";
 
 /**
  * The demo dataset: scratch git repos, synthetic agent-transcript scripts,
@@ -79,9 +80,12 @@ export const KEEPALIVE_INTERVAL_S = 1;
 // (otherwise lines come back clipped to a stale column count, scrolled, or,
 // printed before any client attached, without the first line). Holding on an
 // observed state rather than a pause means a loaded host can't outrun it.
+// Once released, the script records its PTY's size (ptySizeFile) before
+// printing, so the shot can check the geometry the transcript printed at.
 export function agentTranscriptScript({ lines, releaseFile }) {
   const hold = releaseFile
-    ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n`
+    ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n` +
+      `stty size > ${shellSingleQuote(ptySizeFile(releaseFile))} 2>/dev/null || true\n`
     : "";
   const body = lines
     .map((l) => (l === "" ? "echo" : `echo ${shellSingleQuote(l)}`))

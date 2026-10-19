@@ -18,13 +18,14 @@
 // Requires Playwright's Chromium once: `npx playwright install chromium`.
 import { chromium } from "playwright";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
+import { parseSttySize, ptySizeFile, terminalGeometryProblems } from "./demo/geometry.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
 import {
   AUTH_TRANSCRIPT,
@@ -121,6 +122,17 @@ async function newContext(browser, options) {
   await context.addInitScript(() =>
     globalThis.localStorage.setItem("mullion:storage-warning-dismissed-at", String(Date.now())),
   );
+  // The terminal's own renderer warnings (WebGL unavailable or lost, see
+  // TerminalPane.tsx) and uncaught page errors, so a bad shot's log says why.
+  context.on("page", (page) => {
+    page.on("console", (m) => {
+      if (m.text().startsWith("[terminal]")) console.log(`[page ${m.type()}] ${m.text()}`);
+    });
+    // about:blank, before the first navigation, denies the init script's localStorage.
+    page.on("pageerror", (err) => {
+      if (page.url() !== "about:blank") console.log(`[page error] ${err.message}`);
+    });
+  });
   return context;
 }
 
@@ -248,6 +260,58 @@ async function releaseIntoSettledTerminal(page, demo, scriptName, lines, release
   await waitForTranscript(demo, scriptName, lines);
 }
 
+/** The terminal's measured geometry, for terminalGeometryProblems. */
+function measureTerminal(page) {
+  return page.evaluate(() => {
+    // Runs in the page; this file's lint env is Node, hence globalThis.
+    const screen = globalThis.document.querySelector(".xterm-screen");
+    if (!screen) return null;
+    return {
+      screen: { width: screen.offsetWidth, height: screen.offsetHeight },
+      canvases: [...screen.querySelectorAll("canvas")].map((c) => ({
+        cssWidth: c.getBoundingClientRect().width,
+        cssHeight: c.getBoundingClientRect().height,
+        width: c.width,
+        height: c.height,
+      })),
+      dpr: globalThis.devicePixelRatio,
+    };
+  });
+}
+
+/**
+ * Shoots a still showing the terminal released through `releaseFile`, once
+ * its geometry checks out (terminalGeometryProblems). A drawing surface out
+ * of step with the layout gets a viewport nudge to re-fit it, a bounded
+ * number of times. A transcript printed at an oversized cell can't be fixed
+ * by re-fitting (xterm doesn't reflow printed output), so that fails the run
+ * instead of shipping a still of it. Logs one geometry line per shot.
+ */
+const REFIT_ATTEMPTS = 2;
+async function terminalShot(page, demo, name, scriptName, releaseFile) {
+  const { terminal } = await demo.api("/api/settings");
+  const pty = parseSttySize(await readFile(ptySizeFile(releaseFile), "utf8").catch(() => ""));
+  for (let attempt = 0; ; attempt++) {
+    const measured = await measureTerminal(page);
+    if (!measured) throw new Error(`no terminal on the page for ${name}`);
+    const geometry = { ...measured, pty, fontSize: terminal.fontSize };
+    const problems = terminalGeometryProblems(geometry);
+    console.log(`[screenshots] ${name} terminal: ${JSON.stringify(geometry)}`);
+    if (problems.length === 0) break;
+    const printedWrong = problems.some((p) => p.includes(" cells in a "));
+    if (printedWrong || attempt >= REFIT_ATTEMPTS) {
+      throw new Error(`${name}: terminal geometry is off: ${problems.join("; ")}`);
+    }
+    console.log(`[screenshots] ${name}: re-fitting the terminal (${problems.join("; ")})`);
+    const viewport = page.viewportSize();
+    await page.setViewportSize({ ...viewport, width: viewport.width - 1 });
+    await page.waitForTimeout(300);
+    await page.setViewportSize(viewport);
+    await waitForSettledTerminal(page, demo, scriptName);
+  }
+  await shot(page, name);
+}
+
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
 async function collapseDock(page) {
   const collapse = page.getByRole("button", { name: "Collapse dock" });
@@ -281,14 +345,26 @@ async function captureDesktop(browser, demo) {
     demo.seeded.authReleaseFile,
   );
   await page.waitForTimeout(1000);
-  await shot(page, "desktop-dashboard.png");
+  await terminalShot(
+    page,
+    demo,
+    "desktop-dashboard.png",
+    "fake-agent.sh",
+    demo.seeded.authReleaseFile,
+  );
 
   // 2. Git panel, from the right-hand rail; toggled closed again afterwards so
   //    it doesn't sit over the sidebar for the next shot.
   await page.getByRole("button", { name: "Git", exact: true }).click();
   await page.getByText("Initial commit").first().waitFor();
   await page.waitForTimeout(500);
-  await shot(page, "desktop-git-panel.png");
+  await terminalShot(
+    page,
+    demo,
+    "desktop-git-panel.png",
+    "fake-agent.sh",
+    demo.seeded.authReleaseFile,
+  );
   await page.getByRole("button", { name: "Git", exact: true }).click();
   await page.waitForTimeout(500);
 
@@ -347,7 +423,7 @@ async function captureMobile(browser, demo) {
     mobileReleaseFile,
   );
   await page.waitForTimeout(1000);
-  await shot(page, "mobile-terminal.png");
+  await terminalShot(page, demo, "mobile-terminal.png", "mobile-demo.sh", mobileReleaseFile);
   await context.close();
 }
 
