@@ -4,7 +4,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { afterAll } from "vitest";
 import { schema } from "../src/plugins/env.js";
-import { GIT_ENV_KEYS_TO_STRIP } from "../src/services/git-env.js";
+import { scrubGitHookEnv } from "./helpers/git-hook-env.js";
 
 // Give every test file an isolated SQLite database so parallel workers never
 // contend on the default ./data/app.db file. Tests that need specific values
@@ -126,9 +126,7 @@ for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_C
 // and flipped the shared config to core.bare = true. gitEnv() strips these
 // per call; stripping them here too closes the gap for any spawn that misses
 // it. Tests that need a leaked GIT_DIR set it themselves, after this runs.
-for (const key of GIT_ENV_KEYS_TO_STRIP) {
-  delete process.env[key];
-}
+scrubGitHookEnv();
 
 afterAll(() => {
   fs.rmSync(tmpDb, { force: true });

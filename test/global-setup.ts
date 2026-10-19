@@ -3,21 +3,27 @@
 // pre-push hook) silently rewrote its .git/config — `core.bare = true`, then
 // `user.name = Test`. Snapshot the identity/core keys before the run and fail
 // it if they differ afterwards, so the leak surfaces the moment it happens
-// instead of weeks of mis-authored commits later. Logic and known limits:
+// instead of weeks of mis-authored commits later. The git index gets the same
+// check (a leaked GIT_DIR once emptied a worktree's index on pre-push). Logic
+// and known limits:
 // test/helpers/checkout-config.ts.
 import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import {
   assertConfigUnchanged,
+  assertIndexIntact,
   resolveConfigPath,
   snapshotConfig,
+  snapshotIndex,
+  type IndexSnapshot,
 } from "./helpers/checkout-config.js";
 
 const ROOT = path.resolve(__dirname, "..");
 
 let configPath: string | null = null;
 let before = "";
+let indexBefore: IndexSnapshot | null = null;
 let suiteTmpDir: string | null = null;
 let origTmpDir: string | undefined;
 let origTemp: string | undefined;
@@ -26,6 +32,7 @@ let origTmp: string | undefined;
 export function setup(): void {
   configPath = resolveConfigPath(ROOT);
   if (configPath) before = snapshotConfig(configPath);
+  indexBefore = snapshotIndex(ROOT);
 
   // Snapshot caller process environment so teardown() can cleanly restore it
   origTmpDir = process.env.TMPDIR;
@@ -44,7 +51,19 @@ export function setup(): void {
 
 export function teardown(): void {
   try {
-    if (configPath) assertConfigUnchanged(configPath, before);
+    // Run both checks and report everything: one leak usually does both.
+    const errors: string[] = [];
+    for (const check of [
+      () => configPath && assertConfigUnchanged(configPath, before),
+      () => assertIndexIntact(ROOT, indexBefore),
+    ]) {
+      try {
+        check();
+      } catch (err) {
+        errors.push((err as Error).message);
+      }
+    }
+    if (errors.length > 0) throw new Error(errors.join("\n\n"));
   } finally {
     // Restore original temp environment variables
     if (origTmpDir !== undefined) process.env.TMPDIR = origTmpDir;
