@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { parseSttySize, ptySizeFile } from "../../scripts/demo/geometry.mjs";
 import {
   KEEPALIVE_INTERVAL_S,
   agentTranscriptScript,
@@ -56,6 +57,15 @@ describe("agentTranscriptScript", () => {
     expect(await before).not.toContain("held line");
     writeFileSync(releaseFile, "");
     expect(await runFor(script, 1_500)).toContain("held line");
+  });
+
+  it("records its size next to the release file and prints even without a tty", async () => {
+    const releaseFile = path.join(dir, "release-sized");
+    writeFileSync(releaseFile, "");
+    const out = await runFor(agentTranscriptScript({ lines: ["sized line"], releaseFile }), 1_500);
+    expect(out).toContain("sized line");
+    // No tty here, so stty fails: the file exists but holds no size.
+    expect(parseSttySize(readFileSync(ptySizeFile(releaseFile), "utf8"))).toBeNull();
   });
 
   it("writes keepalives faster than the backend's 2 s idle threshold", () => {
