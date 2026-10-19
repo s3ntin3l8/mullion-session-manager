@@ -1602,14 +1602,16 @@ export function App() {
           )}
           {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
               false (an unknown list must not bootstrap a second Default),
-              so without this the grid is just empty. */}
+              so without this the grid is just empty. Not .backend-down-banner:
+              a dead backend already shows that red bar, and its Reconnect
+              does not retry this load, so this stays but reads as secondary. */}
           {workspaceLoadFailed && (
-            <div className="backend-down-banner" role="alert">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
+            <div className="workspace-load-banner" role="alert">
+              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
               <span className="backend-down-title">Couldn't load workspaces</span>
               <span className="backend-down-subtext">retry, or come back online</span>
               <button
-                className="backend-down-reconnect"
+                className="workspace-load-retry"
                 onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
               >
                 Retry
