@@ -2111,6 +2111,44 @@
   color: var(--fg);
 }
 
+/* Issue #1555 — one-shot, not a persistent alarm. Explicit splits on tablet
+   bypass the pane cap; this says so once, then the timer or the dismiss
+   removes it. */
+.pane-cap-notice {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--o) 13%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--o) 25%, transparent);
+}
+.pane-cap-notice-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.pane-cap-notice-dismiss {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+}
+.pane-cap-notice-dismiss:hover {
+  background: color-mix(in srgb, var(--o) 18%, transparent);
+  color: var(--fg);
+}
+
 /* Phase 4 (Gap F) — post-create "want to scaffold this?" offer, dismissible
    and never a modal gate (#944). Blue/informational rather than
    .update-banner's orange/warning palette — this is a suggestion, not a
