@@ -49,9 +49,12 @@
    wide window still floats the sidebar and a forced desktop on a narrow
    window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
    which only matched the JS tier in `auto`. `:where()` adds no specificity,
-   so this block still ties the way that query did and later files
-   (mobile.css's full-bleed phone drawer, compact.css's tablet width) win
-   where they used to. */
+   so a descendant rule written inside it (`.sidebar-wrapper`) still ties
+   the way that query did, and later files (mobile.css's full-bleed phone
+   drawer, compact.css's tablet width) win where they used to. An `&` rule
+   does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
+   is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
+   else targets those state classes, so the computed result still matches. */
 :where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
@@ -88,8 +91,9 @@
    the overlay above: a persisted `sidebarCollapsed` preference from a
    previous desktop session has no CSS effect on the phone or tablet tier
    (`toggleSidebar` itself stops writing to it off desktop too — see that
-   function's own comment). `:where()` keeps the old min-width query's
-   specificity. */
+   function's own comment). The `&` rules below are one class lighter than
+   the old `.app.sidebar-collapsed` selectors (`&` inside `:where()` is
+   `:is(:where(...))`); nothing else competes with them. */
 :where(.app[data-tier="desktop"]) {
   &.sidebar-collapsed .sidebar-wrapper {
     width: 0;

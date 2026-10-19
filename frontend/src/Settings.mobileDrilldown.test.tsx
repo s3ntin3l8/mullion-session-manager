@@ -9,8 +9,8 @@ import { act } from "@testing-library/react";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 
 // Mobile UI/UX overhaul, item D — Settings.tsx's drill-down is pure JS state
-// (`mobileNavOpen`) gated entirely by CSS at the <700px breakpoint (see
-// styles.css's `.settings-modal-body-showing-content` rules and
+// (`mobileNavOpen`) gated entirely by CSS on `.app[data-tier="phone"]` (see
+// mobile.css's `.settings-modal-body-showing-content` rules and
 // `.settings-back-btn`'s base `display: none`), not a matchMedia check —
 // unlike BrowserPanel.tsx's autofocus suppression (item B.5), so these tests
 // don't need to stub window.matchMedia at all. They assert the state
