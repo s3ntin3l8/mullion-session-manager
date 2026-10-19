@@ -80,6 +80,25 @@ export function parseGitDiffHunks(diffText) {
   return files;
 }
 
+/**
+ * The files `diffText` deletes (a `--- a/<path>` followed by `+++ /dev/null`).
+ * A diff that only deletes files has nothing to cover, which is also exactly
+ * what a damaged index looks like (every tracked file staged as deleted), so
+ * runPatchCoverageCheck warns instead of reporting a silent 100%.
+ */
+export function deletedFiles(diffText) {
+  const deleted = [];
+  let from = null;
+  for (const line of diffText.split("\n")) {
+    if (line.startsWith("--- a/")) from = line.slice(6).trim();
+    else if (line.startsWith("+++ ")) {
+      if (from && line.trim() === "+++ /dev/null") deleted.push(from);
+      from = null;
+    }
+  }
+  return deleted;
+}
+
 export function loadCoverageReports() {
   const coverageData = {};
 
@@ -279,6 +298,13 @@ export function runPatchCoverageCheck(options = {}) {
 
   const modifiedFiles = parseGitDiffHunks(diffText);
   if (modifiedFiles.size === 0) {
+    const deleted = deletedFiles(diffText);
+    if (deleted.length > 0)
+      console.warn(
+        `WARNING: the patch only deletes ${deleted.length} source file(s) (e.g. ${deleted[0]}). ` +
+          "If that's unexpected, the index may be damaged (every file staged as deleted): " +
+          "check `git status`, and `git reset` restores it from HEAD.",
+      );
     console.log("No source changes found in patch. Patch coverage: 100.0% (0/0 lines).");
     return { ok: true, overallPercent: 100 };
   }
