@@ -1,5 +1,28 @@
 import { useEffect, useRef } from "react";
 
+// Issue #1402 — the visible region in layout-viewport coordinates. Menus are
+// `position: fixed` against the layout viewport, but on iOS Safari neither
+// `window.innerHeight` nor `100dvh` shrinks when the keyboard is open, so a
+// flip/cap computed from them runs behind the keyboard. The visible slice is
+// `[offsetTop, offsetTop + height]`. Falls back to `innerHeight` where
+// `visualViewport` does not exist (jsdom, older browsers).
+export interface VisibleViewport {
+  top: number;
+  bottom: number;
+  height: number;
+}
+
+export function visibleViewport(): VisibleViewport {
+  const vv = window.visualViewport;
+  if (!vv) {
+    const height = window.innerHeight;
+    return { top: 0, bottom: height, height };
+  }
+  const top = vv.offsetTop;
+  const height = vv.height;
+  return { top, bottom: top + height, height };
+}
+
 // Issue #1399 — since #1398, `.app` pins its `top` to the visual viewport's
 // `offsetTop` under `(pointer: coarse)` (tablet.css's `--shell-top`, fed by
 // useVisualViewportInset.ts), so the toolbar *moves* whenever iOS pans the

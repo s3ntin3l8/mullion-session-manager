@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
 import { OverflowIcon } from "./icons.js";
-import { useVisualViewportChange } from "../hooks/useVisualViewportChange.js";
+import { useVisualViewportChange, visibleViewport } from "../hooks/useVisualViewportChange.js";
 
 // Generic ⋯ trigger + portaled dropdown, extracted from PaneTab.tsx's own
 // overflow menu (Phase 4b/4c) so group/workspace/project rows get the same
@@ -158,8 +158,13 @@ export function KebabMenu({
   // auto`, CSS solved `height = triggerTop − 35`: a kebab near the bottom of
   // the viewport (the Dock) rendered a menu over a thousand pixels tall. Also
   // caps `maxHeight` to the space actually free on the side the menu opens
-  // toward, now that height is content-driven instead of implicitly bounded
-  // by the (buggy) fixed `top`. Floored at MIN_MENU_MAX_HEIGHT rather than
+  // toward, measured against the visible viewport (issue #1402) rather than
+  // `innerHeight` — on iOS the layout viewport does not shrink when the
+  // keyboard is open, so a cap against `innerHeight` extends behind it.
+  // The "top" placement's `bottom` offset stays in layout-viewport
+  // coordinates (`innerHeight`): `position: fixed; bottom` is distance from
+  // the layout viewport's bottom edge, and the trigger's rect is already in
+  // those coordinates. Floored at MIN_MENU_MAX_HEIGHT rather than
   // used raw: a trigger within a few px of the edge it opens toward (the
   // Dock at its minimum height is exactly this case) makes the raw
   // `rect.top - 8`/`... - rect.bottom - 8` go negative, and a negative
@@ -175,14 +180,15 @@ export function KebabMenu({
       left: "auto",
       overflowY: "auto",
     };
+    const visible = visibleViewport();
     if (menuPlacement === "top") {
       style.bottom = window.innerHeight - rect.top + 4;
       style.top = "auto";
-      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, rect.top - 8);
+      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, rect.top - visible.top - 8);
     } else {
       style.top = rect.bottom + 4;
       style.bottom = "auto";
-      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, window.innerHeight - rect.bottom - 8);
+      style.maxHeight = Math.max(MIN_MENU_MAX_HEIGHT, visible.bottom - rect.bottom - 8);
     }
     return style;
   };
