@@ -129,6 +129,14 @@ export function App() {
   // on desktop, where .sidebar-wrapper ignores this class entirely.
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
+  // Issue #1638 — giving up on the initial load used to be console-only.
+  // Stays false until a later round succeeds. Distinct from workspacesLoaded:
+  // that flag must not flip true on an unknown list, or the bootstrap below
+  // would create a second "Default".
+  const [workspaceLoadFailed, setWorkspaceLoadFailed] = useState(false);
+  // Bumped by the banner's Retry. The load effect restarts a fresh bounded
+  // round; the online/visibility re-arm stays inside the effect.
+  const [workspaceLoadNonce, setWorkspaceLoadNonce] = useState(0);
   // Tablet tier plan, PR 4 — replaces the old phone-only `isMobile` boolean.
   // `isMobile` below is now a derived `layoutTier === "phone"` local const
   // (not its own state) so every "stays phone-only" call site the plan
@@ -345,7 +353,10 @@ export function App() {
   // duplicate "Default". Instead, giving up re-arms on the browser coming
   // back online or the tab becoming visible again, starting a fresh bounded
   // round, so a transient outage can't leave the app workspace-less for the
-  // rest of the session.
+  // rest of the session. A failed round sets workspaceLoadFailed so the grid
+  // banner can offer Retry (issue #1638); that bumps workspaceLoadNonce and
+  // this effect starts over. Success clears the flag. workspacesLoaded still
+  // stays false until a round actually resolves.
   useEffect(() => {
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -366,12 +377,15 @@ export function App() {
         .refreshWorkspaces()
         .then(
           () => {
-            if (!cancelled) setWorkspacesLoaded(true);
+            if (cancelled) return;
+            setWorkspacesLoaded(true);
+            setWorkspaceLoadFailed(false);
           },
           (err: unknown) => {
             if (cancelled) return;
             if (attempt + 1 >= WORKSPACE_LOAD_MAX_ATTEMPTS) {
               console.error("[workspace] failed to load workspaces, giving up", err);
+              setWorkspaceLoadFailed(true);
               rearmed = true;
               window.addEventListener("online", rearm);
               document.addEventListener("visibilitychange", rearm);
@@ -390,7 +404,7 @@ export function App() {
       clearTimeout(retryTimer);
       disarm();
     };
-  }, []);
+  }, [workspaceLoadNonce]);
 
   // First-ever load (no workspaces exist at all, anywhere) auto-creates
   // "Default" and selects it. Gated on workspacesLoaded so this can't fire
@@ -408,11 +422,11 @@ export function App() {
     }
     if (bootstrappedRef.current) return;
     bootstrappedRef.current = true;
-    // The backend now seeds "Default" itself whenever GET /api/workspaces
-    // sees an empty table (issue #1618), so this is a fallback. On failure
-    // the ref is re-armed so it doesn't latch "already bootstrapped" with
-    // nothing created; the effect doesn't retry on its own (its deps don't
-    // change on failure), but any later run of it can.
+    // The backend seeds "Default" itself on an empty GET /api/workspaces
+    // (issue #1618), so this is only a version-skew fallback. A failure is
+    // logged and left: resetting the ref would not retry, because this
+    // effect's deps (workspacesLoaded, workspaces.length) do not change
+    // when the create rejects (issue #1638).
     useDashboardStore
       .getState()
       .createWorkspace(DEFAULT_WORKSPACE_NAME)
@@ -421,7 +435,6 @@ export function App() {
           useDashboardStore.getState().setActiveWorkspaceId(workspace.id);
         },
         (err: unknown) => {
-          bootstrappedRef.current = false;
           console.error("[workspace] failed to create the default workspace", err);
         },
       );
@@ -1584,6 +1597,24 @@ export function App() {
               <span className="backend-down-subtext">sign in again to continue</span>
               <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
                 Sign in
+              </button>
+            </div>
+          )}
+          {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
+              false (an unknown list must not bootstrap a second Default),
+              so without this the grid is just empty. Not .backend-down-banner:
+              a dead backend already shows that red bar, and its Reconnect
+              does not retry this load, so this stays but reads as secondary. */}
+          {workspaceLoadFailed && (
+            <div className="workspace-load-banner" role="alert">
+              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+              <span className="backend-down-title">Couldn't load workspaces</span>
+              <span className="backend-down-subtext">retry, or come back online</span>
+              <button
+                className="workspace-load-retry"
+                onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
+              >
+                Retry
               </button>
             </div>
           )}

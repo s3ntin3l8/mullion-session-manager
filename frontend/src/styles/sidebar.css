@@ -2039,6 +2039,34 @@
   background: color-mix(in srgb, var(--r) 12%, transparent);
 }
 
+/* Issue #1638 — the workspace load gave up. Lighter than the red
+   backend-down bar above it: one outage should not read as two alarms,
+   and this one is the only control that actually retries the load. */
+.workspace-load-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--o) 8%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--o) 18%, transparent);
+}
+.workspace-load-retry {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
+  background: transparent;
+  color: var(--o);
+  border-radius: 7px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.workspace-load-retry:hover {
+  background: color-mix(in srgb, var(--o) 12%, transparent);
+}
+
 /* Update available — orange/warning palette, below the backend-down
    banner if both are showing, before the grid-area-body. Click navigates
    to Settings -> Server info -> Updates subsection. */
