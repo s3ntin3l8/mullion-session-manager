@@ -518,7 +518,7 @@ describe("App tablet pane-cap notice", () => {
       addPanel: vi.fn((opts: { id: string; params?: { sessionId?: number } }) => {
         panels.push({
           id: opts.id,
-          params: { sessionId: opts.params?.sessionId },
+          params: { sessionId: opts.params?.sessionId ?? 0 },
           api: { location: { type: "grid" }, setActive: vi.fn(), close: vi.fn() },
           group: { id: `g${panels.length + 1}` },
         });
