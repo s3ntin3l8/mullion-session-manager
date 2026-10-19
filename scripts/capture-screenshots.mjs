@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
+import { withDemo } from "./demo/with-demo.mjs";
 import {
   AUTH_TRANSCRIPT,
   MOBILE_TRANSCRIPT,
@@ -123,6 +124,9 @@ async function newContext(browser, options) {
   return context;
 }
 
+/** Aborts when withDemo is interrupted or tearing down (set in main). */
+let captureSignal;
+
 /**
  * Polls until `check` returns a truthy value or `timeoutMs` elapses. Every
  * shot below waits on a real condition rather than a fixed sleep alone: on a
@@ -132,6 +136,8 @@ async function newContext(browser, options) {
 async function waitUntil(check, what, timeoutMs = 60_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
+    // Interrupted or torn down: stop polling a closed browser until the deadline.
+    captureSignal?.throwIfAborted();
     // A transient API error on a loaded host is "not yet", not a failure.
     const value = await check().catch(() => false);
     if (value) return value;
@@ -436,21 +442,25 @@ async function recordLoop(browser, demo) {
 }
 
 async function main() {
-  const demo = await startDemo({ quiet: true, keep: values.keep, holdTranscripts: true });
-  const browser = await chromium.launch();
-  try {
-    await captureDesktop(browser, demo);
-    await captureMobile(browser, demo);
-    if (profile.loop) await recordLoop(browser, demo);
-    console.log(`[screenshots] done: ${profile.outDir}`);
-  } finally {
-    await browser.close();
-    console.log("[screenshots] tearing down the demo...");
-    await demo.stop();
-  }
+  // withDemo stops the demo on every exit path, including a failed browser
+  // launch and Ctrl-C, which would otherwise leave its servers and session
+  // scopes running on the demo ports.
+  await withDemo({
+    startDemo: () => startDemo({ quiet: true, keep: values.keep, holdTranscripts: true }),
+    launchBrowser: () => chromium.launch(),
+    run: async (browser, demo, signal) => {
+      captureSignal = signal;
+      await captureDesktop(browser, demo);
+      await captureMobile(browser, demo);
+      if (profile.loop) await recordLoop(browser, demo);
+      console.log(`[screenshots] done: ${profile.outDir}`);
+    },
+  });
 }
 
 main().catch((err) => {
   console.error("[screenshots] failed:", err);
-  process.exitCode = 1;
+  // The demo is already down (withDemo awaits its teardown before rejecting);
+  // exit now rather than wait on whatever capture step was abandoned.
+  process.exit(1);
 });
