@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
+import { lastChangeSeconds, loopEnd } from "./demo/freeze.mjs";
 import {
   AUTH_TRANSCRIPT,
   MOBILE_TRANSCRIPT,
@@ -80,6 +81,33 @@ async function shot(page, name) {
 function ffmpeg(args) {
   const res = spawnSync("ffmpeg", ["-y", "-loglevel", "error", ...args], { stdio: "inherit" });
   if (res.error || res.status !== 0) throw new Error(`ffmpeg ${args.join(" ")} failed`);
+}
+
+/**
+ * When the video at `src` last changed, in seconds, or null if it never
+ * settles (see lastChangeSeconds). The loop is cut from this rather than from
+ * when the backend's scrollback reports the last line, which on a loaded host
+ * trails the page by many seconds.
+ */
+function videoLastChange(src) {
+  const res = spawnSync(
+    "ffmpeg",
+    [
+      "-hide_banner",
+      "-i",
+      src,
+      "-vf",
+      "freezedetect=n=-60dB:d=1",
+      "-map",
+      "0:v",
+      "-f",
+      "null",
+      "-",
+    ],
+    { encoding: "utf8" },
+  );
+  if (res.error || res.status !== 0) throw new Error(`ffmpeg freezedetect on ${src} failed`);
+  return lastChangeSeconds(res.stderr);
 }
 
 /**
@@ -142,21 +170,49 @@ async function waitForTranscript(demo, scriptName, lines) {
  * so the fitted terminal in the page is what's measured. Output printed before
  * then lands at an interim geometry (a pre-fit row count or font size) and the
  * shot shows it scrolled or clipped.
+ *
+ * The page has no per-session marker on a terminal pane, so the gate requires
+ * exactly one mounted terminal (every shot that uses it shows one) and fails
+ * on more, rather than measuring a pane other than the attached one. It fails
+ * only once extra terminals have stayed mounted for EXTRA_TERMINAL_GRACE_MS,
+ * so a pane remounting during a slow layout change doesn't abort the run.
+ * A box that hasn't been laid out yet (0×0) doesn't count as settled.
  */
 const SETTLE_MS = 1500;
+const EXTRA_TERMINAL_GRACE_MS = 5000;
 async function waitForSettledTerminal(page, demo, scriptName) {
   let last = null;
   let since = 0;
+  let terminals = 0;
+  let extraSince = null;
+  let extraPersisted = false;
   await waitUntil(async () => {
     const session = await findSession(demo, scriptName);
-    const geometry = await page.evaluate(() => {
+    const measured = await page.evaluate(() => {
       // Runs in the page; this file's lint env is Node, hence globalThis.
       const doc = globalThis.document;
-      const screen = doc.querySelector(".xterm-screen");
-      if (!screen || doc.querySelector(".terminal-status-overlay")) return null;
-      if (doc.fonts.status !== "loaded") return null;
-      return `${screen.offsetWidth}x${screen.offsetHeight}`;
+      const screens = doc.querySelectorAll(".xterm-screen");
+      if (screens.length !== 1) return { terminals: screens.length, geometry: null };
+      const [screen] = screens;
+      const ready =
+        !doc.querySelector(".terminal-status-overlay") &&
+        doc.fonts.status === "loaded" &&
+        screen.offsetWidth > 0 &&
+        screen.offsetHeight > 0;
+      const geometry = ready ? `${screen.offsetWidth}x${screen.offsetHeight}` : null;
+      return { terminals: 1, geometry };
     });
+    terminals = measured.terminals;
+    if (terminals > 1) {
+      extraSince ??= Date.now();
+      last = null;
+      // Ends the wait so the throw below fails loudly. Throwing here instead
+      // would be swallowed by waitUntil's catch into a slow, misleading timeout.
+      extraPersisted = Date.now() - extraSince >= EXTRA_TERMINAL_GRACE_MS;
+      return extraPersisted;
+    }
+    extraSince = null;
+    const { geometry } = measured;
     if (!(session?.subscriberCount > 0) || geometry === null) {
       last = null;
       return false;
@@ -168,6 +224,22 @@ async function waitForSettledTerminal(page, demo, scriptName) {
     }
     return Date.now() - since >= SETTLE_MS;
   }, `the terminal attached to ${scriptName} to settle`);
+  if (extraPersisted) {
+    throw new Error(
+      `expected one mounted terminal while waiting for ${scriptName}, found ${terminals}`,
+    );
+  }
+}
+
+/**
+ * The contract both terminal shots share: the session (already opened in the
+ * page) holds its transcript until its terminal has settled, is released
+ * through `releaseFile`, and the shot waits for the whole transcript.
+ */
+async function releaseIntoSettledTerminal(page, demo, scriptName, lines, releaseFile) {
+  await waitForSettledTerminal(page, demo, scriptName);
+  await writeFile(releaseFile, "");
+  await waitForTranscript(demo, scriptName, lines);
 }
 
 /** The demo has no dock monitors, so give its empty panel's space to the terminal. */
@@ -195,9 +267,13 @@ async function captureDesktop(browser, demo) {
   // the session is open here and its terminal sized, then prints it into the
   // live terminal; the shot waits for the whole transcript.
   await page.locator(".session-item", { hasText: "fake-agent.sh" }).first().click();
-  await waitForSettledTerminal(page, demo, "fake-agent.sh");
-  await writeFile(demo.seeded.authReleaseFile, "");
-  await waitForTranscript(demo, "fake-agent.sh", AUTH_TRANSCRIPT);
+  await releaseIntoSettledTerminal(
+    page,
+    demo,
+    "fake-agent.sh",
+    AUTH_TRANSCRIPT,
+    demo.seeded.authReleaseFile,
+  );
   await page.waitForTimeout(1000);
   await shot(page, "desktop-dashboard.png");
 
@@ -220,13 +296,17 @@ async function captureDesktop(browser, demo) {
 }
 
 async function captureMobile(browser, demo) {
-  // A dedicated session, gated behind a startDelay (see agentTranscriptScript)
-  // so nothing prints before the mobile client attaches and resizes the PTY.
+  // A dedicated session that holds its transcript until the mobile client
+  // has attached and fitted its terminal (see agentTranscriptScript).
   const { scriptsDir, auroraProject } = demo.seeded;
   const mobileScriptPath = path.join(scriptsDir, "mobile-demo.sh");
+  const mobileReleaseFile = path.join(scriptsDir, "mobile-demo.release");
   await writeFile(
     mobileScriptPath,
-    agentTranscriptScript({ startDelay: 1, lines: MOBILE_TRANSCRIPT }),
+    agentTranscriptScript({
+      lines: MOBILE_TRANSCRIPT,
+      releaseFile: mobileReleaseFile,
+    }),
     {
       mode: 0o755,
     },
@@ -250,15 +330,24 @@ async function captureMobile(browser, demo) {
   await page.waitForTimeout(800);
   await shot(page, "mobile-session-list.png");
 
-  // 5. Mobile terminal with the key bar. The session's startDelay has elapsed
-  //    during page load and drawer opening, so its attach/resize is done
-  //    before the transcript starts printing.
+  // 5. Mobile terminal with the key bar, released through the same settled
+  //    gate as the dashboard so the transcript prints at the fitted width.
   await page.locator(".session-item", { hasText: "mobile-demo.sh" }).first().click();
-  await waitForTranscript(demo, "mobile-demo.sh", MOBILE_TRANSCRIPT);
+  await releaseIntoSettledTerminal(
+    page,
+    demo,
+    "mobile-demo.sh",
+    MOBILE_TRANSCRIPT,
+    mobileReleaseFile,
+  );
   await page.waitForTimeout(1000);
   await shot(page, "mobile-terminal.png");
   await context.close();
 }
+
+const LOOP_LEAD_MS = 1000;
+// A beat on the finished transcript before the loop restarts.
+const LOOP_TAIL_S = 1.5;
 
 /** An agent session streaming into the terminal, recorded from session start. */
 async function recordLoop(browser, demo) {
@@ -268,8 +357,9 @@ async function recordLoop(browser, demo) {
   }
   const { scriptsDir, auroraProject } = demo.seeded;
   const scriptPath = path.join(scriptsDir, "loop-demo.sh");
-  // startDelay leaves time to open the session before the first line prints.
-  await writeFile(scriptPath, agentTranscriptScript({ startDelay: 3, lines: AUTH_TRANSCRIPT }), {
+  const releaseFile = path.join(scriptsDir, "loop-demo.release");
+  // Held until the session is open and its terminal settled, like the stills.
+  await writeFile(scriptPath, agentTranscriptScript({ lines: AUTH_TRANSCRIPT, releaseFile }), {
     mode: 0o755,
   });
 
@@ -296,20 +386,25 @@ async function recordLoop(browser, demo) {
     }),
   });
   await page.locator(".session-item", { hasText: "loop-demo.sh" }).first().click();
-  await page.waitForTimeout(1500);
-  // Taken once the session is open, still inside the script's startDelay, so
-  // the trimmed loop begins on an empty terminal just before the first line.
-  // Wall-clock, so on a loaded machine the trim can land a little early or
-  // late; landing about 1.5 s before the first line absorbs normal drift.
+  await waitForSettledTerminal(page, demo, "loop-demo.sh");
+  // The trimmed loop starts here, on the settled empty terminal, LOOP_LEAD_MS
+  // before the release; the transcript can't print before then whatever the
+  // host's load, so the trim never cuts into it.
   const offset = (Date.now() - recordingStarted) / 1000;
-  // 35 transcript lines at 0.25 s each, plus a beat at the end.
-  await page.waitForTimeout(3000 + AUTH_TRANSCRIPT.length * 250 + 1500);
+  await page.waitForTimeout(LOOP_LEAD_MS);
+  await writeFile(releaseFile, "");
+  // The recording must hold the whole transcript plus its tail; the encode
+  // below cuts the end back to the last on-screen change + LOOP_TAIL_S.
+  await waitForTranscript(demo, "loop-demo.sh", AUTH_TRANSCRIPT);
+  await page.waitForTimeout(LOOP_TAIL_S * 1000);
   await context.close();
 
   const [raw] = await readdir(videoDir);
   const src = path.join(videoDir, raw);
   const base = path.join(profile.outDir, "terminal-stream");
-  const input = ["-ss", offset.toFixed(2), "-i", src, "-an"];
+  // End LOOP_TAIL_S after the transcript's last line landed on screen.
+  const end = loopEnd(videoLastChange(src), offset, LOOP_TAIL_S);
+  const input = ["-ss", offset.toFixed(2), ...end, "-i", src, "-an"];
   ffmpeg([
     ...input,
     "-c:v",
