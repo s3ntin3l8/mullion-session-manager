@@ -1,26 +1,24 @@
 /* ============================================================ */
-/* Mobile (<700px): single active pane + switcher, sidebar overlay */
+/* Phone tier: single active pane + switcher, sidebar overlay    */
 /* ============================================================ */
 
-/* `.98px`, not a bare 699px — matches lib/layoutTier.ts's own
-   PHONE_BREAKPOINT_QUERY exactly (that file's own comment explains why: at
-   a bare integer bound, a width landing on the boundary itself, or a
-   sub-pixel value browsers can genuinely report, can satisfy this query and
-   NOT the JS-resolved tier, or vice versa — a foldable mid-transition is
-   exactly the case likeliest to hit that gap). Independent code review. */
-@media (max-width: 699.98px) {
+/* Keyed on `.app[data-tier="phone"]`, not viewport width, so an explicit
+   `layoutMode` follows the same rules as the JS tier (issue #1531).
+   `:where()` adds no specificity — these used to be a max-width query, and
+   the cascade order in index.css still decides ties. */
+:where(.app[data-tier="phone"]) {
   /* Mobile UI/UX overhaul, item B.4 — the key bar's own CSS
      (.app.key-bar .grid-area-body, .mobile-key-bar*) moved to tablet.css
      under `(pointer: coarse)` (tablet tier plan, PR 4): App.tsx now gates
      the key bar's render and `.key-bar` class on pointer coarseness, not
-     this width query, so its styling has to be reachable at any width a
-     coarse pointer shows up at, not just below 700px. */
+     this tier, so its styling has to be reachable at any width a
+     coarse pointer shows up at, not just on the phone tier. */
 
   /* `.toolbar-lead`'s own width-auto override, and the floating sidebar
      drawer itself (`.sidebar-wrapper`/`.cmux-scrim`), moved to sidebar.css's
-     own `max-width: 1279.98px` block (floating-sidebar redesign) — both now
-     apply on tablet too, not just below this breakpoint, so they live next
-     to the desktop-collapse rule they replace at that width instead of
+     phone/tablet `data-tier` block (floating-sidebar redesign) — both now
+     apply on tablet too, not just the phone tier, so they live next
+     to the desktop-collapse rule they replace instead of
      being split across two files. `.toolbar-center`/`.run-cmd-btn` stay
      phone-only, deliberately, right here: tablet has the width to keep both
      visible (this is the explicit decision, not an accidental inheritance
@@ -474,13 +472,15 @@
 .phone-nav-settings-title {
   flex: 1;
 }
-@media (max-width: 699.98px) {
+:where(.app[data-tier="phone"]) {
   .sidebar-wrapper {
     width: 100vw !important;
     box-shadow: none !important;
   }
-  /* The navigator covers the whole viewport, so the scrim behind it is moot. */
-  .app.sb-open .cmux-scrim {
+  /* The navigator covers the whole viewport, so the scrim behind it is moot.
+     `&` keeps `.sb-open` on `.app` itself — a descendant combinator would
+     never match, because the class lives on the same element as data-tier. */
+  &.sb-open .cmux-scrim {
     display: none !important;
   }
 }
@@ -490,7 +490,7 @@
 .task-card-sync-error-text {
   display: none;
 }
-@media (max-width: 699.98px) {
+:where(.app[data-tier="phone"]) {
   .task-card-sync-error-text {
     display: block;
     width: 100%;
@@ -591,7 +591,7 @@
 
 /* Settings on phone: fix the fields that overflow a 390px screen. Inline
    widths need !important to lose to. */
-@media (max-width: 699.98px) {
+:where(.app[data-tier="phone"]) {
   .settings-launcher-table {
     --lch-cols: 16px 9px minmax(0, 96px) minmax(0, 1fr) 36px 56px 36px;
   }

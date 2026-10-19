@@ -38,10 +38,10 @@
   font-weight: 600;
 }
 /* Mobile UI/UX overhaul, item D — the drill-down's "back to nav list"
-   chevron (Settings.tsx). Hidden unconditionally here; only the <700px
-   breakpoint below turns it on, so the component can mount/unmount it
-   purely off its own `mobileNavOpen` state without also having to know
-   the current viewport width itself. */
+   chevron (Settings.tsx). Hidden unconditionally here; only the phone tier
+   turns it on (mobile.css's `:where(.app[data-tier="phone"])` block), so
+   the component can mount it purely off its own `mobileNavOpen` state
+   without also having to know the layout tier. */
 .settings-back-btn {
   display: none;
   width: 28px;

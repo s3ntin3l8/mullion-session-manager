@@ -1222,8 +1222,8 @@ export function App() {
   // Review finding — without this, resizing from tablet (drawer open) to
   // desktop and back re-opened the drawer unbidden: `sidebarOpen` has no
   // other tier-transition reset, so it just carried the stale `true` back
-  // across the boundary. Desktop's own overlay CSS never reads `sb-open`
-  // (scoped to `max-width: 1279.98px`), so this was a surprising re-open on
+  // across the boundary. The overlay CSS only reads `sb-open` on the phone
+  // and tablet tiers, so this was a surprising re-open on
   // tier reversion, not a desktop-side visual bug. Direct setState is
   // genuinely needed here (canceling in response to an externally-driven
   // `layoutTier` change, not a pure render-time derivation) — same shape as
@@ -1491,7 +1491,7 @@ export function App() {
         <div className="sidebar-wrapper cmux-scroll" ref={sidebarWrapperRef}>
           {/* Desktop-only (review finding, floating-sidebar redesign): the
               overlay's own `width: min(310px, 84vw) !important`
-              (sidebar.css's `max-width: 1279.98px` block) outranks
+              (sidebar.css's phone/tablet `data-tier` block) outranks
               `--sidebar-width`, the custom property this drag actually
               writes to, so below desktop width the handle used to render,
               respond to mousedown, and update state/localStorage while
