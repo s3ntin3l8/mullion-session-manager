@@ -44,23 +44,15 @@
   transition: width 0.16s ease;
 }
 
-/* Floating-sidebar redesign — below desktop width (phone AND tablet now,
-   not just phone), the sidebar is a translucent overlay card floating ON
-   TOP of the tiled grid, not an in-flow column that pushes/resizes it.
-   Modeled on UISplitViewController's own overlay display mode (Files/
-   Notes/Mail on iPad): reveal/dismiss via App.tsx's `sidebarOpen` state
-   (`toggleSidebar`'s own comment), content's width never changes while it
-   shows. Was phone-only (`max-width: 699px`, in mobile.css) under the
-   tablet tier plan, which deliberately kept tablet on desktop's docked
-   collapse behavior below — reversed because tablet's sidebar was pushing
-   and resizing the live dockview grid on open, which is both the wrong
-   feel and (independently) a second trigger for the dockview pane-skew
-   bug fixed separately: any grid-width change while a group is maximized
-   replays that clamp. `699.98px`/`1279.98px`, not bare integers — matches
-   lib/layoutTier.ts's own PHONE_BREAKPOINT_QUERY/TABLET_BREAKPOINT_QUERY
-   exactly (that file's own comment explains why: avoids a live gap at
-   fractional/boundary widths a foldable's mid-transition can report). */
-@media (max-width: 1279.98px) {
+/* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
+   width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
+   wide window still floats the sidebar and a forced desktop on a narrow
+   window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
+   which only matched the JS tier in `auto`. `:where()` adds no specificity,
+   so this block still ties the way that query did and later files
+   (mobile.css's full-bleed phone drawer, compact.css's tablet width) win
+   where they used to. */
+:where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
     /* Matches .toolbar's own inset-aware height (its base rule, near the
@@ -77,10 +69,10 @@
     transition: transform 0.24s ease;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
   }
-  .app.sb-open .sidebar-wrapper {
+  &.sb-open .sidebar-wrapper {
     transform: none;
   }
-  .app.sb-open .cmux-scrim {
+  &.sb-open .cmux-scrim {
     display: block !important;
   }
 
@@ -94,13 +86,12 @@
 
 /* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
    the overlay above: a persisted `sidebarCollapsed` preference from a
-   previous desktop session has no CSS effect below this width at all
-   (`toggleSidebar` itself stops writing to it below desktop width too —
-   see that function's own comment), so this block scoping to desktop only
-   is consistent with what actually drives the class, not just a leftover
-   width query. */
-@media (min-width: 1280px) {
-  .app.sidebar-collapsed .sidebar-wrapper {
+   previous desktop session has no CSS effect on the phone or tablet tier
+   (`toggleSidebar` itself stops writing to it off desktop too — see that
+   function's own comment). `:where()` keeps the old min-width query's
+   specificity. */
+:where(.app[data-tier="desktop"]) {
+  &.sidebar-collapsed .sidebar-wrapper {
     width: 0;
     border-right: none;
     overflow: hidden;
@@ -109,14 +100,14 @@
   /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
      its three icons; the center divider is removed because there is no
      longer a sidebar edge for it to line up with. */
-  .app.sidebar-collapsed .toolbar-lead {
+  &.sidebar-collapsed .toolbar-lead {
     width: auto;
   }
-  .app.sidebar-collapsed .toolbar-center {
+  &.sidebar-collapsed .toolbar-center {
     border-left: none;
   }
   /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  .app.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
+  &.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
     transform: scaleX(-1);
   }
 }
