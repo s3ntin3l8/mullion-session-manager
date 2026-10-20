@@ -233,8 +233,7 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
       <div className="github-panel-section">
         <div className="github-panel-section-title">Review</div>
         <div className="github-panel-empty-row">
-          A review was requested — {pendingLabel(state.status, state.landedChecked)}
-          {state.status ? ` (${state.status})` : ""}.
+          A review was requested — {pendingLabel(state.status, state.landedChecked)}.
         </div>
       </div>
     );

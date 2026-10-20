@@ -260,6 +260,32 @@ describe("GitHubPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not paint a changes-requested review green", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: STATUS,
+        prs: {
+          ...PRS_LOADED,
+          prs: [
+            {
+              ...PRS_LOADED.prs[0],
+              relayReview: {
+                state: "landed",
+                verdict: "CHANGES_REQUESTED",
+                author: "hermes[bot]",
+              },
+            },
+          ],
+        },
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+
+    const pill = await screen.findByText("Review posted");
+    expect(pill.className).toContain("changes-requested");
+  });
+
   it("marks a PR from the store's list too — that is the list a running app shows", async () => {
     // The panel prefers the store's PRs (fed by the batch route) over its own
     // fetch, so the marker has to survive that swap — otherwise it renders

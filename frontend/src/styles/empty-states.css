@@ -2681,6 +2681,13 @@ button.github-panel-row.gh-issue-row {
   border-color: color-mix(in srgb, var(--good, #4caf50) 45%, transparent);
   color: var(--good, #4caf50);
 }
+/* A landed review that asked for changes is not the good news an approval
+   is — the tone follows the verdict, not merely the fact that a review
+   landed. */
+.github-panel-pr-relay-pill.landed.changes-requested {
+  border-color: color-mix(in srgb, var(--y) 45%, transparent);
+  color: var(--y);
+}
 
 /* A workflow run in a PR's expanded CI list: a plain label above its jobs. */
 .github-panel-ci-group {

@@ -721,43 +721,28 @@ async function attachRelayReviewState(
   );
   if (withRuns.size === 0) return prs;
   // A read token for the landed check. Without one the PR still shows that a
-  // review was requested — it just cannot say whether it landed. A token
-  // that cannot be resolved at all must not take the PR list down with it:
-  // the relay's state is a nicety, the list is not.
-  const token = await resolveGitHubToken(app, repoRef, "read").catch((err) => {
-    app.log.warn(
-      { detail: (err as Error).message, owner: repoRef.owner, repo: repoRef.repo },
-      "pr list: no GitHub token for the relay's landed check",
-    );
-    return null;
-  });
+  // review was requested — it just cannot say whether it landed (the state
+  // says "could not confirm", not "not landed").
+  //
+  // `resolveGitHubToken` already narrows its own failures the way this repo
+  // does everywhere else: the expected ones fall back to the PAT and a null
+  // answer means "no credentials", while an unexpected one (a bug) is
+  // rethrown. So there is nothing to catch here — a swallowed TypeError
+  // would read as "could not confirm" instead of surfacing.
+  const token = await resolveGitHubToken(app, repoRef, "read");
   return Promise.all(
     prs.map(async (pr) => {
       if (!withRuns.has(pr.number)) return pr;
-      try {
-        const relayReview = await getRelayReviewState(app, {
-          owner: repoRef.owner,
-          repo: repoRef.repo,
-          prNumber: pr.number,
-          token,
-        });
-        // The list renders the state, the verdict and the author — not the
-        // review's whole text, which the drill-in fetches when it is opened.
-        const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
-        return { ...pr, relayReview: summary };
-      } catch (err) {
-        // Same reasoning: one PR's relay state must not fail the whole list.
-        app.log.warn(
-          {
-            detail: (err as Error).message,
-            owner: repoRef.owner,
-            repo: repoRef.repo,
-            pr: pr.number,
-          },
-          "pr list: the relay's state for a pull request is unavailable",
-        );
-        return pr;
-      }
+      const relayReview = await getRelayReviewState(app, {
+        owner: repoRef.owner,
+        repo: repoRef.repo,
+        prNumber: pr.number,
+        token,
+      });
+      // The list renders the state, the verdict and the author — not the
+      // review's whole text, which the drill-in fetches when it is opened.
+      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
+      return { ...pr, relayReview: summary };
     }),
   );
 }
@@ -2160,12 +2145,14 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
       const { owner, repo } = ctx.repoRef;
       try {
-        const token = await resolveGitHubToken(app, ctx.repoRef, "read");
+        // `ctx.token` is already the read-scoped token (the context resolves
+        // it with the same "read" scope) — resolving it a second time would
+        // mint a second installation token for the same call.
         const state = await getRelayReviewState(app, {
           owner,
           repo,
           prNumber: number,
-          token,
+          token: ctx.token,
         });
         // The Hermes run's own status, when a run is known: it tells the
         // operator whether a review that has not landed yet is still on its
@@ -2981,10 +2968,23 @@ export async function projectsRoute(app: FastifyInstance) {
             // running app (the batch route feeds the Zustand store, which
             // shadows the per-project fetch), so annotating only the
             // per-project route would leave the list's review marker dead.
-            prsResult[project.id] = {
-              ...status,
-              prs: await attachRelayReviewState(app, status.prs, result.value),
-            };
+            //
+            // A GitHub failure here is expected (a rate limit, a token that
+            // cannot be minted) — the list itself is still good, so it goes
+            // out un-annotated. An unexpected one is a bug and is left loud.
+            try {
+              prsResult[project.id] = {
+                ...status,
+                prs: await attachRelayReviewState(app, status.prs, result.value),
+              };
+            } catch (err) {
+              if (!(err instanceof GitHubApiError)) throw err;
+              app.log.warn(
+                { detail: (err as Error).message, projectId: project.id },
+                "batch git-refs: the review relay's state is unavailable, omitting",
+              );
+              prsResult[project.id] = status;
+            }
           })();
 
           await Promise.all([branchesPromise, prsPromise]);

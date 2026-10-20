@@ -289,7 +289,9 @@ function PRCard({
         {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
         {pr.relayReview && pr.relayReview.state !== "none" && (
           <span
-            className={`github-panel-pr-relay-pill ${pr.relayReview.state}`}
+            className={`github-panel-pr-relay-pill ${pr.relayReview.state}${
+              pr.relayReview.verdict === "CHANGES_REQUESTED" ? " changes-requested" : ""
+            }`}
             title={relayPillTitle(pr.relayReview)}
           >
             {pr.relayReview.state === "landed" ? "Review posted" : "Review requested"}
