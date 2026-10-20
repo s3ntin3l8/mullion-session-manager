@@ -115,7 +115,7 @@ describe("PrDetailView", () => {
       }),
     );
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    expect(await screen.findByText(/CHANGES_REQUESTED by hermes\[bot\]/)).toBeInTheDocument();
+    expect(await screen.findByText(/Changes requested by hermes\[bot\]/)).toBeInTheDocument();
     expect(screen.getByText(/Verdict/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "open on GitHub" })).toBeInTheDocument();
   });

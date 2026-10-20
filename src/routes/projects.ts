@@ -725,23 +725,30 @@ async function attachRelayReviewState(
   prs: PROrWithChecks[],
   repoRef: { owner: string; repo: string },
 ): Promise<PROrWithChecks[]> {
-  const withRuns = prs.filter(
-    (pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null,
+  // One pass to find the PRs the relay knows about — the same lookup every
+  // annotation would otherwise repeat.
+  const withRuns = new Set(
+    prs
+      .filter((pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null)
+      .map((pr) => pr.number),
   );
-  if (withRuns.length === 0) return prs;
+  if (withRuns.size === 0) return prs;
   // A read token for the landed check. Without one the PR still shows that a
   // review was requested — it just cannot say whether it landed.
   const token = await resolveGitHubToken(app, repoRef, "read");
   return Promise.all(
     prs.map(async (pr) => {
-      if (!withRuns.includes(pr)) return pr;
+      if (!withRuns.has(pr.number)) return pr;
       const relayReview = await getRelayReviewState(app, {
         owner: repoRef.owner,
         repo: repoRef.repo,
         prNumber: pr.number,
         token,
       });
-      return { ...pr, relayReview };
+      // The list renders the state, the verdict and the author — not the
+      // review's whole text, which the drill-in fetches when it is opened.
+      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
+      return { ...pr, relayReview: summary };
     }),
   );
 }
@@ -2140,8 +2147,9 @@ export async function projectsRoute(app: FastifyInstance) {
         });
         // The Hermes run's own status, when a run is known: it tells the
         // operator whether a review that has not landed yet is still on its
-        // way or has failed outright.
-        if (state.runId) {
+        // way or has failed outright. A landed review has nothing left to
+        // say, so it is not fetched.
+        if (state.runId && state.state !== "landed") {
           try {
             const run = await getHermesReviewStatus(app, { owner, repo, prNumber: number });
             if (typeof run.status === "string") state.status = run.status;

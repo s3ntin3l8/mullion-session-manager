@@ -17,7 +17,6 @@ import type * as HermesReview from "../../src/services/hermes-review.js";
 import { getReviewRunForPr } from "../../src/services/hermes-review.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
-import { resetLandedMemo } from "../../src/routes/review-relay.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
@@ -2007,11 +2006,9 @@ describe("projects route", () => {
           dispatchedAt: Date.now(),
         };
 
-        beforeEach(() => {
-          // The landed check is memoized per run (one GitHub call, not one per
-          // poll), so each test starts from a clean memo.
-          resetLandedMemo();
-        });
+        // The landed check is memoized per app (one GitHub call, not one per
+        // poll), and each test builds its own app — so every test starts
+        // from an empty memo.
 
         it("reports 'none' when this Mullion knows no run for the PR", async () => {
           vi.mocked(getReviewRunForPr).mockReturnValue(null);
@@ -2039,6 +2036,53 @@ describe("projects route", () => {
           });
           expect(res.statusCode).toBe(200);
           expect(res.json()).toMatchObject({ state: "requested", runId: "run_1" });
+        });
+
+        it("re-checks the landed review after the memo window, so a review that lands is seen", async () => {
+          // The memo must be a TTL, not a sliding window: the PR list is
+          // refreshed on every webhook event, so a reader faster than the
+          // window would otherwise pin the cached answer and never see the
+          // review land.
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          let reviews = 0;
+          mockGithub(gqlPr(41), (url) => {
+            if (!url.includes("/pulls/41/reviews")) return null;
+            reviews += 1;
+            // The review has not landed on the first check, and has on the
+            // ones after it.
+            if (reviews === 1) return jsonResponse(200, []);
+            return jsonResponse(200, [
+              {
+                user: { login: "hermes[bot]", type: "Bot" },
+                state: "APPROVED",
+                commit_id: "sha41",
+                submitted_at: new Date().toISOString(),
+              },
+            ]);
+          });
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          // Reads FASTER than the memo window, the way the PR list is
+          // refreshed on every webhook event. A sliding window would keep
+          // re-stamping the cached answer and never see the review land.
+          vi.useFakeTimers({ toFake: ["Date"] });
+          try {
+            const base = Date.now();
+            let state = "";
+            for (let i = 0; i < 5; i += 1) {
+              vi.setSystemTime(base + i * 5_000);
+              const res = await app.inject({
+                method: "GET",
+                url: `/api/projects/${id}/github/prs/41/review`,
+              });
+              state = res.json().state;
+              if (state === "landed") break;
+            }
+            expect(state).toBe("landed");
+          } finally {
+            vi.useRealTimers();
+          }
+          expect(reviews).toBeGreaterThan(1);
         });
 
         it("annotates the PR list with the relay's state", async () => {

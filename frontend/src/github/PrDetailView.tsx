@@ -162,6 +162,20 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
 
 const PR_REFRESH_MS = 30_000;
 
+/** A review's GitHub state, in words. */
+function verdictLabel(verdict: string | undefined): string {
+  switch (verdict) {
+    case "APPROVED":
+      return "Approved";
+    case "CHANGES_REQUESTED":
+      return "Changes requested";
+    case "COMMENTED":
+      return "Commented";
+    default:
+      return verdict ?? "Review posted";
+  }
+}
+
 /**
  * The review relay's state for this pull request (issue #1630) — the same
  * relay the agent-facing `review_status` reports, seen from the operator's
@@ -182,7 +196,7 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
       <div className="github-panel-section">
         <div className="github-panel-section-title">Review</div>
         <div className="github-panel-empty-row">
-          A review was requested{state.dispatchedAt ? " — waiting for the review bot" : ""}
+          A review was requested — waiting for the review bot
           {state.status ? ` (${state.status})` : ""}.
         </div>
       </div>
@@ -192,7 +206,7 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
     <div className="github-panel-section">
       <div className="github-panel-section-title">Review</div>
       <div className="github-panel-empty-row">
-        {state.verdict ?? "Review posted"}
+        {verdictLabel(state.verdict)}
         {state.author ? ` by ${state.author}` : ""}
         {state.htmlUrl ? (
           <>
@@ -223,9 +237,16 @@ export function PrDetailView({
   onBack: () => void;
 }) {
   const [pr, setPr] = useState<GitHubPrDetail | null>(null);
-  // The review relay's state for this PR (issue #1630) — refreshed with the
-  // PR itself, so a review that lands shows up within the same 30s tick.
-  const [relayReview, setRelayReview] = useState<RelayReviewState | null>(null);
+  // The relay's state for this PR (issue #1630) — refreshed with the PR
+  // itself, so a review that lands shows up within the same 30s tick. The PR
+  // it belongs to is remembered alongside it, so switching PRs never shows the
+  // previous PR's verdict under the new PR's header (cleared by derivation,
+  // not by a setState inside the effect).
+  const [relay, setRelay] = useState<{ pr: number; state: RelayReviewState | null }>({
+    pr: number,
+    state: null,
+  });
+  const relayReview = relay.pr === number ? relay.state : null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<"merge" | "review" | "handoff" | null>(null);
@@ -267,10 +288,10 @@ export function PrDetailView({
     api
       .getProjectPrReview(projectId, number)
       .then((res) => {
-        if (!cancelled) setRelayReview(res);
+        if (!cancelled) setRelay({ pr: number, state: res });
       })
       .catch(() => {
-        if (!cancelled) setRelayReview(null);
+        if (!cancelled) setRelay({ pr: number, state: null });
       });
     return () => {
       cancelled = true;
