@@ -348,4 +348,103 @@ describe("Settings -> Models", () => {
     await waitFor(() => expect(within(fallback).getByText("gpt-6-astra")).toBeInTheDocument());
     expect(within(fallback).queryByText("gpt-5.5")).not.toBeInTheDocument();
   });
+
+  // The reviewer is the last line of defence on a Task Master task: a
+  // separate session with its own context, judging the diff against the
+  // issue's acceptance criteria. When it resolves to the implementer's
+  // model it is still a separate context, but not a second opinion in the
+  // sense that matters — same weights, same blind spots. The dropdown can
+  // only show which model is selected, so the warning has to be stated.
+  describe("reviewer/implementer model collapse", () => {
+    // Only fires when the implementer model is EXPLICITLY configured — with
+    // both roles unset there is no deliberate implementer choice being
+    // silently inherited, so warning would be noise about nothing.
+    const claudeWarning = /Claude Code's reviewer runs on the same model/i;
+    const opencodeWarning = /opencode's reviewer runs on the same model/i;
+
+    it("warns for Claude Code when the reviewer model is unset", () => {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(claudeWarning)).toBeInTheDocument();
+    });
+
+    it("warns for Claude Code when both roles name the same model", () => {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: "opusplan", reviewerModel: "opusplan", smallModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(claudeWarning)).toBeInTheDocument();
+    });
+
+    it("does not warn for Claude Code when the reviewer names a different model", () => {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(claudeWarning)).not.toBeInTheDocument();
+    });
+
+    it("does not warn when neither role has a model configured", () => {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(claudeWarning)).not.toBeInTheDocument();
+    });
+
+    it("warns for opencode when both roles name the same model", () => {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: "opencode-go/minimax-m3.1-flash-free",
+            defaultSmallModel: null,
+          },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(opencodeWarning)).toBeInTheDocument();
+    });
+
+    it("does NOT warn for opencode when the reviewer model is unset", () => {
+      // opencode's roles have separate settings and neither inherits the
+      // other — an unset reviewer model means "no override" (opencode's own
+      // default), not "the implementer's model". Claude Code's unset
+      // reviewer model DOES mean the implementer's model, so the two
+      // families must not share a rule here.
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: null,
+            defaultSmallModel: null,
+          },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(opencodeWarning)).not.toBeInTheDocument();
+    });
+  });
 });

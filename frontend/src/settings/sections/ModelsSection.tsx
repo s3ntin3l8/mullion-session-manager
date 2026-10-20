@@ -1,13 +1,57 @@
 import { useDashboardStore } from "../../store/index.js";
+import type { ReactNode } from "react";
 import { api } from "../../api/index.js";
 import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
+import {
+  describeModelRole,
+  resolveCliModelRoles,
+  resolveOpencodeModelRoles,
+} from "../../modelRoles.js";
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
+const warningStyle = {
+  fontSize: 11.5,
+  color: "var(--r)",
+  margin: 0,
+  paddingLeft: 6,
+  maxWidth: 280,
+};
+
 const FLAG_HINT =
   "Adds --model to new sessions and Task Master workers. A task's Model: / Reviewer-Model: line overrides these; a launcher command that already passes --model is left alone.";
+
+/**
+ * The advisory note under a reviewer-model picker when the reviewer role
+ * resolves to the same model as the implementer role.
+ *
+ * The reviewer is the last line of defence on a Task Master task: it is a
+ * separate session with its own context, judging the diff against the
+ * issue's acceptance criteria. When it runs on the implementer's model it
+ * is still a separate context, but it is not a second opinion in the
+ * sense that matters — same weights, same blind spots. Saying so is the
+ * whole point of this note; the dropdown itself can only show which model
+ * is selected, not what that selection means for the review.
+ *
+ * Only fires when the implementer model is EXPLICITLY configured. With
+ * both roles unset there is no deliberate implementer choice being
+ * silently inherited — there is just no opinion configured at all — and
+ * warning about it on a fresh install would be noise about nothing.
+ */
+function reviewerModelWarning(
+  cliName: string,
+  roles: { implementer: string | null; reviewer: string | null; shared: boolean },
+): ReactNode {
+  if (!roles.shared || roles.implementer === null) return null;
+  return (
+    <p style={warningStyle}>
+      {cliName}'s reviewer runs on the same model as its implementer (
+      {describeModelRole(roles.implementer)}) — no second opinion.
+    </p>
+  );
+}
 
 export function ModelsSection() {
   const { settings, updateSettings } = useDashboardStore();
@@ -21,6 +65,20 @@ export function ModelsSection() {
   ) => updateSettings({ opencode: { [key]: value } });
 
   const opencodeOptions = opencode.models.map((value) => ({ value }));
+
+  const claudeRoles = resolveCliModelRoles(
+    settings.claudeCode?.defaultModel,
+    settings.claudeCode?.reviewerModel,
+  );
+  const codexRoles = resolveCliModelRoles(
+    settings.codex?.defaultModel,
+    settings.codex?.reviewerModel,
+  );
+  const agyRoles = resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel);
+  const opencodeRoles = resolveOpencodeModelRoles(
+    settings.opencode?.implementerModel,
+    settings.opencode?.reviewerModel,
+  );
 
   return (
     <>
@@ -44,6 +102,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
+        warning={reviewerModelWarning("Claude Code", claudeRoles)}
       />
       <ModelPicker
         label="Small model"
@@ -83,6 +142,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ codex: { reviewerModel: v } })}
+        warning={reviewerModelWarning("Codex", codexRoles)}
       />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
@@ -108,6 +168,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ agy: { reviewerModel: v } })}
+        warning={reviewerModelWarning("agy", agyRoles)}
       />
       <p style={hintStyle}>
         {agy.status === "error"
@@ -137,6 +198,7 @@ export function ModelsSection() {
         defaultLabel="opencode default"
         allowCustom={false}
         onChange={(v) => setOpencode("reviewerModel", v)}
+        warning={reviewerModelWarning("opencode", opencodeRoles)}
       />
       <ModelPicker
         label="Small model"

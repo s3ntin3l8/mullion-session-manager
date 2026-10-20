@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Dropdown, Row } from "../ui/primitives.js";
 import { ErrorText } from "../ui/ErrorText.js";
 
@@ -153,6 +154,7 @@ export function ModelPicker({
   defaultLabel,
   allowCustom,
   onChange,
+  warning,
 }: {
   label: string;
   // The visible label repeats across CLIs ("Default model"), so callers pass a
@@ -164,17 +166,27 @@ export function ModelPicker({
   defaultLabel: string;
   allowCustom: boolean;
   onChange: (value: string | null) => void;
+  // An advisory note rendered under the control — used by Settings → Models
+  // to say something the dropdown itself cannot: that the reviewer role
+  // resolves to the same model as the implementer role, so the reviewer
+  // offers no second opinion. Rendered under the control rather than in the
+  // Row's description column because it is a consequence of the CURRENT
+  // value, not a static explanation of what the field is for.
+  warning?: ReactNode;
 }) {
   return (
     <Row label={label} desc={desc}>
-      <ModelSelect
-        ariaLabel={ariaLabel}
-        value={value}
-        options={options}
-        defaultLabel={defaultLabel}
-        allowCustom={allowCustom}
-        onChange={onChange}
-      />
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <ModelSelect
+          ariaLabel={ariaLabel}
+          value={value}
+          options={options}
+          defaultLabel={defaultLabel}
+          allowCustom={allowCustom}
+          onChange={onChange}
+        />
+        {warning}
+      </div>
     </Row>
   );
 }
