@@ -243,6 +243,28 @@ describe("buildTaskMasterPreamble — delegation clause", () => {
   });
 });
 
+// The clause only exists if a spawn site threads `agentCommand` into the
+// preamble. The two test files above exercise the builder and the lookup
+// in isolation — a future call site that forgot the field would drop the
+// clause silently, with the whole suite still green. So assert the WIRING:
+// a real builder call, through the path a spawn actually takes.
+describe("worker prompt wiring", () => {
+  it("carries the clause through buildWorkerPrompt when a command is given", () => {
+    const out = buildWorkerPrompt({ ...BASE, mode: "claim", agentCommand: "claude" });
+    expect(out).toContain("Task tool");
+  });
+
+  it("carries the clause through buildRejectPrompt when a command is given", () => {
+    const out = buildRejectPrompt({ ...BASE, feedback: "not this way", agentCommand: "codex" });
+    expect(out).toContain("spawn_agent");
+  });
+
+  it("omits the clause from a worker prompt with no command", () => {
+    const out = buildWorkerPrompt({ ...BASE, mode: "claim" });
+    expect(out).not.toContain("delegate");
+  });
+});
+
 describe("buildWorkerPrompt", () => {
   it("puts the preamble first, then the issue title and body after a break", () => {
     const out = buildWorkerPrompt({ ...BASE, mode: "claim" });

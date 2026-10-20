@@ -5,16 +5,19 @@ import { getAdapterDelegationHint } from "../../../src/services/hook-adapters/in
 // CLI's delegation primitive AND their own way of choosing the child's model,
 // because those genuinely differ:
 //
-//   claude-code: the Task tool takes a `subagent_type`; the child's model
-//                 comes from that subagent's own definition, not the call.
-//   codex:        `spawn_agent` takes a per-child model + reasoning effort.
+//   claude-code: the Task tool takes a `subagent_type` and an optional
+//                 per-call `model` (sonnet/opus/haiku/fable) that takes
+//                 precedence over the subagent definition's own `model:`;
+//                 ignored for `subagent_type: "fork"`.
+//   codex:        `spawn_agent` takes a per-child model + reasoning effort
+//                 where the install exposes them.
 //   opencode:     subagents are `agents.<name>` entries, each with a model.
 //   agy:          `invoke_subagent` takes a spec with a model and a modelTier.
 //
 // A single generic sentence would be wrong for three of the four — naming
-// `spawn_agent` to a Claude Code worker, or telling a Claude Code worker to
-// "pass a cheaper model" (it can't — the model comes from the subagent's
-// definition), would both be actively misleading.
+// `spawn_agent` to a Claude Code worker, or telling a Codex worker to pass
+// a `model` field its schema may not expose, would both be actively
+// misleading.
 describe("getAdapterDelegationHint", () => {
   it("names Claude Code's Task tool and its per-call model override", () => {
     const hint = getAdapterDelegationHint("claude");

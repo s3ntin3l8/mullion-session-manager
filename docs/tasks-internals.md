@@ -469,11 +469,13 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   an agent that has a subagent primitive (`getAdapterDelegationHint` in
   `hook-adapters/index.ts`; a plain shell gets nothing). It names that
   CLI's own delegation primitive and that CLI's own way of choosing the
-  child's model — Claude Code's `Task` tool takes a `subagent_type` and the
-  child's model comes from that subagent's own definition, Codex's
-  `spawn_agent` takes a per-child model and reasoning effort, opencode's
-  subagents are `agents.<name>` entries each carrying a model, agy's
-  `invoke_subagent` takes a spec with a model and a `modelTier`. One
+  child's model — Claude Code's `Task` tool takes a `subagent_type` and an
+  optional per-call `model` that takes precedence over that subagent's own
+  definition's `model:` frontmatter (ignored for `subagent_type: "fork"`,
+  which always inherits the parent model), Codex's `spawn_agent` takes a
+  per-child model and reasoning effort where the install exposes them,
+  opencode's subagents are `agents.<name>` entries each carrying a model,
+  agy's `invoke_subagent` takes a spec with a model and a `modelTier`. One
   generic sentence would be wrong for three of the four.
 
   This is **advisory**, not an obligation to delegate: the clause says the
