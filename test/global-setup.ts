@@ -9,7 +9,6 @@
 // test/helpers/checkout-config.ts.
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
 import {
   assertConfigUnchanged,
   assertIndexIntact,
@@ -18,6 +17,7 @@ import {
   snapshotIndex,
   type IndexSnapshot,
 } from "./helpers/checkout-config.js";
+import { createSuiteTmpDir } from "./helpers/suite-tmpdir.js";
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -43,7 +43,9 @@ export function setup(): void {
   // into a single suite-level temporary directory. Guarantees that even if tests
   // fail, throw, or timeout before their local afterEach/afterAll cleanup runs,
   // the entire run's temporary files are cleaned up in teardown().
-  suiteTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-test-suite-"));
+  // Kept short (see helpers/suite-tmpdir.ts): a hosted session's long TMPDIR
+  // would otherwise push every socket the suite binds past sun_path.
+  suiteTmpDir = createSuiteTmpDir();
   process.env.TMPDIR = suiteTmpDir;
   process.env.TEMP = suiteTmpDir;
   process.env.TMP = suiteTmpDir;
