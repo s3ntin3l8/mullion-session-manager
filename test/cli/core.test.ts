@@ -1497,6 +1497,39 @@ describe("runCommand", () => {
         expect(out).toContain("run_triage (completed)");
       });
 
+      it("clips a long triage text by code point, never splitting a surrogate pair", async () => {
+        // 1500 code points, with an astral character right at the cut: a
+        // plain slice would end in half a surrogate.
+        const body = `${"a".repeat(1_499)}\u{1F600}${"b".repeat(100)}`;
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_triage",
+            repo: "acme/widgets",
+            prNumber: 12,
+            status: "completed",
+            github: {
+              checked: true,
+              comment: {
+                author: "hermes[bot]",
+                attribution: "marked",
+                body,
+                bodyTruncated: false,
+                createdAt: "2026-10-20T10:00:00Z",
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        await runCommand(["triage", "status", "--issue", "12"], { client, io });
+        const out = io.written.join("");
+        const printed = out.slice(out.indexOf("triage text: ") + "triage text: ".length);
+        // No lone surrogate, and no U+FFFD (what the output pipeline's
+        // encode/decode turns one into).
+        expect(printed).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+        expect(printed).not.toContain("\uFFFD");
+        expect(printed).toContain("\u2026");
+      });
+
       it("says when the comment was only a fallback attribution", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({

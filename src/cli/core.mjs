@@ -1465,6 +1465,16 @@ const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
 // text.
 const MAX_CLI_REVIEW_BODY = 1_500;
 
+/**
+ * Clips a review or triage text to what a terminal can show. The cut is by
+ * code point, so it cannot leave a lone surrogate behind (a plain slice
+ * would split an emoji in half), and the ellipsis marks that it cut.
+ */
+function clipForTerminal(body) {
+  if ([...body].length <= MAX_CLI_REVIEW_BODY) return body;
+  return `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`;
+}
+
 async function runReview(client, args, opts, io) {
   // `mullion review` requests; `status` and `stop <runId>` troubleshoot / cancel.
   const sub = args[0] === "status" || args[0] === "stop" ? args[0] : "request";
@@ -1546,11 +1556,7 @@ function formatReviewStatus(r) {
     // already bounded server-side; the CLI only cuts it to a readable length.
     const body = r.github.review?.body;
     if (body) {
-      // The cut is by code point, so it cannot leave a lone surrogate behind.
-      const trimmed =
-        [...body].length > MAX_CLI_REVIEW_BODY
-          ? `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`
-          : body;
+      const trimmed = clipForTerminal(body);
       lines.push(`review text: ${trimmed}`);
       if (r.github.review.bodyTruncated) lines.push("(the review text was cut short)");
     }
@@ -1651,11 +1657,7 @@ function formatTriageStatus(r) {
     );
     const body = r.github.comment?.body;
     if (body) {
-      // The cut is by code point, so it cannot leave a lone surrogate behind.
-      const trimmed =
-        [...body].length > MAX_CLI_REVIEW_BODY
-          ? `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`
-          : body;
+      const trimmed = clipForTerminal(body);
       lines.push(`triage text: ${trimmed}`);
       if (r.github.comment.bodyTruncated) lines.push("(the triage text was cut short)");
     }

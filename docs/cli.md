@@ -461,10 +461,14 @@ takes a run id and does not look at the project.
   confirmation names the run id.
 - `triage status --issue <n>` — troubleshoots a requested triage: the run's
   Hermes status, the triage bot's reply or error, and whether a comment
-  from a bot account actually landed on the issue after the request —
-  including the comment's own text and a link to it. `not_found` means this
-  Mullion has no run for the issue (nothing was requested here, or the
-  server restarted).
+  actually landed on the issue after the request — including the comment's
+  own text and a link to it. The comment is matched by the marker Mullion's
+  own triage prompt asks for ("## Triage"); with a custom prompt that does
+  not use the marker, the newest bot comment after the request is reported
+  instead, and the output says so — that comment may be another bot's (the
+  issue-comment counterpart of a review has no head commit to pin it to).
+  `not_found` means this Mullion has no run for the issue (nothing was
+  requested here, or the server restarted).
 - `triage stop <runId>` — stops a run **this session** dispatched (the same
   op as `review stop` — a relay run is stopped by its id, whatever kind it
   is); another session's run is refused (403).
