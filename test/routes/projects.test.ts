@@ -2010,6 +2010,12 @@ describe("projects route", () => {
         // poll), and each test builds its own app — so every test starts
         // from an empty memo.
 
+        // The run index is mocked per test; reset it afterwards so one
+        // test's mock cannot leak into the next.
+        afterEach(() => {
+          vi.mocked(getReviewRunForPr).mockReturnValue(null);
+        });
+
         it("reports 'none' when this Mullion knows no run for the PR", async () => {
           vi.mocked(getReviewRunForPr).mockReturnValue(null);
           mockGithub(gqlPr(41));
@@ -2160,6 +2166,76 @@ describe("projects route", () => {
           // review's whole text, which the drill-in fetches when it is opened.
           expect(pr.relayReview.body).toBeUndefined();
           expect(pr.relayReview.bodyTruncated).toBeUndefined();
+        });
+
+        it("leaves a PR the relay knows nothing about untouched", async () => {
+          // The run index is in-memory: a PR this Mullion never dispatched a
+          // review for must come back exactly as it was — no `relayReview`
+          // key at all — so the panel has nothing to render for it.
+          vi.mocked(getReviewRunForPr).mockImplementation((_owner, _repo, prNumber) =>
+            prNumber === 41 ? relayRun : null,
+          );
+          const { setRepoPRsStatus } = await import("../../src/services/github.js");
+          const pr = (number: number) => ({
+            number,
+            title: `PR ${number}`,
+            htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
+            author: "me",
+            headSha: `sha${number}`,
+            headBranch: "feat",
+            baseBranch: "main",
+            ciStatus: null,
+            actionsRuns: [],
+            isDraft: false,
+            updatedAt: null,
+            reviewDecision: null,
+            mergeable: null,
+            mergeStateStatus: null,
+            reviewers: [],
+            requestedReviewers: [],
+            unresolvedThreads: null,
+            commentCount: null,
+            reviewStateKnown: false,
+            ciFetched: false,
+            prPhase: "unknown" as const,
+          });
+          setRepoPRsStatus("acme", "widgets", {
+            prs: [pr(41), pr(42)],
+            prSummary: { total: 2, pass: 0, fail: 0, pending: 0, unknown: 2 },
+          });
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews") ? jsonResponse(200, []) : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs`,
+          });
+          expect(res.statusCode).toBe(200);
+          const prs = res.json().prs as Array<{ number: number; relayReview?: unknown }>;
+          const known = prs.find((p) => p.number === 41);
+          const unknown = prs.find((p) => p.number === 42);
+          expect(known?.relayReview).toMatchObject({ state: "requested" });
+          expect(unknown?.relayReview).toBeUndefined();
+        });
+
+        it("says the landed review could not be confirmed when the lookup fails", async () => {
+          // A failed lookup is not the same as "no review landed" — the UI
+          // has to be able to say so, instead of claiming the review is
+          // still pending.
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews") ? jsonResponse(500, { message: "boom" }) : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs/41/review`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toMatchObject({ state: "requested", landedChecked: false });
         });
 
         it("reports the landed review, with what the bot said", async () => {

@@ -144,6 +144,29 @@ describe("PrDetailView", () => {
     expect(screen.queryByText(/waiting for the review bot/)).toBeNull();
   });
 
+  it("does not claim a review with no status at all is still waiting", async () => {
+    // No status means the run-status read failed — the panel must not turn
+    // that silence into "the review bot is on it".
+    vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1" }));
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(/the relay could not read the review run/)).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the review bot/)).toBeNull();
+  });
+
+  it("does not claim a review is still waiting when the landed lookup failed", async () => {
+    // The review may well have landed — the lookup that would have said so
+    // failed, which is not the same as "nothing landed".
+    vi.stubGlobal(
+      "fetch",
+      stubReview({ state: "requested", runId: "run_1", status: "running", landedChecked: false }),
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(
+      await screen.findByText(/the review could not be confirmed on the pull request/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the review bot/)).toBeNull();
+  });
+
   it("does not show one PR's review under another PR's header", async () => {
     // PR 12 has a landed review; PR 13's review never arrives — so the
     // assertion below is about the previous PR's verdict lingering, not about

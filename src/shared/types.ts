@@ -469,6 +469,13 @@ export interface RelayReviewState {
   dispatchedAt?: string;
   /** The Hermes run's own status: queued, running, completed, failed, … */
   status?: string;
+  /**
+   * Whether the landed-review lookup actually ran (`false` when the lookup
+   * itself failed). Without it, a failed lookup and a review that simply has
+   * not landed are the same answer — "requested" — and the UI cannot say
+   * "could not confirm" instead.
+   */
+  landedChecked?: boolean;
   /** Who posted the landed review. */
   author?: string;
   /** The review's state: APPROVED, CHANGES_REQUESTED, … */

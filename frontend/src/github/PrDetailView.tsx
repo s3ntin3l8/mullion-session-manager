@@ -163,7 +163,7 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
 const PR_REFRESH_MS = 30_000;
 
 /** What a review that has not landed is doing, in words. */
-function pendingLabel(status: string | undefined): string {
+function pendingLabel(status: string | undefined, landedChecked: boolean | undefined): string {
   switch (status) {
     case "failed":
     case "interrupted":
@@ -180,8 +180,18 @@ function pendingLabel(status: string | undefined): string {
       return "the review run is no longer known to the relay";
     case "unknown":
       return "the relay could not read the review run";
+    case undefined:
+      // No status at all — the run-status read failed, so this says nothing
+      // about the review. Claiming it is "waiting" would be an assertion
+      // made from no data.
+      return "the relay could not read the review run";
     default:
-      return "waiting for the review bot";
+      // The run's status says it is still going. The landed-review lookup is
+      // what separates "still waiting" from "we could not confirm it" — a
+      // failed lookup must not be read as "no review yet".
+      return landedChecked === false
+        ? "the review could not be confirmed on the pull request"
+        : "waiting for the review bot";
   }
 }
 
@@ -219,7 +229,7 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
       <div className="github-panel-section">
         <div className="github-panel-section-title">Review</div>
         <div className="github-panel-empty-row">
-          A review was requested — {pendingLabel(state.status)}
+          A review was requested — {pendingLabel(state.status, state.landedChecked)}
           {state.status ? ` (${state.status})` : ""}.
         </div>
       </div>
@@ -348,6 +358,10 @@ export function PrDetailView({
   const reReview = () =>
     run("review", async () => {
       await api.reReviewProjectPr(projectId, number);
+      // Refetch: the request produced a new run, so the old verdict on screen
+      // is stale (the state is memoized per run, so a refetch shows the new
+      // one straight away).
+      setReloadKey((k) => k + 1);
       return "Re-review requested";
     });
 

@@ -712,7 +712,11 @@ export async function getRelayReviewState(
     runId: record.runId,
     dispatchedAt: new Date(record.dispatchedAt).toISOString(),
   };
-  if (!opts.token) return base;
+  if (!opts.token) {
+    // No token means the landed-review lookup cannot run at all — so the
+    // review is *unconfirmed*, not "not landed".
+    return { ...base, landedChecked: false };
+  }
 
   // The memo is keyed by the run, so a new dispatch re-checks immediately.
   const memo = landedMemoFor(app);
@@ -747,6 +751,7 @@ export async function getRelayReviewState(
     return {
       ...base,
       state: "landed",
+      landedChecked: true,
       author: landed.review.author,
       verdict: landed.review.state,
       ...(landed.review.body !== undefined ? { body: landed.review.body } : {}),
@@ -754,7 +759,9 @@ export async function getRelayReviewState(
       ...(landed.review.htmlUrl !== undefined ? { htmlUrl: landed.review.htmlUrl } : {}),
     };
   }
-  return base;
+  // `landedChecked: false` means the lookup itself failed — the UI can say
+  // "could not confirm" instead of claiming the review is simply not there.
+  return { ...base, landedChecked: landed.checked };
 }
 
 type LandedComment =
