@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { CgroupProcess } from "../cgroup-inventory.js";
-import { extractDtachSocketPath, sessionSocketPath } from "./dtach.js";
+import { probeSocket } from "../unix-socket.js";
+import { isDtachCreateFor, sessionSocketPath } from "./dtach.js";
 import { spawnScopeProcess } from "./spawn.js";
 import type { ScopeBackend, ScopeLaunchSpec, ScopeLiveness } from "./types.js";
 
@@ -12,7 +13,7 @@ const PS_TIMEOUT_MS = 5_000;
 /** How long a signalled process tree gets to exit before it is SIGKILLed. */
 const TERMINATE_GRACE_MS = 2_000;
 
-/** How often the termination wait re-checks whether the tree is gone. */
+/** How long the termination wait re-checks whether the tree is gone. */
 const TERMINATE_POLL_MS = 50;
 
 /**
@@ -62,48 +63,30 @@ export function parseProcessTable(stdout: string): ProcessEntry[] {
 }
 
 /**
- * Whether this command line IS a dtach process — as opposed to some other
- * process whose command line merely MENTIONS a dtach invocation.
+ * The dtach session masters in a process table, keyed by socket path.
  *
- * The distinction matters: a shell running `sh -c "dtach -n /path/1.sock …"`
- * would otherwise be mistaken for the session's master, and `stop()` would
- * then signal the wrong process. Anchoring on argv[0] — which `ps` always
- * renders first — rules that out.
+ * `socketPaths` are the paths this caller cares about — the master for a
+ * path is the process whose command line IS `dtach -n <that path> …`, not a
+ * process that happens to mention one.
+ *
+ * When several processes claim the same socket, the HIGHEST pid wins.
+ * `dtach -n` daemonizes: the process Mullion spawns forks, and the parent
+ * exits once the forked child is ready — so for a moment the table holds two
+ * dtach processes with the SAME argv, one of which is about to vanish. A
+ * fork always gives the child a higher pid, and the master is the survivor
+ * of that fork chain, so the highest pid is the one that will still be
+ * there. Picking the other would make `stop()` signal a corpse while the
+ * real master kept running.
  */
-function isDtachProcess(command: string): boolean {
-  const argv0 = command.split(/\s+/, 1)[0] ?? "";
-  return argv0 === "dtach" || argv0.endsWith("/dtach");
-}
-
-/**
- * The dtach session masters in a process table, keyed by the socket path
- * each one serves.
- *
- * Two rules, both load-bearing:
- *
- *   - Only a `-n` (create) invocation is a master. An attach client
- *     (`dtach -a <socket> …`) names the same socket but is not its owner,
- *     and mistaking one for the master would make a session look alive after
- *     its real master died.
- *
- *   - When several processes claim the same socket, the HIGHEST pid wins.
- *     `dtach -n` daemonizes: the process Mullion spawns forks, and the
- *     parent exits once the forked child is ready — so for a moment the
- *     table holds two dtach processes with the SAME argv, one of which is
- *     about to vanish. A fork always gives the child a higher pid, and the
- *     master is the survivor of that fork chain, so the highest pid is the
- *     one that will still be there. Picking the other would make `stop()`
- *     signal a corpse while the real master kept running.
- */
-export function dtachMasters(table: ProcessEntry[]): Map<string, number> {
+export function dtachMasters(table: ProcessEntry[], socketPaths: string[]): Map<string, number> {
   const masters = new Map<string, number>();
   for (const entry of table) {
-    if (!isDtachProcess(entry.command)) continue;
-    const socketPath = extractDtachSocketPath(entry.command);
-    if (socketPath === null) continue;
-    const existing = masters.get(socketPath);
-    if (existing === undefined || entry.pid > existing) {
-      masters.set(socketPath, entry.pid);
+    for (const socketPath of socketPaths) {
+      if (!isDtachCreateFor(entry.command, socketPath)) continue;
+      const existing = masters.get(socketPath);
+      if (existing === undefined || entry.pid > existing) {
+        masters.set(socketPath, entry.pid);
+      }
     }
   }
   return masters;
@@ -158,6 +141,23 @@ async function waitForExit(pids: number[], timeoutMs: number): Promise<void> {
   }
 }
 
+/**
+ * Removes a socket file that nothing is serving any more.
+ *
+ * dtach does NOT remove its socket when its master exits, so the file
+ * outlives the session it belonged to — and a stale socket is exactly what
+ * makes a later liveness check read "unknown" rather than "dead" (the
+ * socket exists, but nothing answers on it).
+ */
+function removeSocket(socketPath: string): void {
+  try {
+    unlinkSync(socketPath);
+  } catch {
+    // ENOENT (already gone) or a permission problem — either way, nothing
+    // the teardown should fail on.
+  }
+}
+
 export interface DetachedScopeBackendOptions {
   /** This instance's absolute, resolved sessions dir. */
   sessionsDir: string;
@@ -176,21 +176,31 @@ export interface DetachedScopeBackendOptions {
  * gets from systemd and macOS gets from dtach is the same thing — the
  * session outlives its creator.
  *
- * **What the scope's identity is here.** On Linux it is a systemd unit,
- * identified by the dtach socket path in the unit's `Description`. On macOS
- * there is no unit, so the identity is the socket path directly, recovered
- * from a live process's command line. The trust rules are deliberately the
- * same shape:
+ * **How liveness is established.** The question is "is the session's dtach
+ * master still serving its socket?", and `probeSocket()` answers it
+ * directly: it connects, and
  *
- *   - the master is identified  -> "alive"
- *   - no trace of the scope at all -> "dead" (a confident negative)
- *   - the scope's socket is still on disk, but its master cannot be
- *     identified -> "unknown" (the same posture the systemd backend takes
- *     when a scope's Description does not parse)
+ *   - something accepted the connection -> the master is alive
+ *   - nothing answers (ECONNREFUSED)    -> the master is gone
+ *   - the probe timed out, or the path is not a socket, or we may not open
+ *     it                            -> we could not tell
  *
- * The "unknown" case is the important one: it is what stops a process
- * table this backend cannot interpret from reading as "the session died",
- * which the reconciler would act on.
+ * That last case is "unknown", and it is never widened to "dead": a false
+ * "dead" makes the reconciler mark a live session exited and terminate it.
+ *
+ * Connecting is safe here, which was not obvious before it was measured. The
+ * concern was that a probe would displace a browser's live attach. It does
+ * not: dtach's master serves any number of attached terminals, a probe
+ * connection sends no bytes and is closed immediately, the master survives
+ * its clients disconnecting, and the closed connections do not pile up in
+ * the accept queue (measured: 300 probes, queue depth still 1, a further
+ * client still attaching). `probeSocket()` is the same probe the Linux path
+ * already uses on a session's own socket, with the same tri-state.
+ *
+ * **What the scope's identity is.** The session's dtach socket path — the
+ * same anchor the systemd backend recovers from a unit's `Description`. It
+ * is what the process table is matched against to find the master, for
+ * teardown and for the process inventory.
  */
 export class DetachedScopeBackend implements ScopeBackend {
   readonly kind = "detached";
@@ -261,34 +271,30 @@ export class DetachedScopeBackend implements ScopeBackend {
     });
   }
 
+  /**
+   * Liveness for every requested id — a TOTAL map.
+   *
+   * Every requested id is always present in the result, so no caller can
+   * mistake "this backend's reply omitted the id" for a confident "dead".
+   */
   async isAliveBatch(ids: string[]): Promise<Record<string, ScopeLiveness>> {
     const result: Record<string, ScopeLiveness> = Object.create(null);
-    if (ids.length === 0) return result;
-    const table = await this.readProcessTable();
-    if (table === null) {
-      // The process table could not be read at all. A liveness probe that
-      // could not run knows NOTHING about any session — "unknown" for every
-      // id, never "dead". Collapsing the two would let a transient `ps`
-      // failure mark live sessions exited.
-      for (const id of ids) result[id] = "unknown";
-      return result;
-    }
-    const masters = dtachMasters(table);
-    for (const id of ids) {
-      const socketPath = this.socketPathFor(id);
-      if (masters.has(socketPath)) {
-        result[id] = "alive";
-        continue;
-      }
-      // No master found for this socket. If the socket file is gone too,
-      // the master is definitely gone (dtach removes its socket when it
-      // exits) — a confident "dead". If the socket file is STILL there,
-      // there IS a scope but its master cannot be identified: a stale
-      // socket, or a process table this backend cannot interpret. That is
-      // "unknown", never "dead" — the same posture the systemd backend takes
-      // for a scope whose Description does not parse.
-      result[id] = existsSync(socketPath) ? "unknown" : "dead";
-    }
+    // Seed the map with the requested ids so it is total even if a probe
+    // rejects outright.
+    for (const id of ids) result[id] = "unknown";
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const probe = await probeSocket(this.socketPathFor(id));
+          if (probe === "live") result[id] = "alive";
+          else if (probe === "dead") result[id] = "dead";
+          // "unknown" stays "unknown" — a probe that could not tell must
+          // never be read as "not alive".
+        } catch {
+          // A probe that threw tells us nothing either. "unknown" it is.
+        }
+      }),
+    );
     return result;
   }
 
@@ -305,8 +311,15 @@ export class DetachedScopeBackend implements ScopeBackend {
     const socketPath = this.socketPathFor(id);
     const table = await this.readProcessTable();
     if (table === null) return;
-    const masterPid = dtachMasters(table).get(socketPath);
-    if (masterPid === undefined) return;
+    const masterPid = dtachMasters(table, [socketPath]).get(socketPath);
+    if (masterPid === undefined) {
+      // No master we can see. If nothing is serving the socket either, the
+      // session is definitively gone and the socket file is stale — remove
+      // it, so the session reads "dead" instead of lingering on a socket
+      // that will never answer again.
+      if ((await probeSocket(socketPath)) === "dead") removeSocket(socketPath);
+      return;
+    }
     const tree = [masterPid, ...descendantsOf(table, masterPid).map((entry) => entry.pid)];
     for (const pid of tree) {
       try {
@@ -324,6 +337,11 @@ export class DetachedScopeBackend implements ScopeBackend {
         // Exited between the check and the signal.
       }
     }
+    // The socket is stale now — dtach does not clean it up itself. Remove
+    // it, but only once the tree is confirmed gone: unlinking the socket of
+    // a LIVE session would break its attach.
+    await waitForExit(tree, TERMINATE_POLL_MS * 10);
+    if (tree.every((pid) => !isProcessAlive(pid))) removeSocket(socketPath);
   }
 
   /**
@@ -334,12 +352,19 @@ export class DetachedScopeBackend implements ScopeBackend {
    * An empty list means "nothing running, or nothing we could read" — the
    * same honest answer the interface allows for a platform that cannot
    * enumerate.
+   *
+   * The `cmdline` is BEST EFFORT and deliberately so: `ps` renders a
+   * printable command line, not an argv, so an argument containing a space
+   * cannot be told apart from two arguments, and quoted arguments lose
+   * their grouping. The Linux path reads the real argv out of
+   * `/proc/<pid>/cmdline`; there is no equivalent here. Consumers that need
+   * the exact argv should treat this as a display string.
    */
   async listProcesses(id: string): Promise<CgroupProcess[]> {
     const socketPath = this.socketPathFor(id);
     const table = await this.readProcessTable();
     if (table === null) return [];
-    const masterPid = dtachMasters(table).get(socketPath);
+    const masterPid = dtachMasters(table, [socketPath]).get(socketPath);
     if (masterPid === undefined) return [];
     const byPid = new Map(table.map((entry) => [entry.pid, entry]));
     const tree = [masterPid, ...descendantsOf(table, masterPid).map((entry) => entry.pid)];

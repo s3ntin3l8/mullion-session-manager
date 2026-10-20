@@ -3,20 +3,18 @@
 // The backend's whole job is to answer three questions about a session on a
 // host that has no systemd:
 //
-//   1. is the session's dtach master still running?
+//   1. is the session's dtach master still serving its socket?
 //   2. which processes belong to it?
 //   3. how do I stop it?
 //
-// and to answer them WITHOUT the two things that would make the answer
-// wrong or destructive: connecting to the dtach socket (dtach serves one
-// client at a time — a probe would DISPLACE the browser's live attach), and
-// reading the process table in a way that mistakes some other process for
-// the master.
+// Liveness is the delicate part, so it is pinned explicitly: "alive" /
+// "dead" / "unknown", where "unknown" is never silently widened to "dead" —
+// a false "dead" makes the reconciler mark a live session exited and
+// terminate it.
 //
-// The liveness rules are the delicate part, so they are pinned here
-// explicitly: "alive" / "dead" / "unknown", where "unknown" is never
-// silently widened to "dead" — a false "dead" makes the reconciler mark a
-// live session exited and terminate it.
+// The process table is NOT how liveness is decided. It is how the master's
+// PID is found (to terminate it) and how the process inventory is built. The
+// two are deliberately separate, and these tests keep them separate.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
@@ -24,6 +22,14 @@ import type * as ChildProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// --- the mocked socket probe ----------------------------------------------
+// What probeSocket() should answer for a given socket path.
+let probeResults: Map<string, "live" | "dead" | "unknown">;
+// Sockets whose probe should throw.
+let probeThrows: Set<string>;
+// Every probe, in order.
+let probeCalls: string[] = [];
 
 // --- the mocked `ps` ------------------------------------------------------
 // The output the next `ps` call should produce.
@@ -52,6 +58,14 @@ function createMockChild(): MockChild {
   ee.kill = vi.fn(() => true);
   return ee;
 }
+
+vi.mock("../../src/services/unix-socket.js", () => ({
+  probeSocket: vi.fn(async (socketPath: string) => {
+    probeCalls.push(socketPath);
+    if (probeThrows.has(socketPath)) throw new Error("probe exploded");
+    return probeResults.get(socketPath) ?? "unknown";
+  }),
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -120,6 +134,9 @@ function tableForSession(
 let sessionsDir: string;
 
 beforeEach(() => {
+  probeResults = new Map();
+  probeThrows = new Set();
+  probeCalls = [];
   psOutput = "";
   psFails = false;
   psCalls = [];
@@ -178,29 +195,27 @@ describe("parseProcessTable", () => {
 
 describe("dtachMasters", () => {
   it("maps a dtach master to the socket it serves", () => {
-    const masters = dtachMasters(parseProcessTable(psRow(100, 1, "dtach -n /tmp/1.sock /bin/zsh")));
-    expect(masters.get("/tmp/1.sock")).toBe(100);
+    const table = parseProcessTable(psRow(100, 1, "dtach -n /tmp/1.sock /bin/zsh"));
+    expect(dtachMasters(table, ["/tmp/1.sock"]).get("/tmp/1.sock")).toBe(100);
   });
 
   it("ignores an attach client — it names the socket but does not own it", () => {
-    const masters = dtachMasters(parseProcessTable(psRow(100, 1, "dtach -a /tmp/1.sock -E -z")));
-    expect(masters.size).toBe(0);
+    const table = parseProcessTable(psRow(100, 1, "dtach -a /tmp/1.sock -E -z -r winch"));
+    expect(dtachMasters(table, ["/tmp/1.sock"]).size).toBe(0);
   });
 
   it("ignores a process that merely MENTIONS a dtach invocation", () => {
     // A shell running the invocation as a string is not the master — and
     // mistaking it for one would make stop() signal the wrong process.
-    const masters = dtachMasters(
-      parseProcessTable(psRow(100, 1, 'sh -c "dtach -n /tmp/1.sock /bin/zsh"')),
-    );
-    expect(masters.size).toBe(0);
+    const table = parseProcessTable(psRow(100, 1, 'sh -c "dtach -n /tmp/1.sock /bin/zsh"'));
+    expect(dtachMasters(table, ["/tmp/1.sock"]).size).toBe(0);
   });
 
   it("accepts a dtach invoked by absolute path", () => {
-    const masters = dtachMasters(
-      parseProcessTable(psRow(100, 1, "/opt/homebrew/bin/dtach -n /tmp/1.sock /bin/zsh")),
+    const table = parseProcessTable(
+      psRow(100, 1, "/opt/homebrew/bin/dtach -n /tmp/1.sock /bin/zsh"),
     );
-    expect(masters.get("/tmp/1.sock")).toBe(100);
+    expect(dtachMasters(table, ["/tmp/1.sock"]).get("/tmp/1.sock")).toBe(100);
   });
 
   it("prefers the highest pid when the daemonizing parent and the master both claim the socket", () => {
@@ -213,7 +228,25 @@ describe("dtachMasters", () => {
         psRow(101, 1, "dtach -n /tmp/1.sock /bin/zsh"),
       ].join("\n"),
     );
-    expect(dtachMasters(table).get("/tmp/1.sock")).toBe(101);
+    expect(dtachMasters(table, ["/tmp/1.sock"]).get("/tmp/1.sock")).toBe(101);
+  });
+
+  it("does not confuse one session's socket with another's", () => {
+    const table = parseProcessTable(
+      [
+        psRow(100, 1, "dtach -n /tmp/1.sock /bin/zsh"),
+        psRow(200, 1, "dtach -n /tmp/11.sock /bin/zsh"),
+      ].join("\n"),
+    );
+    expect(dtachMasters(table, ["/tmp/1.sock"]).get("/tmp/1.sock")).toBe(100);
+    expect(dtachMasters(table, ["/tmp/1.sock"]).has("/tmp/11.sock")).toBe(false);
+  });
+
+  it("finds a master whose socket path contains a space", () => {
+    // `ps` renders argv joined by spaces and UNQUOTED, so the path is not a
+    // single token here — it has to be MATCHED, not tokenized.
+    const table = parseProcessTable(psRow(100, 1, "dtach -n /tmp/sp ace/1.sock /bin/zsh"));
+    expect(dtachMasters(table, ["/tmp/sp ace/1.sock"]).get("/tmp/sp ace/1.sock")).toBe(100);
   });
 });
 
@@ -247,67 +280,60 @@ describe("descendantsOf", () => {
 // ---------------------------------------------------------------------------
 
 describe("DetachedScopeBackend.isAliveBatch", () => {
-  it("reports a session alive when its master is visible", async () => {
+  it("reports a session alive when its socket is being served", async () => {
     const backend = new DetachedScopeBackend({ sessionsDir });
-    psOutput = tableForSession(socketOf("1"));
+    probeResults.set(socketOf("1"), "live");
     const state = await backend.isAliveBatch(["1"]);
     expect(state).toEqual({ 1: "alive" });
   });
 
-  it("reports a session dead when neither the master nor its socket is left", async () => {
+  it("reports a session dead when nothing is serving its socket", async () => {
     const backend = new DetachedScopeBackend({ sessionsDir });
-    psOutput = psRow(1, 0, "/sbin/launchd");
+    probeResults.set(socketOf("1"), "dead");
     const state = await backend.isAliveBatch(["1"]);
     expect(state).toEqual({ 1: "dead" });
   });
 
-  it("reports UNKNOWN — not dead — when the socket is still there but the master is not visible", async () => {
-    // A stale socket, or a process table this backend cannot interpret.
-    // "dead" here would make the reconciler terminate a live session.
+  it("reports UNKNOWN — not dead — when the probe cannot tell", async () => {
     const backend = new DetachedScopeBackend({ sessionsDir });
-    fs.writeFileSync(socketOf("1"), "");
-    psOutput = psRow(1, 0, "/sbin/launchd");
+    probeResults.set(socketOf("1"), "unknown");
     const state = await backend.isAliveBatch(["1"]);
     expect(state).toEqual({ 1: "unknown" });
   });
 
-  it("reports UNKNOWN for every id when the process table cannot be read", async () => {
+  it("reports UNKNOWN — not dead — when the probe itself fails", async () => {
+    // A probe that threw knows nothing. Reading that as "dead" would make
+    // the reconciler mark a live session exited and terminate it.
     const backend = new DetachedScopeBackend({ sessionsDir });
-    psFails = true;
-    const state = await backend.isAliveBatch(["1", "2", "3"]);
-    expect(state).toEqual({ 1: "unknown", 2: "unknown", 3: "unknown" });
+    probeThrows.add(socketOf("1"));
+    const state = await backend.isAliveBatch(["1"]);
+    expect(state).toEqual({ 1: "unknown" });
   });
 
-  it("answers for every requested id, even one that is not in the table", async () => {
+  it("answers for every requested id, even one that was never probed", async () => {
     const backend = new DetachedScopeBackend({ sessionsDir });
-    psOutput = tableForSession(socketOf("1"));
+    probeResults.set(socketOf("1"), "live");
     const state = await backend.isAliveBatch(["1", "2"]);
     expect(Object.keys(state).sort()).toEqual(["1", "2"]);
     expect(state["1"]).toBe("alive");
-    expect(state["2"]).toBe("dead");
+    expect(state["2"]).toBe("unknown");
   });
 
-  it("returns an empty map for an empty request without reading the process table", async () => {
+  it("returns an empty map for an empty request without probing anything", async () => {
     const backend = new DetachedScopeBackend({ sessionsDir });
     const state = await backend.isAliveBatch([]);
     expect(state).toEqual({});
-    expect(psCalls).toHaveLength(0);
+    expect(probeCalls).toHaveLength(0);
   });
 
-  it("reads the process table ONCE for a whole batch", async () => {
+  it("does not read the process table to decide liveness", async () => {
+    // The process table says nothing about whether the master is serving
+    // its socket — and dtach does not clean its socket up, so the file's
+    // presence proves nothing either. The probe is the only honest answer.
     const backend = new DetachedScopeBackend({ sessionsDir });
-    psOutput = tableForSession(socketOf("1"));
-    await backend.isAliveBatch(["1", "2", "3", "4", "5"]);
-    expect(psCalls).toHaveLength(1);
-  });
-
-  it("asks `ps` for a portable, untruncated process table", async () => {
-    const backend = new DetachedScopeBackend({ sessionsDir });
-    psOutput = "";
+    probeResults.set(socketOf("1"), "live");
     await backend.isAliveBatch(["1"]);
-    // `command=` is the keyword BSD (macOS) and procps (Linux) both spell
-    // the same way; `args=` is procps-only.
-    expect(psCalls[0]).toEqual(["-ax", "-o", "pid=,ppid=,command="]);
+    expect(psCalls).toHaveLength(0);
   });
 });
 
@@ -381,6 +407,37 @@ describe("DetachedScopeBackend.stop", () => {
     psFails = true;
     await backend.stop("1");
     expect(signals).toEqual([]);
+  });
+
+  it("removes the socket file dtach left behind", async () => {
+    // dtach does not clean its socket up, so the file outlives the master.
+    // Left in place, the next session at this id could not bind it.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = tableForSession(socketOf("1"));
+    fs.writeFileSync(socketOf("1"), "");
+    alivePids = new Set([100, 101, 102]);
+    await backend.stop("1");
+    expect(fs.existsSync(socketOf("1"))).toBe(false);
+  });
+
+  it("removes a stale socket when the master is gone and nothing is serving it", async () => {
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = psRow(1, 0, "/sbin/launchd");
+    fs.writeFileSync(socketOf("1"), "");
+    probeResults.set(socketOf("1"), "dead");
+    await backend.stop("1");
+    expect(fs.existsSync(socketOf("1"))).toBe(false);
+  });
+
+  it("keeps the socket of a session that is still being served", async () => {
+    // The master is not visible in the process table, but something IS
+    // serving the socket — so unlinking it would break a live session.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = psRow(1, 0, "/sbin/launchd");
+    fs.writeFileSync(socketOf("1"), "");
+    probeResults.set(socketOf("1"), "live");
+    await backend.stop("1");
+    expect(fs.existsSync(socketOf("1"))).toBe(true);
   });
 });
 

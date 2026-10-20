@@ -39,14 +39,47 @@ const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
  * Recovers the dtach socket path a command line names, or null if it names
  * none.
  *
- * Shared by the two places that need it: the systemd backend, which reads
- * it out of a scope's `Description`, and the detached backend, which reads it
- * out of a live process's command line.
+ * This is the matcher for systemd's `Description` rendering, which QUOTES an
+ * argument containing a space. For a live process's command line — which
+ * `ps` renders as raw argv, unquoted — use `isDtachCreateFor()` below
+ * instead: a path with a space cannot be recovered by tokenizing there, only
+ * matched.
  */
 export function extractDtachSocketPath(commandLine: string): string | null {
   const match = DTACH_SOCKET_PATTERN.exec(commandLine);
   if (!match) return null;
   return match[1] ?? match[2] ?? match[3] ?? null;
+}
+
+/**
+ * Whether a command line is a dtach invocation that CREATES the session at
+ * `socketPath` — i.e. `dtach -n <socketPath> ...`.
+ *
+ * A raw match on the command line rather than a parse of it. `ps` renders
+ * argv joined by spaces and UNQUOTED, so a socket path containing a space
+ * cannot be recovered by tokenizing — the path would simply be truncated at
+ * the first space, and the session would then read as "unknown" forever
+ * while its agent tree kept running. But it can be MATCHED, because the path
+ * is the thing being looked for in the first place.
+ *
+ * Two further conditions keep the match honest:
+ *
+ *   - argv[0] must be dtach. A process whose command line merely MENTIONS
+ *     the invocation (a shell running `sh -c "dtach -n ..."`, say) is not
+ *     the session's master, and teardown would then signal the wrong
+ *     process.
+ *   - the path must be the WHOLE argument. A longer path that merely starts
+ *     with ours (`.../11.sock` against `.../1.sock`) belongs to a different
+ *     session.
+ */
+export function isDtachCreateFor(commandLine: string, socketPath: string): boolean {
+  const needle = ` -n ${socketPath}`;
+  const at = commandLine.indexOf(needle);
+  if (at === -1) return false;
+  const argv0 = commandLine.slice(0, at);
+  if (argv0 !== "dtach" && !argv0.endsWith("/dtach")) return false;
+  const after = commandLine.charAt(at + needle.length);
+  return after === "" || after === " ";
 }
 
 /**
