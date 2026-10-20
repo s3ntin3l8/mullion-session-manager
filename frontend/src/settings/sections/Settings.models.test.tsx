@@ -447,23 +447,48 @@ describe("Settings -> Models", () => {
       expect(screen.queryByText(opencodeWarning)).not.toBeInTheDocument();
     });
 
-    it("announces the warning through a live region", () => {
-      // role="status" only reliably announces a CHANGE to a region that
-      // already existed — a region inserted together with its content is
-      // missed by most screen readers. The note appears exactly when the
-      // reviewer dropdown changes, so the region has to be mounted before
-      // that happens.
+    it("keeps the live region mounted, so the warning's arrival is announced", () => {
+      // A polite live region only reliably announces a MUTATION to a region
+      // that already existed: one inserted together with its content is
+      // missed by most screen readers. And the note appears exactly when
+      // the reviewer dropdown changes — the case this is for.
+      //
+      // So the region must exist BEFORE the warning does, and be the SAME
+      // node afterwards. A region mounted with its content, or re-created
+      // on the change, fails the identity assertion below.
       useDashboardStore.setState({
         settings: {
           ...DEFAULT_SETTINGS,
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
         },
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      const status = screen.getAllByRole("status");
-      expect(status.length).toBeGreaterThan(0);
-      expect(status.some((el) => /no second opinion/i.test(el.textContent ?? ""))).toBe(true);
+
+      // The reviewer row for each CLI is labelled "Reviewer model"; Claude
+      // Code's is the first group.
+      const reviewerLabels = screen.getAllByText("Reviewer model");
+      expect(reviewerLabels.length).toBeGreaterThan(0);
+      const claudeRow = reviewerLabels[0].closest(".settings-row") as HTMLElement;
+      const region = within(claudeRow).getByRole("status");
+      // Mounted, and empty — there is nothing to say yet.
+      expect(region.textContent ?? "").toBe("");
+
+      // Collapse the roles: the note appears.
+      act(() => {
+        useDashboardStore.setState({
+          settings: {
+            ...DEFAULT_SETTINGS,
+            claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          },
+          settingsLoaded: true,
+        });
+      });
+
+      // The SAME node, still mounted, now carrying the text. A region
+      // re-created on the change would have a different identity.
+      expect(within(claudeRow).getByRole("status")).toBe(region);
+      expect(region.textContent ?? "").toMatch(/no second opinion/i);
     });
   });
 });

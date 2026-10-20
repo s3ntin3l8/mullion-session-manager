@@ -4,7 +4,11 @@ import { api } from "../../api/index.js";
 import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
-import { resolveCliModelRoles, resolveOpencodeModelRoles } from "../../modelRoles.js";
+import {
+  resolveCliModelRoles,
+  resolveOpencodeModelRoles,
+  type ModelRoleResolution,
+} from "../../modelRoles.js";
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
@@ -36,10 +40,7 @@ const FLAG_HINT =
  * silently inherited — there is just no opinion configured at all — and
  * warning about it on a fresh install would be noise about nothing.
  */
-function reviewerModelWarning(
-  cliName: string,
-  roles: { implementer: string | null; reviewer: string | null; shared: boolean },
-): ReactNode {
+function reviewerModelWarning(cliName: string, roles: ModelRoleResolution): ReactNode {
   if (!roles.shared || roles.implementer === null) return null;
   return (
     <p style={warningStyle}>

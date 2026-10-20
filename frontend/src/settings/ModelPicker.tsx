@@ -188,8 +188,11 @@ export function ModelPicker({
         <>
           {desc}
           {/* Always mounted so the warning's arrival is announced. Empty and
-              inert when there is nothing to say. */}
-          <span role="status">{warning}</span>
+              inert when there is nothing to say.
+
+              A div, not a span: the live region wraps a block-level note,
+              and a span (phrasing content) may not contain one. */}
+          <div role="status">{warning}</div>
         </>
       }
     >
