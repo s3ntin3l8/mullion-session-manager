@@ -562,6 +562,33 @@ describe("MullionClient (issue #271)", () => {
         expect(spy).toHaveBeenCalledWith("reviews.request", { prNumber: 4 }, 60_000);
       });
 
+      it("requestTriage sends triage.request with the issue number", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("triage.request");
+          expect(msg.body).toEqual({ issueNumber: 12 });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "dispatched", issueNumber: 12 } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.requestTriage(12)).toEqual({
+          status: "dispatched",
+          issueNumber: 12,
+        });
+      });
+
+      it("triageStatus sends triage.status with the issue number", async () => {
+        const socketPath = await startControlServer((msg, socket) => {
+          expect(msg.op).toBe("triage.status");
+          expect(msg.body).toEqual({ issueNumber: 12 });
+          socket.write(
+            `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { status: "completed" } })}\n`,
+          );
+        });
+        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        expect(await client.triageStatus(12)).toEqual({ status: "completed" });
+      });
+
       it("retries with MULLION_SESSION_ID after the direct attempt 400s, keeping prNumber", async () => {
         let calls = 0;
         const socketPath = await startControlServer((msg, socket) => {

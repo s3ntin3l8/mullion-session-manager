@@ -59,11 +59,15 @@ export class ReviewCooldownError extends Error {
     readonly retryAfterSeconds: number,
     /** The commit whose review is being throttled (issue #1703). */
     readonly headSha?: string,
+    /** The target's kind — a triage request is throttled separately (issue #1629). */
+    readonly kind: RelayTargetKind = "pull_request",
   ) {
     super(
       headSha
         ? `A review of this commit (${headSha.slice(0, 7)}) was requested recently — wait ${retryAfterSeconds}s before requesting another, or request a review of the new head commit right away`
-        : `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
+        : kind === "issue"
+          ? `A triage of this issue was requested recently — wait ${retryAfterSeconds}s before requesting another`
+          : `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
     );
     this.name = "ReviewCooldownError";
   }
@@ -95,19 +99,48 @@ export class ReviewRunForbiddenError extends Error {
   }
 }
 
+/**
+ * What a relay run acts on (issue #1629). The relay started as "review this
+ * PR"; an issue triage is the same shape of job — one GitHub number in one
+ * repository — so it is a *kind* of target rather than a second service.
+ */
+export type RelayTargetKind = "pull_request" | "issue";
+
+export interface RelayTarget {
+  kind: RelayTargetKind;
+  owner: string;
+  repo: string;
+  /** The PR or issue number (GitHub shares one numbering namespace). */
+  number: number;
+  /** The PR's head commit — a pull_request target only. */
+  headSha?: string;
+  /** Dispatching Mullion session, when the request came from an agent. */
+  sessionId?: number;
+}
+
 // Deliberately generic: nothing here names a particular host's scripts or
 // profile layout, so it works for any Hermes review-bot setup. What matters
 // is WHO posts the review — a GitHub App bot identity that can give an
 // official verdict — so that is stated as a requirement.
-export function buildReviewMessage(
+/**
+ * The dispatch message for a relay run (issue #1629). The target line names
+ * the kind, so a triage run is never mistaken for a review of a pull request
+ * that happens to share the number.
+ */
+export function buildRelayMessage(
+  kind: RelayTargetKind,
   owner: string,
   repo: string,
-  prNumber: number,
+  number: number,
   prompt: string,
 ): string {
+  const target = kind === "issue" ? `issue #${number}` : `pr #${number}`;
+  // A triage posts a comment, not a review — telling it to "post the review"
+  // would ask for a verdict it has none to give.
+  const post = kind === "issue" ? "comment" : "review";
   const header =
-    `Target: pr #${prNumber} in repo ${owner}/${repo}\n` +
-    "Post the review as your GitHub App bot identity (an installation token from your profile's " +
+    `Target: ${target} in repo ${owner}/${repo}\n` +
+    `Post the ${post} as your GitHub App bot identity (an installation token from your profile's ` +
     "App credentials) — never with a personal user token. If you have no App credentials, do not " +
     "post; reply with the reason instead. Do NOT ask the human for secrets.\n" +
     `\nHonor a maximum of ${MAX_AGENT_TURNS} agent turns.\n\n`;
@@ -136,6 +169,44 @@ Verdict:
 - APPROVE: clean, or only non-blocking nits.
 - REQUEST_CHANGES: any critical or warning issue that must be fixed before merge.
 - COMMENT: only for draft or already merged/closed PRs.
+`;
+
+/**
+ * Used when no triage prompt repo is configured (issue #1629). The triage
+ * run posts a comment on the issue — the same "post as the App bot" rule as
+ * a review, but there is no verdict to submit: a triage is advice.
+ *
+ * Self-contained on purpose: it names no skill, because there is no
+ * issue-triage skill to name (the review-bot profile has none, and a prompt
+ * that opens by hunting a skill that does not exist sends every install
+ * down a dead end). The procedure below is the whole instruction.
+ */
+/**
+ * The heading the built-in triage prompt asks the bot to start its comment
+ * with. It is what tells *our* comment apart from another bot's
+ * (dependabot, a stale-bot) in the window after the dispatch — the triage
+ * path has no commit to pin the comment to, the way the review path pins a
+ * review to its head commit.
+ *
+ * Stated here, next to the prompt that asks for it: the route matches on
+ * this constant, so the two cannot drift apart.
+ */
+export const TRIAGE_COMMENT_MARKER = "## Triage";
+
+export const BUILTIN_TRIAGE_PROMPT = `Triage the issue named above.
+
+Procedure:
+1. Read the issue's title, description, labels and any linked PRs (gh issue view).
+2. Look at the repository to judge what the issue is really about — the files it names, the code around them.
+3. Decide what the reporter most likely needs: a fix, a decision, a reproduction, or more information.
+
+Constraints:
+- Read-only: never git push, commit, modify files, close the issue, or label it.
+- Post exactly one comment on the issue — the triage itself, not a reply to another comment.
+- Comment body shape: "${TRIAGE_COMMENT_MARKER}", then "**Summary:** ...", then "### Findings", "### Suggested next step" and "### Questions for the reporter" (omit empty ones).
+- Be concrete: name the real files and functions involved, and say what you could not verify.
+- If the issue is unclear or wrong, say so plainly instead of guessing.
+- Reply with a single line: "<N> findings, action=<...>".
 `;
 
 // In-memory only: a server restart clears it, which is acceptable — the
@@ -168,6 +239,8 @@ export function cooldownEntryCount(): number {
 
 export interface ReviewRunRecord {
   runId: string;
+  /** What the run acts on (issue #1629). */
+  kind: RelayTargetKind;
   owner: string;
   repo: string;
   prNumber: number;
@@ -188,6 +261,15 @@ function prKey(owner: string, repo: string, prNumber: number): string {
 }
 
 /**
+ * The run index's key (issue #1629): the kind is part of it, so a triage of
+ * issue #5 never displaces the review of PR #5 — they share a numbering
+ * namespace on GitHub but are different jobs.
+ */
+function targetKey(kind: RelayTargetKind, owner: string, repo: string, number: number): string {
+  return `${kind}:${prKey(owner, repo, number)}`;
+}
+
+/**
  * The cooldown's key (issue #1703): the thing being throttled is a *commit*,
  * not a PR. The idempotency key the run is dispatched under is already
  * SHA-scoped (`mullion-review:owner/repo#pr@headSha:bucket`), so keying the
@@ -195,14 +277,18 @@ function prKey(owner: string, repo: string, prNumber: number): string {
  * commit was refused for up to `cooldownMinutes`, even though it is a
  * different review of a different commit. Keying both by the commit keeps
  * "the same commit is throttled" and "a new commit is reviewed right away"
- * in sync.
+ * in sync. An issue has no commit, so its key is the target's own.
  */
-function commitKey(owner: string, repo: string, prNumber: number, headSha: string): string {
-  // `headSha` is required, and an empty one would collapse every commit of
-  // the PR into one key — silently restoring the PR-wide cooldown this
-  // change removes. Fail loudly instead.
-  if (!headSha) throw new HermesNotConfiguredError("A review target needs its head commit");
-  return `${prKey(owner, repo, prNumber)}@${headSha.toLowerCase()}`;
+function cooldownKeyFor(target: RelayTarget): string {
+  const base = targetKey(target.kind, target.owner, target.repo, target.number);
+  if (target.kind === "issue") return base;
+  // A pull request's key MUST include its commit: an empty sha would make
+  // every commit of the PR collapse into one key, silently restoring the
+  // PR-wide cooldown this change removes. Fail loudly instead.
+  if (!target.headSha) {
+    throw new HermesNotConfiguredError("A review target needs its head commit");
+  }
+  return `${base}@${target.headSha.toLowerCase()}`;
 }
 
 function trackRun(incoming: ReviewRunRecord): void {
@@ -217,13 +303,16 @@ function trackRun(incoming: ReviewRunRecord): void {
     : incoming;
   runsById.delete(record.runId);
   runsById.set(record.runId, record);
-  latestRunByPr.set(prKey(record.owner, record.repo, record.prNumber), record.runId);
+  latestRunByPr.set(
+    targetKey(record.kind, record.owner, record.repo, record.prNumber),
+    record.runId,
+  );
   while (runsById.size > MAX_TRACKED_RUNS) {
     const oldest = runsById.keys().next().value as string;
     const gone = runsById.get(oldest);
     runsById.delete(oldest);
     if (gone) {
-      const k = prKey(gone.owner, gone.repo, gone.prNumber);
+      const k = targetKey(gone.kind, gone.owner, gone.repo, gone.prNumber);
       if (latestRunByPr.get(k) === oldest) latestRunByPr.delete(k);
     }
   }
@@ -376,10 +465,32 @@ export async function requestHermesReview(
   app: FastifyInstance,
   { owner, repo, prNumber, headSha, sessionId }: HermesReviewRequest,
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
-  const { apiUrl, model, promptRepo, promptPath, cooldownMinutes } = getStoredSettings(
-    app.db,
-  ).reviewRelay;
+  return requestRelay(app, {
+    kind: "pull_request",
+    owner,
+    repo,
+    number: prNumber,
+    headSha,
+    sessionId,
+  });
+}
+
+/**
+ * Dispatches a relay run for any target kind (issue #1629). A pull request
+ * review and an issue triage are the same job with a different target and a
+ * different prompt, so they share one dispatch path, one cooldown, one run
+ * index and one status surface.
+ */
+export async function requestRelay(
+  app: FastifyInstance,
+  target: RelayTarget,
+): Promise<{ runId: string; status: string; replayed: boolean }> {
+  const { owner, repo, number } = target;
+  const settings = getStoredSettings(app.db).reviewRelay;
+  const { apiUrl, model, cooldownMinutes } = settings;
   const key = assertReviewerConfigured(app);
+  const promptRepo = target.kind === "issue" ? settings.triagePromptRepo : settings.promptRepo;
+  const promptPath = target.kind === "issue" ? settings.triagePromptPath : settings.promptPath;
   if (promptRepo && !isValidPromptLocation(promptRepo, promptPath)) {
     throw new HermesNotConfiguredError(
       "The prompt repository/path in Settings is invalid — use owner/repo and a plain relative path",
@@ -387,12 +498,18 @@ export async function requestHermesReview(
   }
   const root = baseUrl(apiUrl);
 
-  const cooldownKey = commitKey(owner, repo, prNumber, headSha);
+  const cooldownKey = cooldownKeyFor(target);
   sweepCooldown(Date.now(), cooldownMinutes * 60_000);
   const last = lastRequested.get(cooldownKey);
   if (last !== undefined) {
     const remainingMs = cooldownMinutes * 60_000 - (Date.now() - last);
-    if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000), headSha);
+    if (remainingMs > 0) {
+      throw new ReviewCooldownError(
+        Math.ceil(remainingMs / 1000),
+        target.kind === "pull_request" ? target.headSha : undefined,
+        target.kind,
+      );
+    }
   }
   // Reserve the slot BEFORE the awaits below: the check above and a later
   // set would otherwise let two concurrent requests for one commit both pass
@@ -412,17 +529,34 @@ export async function requestHermesReview(
     // bucket rolls, and dispatched fresh after it does.
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
-    const idempotencyKey = `mullion-review:${owner}/${repo}#${prNumber}@${headSha}:${bucket}`;
+    // The key names the kind, so a triage of issue #5 and a review of PR #5
+    // are never the same request as far as Hermes' replay window is
+    // concerned.
+    const scope =
+      target.kind === "issue"
+        ? `mullion-triage:${owner}/${repo}#${number}`
+        : `mullion-review:${owner}/${repo}#${number}@${target.headSha}`;
+    const idempotencyKey = `${scope}:${bucket}`;
     const run = await dispatchReview(root, key, {
       idempotencyKey,
       model,
+      kind: target.kind,
       owner,
       repo,
-      prNumber,
+      number,
       promptRepo,
       promptPath,
     });
-    trackRun({ ...run, owner, repo, prNumber, headSha, sessionId, dispatchedAt: Date.now() });
+    trackRun({
+      ...run,
+      kind: target.kind,
+      owner,
+      repo,
+      prNumber: number,
+      headSha: target.headSha ?? "",
+      sessionId: target.sessionId,
+      dispatchedAt: Date.now(),
+    });
     return { runId: run.runId, status: run.status, replayed: run.replayed };
   } catch (err) {
     if (last === undefined) lastRequested.delete(cooldownKey);
@@ -491,21 +625,24 @@ async function dispatchReview(
   r: {
     idempotencyKey: string;
     model: string;
+    kind: RelayTargetKind;
     owner: string;
     repo: string;
-    prNumber: number;
+    number: number;
     promptRepo: string;
     promptPath: string;
   },
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
   const prompt = r.promptRepo
     ? await loadReviewPrompt(r.promptRepo, r.promptPath)
-    : BUILTIN_REVIEW_PROMPT;
+    : r.kind === "issue"
+      ? BUILTIN_TRIAGE_PROMPT
+      : BUILTIN_REVIEW_PROMPT;
   await checkHealth(root);
 
   const body = JSON.stringify({
     model: r.model,
-    input: buildReviewMessage(r.owner, r.repo, r.prNumber, prompt),
+    input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt),
   });
   const res = await hermesFetch(root, key, "/v1/runs", {
     method: "POST",
@@ -555,12 +692,20 @@ async function readJson<T>(res: Response): Promise<T | null> {
 export interface ReviewRunStatus {
   provider: "hermes";
   runId: string;
+  /** What the run acts on (issue #1629). */
+  kind: RelayTargetKind;
   /** Hermes' own status, or "not_found" when no run is known / it has expired. */
   status: string;
   output?: string;
   error?: string;
   shuttingDown: boolean;
   repo: string;
+  /**
+   * The PR or issue number the run acts on. `prNumber` below is the same
+   * number under its review-era name — kept for the review path's existing
+   * consumers, but "prNumber" for an issue reads wrong (issue #1629).
+   */
+  number: number;
   prNumber: number;
   headSha: string;
   dispatchedAt: string;
@@ -572,11 +717,13 @@ function toStatus(record: ReviewRunRecord, run: Record<string, unknown> | null):
   return {
     provider: "hermes",
     runId: record.runId,
+    kind: record.kind,
     status: run ? (typeof run.status === "string" ? run.status : "unknown") : "not_found",
     output: text(run?.output),
     error: text(run?.error),
     shuttingDown: run?.shutdown_requested_at != null,
     repo: `${record.owner}/${record.repo}`,
+    number: record.prNumber,
     prNumber: record.prNumber,
     headSha: record.headSha,
     dispatchedAt: new Date(record.dispatchedAt).toISOString(),
@@ -603,14 +750,28 @@ async function fetchRun(
   return run ? toStatus(record, run) : { ...toStatus(record, null), status: "unknown" };
 }
 
+/**
+ * Latest run this Mullion dispatched for a target, or null (restart, or never
+ * requested). The kind is part of the key (issue #1629), so a triage run
+ * never answers for a PR of the same number.
+ */
+export function getRunForTarget(
+  kind: RelayTargetKind,
+  owner: string,
+  repo: string,
+  number: number,
+): ReviewRunRecord | null {
+  const id = latestRunByPr.get(targetKey(kind, owner, repo, number));
+  return (id && runsById.get(id)) || null;
+}
+
 /** Latest run this Mullion dispatched for a PR, or null (restart, or never requested). */
 export function getReviewRunForPr(
   owner: string,
   repo: string,
   prNumber: number,
 ): ReviewRunRecord | null {
-  const id = latestRunByPr.get(prKey(owner, repo, prNumber));
-  return (id && runsById.get(id)) || null;
+  return getRunForTarget("pull_request", owner, repo, prNumber);
 }
 
 /** Status of the latest review run for a PR; `status: "not_found"` when none is known. */
@@ -620,14 +781,48 @@ export async function getHermesReviewStatus(
 ): Promise<
   ReviewRunStatus | { provider: "hermes"; status: "not_found"; repo: string; prNumber: number }
 > {
+  return getRelayStatus(app, {
+    kind: "pull_request",
+    owner,
+    repo,
+    number: prNumber,
+  });
+}
+
+/**
+ * Status of the latest relay run for a target; `status: "not_found"` when
+ * none is known (issue #1629 — the same surface serves a review and a
+ * triage).
+ */
+export async function getRelayStatus(
+  app: FastifyInstance,
+  target: { kind: RelayTargetKind; owner: string; repo: string; number: number },
+): Promise<
+  | ReviewRunStatus
+  | {
+      provider: "hermes";
+      status: "not_found";
+      repo: string;
+      number: number;
+      prNumber: number;
+      kind: RelayTargetKind;
+    }
+> {
   const key = assertReviewerConfigured(app);
   const root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
-  const record = getReviewRunForPr(owner, repo, prNumber);
+  const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
   if (!record) {
     // Nothing tracked here (restart, or the workflow started the review).
     // Hermes still holds the run under the idempotency key but offers no
     // lookup by key, so say so plainly.
-    return { provider: "hermes", status: "not_found", repo: `${owner}/${repo}`, prNumber };
+    return {
+      provider: "hermes",
+      status: "not_found",
+      repo: `${target.owner}/${target.repo}`,
+      number: target.number,
+      prNumber: target.number,
+      kind: target.kind,
+    };
   }
   return fetchRun(root, key, record);
 }

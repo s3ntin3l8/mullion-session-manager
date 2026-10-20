@@ -194,16 +194,37 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("commits the prompt repository on Enter", async () => {
     const user = userEvent.setup();
     await renderCard();
-    await user.type(screen.getByPlaceholderText("owner/repo"), "acme/.github{Enter}");
+    // Named, not positional: the review prompt's and the triage prompt's
+    // (#1629) fields share a placeholder, so a query by position would
+    // silently re-point if the rows were reordered.
+    await user.type(screen.getByLabelText("Prompt repository"), "acme/.github{Enter}");
     await waitFor(() =>
       expect(settingsPatches).toContainEqual({ reviewRelay: { promptRepo: "acme/.github" } }),
+    );
+  });
+
+  it("commits the triage prompt repository and path (#1629)", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    await user.type(screen.getByLabelText("Triage prompt repository"), "acme/.github{Enter}");
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { triagePromptRepo: "acme/.github" } }),
+    );
+    const paths = screen.getAllByDisplayValue("hermes-triage-prompt.md");
+    expect(paths.length).toBeGreaterThan(0);
+    await user.clear(paths[0]);
+    await user.type(paths[0], "custom-triage.md{Enter}");
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({
+        reviewRelay: { triagePromptPath: "custom-triage.md" },
+      }),
     );
   });
 
   it("doesn't patch settings when a field is blurred unchanged", async () => {
     const user = userEvent.setup();
     await renderCard();
-    await user.click(screen.getByPlaceholderText("owner/repo"));
+    await user.click(screen.getByLabelText("Prompt repository"));
     await user.tab();
     expect(settingsPatches).toEqual([]);
   });

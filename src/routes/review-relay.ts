@@ -8,11 +8,14 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import {
   findPullRequestByHead,
+  getIssueState,
   getPullRequestByNumber,
+  listIssueComments,
   listPullRequestReviews,
 } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github-fetch.js";
 import {
+  TRIAGE_COMMENT_MARKER,
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
@@ -23,7 +26,10 @@ import {
   assertReviewerConfigured,
   getHermesReviewStatus,
   getReviewRunForPr,
+  getRelayStatus,
+  getRunForTarget,
   requestHermesReview,
+  requestRelay,
   stopHermesReview,
 } from "../services/hermes-review.js";
 
@@ -35,10 +41,39 @@ import {
 // about a PR in the repo it is working in, and can only stop runs it
 // dispatched itself. The Hermes URL/key never leave the server
 // (services/hermes-integration.ts).
+//
+// The same relay also serves issue triage (issue #1629): `triage.request` /
+// `triage_status` (MCP) and `mullion triage` (CLI) reach the routes below.
+// A triage's target is an issue *number* in the session's repo — there is no
+// "current issue" to infer, so the number always comes from the caller — and
+// the same scoping rules apply: the repo comes from the session's project,
+// never from the request body.
 
 interface ReviewRequestBody {
   prNumber?: number;
 }
+
+interface TriageRequestBody {
+  issueNumber: number;
+}
+
+const triageRequestSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    required: ["issueNumber"],
+    properties: { issueNumber: { type: "integer", minimum: 1 } },
+  },
+};
+
+const triageStatusSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    required: ["issueNumber"],
+    properties: { issueNumber: { type: "integer", minimum: 1 } },
+  },
+};
 
 const reviewRequestSchema = {
   body: {
@@ -71,6 +106,16 @@ interface ReviewTarget {
   prNumber: number;
   headSha: string;
   token: string;
+}
+
+interface TriageTarget {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  token: string;
+  /** Whether the issue is open or closed — a triage of a closed issue still
+   * goes out, but the caller is told (issue #1629). */
+  issueState: "open" | "closed";
 }
 
 // Maps the service's errors to HTTP. Anything unexpected is rethrown (500).
@@ -287,6 +332,98 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
   }
 }
 
+/**
+ * Session → repo + issue number (+ a read token), for the triage relay
+ * (issue #1629). The repo comes from the session's project — never from the
+ * request body — exactly as the review path does, so a session can only
+ * triage an issue in the repo it is working in. The issue *number* always
+ * comes from the caller: there is no "current issue" to infer from a
+ * session's branch.
+ */
+async function resolveTriageTarget(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  sessionId: number,
+  issueNumber: number,
+): Promise<TriageTarget | null> {
+  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  if (!session) {
+    reply.notFound("Session not found");
+    return null;
+  }
+  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
+  if (!project) {
+    reply.notFound("Project not found");
+    return null;
+  }
+
+  // The same host-aware resolution the review path uses: a remote host that
+  // is down is not "this project has no GitHub remote" (issue #1628).
+  const repoResult = await resolveRepoRefResult(app, project);
+  if (!repoResult.ok) {
+    app.log.warn(
+      {
+        hostId: project.hostId,
+        projectId: project.id,
+        reason: repoResult.reason,
+        detail: repoResult.reason === "unreachable" ? repoResult.detail : undefined,
+      },
+      "triage-request: could not resolve the project host's GitHub remote",
+    );
+    if (repoResult.reason === "unreachable") {
+      reply.serviceUnavailable("The project host is unreachable — try again shortly");
+      return null;
+    }
+    reply.preconditionFailed("This project's host cannot resolve its GitHub remote");
+    return null;
+  }
+  const repoRef = repoResult.value;
+  if (!repoRef) {
+    reply.preconditionFailed("This project has no GitHub remote");
+    return null;
+  }
+  const { owner, repo } = repoRef;
+
+  const token = await resolveGitHubToken(app, { owner, repo }, "read");
+  if (!token) {
+    reply.preconditionFailed("No GitHub credentials are configured");
+    return null;
+  }
+
+  // Confirm the issue exists before dispatching: a triage of a number that
+  // is not an issue would send Hermes off to triage nothing. A pull request
+  // shares the numbering namespace and GitHub answers `/issues/{n}` for a
+  // PR too, so the `pull_request` key is what tells the two apart (the same
+  // check github-issues.ts's own detail fetch makes).
+  let issueState: "open" | "closed";
+  try {
+    const issue = await getIssueState(token, owner, repo, issueNumber);
+    if (issue.isPullRequest) {
+      reply.notFound(`#${issueNumber} is a pull request, not an issue`);
+      return null;
+    }
+    issueState = issue.state;
+  } catch (err) {
+    if (!(err instanceof GitHubApiError)) throw err;
+    if (err.statusCode === 404) {
+      reply.notFound(`Issue #${issueNumber} was not found in ${owner}/${repo}`);
+      return null;
+    }
+    app.log.warn(
+      { status: err.statusCode, detail: err.message },
+      "triage-request: GitHub lookup failed",
+    );
+    reply.badGateway(
+      err.statusCode === 0
+        ? "GitHub is unreachable — try again shortly"
+        : `GitHub rejected the issue lookup (HTTP ${err.statusCode})`,
+    );
+    return null;
+  }
+
+  return { owner, repo, issueNumber, token, issueState };
+}
+
 export async function reviewRequestRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: ReviewRequestBody }>(
     "/api/sessions/:id/review-request",
@@ -368,6 +505,84 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       }
     },
   );
+
+  // Issue triage (issue #1629): the same relay, aimed at an issue instead of
+  // a pull request. The run posts its findings as a comment on the issue.
+  app.post<{ Params: { id: string }; Body: TriageRequestBody }>(
+    "/api/sessions/:id/triage-request",
+    { schema: triageRequestSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      if (!gateReviewer(app, reply)) return reply;
+
+      // The schema requires issueNumber, so Fastify has already refused a
+      // request without one.
+      const issueNumber = request.body.issueNumber;
+      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      if (!target) return reply;
+      const { owner, repo } = target;
+
+      try {
+        const run = await requestRelay(app, {
+          kind: "issue",
+          owner,
+          repo,
+          number: issueNumber,
+          sessionId,
+        });
+        return {
+          status: "dispatched",
+          kind: "issue",
+          repo: `${owner}/${repo}`,
+          issueNumber,
+          runId: run.runId,
+          runStatus: run.status,
+          replayed: run.replayed,
+          // A triage of a closed issue still goes out — the caller may want
+          // exactly that — but the caller is told (issue #1629).
+          ...(target.issueState === "closed" ? { warning: `Issue #${issueNumber} is closed` } : {}),
+        };
+      } catch (err) {
+        return replyReviewError(reply, err);
+      }
+    },
+  );
+
+  // Status of the latest triage run for an issue, plus whether the triage
+  // comment actually landed on it.
+  app.get<{ Params: { id: string }; Querystring: { issueNumber: number } }>(
+    "/api/sessions/:id/triage-request",
+    { schema: triageStatusSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      if (!gateReviewer(app, reply)) return reply;
+
+      // The schema requires issueNumber, so Fastify has already refused a
+      // request without one.
+      const issueNumber = request.query.issueNumber;
+      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      if (!target) return reply;
+      const { owner, repo, token } = target;
+
+      try {
+        const status = await getRelayStatus(app, {
+          kind: "issue",
+          owner,
+          repo,
+          number: issueNumber,
+        });
+        const record = getRunForTarget("issue", owner, repo, issueNumber);
+        return {
+          ...status,
+          github: await findLandedComment(app, token, target, record),
+        };
+      } catch (err) {
+        return replyReviewError(reply, err);
+      }
+    },
+  );
 }
 
 type LandedReview =
@@ -440,6 +655,73 @@ async function findLandedReview(
     };
   } catch (err) {
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
+    return { checked: false };
+  }
+}
+
+type LandedComment =
+  | {
+      checked: true;
+      comment: {
+        author: string;
+        body: string;
+        bodyTruncated: boolean;
+        createdAt: string;
+        htmlUrl?: string;
+        /**
+         * How the comment was attributed (issue #1629): "marked" when it
+         * carries the triage marker Mullion's own prompt asks for,
+         * "fallback" when it is the newest bot comment after the dispatch
+         * (a custom triage prompt may not use the marker).
+         */
+        attribution: "marked" | "fallback";
+      } | null;
+    }
+  | { checked: false };
+
+// Best effort: the newest comment by a bot account on the issue, posted after
+// the triage run was dispatched. A GitHub failure must not hide the Hermes
+// status. The issue-comment counterpart of `findLandedReview` (issue #1629).
+async function findLandedComment(
+  app: FastifyInstance,
+  token: string,
+  t: TriageTarget,
+  record: { dispatchedAt: number } | null,
+): Promise<LandedComment> {
+  if (!record) return { checked: false };
+  const { dispatchedAt } = record;
+  try {
+    // `since` narrows the walk to comments touched after the dispatch, so a
+    // busy issue does not cost ten pages of comments on every poll.
+    const comments = await listIssueComments(token, t.owner, t.repo, t.issueNumber, {
+      since: new Date(dispatchedAt - 60_000).toISOString(),
+    });
+    const newBotComments = comments.filter(
+      (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,
+    );
+    // A comment carrying the triage marker is ours; another bot's comment is
+    // not. A custom triage prompt may not use the marker, so the newest bot
+    // comment is the fallback — with its author in the payload, so a wrong
+    // attribution is visible rather than silent.
+    const marked = newBotComments.filter((c) => c.body.includes(TRIAGE_COMMENT_MARKER)).at(-1);
+    const fallback = newBotComments.at(-1);
+    const landed = marked ?? fallback;
+    const attribution = marked ? "marked" : "fallback";
+    return {
+      checked: true,
+      comment: landed
+        ? {
+            author: landed.author,
+            attribution,
+            body: landed.body,
+            bodyTruncated: landed.bodyTruncated,
+            createdAt: landed.createdAt as string,
+            ...(landed.htmlUrl !== undefined ? { htmlUrl: landed.htmlUrl } : {}),
+          }
+        : null,
+    };
+  } catch (err) {
+    app.log.warn({ detail: (err as Error).message }, "triage-status: GitHub comment lookup failed");
     return { checked: false };
   }
 }

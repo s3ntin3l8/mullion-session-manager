@@ -138,5 +138,11 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   `review_status`) shows the run's state, the bot's reply, whether its
   review landed and the review's own text; `mullion review stop <runId>` (or
   `stop_review`) cancels a run you started.
+- `mullion triage --issue <n>` (or the `request_triage` MCP tool) — the same
+  relay, pointed at an issue instead of a PR: Hermes triages it and posts
+  its findings as a comment on the issue. The issue number is required —
+  there is no "current issue" to infer. `mullion triage status --issue <n>`
+  (or `triage_status`) shows the run's state and whether the comment
+  landed.
 - Drive the browser (see the Mullion browser skill) against whatever's
   already listening, dock-managed or started in your own shell.

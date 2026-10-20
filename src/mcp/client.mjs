@@ -574,6 +574,18 @@ export class MullionClient {
     return this.reviewOp("reviews.stop", { runId });
   }
 
+  /** Asks the Mullion server to relay a Hermes triage of an issue in this
+   * session's repo. The issue number is required — there is no "current
+   * issue" to infer from the session's branch. */
+  async requestTriage(issueNumber) {
+    return this.reviewOp("triage.request", { issueNumber });
+  }
+
+  /** Status of the latest triage run for an issue in this session's repo. */
+  async triageStatus(issueNumber) {
+    return this.reviewOp("triage.status", { issueNumber });
+  }
+
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview
    * create` — self-guarding (not just validated by the caller, tools.mjs)
    * so this method is safe to call directly from anywhere, not only through

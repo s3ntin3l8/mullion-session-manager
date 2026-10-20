@@ -1327,7 +1327,7 @@ export const OPS: Record<string, OpSpec> = {
   // Hermes review request for the PR of the repo it is working in. Pinned to
   // the caller's own session (same target-id shape as sessions.get); the repo
   // is derived server-side from that session's project (routes/
-  // review-request.ts), and the Hermes URL/key never reach the session.
+  // review-relay.ts), and the Hermes URL/key never reach the session.
   "reviews.request": routeOp(
     ["full", "session"],
     onSession((id, { body }) => ({
@@ -1337,7 +1337,7 @@ export const OPS: Record<string, OpSpec> = {
     })),
   ),
   // Status of the latest review run for the caller's PR, and stopping a run the
-  // caller's own session dispatched (routes/review-request.ts enforces that).
+  // caller's own session dispatched (routes/review-relay.ts enforces that).
   "reviews.status": routeOp(
     ["full", "session"],
     onSession((id, { body }) => ({
@@ -1347,6 +1347,8 @@ export const OPS: Record<string, OpSpec> = {
       }`,
     })),
   ),
+  // The stop op covers every relay run — a review or a triage — because the
+  // run is named, not derived from a target.
   "reviews.stop": routeOp(
     ["full", "session"],
     onSession((id, { body }) =>
@@ -1358,6 +1360,36 @@ export const OPS: Record<string, OpSpec> = {
             payload: json({ runId: body.runId }),
           },
     ),
+  ),
+  // Issue triage through the same relay (issue #1629). The repo comes from
+  // the caller's own project, exactly as for a review; the issue number
+  // always comes from the caller — there is no "current issue" to infer.
+  "triage.request": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => {
+      const issueNumber = body?.issueNumber;
+      if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber) || issueNumber < 1) {
+        return bad(400, "'issueNumber' must be a positive integer");
+      }
+      return {
+        method: "POST",
+        url: `/api/sessions/${enc(id)}/triage-request`,
+        payload: json({ issueNumber }),
+      };
+    }),
+  ),
+  "triage.status": routeOp(
+    ["full", "session"],
+    onSession((id, { body }) => {
+      const issueNumber = body?.issueNumber;
+      if (typeof issueNumber !== "number" || !Number.isInteger(issueNumber) || issueNumber < 1) {
+        return bad(400, "'issueNumber' must be a positive integer");
+      }
+      return {
+        method: "GET",
+        url: `/api/sessions/${enc(id)}/triage-request?issueNumber=${enc(String(issueNumber))}`,
+      };
+    }),
   ),
   // Reachable at session scope — same target-id shape as sessions.get.
   "sessions.scrollback": routeOp(

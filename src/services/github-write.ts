@@ -187,6 +187,81 @@ export async function createComment(
   return { id: result.id, htmlUrl: result.html_url };
 }
 
+export interface IssueCommentSummary {
+  author: string;
+  authorIsBot: boolean;
+  /** The comment's text, bounded (see `MAX_ISSUE_COMMENT_CHARS`). */
+  body: string;
+  /** True when `body` was cut short by the cap. */
+  bodyTruncated: boolean;
+  createdAt: string | null;
+  htmlUrl?: string;
+}
+
+/**
+ * How much of an issue comment is kept (issue #1629). A comment body is
+ * user-controlled prose — the same bound the review body gets.
+ */
+export const MAX_ISSUE_COMMENT_CHARS = 4_000;
+
+const ISSUE_COMMENTS_PAGE_SIZE = 100;
+const ISSUE_COMMENTS_MAX_PAGES = 10;
+
+/**
+ * Comments on an issue, oldest first (issue #1629). The triage relay posts
+ * its findings as an issue comment, so this is how "did the triage land?"
+ * is answered — the issue-comment counterpart of
+ * `listPullRequestReviews`. Read-only.
+ *
+ * `since` narrows the walk to comments updated after that moment: issue
+ * threads are long (a busy issue can have hundreds), and the caller knows
+ * the dispatch time it filters on anyway. Without it, every status poll
+ * walked up to ten pages of comments.
+ */
+export async function listIssueComments(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  opts: { since?: string } = {},
+): Promise<IssueCommentSummary[]> {
+  const out: IssueCommentSummary[] = [];
+  const since = opts.since ? `&since=${encodeURIComponent(opts.since)}` : "";
+  for (let page = 1; page <= ISSUE_COMMENTS_MAX_PAGES; page += 1) {
+    const comments = await githubRequest<
+      Array<{
+        user: { login: string; type: string } | null;
+        body?: string | null;
+        created_at: string | null;
+        html_url?: string | null;
+      }>
+    >(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/issues/${issueNumber}/comments?per_page=${ISSUE_COMMENTS_PAGE_SIZE}${since}&page=${page}`,
+    );
+    for (const c of comments) {
+      const body = typeof c.body === "string" ? c.body : "";
+      // truncateText cuts by code point and marks the cut with an ellipsis —
+      // the same helper the review body uses (a plain slice would split a
+      // surrogate pair).
+      const truncated = [...body].length > MAX_ISSUE_COMMENT_CHARS;
+      out.push({
+        author: c.user?.login ?? "ghost",
+        authorIsBot: c.user?.type === "Bot",
+        body: truncated ? truncateText(body, MAX_ISSUE_COMMENT_CHARS) : body,
+        bodyTruncated: truncated,
+        createdAt: c.created_at,
+        ...(typeof c.html_url === "string" ? { htmlUrl: c.html_url } : {}),
+      });
+    }
+    if (comments.length < ISSUE_COMMENTS_PAGE_SIZE) break;
+  }
+  return out;
+}
+
 export async function setAssignees(
   token: string,
   owner: string,
@@ -213,6 +288,16 @@ export async function closeIssue(
 export interface IssueStateResult {
   state: "open" | "closed";
   labels: string[];
+  /**
+   * True when the number is a pull request, not an issue (issue #1629).
+   *
+   * GitHub answers `/issues/{n}` for a pull request too — with a
+   * `pull_request` key it only reports for PRs. `getIssueState` did not
+   * look at it, so a caller that took the answer at face value would treat
+   * a PR as an issue (the same check github-issues.ts's own detail fetch
+   * makes).
+   */
+  isPullRequest: boolean;
 }
 
 /** Fetches the current open/closed state and label names of a single issue
@@ -230,11 +315,12 @@ export async function getIssueState(
   const result = await githubRequest<{
     state: "open" | "closed";
     labels?: Array<string | { name?: string }>;
+    pull_request?: unknown;
   }>(token, owner, repo, "GET", `/issues/${issueNumber}`);
   const labels = (result.labels ?? [])
     .map((l) => (typeof l === "string" ? l : l.name))
     .filter((name): name is string => typeof name === "string");
-  return { state: result.state, labels };
+  return { state: result.state, labels, isPullRequest: result.pull_request != null };
 }
 
 /** #701 — fetches a single issue's title, used by task-watcher.ts's

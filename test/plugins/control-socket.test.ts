@@ -1263,6 +1263,79 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    describe("triage.request / triage.status", () => {
+      it("session scope: triage.request reaches the route for the pinned session", async () => {
+        app = await buildApp();
+        await app.ready();
+        applySettingsPatch(app, {
+          reviewRelay: { provider: "hermes", apiUrl: "http://192.168.2.6:8643" },
+        });
+        setHermesKey(app, "test-key"); // pragma: allowlist secret
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "triage.request", body: { issueNumber: 12 } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // Past the reviewer gate, stopped by the route's own "no GitHub remote".
+        expect(reply.status).toBe(412);
+        const forwarded = injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string; payload?: unknown })
+          .find((o) => o.url === `/api/sessions/${sessionId}/triage-request`);
+        expect(forwarded).toMatchObject({ method: "POST" });
+        expect(JSON.parse(String(forwarded!.payload))).toEqual({ issueNumber: 12 });
+        socket.destroy();
+      });
+
+      it("session scope: triage.status forwards the issue number", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "triage.status", body: { issueNumber: 12 } })}\n`,
+        );
+        await waitForReply(socket);
+        const forwarded = injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string })
+          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/triage-request`));
+        expect(forwarded).toMatchObject({
+          method: "GET",
+          url: `/api/sessions/${sessionId}/triage-request?issueNumber=12`,
+        });
+        socket.destroy();
+      });
+
+      it("session scope: requires an issueNumber", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "triage.request", body: {} })}\n`);
+        expect((await waitForReply(socket)).status).toBe(400);
+        socket.write(
+          `${JSON.stringify({ id: 2, op: "triage.status", body: { issueNumber: 0 } })}\n`,
+        );
+        expect((await waitForReply(socket)).status).toBe(400);
+        socket.destroy();
+      });
+
+      it("session scope: rejects targeting a different session id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "triage.request", body: { issueNumber: 12, sessionId: otherSessionId } })}\n`,
+        );
+        expect((await waitForReply(socket)).status).toBe(403);
+        socket.destroy();
+      });
+    });
+
     describe("sessions.rename", () => {
       it("full scope: renames by explicit sessionId", async () => {
         app = await buildApp();
