@@ -224,10 +224,7 @@ const FILE_DIFF_TRUNCATED_MARKER =
  * user-click-triggered fetch (not a poll loop), and the patch is inherently
  * single-use.
  */
-function runDiffProcess(
-  cwd: string,
-  args: string[],
-): Promise<{ out: string | null; code: number | null }> {
+function runDiffProcess(args: string[]): Promise<{ out: string | null; code: number | null }> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
@@ -312,7 +309,7 @@ export async function getFileDiff(
     const args = baseRef
       ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
       : ["-C", cwd, "diff", "HEAD", "--", filePath];
-    const { out: patch, code } = await runDiffProcess(cwd, args);
+    const { out: patch, code } = await runDiffProcess(args);
     if (patch) return patch;
 
     // If working-tree diff against HEAD exited cleanly (code === 0) with no
@@ -321,7 +318,7 @@ export async function getFileDiff(
       const resolvedCwd = path.resolve(cwd);
       const fullPath = path.resolve(cwd, filePath);
       if (fullPath.startsWith(resolvedCwd + path.sep)) {
-        const { out: lsOut } = await runDiffProcess(cwd, [
+        const { out: lsOut } = await runDiffProcess([
           "-C",
           cwd,
           "ls-files",
@@ -331,7 +328,7 @@ export async function getFileDiff(
           filePath,
         ]);
         if (lsOut === `${filePath}\0`) {
-          const { out: untrackedPatch } = await runDiffProcess(cwd, [
+          const { out: untrackedPatch } = await runDiffProcess([
             "-C",
             cwd,
             "diff",

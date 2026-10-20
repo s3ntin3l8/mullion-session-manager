@@ -21,35 +21,38 @@ export function GitWorktreesSection({
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
   const projectCwd = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.cwd);
 
-  const [isPruning, setIsPruning] = useState(false);
-  const [pruneError, setPruneError] = useState<string | null>(null);
+  const [pruningByProject, setPruningByProject] = useState<Record<number, boolean>>({});
+  const [pruneErrors, setPruneErrors] = useState<Record<number, string | null>>({});
   const [rowErrors, setRowErrors] = useState<Record<string, { message: string; reason?: string }>>(
     {},
   );
   const [prevProjectId, setPrevProjectId] = useState(projectId);
   if (projectId !== prevProjectId) {
     setPrevProjectId(projectId);
-    setPruneError(null);
+    setPruneErrors({});
     setRowErrors({});
   }
+  const isPruning = Boolean(pruningByProject[projectId]);
+  const pruneError = pruneErrors[projectId] ?? null;
 
   const handlePruneStale = useCallback(async () => {
-    setIsPruning(true);
-    setPruneError(null);
+    setPruningByProject((prev) => ({ ...prev, [projectId]: true }));
+    setPruneErrors((prev) => ({ ...prev, [projectId]: null }));
     try {
       await api.pruneProjectGitWorktrees(projectId);
       void useDashboardStore.getState().refreshGitRefs([projectId]);
       useDashboardStore.getState().bumpGitRefreshTrigger();
     } catch (err) {
-      setPruneError(err instanceof Error ? err.message : "Prune failed — try again.");
+      const msg = err instanceof Error ? err.message : "Prune failed — try again.";
+      setPruneErrors((prev) => ({ ...prev, [projectId]: msg }));
     } finally {
-      setIsPruning(false);
+      setPruningByProject((prev) => ({ ...prev, [projectId]: false }));
     }
   }, [projectId]);
 
   const handleRemoveWorktree = useCallback(
     async (worktreePath: string, force = false) => {
-      const key = `worktree:${worktreePath}`;
+      const key = `${projectId}:worktree:${worktreePath}`;
       try {
         const result = await api.removeProjectGitWorktree(projectId, worktreePath, force);
         if (result.removed) {
@@ -107,7 +110,7 @@ export function GitWorktreesSection({
         );
         const pr = w.branch ? prByBranch.get(w.branch) : undefined;
         const isSelected = (selected ?? worktrees.find((x) => x.isMain)?.path) === w.path;
-        const rowError = rowErrors[`worktree:${w.path}`];
+        const rowError = rowErrors[`${projectId}:worktree:${w.path}`];
         const basename = w.path.split("/").filter(Boolean).pop() || w.path;
 
         return (

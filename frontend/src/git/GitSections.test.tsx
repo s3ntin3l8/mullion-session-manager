@@ -621,17 +621,28 @@ describe("GitBranchesSection / GitWorktreesSection", () => {
     expect(removeCalled).toEqual({ worktreePath: "/repo-extra", force: false });
   });
 
-  it("clears branch rowErrors and worktree pruneError when projectId changes", async () => {
+  it("clears branch rowErrors and worktree pruneError when projectId changes, including late in-flight responses", async () => {
+    let settleSlowBranchDelete!: (r: Response) => void;
+    let settleSlowPrune!: (err: Error) => void;
+    let callIdx = 0;
     vi.stubGlobal(
       "fetch",
       vi.fn((url: string) => {
         if (url.includes("/git-branch-delete")) {
-          return Promise.resolve(
-            jsonResponse(200, { deleted: false, reason: "unmerged", detail: "not merged" }),
-          );
+          callIdx += 1;
+          if (callIdx === 1) {
+            return Promise.resolve(
+              jsonResponse(200, { deleted: false, reason: "unmerged", detail: "not merged" }),
+            );
+          }
+          return new Promise<Response>((res) => {
+            settleSlowBranchDelete = res;
+          });
         }
         if (url.includes("/git-worktree-prune")) {
-          return Promise.reject(new Error("prune boom"));
+          return new Promise<Response>((_, rej) => {
+            settleSlowPrune = rej;
+          });
         }
         return Promise.resolve(jsonResponse(204, undefined));
       }),
@@ -659,20 +670,34 @@ describe("GitBranchesSection / GitWorktreesSection", () => {
       await screen.findByText((content) => content.includes("not merged")),
     ).toBeInTheDocument();
 
+    // Start a second (slow) delete on project 1, then switch to project 2 before it settles
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
     rerender(<GitBranchesSection projectId={2} />);
     expect(screen.queryByText((content) => content.includes("not merged"))).toBeNull();
+
+    settleSlowBranchDelete(
+      jsonResponse(200, { deleted: false, reason: "unmerged", detail: "late project 1 refusal" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText((content) => content.includes("not merged"))).toBeNull(),
+    );
     unmount();
 
     const wtRender = render(
       <GitWorktreesSection projectId={1} selected={undefined} onSelect={vi.fn()} />,
     );
     await userEvent.click(screen.getByRole("button", { name: /Prune stale/ }));
-    expect(await screen.findByText("prune boom")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pruning/ })).toBeDisabled();
 
+    // Switch to project 2 while project 1's prune is still in flight
     wtRender.rerender(
       <GitWorktreesSection projectId={2} selected={undefined} onSelect={vi.fn()} />,
     );
-    expect(screen.queryByText("prune boom")).toBeNull();
+    expect(screen.getByRole("button", { name: /Prune stale/ })).not.toBeDisabled();
+
+    settleSlowPrune(new Error("prune boom"));
+    await waitFor(() => expect(screen.queryByText("prune boom")).toBeNull());
   });
 });
 

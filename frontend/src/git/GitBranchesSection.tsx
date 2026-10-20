@@ -43,7 +43,7 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
 
   const handleDeleteBranch = useCallback(
     async (name: string, force = false) => {
-      const key = `branch:${name}`;
+      const key = `${projectId}:branch:${name}`;
       try {
         const result = await api.deleteProjectGitBranch(projectId, name, force);
         if (result.deleted) {
@@ -79,7 +79,7 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
         const checkedOutElsewhere = worktrees?.find((w) => w.branch === b.name && !w.isMain);
         const deleteDisabled = b.isCurrent || Boolean(checkedOutElsewhere);
         const tooltip = b.upstream ? `${b.name}\nTracks: ${b.upstream}` : b.name;
-        const rowError = rowErrors[`branch:${b.name}`];
+        const rowError = rowErrors[`${projectId}:branch:${b.name}`];
         const isDefaultBranch = b.name === "main" || b.name === "master";
 
         return (

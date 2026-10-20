@@ -208,6 +208,7 @@ export function GitHistorySection({
               <button
                 type="button"
                 className="gh-history-clear-scope"
+                aria-label="Clear worktree filter"
                 onClick={onClearCwd}
                 title="Clear worktree filter (show project root history)"
               >
