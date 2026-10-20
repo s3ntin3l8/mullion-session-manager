@@ -1,15 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ExecFileFn } from "../../src/services/avd-manager.js";
 import {
+  AvdCreatedError,
+  avdConfigDirFromListOutput,
+  avdConfigRoots,
   createAvd,
+  isInsideDirectory,
   listAvds,
   listDeviceProfiles,
   listInstalledSystemImages,
+  normalizeAvdHardware,
   parseSdkManagerList,
+  patchAvdConfigIni,
   listAvailableSystemImages,
   installSystemImage,
   uninstallSystemImage,
@@ -281,6 +287,300 @@ describe("createAvd", () => {
     expect(execFileFn.mock.calls[0][1]).not.toContain("--force");
     expect(execFileFn.mock.calls[0][1]).not.toContain("-f");
     expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it("appends --sdcard and does not list AVDs when only an SD card size is set", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child);
+
+    await createAvd({
+      avdmanagerPath: "/opt/sdk/avdmanager",
+      name: "pixel_7",
+      systemImage: "system-images;android-35;google_apis;x86_64",
+      deviceProfile: "pixel_6",
+      sdcardSize: "2048M",
+      execFileFn,
+    });
+
+    expect(execFileFn).toHaveBeenCalledTimes(1);
+    expect(execFileFn).toHaveBeenCalledWith(
+      "/opt/sdk/avdmanager",
+      [
+        "create",
+        "avd",
+        "-n",
+        "pixel_7",
+        "-k",
+        "system-images;android-35;google_apis;x86_64",
+        "-d",
+        "pixel_6",
+        "--sdcard",
+        "2048M",
+      ],
+      expect.any(Function),
+    );
+  });
+
+  it("patches hw.ramSize and disk.dataPartition.size in the AVD config.ini avdmanager reports", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-ini-"));
+    const dir = path.join(root, "pixel_7.avd");
+    mkdirSync(dir);
+    const iniPath = path.join(dir, "config.ini");
+    writeFileSync(iniPath, "hw.ramSize=512\nhw.lcd.width=1080\n");
+    const listOutput = `Available Android Virtual Devices:
+    Name: other
+    Path: /tmp/other.avd
+---------
+    Name: pixel_7
+    Path: ${dir}
+---------
+`;
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? listOutput : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        dataPartitionSize: "6G",
+        configRoots: [root],
+        execFileFn,
+      });
+      const ini = readFileSync(iniPath, "utf8");
+      expect(ini).toBe("hw.ramSize=2048\nhw.lcd.width=1080\ndisk.dataPartition.size=6G\n");
+      expect(execFileFn).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says the AVD was created when its config directory cannot be found", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      stdout: "Available Android Virtual Devices:\n",
+    });
+    await expect(
+      createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        execFileFn,
+      }),
+    ).rejects.toThrow(/pixel_7 was created/);
+  });
+
+  it("caps the follow-up list avd at the list timeout, not the create timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
+      const execFileFn = vi.fn((_file: string, args: string[], callback?: unknown) => {
+        if (args[0] === "create" && typeof callback === "function") {
+          queueMicrotask(() =>
+            (callback as (error: null, stdout: string, stderr: string) => void)(null, "", ""),
+          );
+        }
+        return child;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+      }) as any;
+      const promise = createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        configRoots: ["/home/user/.android/avd"],
+        timeoutMs: 1_000,
+        execFileFn,
+      });
+      const assertion = expect(promise).rejects.toThrow(/timed out after 15000ms/);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AVD hardware helpers", () => {
+  it("normalizes sizes and rejects ones outside the allowlist", () => {
+    expect(
+      normalizeAvdHardware({ sdcardSize: "2048m", ramSize: "2G", dataPartitionSize: "800M" }),
+    ).toEqual({
+      ok: true,
+      value: { sdcardSize: "2048M", ramSizeMb: "2048", dataPartitionSize: "800M" },
+    });
+    expect(normalizeAvdHardware({ sdcardSize: "  ", ramSize: "" })).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(normalizeAvdHardware({ sdcardSize: "512" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ ramSize: "64" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ dataPartitionSize: "4K" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ ramSize: 2048 }).ok).toBe(false);
+  });
+
+  it("only accepts an avdmanager Path whose directory is named <avd>.avd and sits under an allowed root", () => {
+    const home = "/home/user/.android/avd";
+    expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "pixel_7", [home])).toBe(
+      "/home/user/.android/avd/pixel_7.avd",
+    );
+    expect(
+      avdConfigDirFromListOutput(
+        "    Name: pixel_7\n    Path: /tmp/pixel_7.avd/../../etc\n",
+        "pixel_7",
+        ["/tmp"],
+      ),
+    ).toBeNull();
+    expect(
+      avdConfigDirFromListOutput("    Name: pixel_7\n    Path: /tmp/pixel_7.avd\n", "pixel_7", [
+        home,
+      ]),
+    ).toBeNull();
+    expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "pixel_7", [])).toBeNull();
+    expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "missing", [home])).toBeNull();
+    expect(isInsideDirectory(home, "/home/user/.android/avd-evil/pixel_7.avd")).toBe(false);
+    const roots = avdConfigRoots();
+    expect(roots).toContain(path.join(os.homedir(), ".android", "avd"));
+    expect(roots).not.toContain(path.resolve("/opt/sdk"));
+  });
+
+  it("refuses to patch a config directory that resolves outside the AVD home", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-link-"));
+    const avdHome = path.join(root, "avd");
+    const outside = path.join(root, "outside");
+    mkdirSync(avdHome);
+    mkdirSync(outside);
+    const link = path.join(avdHome, "pixel_7.avd");
+    symlinkSync(outside, link);
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? `    Name: pixel_7\n    Path: ${link}\n` : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await expect(
+        createAvd({
+          avdmanagerPath: "/opt/sdk/avdmanager",
+          name: "pixel_7",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_6",
+          ramSizeMb: "2048",
+          configRoots: [avdHome],
+          execFileFn,
+        }),
+      ).rejects.toThrow(/outside the AVD home/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("patches an AVD whose home is itself a symlink", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-home-link-"));
+    const realHome = path.join(root, "real");
+    const linkHome = path.join(root, "link");
+    mkdirSync(realHome);
+    symlinkSync(realHome, linkHome);
+    const avdDir = path.join(realHome, "pixel_7.avd");
+    mkdirSync(avdDir);
+    writeFileSync(path.join(avdDir, "config.ini"), "hw.lcd.width=1080\n");
+    const reported = path.join(linkHome, "pixel_7.avd");
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? `    Name: pixel_7\n    Path: ${reported}\n` : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        configRoots: [linkHome],
+        execFileFn,
+      });
+      expect(readFileSync(path.join(avdDir, "config.ini"), "utf8")).toContain("hw.ramSize=2048");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says the AVD was created when config.ini cannot be written", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-ini-ro-"));
+    const avdDir = path.join(root, "pixel_7.avd");
+    mkdirSync(avdDir);
+    // A directory where the file should be: the write fails even as root.
+    mkdirSync(path.join(avdDir, "config.ini"));
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? `    Name: pixel_7\n    Path: ${avdDir}\n` : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await expect(
+        createAvd({
+          avdmanagerPath: "/opt/sdk/avdmanager",
+          name: "pixel_7",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_6",
+          ramSizeMb: "2048",
+          configRoots: [root],
+          execFileFn,
+        }),
+      ).rejects.toBeInstanceOf(AvdCreatedError);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to write a config.ini key outside the allowlist", () => {
+    expect(() => patchAvdConfigIni("hw.ramSize=512\n", { "hw.keyboard": "no" } as never)).toThrow(
+      /not allowed/,
+    );
   });
 
   it("rejects with the process's own stderr on failure (e.g. duplicate AVD name)", async () => {

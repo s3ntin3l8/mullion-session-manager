@@ -601,7 +601,7 @@ function renderPane(
         cooldownMinutes: 10,
       },
       browser: { framerate: -1, maxInstances: -1 },
-      devices: { discoveryEnabled: "inherit" },
+      devices: { discoveryEnabled: "inherit", emulatorHeadless: "inherit", emulatorGpu: null },
       server: { logLevel: "inherit" },
       claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
       codex: { defaultModel: null, reviewerModel: null },

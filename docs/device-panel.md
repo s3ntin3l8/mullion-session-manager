@@ -25,12 +25,13 @@ encoded in software on the same guest vCPUs that render it. A phone-native
 screen (e.g. 1344×2992) is far more pixels than a panel of a few hundred CSS
 pixels can show, so the stream is bounded by default:
 
-| Variable                | Default                | Meaning                                                                                                                                                                                                                                                                                                                                              |
-| ----------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEVICE_VIDEO_MAX_SIZE` | `1280`                 | Longest side of the streamed video, px (scrcpy `--max-size`). `0` = native.                                                                                                                                                                                                                                                                          |
-| `DEVICE_VIDEO_MAX_FPS`  | `60`                   | Frame-rate cap (scrcpy `--max-fps`). `0` = uncapped.                                                                                                                                                                                                                                                                                                 |
-| `DEVICE_VIDEO_BIT_RATE` | `8000000`              | H.264 bit rate, bits/s. Lower it for a remote viewer.                                                                                                                                                                                                                                                                                                |
-| `DEVICE_EMULATOR_GPU`   | `swiftshader_indirect` | Emulator `-gpu` mode. The default is software rendering (works headless anywhere). `host` requires a usable GLX display and access to the host graphics driver stack; restart Mullion and confirm the emulator uses the host GPU. See [Host GPU rendering](#host-gpu-rendering) for setup. Other common values: `auto`, `swangle_indirect`, `guest`. |
+| Variable                   | Default                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------- | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEVICE_VIDEO_MAX_SIZE`    | `1280`                 | Longest side of the streamed video, px (scrcpy `--max-size`). `0` = native.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `DEVICE_VIDEO_MAX_FPS`     | `60`                   | Frame-rate cap (scrcpy `--max-fps`). `0` = uncapped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `DEVICE_VIDEO_BIT_RATE`    | `8000000`              | H.264 bit rate, bits/s. Lower it for a remote viewer.                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `DEVICE_EMULATOR_GPU`      | `swiftshader_indirect` | Emulator `-gpu` mode. The default is software rendering (works headless anywhere). `host` requires a usable GLX display and access to the host graphics driver stack; restart Mullion and confirm the emulator uses the host GPU. See [Host GPU rendering](#host-gpu-rendering) for setup. Other common values: `auto`, `swangle_indirect`, `guest`. Settings → Devices can override this for the next emulator start on a primary. An agent host has no settings DB, so an emulator launched there uses this env value only. |
+| `DEVICE_EMULATOR_HEADLESS` | `true`                 | Pass `-no-window` when launching an emulator. The panel already shows the guest through scrcpy, and a headless service has no display for a window. Set `false` only when a workflow needs the emulator's own window (camera, AR, visual debugging). Settings → Devices can override this for the next emulator start on a primary. An agent host has no settings DB, so an emulator launched there uses this env value only. `-no-audio` and the allocated `-port` stay fixed.                                               |
 
 ### Host GPU rendering
 
@@ -570,8 +571,9 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   needed; each leaf directory's `source.properties` is read for
   enrichment-only display fields (API level, tag, ABI) that fall back to
   `null` — never dropping the image — if that file is missing or corrupt.
-- **`POST /api/avds`** — `{name, systemImage, deviceProfile}` →
-  `avdmanager create avd -n <name> -k <systemImage> -d <deviceProfile>`.
+- **`POST /api/avds`** — `{name, systemImage, deviceProfile, sdcardSize?, ramSize?, dataPartitionSize?}` →
+  `avdmanager create avd -n <name> -k <systemImage> -d <deviceProfile>`
+  and, when `sdcardSize` is set, `--sdcard <size>` (`-c` is the same flag; the long form is what we pass).
   `name` is allowlisted against avdmanager's own accepted charset
   (alphanumerics, `.`, `_`, `-`); `systemImage`/`deviceProfile` are
   allowlisted against what `GET /api/system-images`/`GET /api/device-profiles`
@@ -584,6 +586,17 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   deliberately never passes) fails fast on EOF instead of hanging until the
   route's own timeout. A name collision therefore surfaces as a clear
   "already exists" error rather than silently overwriting an existing AVD.
+  The three hardware fields are optional. Blank means avdmanager's own
+  defaults. `sdcardSize` is a size with a unit (`512M`, `2G`; 16M–128G).
+  `ramSize` is megabytes (`2048`, `2048M`, or `2G`; 128–16384) and is written
+  to `hw.ramSize` in that AVD's `config.ini`. `dataPartitionSize` (`6G`,
+  `800M`; 64M–512G) is written to `disk.dataPartition.size`. Those two keys
+  are the only ini keys Mullion will write, and only into the `.avd`
+  directory `avdmanager list avd` reports for this name. A bad size is
+  rejected before `create` runs. If create succeeds but the ini cannot be
+  patched, the response is still 201, with a `warning`: the AVD exists
+  (with avdmanager's defaults for whatever was not written), so the UI
+  selects it instead of inviting a retry that would hit "already exists".
 
 ### System image management (issue #1348)
 

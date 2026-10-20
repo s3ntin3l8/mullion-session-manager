@@ -5,7 +5,10 @@ import { DeviceManager } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
 import { ensureSessionsDir } from "./pty.js";
-import { resolveDeviceDiscoveryEnabled } from "../services/runtime-config.js";
+import {
+  resolveDeviceDiscoveryEnabled,
+  resolveDeviceEmulatorLaunch,
+} from "../services/runtime-config.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 
 // Decorates app.device with the emulator/adb-scrcpy manager (see
@@ -44,6 +47,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     videoMaxFps: app.config.DEVICE_VIDEO_MAX_FPS,
     videoBitRate: app.config.DEVICE_VIDEO_BIT_RATE,
     emulatorGpu: app.config.DEVICE_EMULATOR_GPU,
+    // Settings → Devices can override the env default. Read here, on every
+    // spawn, rather than once at boot: a window/GPU change should apply the
+    // next time an emulator starts. DeviceManager still never touches app.db
+    // itself — this callback is the same seam as onPortAssigned.
+    resolveEmulatorLaunch: () =>
+      resolveDeviceEmulatorLaunch(app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS, app),
     // Same input, same pure function pty.ts's own plugin already calls —
     // see ensureSessionsDir's own comment on why this must match exactly.
     sessionsDir: ensureSessionsDir(app.config.SESSIONS_DIR),

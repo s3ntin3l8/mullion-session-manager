@@ -6,6 +6,8 @@ import {
   BrowserFramerateSetting,
   BrowserPoolSizeSetting,
   DeviceDiscoverySetting,
+  EmulatorGpuSetting,
+  EmulatorWindowSetting,
   GitHubPollingSettings,
   HostHeartbeatSetting,
   LogLevelSetting,
@@ -145,7 +147,7 @@ describe("runtime settings controls", () => {
   });
 
   it("hints for device discovery when the saved choice differs from what booted", async () => {
-    setSettings({ devices: { discoveryEnabled: "off" } });
+    setSettings({ devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" } });
     render(<DeviceDiscoverySetting />);
     expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
   });
@@ -154,5 +156,41 @@ describe("runtime settings controls", () => {
     render(<DeviceDiscoverySetting />);
     await waitFor(() => expect(screen.getByText("Find phones on the network")).toBeInTheDocument());
     expect(screen.queryByText(/Restart required/)).toBeNull();
+  });
+
+  it("stores an emulator window and GPU override for the next launch", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <EmulatorWindowSetting />
+        <EmulatorGpuSetting />
+      </>,
+    );
+    expect(await screen.findByLabelText("Emulator window")).toHaveDisplayValue(/Headless/);
+    expect(screen.getByLabelText("Emulator GPU")).toHaveDisplayValue(/swiftshader_indirect/);
+
+    await user.selectOptions(screen.getByLabelText("Emulator window"), "off");
+    await user.selectOptions(screen.getByLabelText("Emulator GPU"), "host");
+
+    expect(useDashboardStore.getState().settings.devices.emulatorHeadless).toBe("off");
+    expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBe("host");
+  });
+
+  it("sends null when the GPU override returns to the server default", async () => {
+    const user = userEvent.setup();
+    setSettings({ devices: { ...DEFAULT_SETTINGS.devices, emulatorGpu: "host" } });
+    render(<EmulatorGpuSetting />);
+    await user.selectOptions(await screen.findByLabelText("Emulator GPU"), "inherit");
+    expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBeNull();
+    await waitFor(() => {
+      const patch = vi
+        .mocked(fetch)
+        .mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PATCH");
+      expect(patch).toBeTruthy();
+      const body = JSON.parse(String((patch![1] as RequestInit).body)) as {
+        devices: { emulatorGpu: string | null };
+      };
+      expect(body.devices.emulatorGpu).toBeNull();
+    });
   });
 });

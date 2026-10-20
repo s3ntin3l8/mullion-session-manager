@@ -10,6 +10,9 @@ import {
   uninstallSystemImage,
   acceptLicenses,
   licensesMayBePending,
+  normalizeAvdHardware,
+  avdConfigRoots,
+  AvdCreatedError,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
 
@@ -39,6 +42,9 @@ interface CreateAvdBody {
   name?: string;
   systemImage?: string;
   deviceProfile?: string;
+  sdcardSize?: string;
+  ramSize?: string;
+  dataPartitionSize?: string;
 }
 
 export async function avdsRoute(app: FastifyInstance): Promise<void> {
@@ -136,14 +142,33 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
       return reply.badRequest("deviceProfile must be one of the host's known device profiles");
     }
 
+    // Optional hardware. Empty/absent leaves avdmanager's own defaults.
+    // Invalid sizes fail before createAvd so a bad SD-card string never
+    // reaches the binary, and a bad RAM string never leaves a half-patched
+    // AVD behind.
+    const hardware = normalizeAvdHardware(request.body ?? {});
+    if (!hardware.ok) return reply.badRequest(hardware.message);
+
     try {
+      // Do not spread `hardware.value` into this object. CodeQL treats that
+      // spread as tainting every property, including `avdmanagerPath`, which
+      // is the execFile executable (js/command-line-injection). The three
+      // size fields are copied by name so the path stays the config value.
       await createAvd({
         avdmanagerPath: app.config.DEVICE_AVDMANAGER_PATH,
         name,
         systemImage,
         deviceProfile,
+        sdcardSize: hardware.value.sdcardSize,
+        ramSizeMb: hardware.value.ramSizeMb,
+        dataPartitionSize: hardware.value.dataPartitionSize,
+        configRoots: avdConfigRoots(),
       });
     } catch (err) {
+      if (err instanceof AvdCreatedError) {
+        reply.code(201);
+        return { name, warning: err.message };
+      }
       return reply.badRequest(err instanceof Error ? err.message : String(err));
     }
 

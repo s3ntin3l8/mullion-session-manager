@@ -59,6 +59,8 @@ describe("server-info route", () => {
         browserFramerate: expect.any(Number),
         browserMaxInstances: expect.any(Number),
         deviceDiscoveryEnabled: expect.any(Boolean),
+        deviceEmulatorHeadless: expect.any(Boolean),
+        deviceEmulatorGpu: expect.any(String),
         logLevel: expect.any(String),
       },
       running: {

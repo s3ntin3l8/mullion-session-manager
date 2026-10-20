@@ -425,6 +425,8 @@ describe("DeviceManager", () => {
     const systemdRun = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemd-run");
     const argv = systemdRun?.[1] as string[];
     expect(argv[argv.indexOf("-gpu") + 1]).toBe("host");
+    expect(argv).toContain("-no-window");
+    expect(argv).toContain("-no-audio");
   });
 
   it("falls back to a 1280px / 60fps / 8Mbps stream and swiftshader_indirect when unconfigured", async () => {
@@ -446,6 +448,31 @@ describe("DeviceManager", () => {
     const systemdRun = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemd-run");
     const argv = systemdRun?.[1] as string[];
     expect(argv[argv.indexOf("-gpu") + 1]).toBe("swiftshader_indirect");
+    expect(argv).toContain("-no-window");
+  });
+
+  it("drops -no-window and uses the spawn-time GPU when resolveEmulatorLaunch says so", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const resolveEmulatorLaunch = vi.fn(() => ({ headless: false, gpu: "host" }));
+    const manager = new DeviceManager(
+      baseOpts({ emulatorGpu: "swiftshader_indirect", resolveEmulatorLaunch }),
+    );
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "streaming");
+
+    const systemdRun = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemd-run");
+    const argv = systemdRun?.[1] as string[];
+    expect(argv).not.toContain("-no-window");
+    expect(argv).toContain("-no-audio");
+    expect(argv[argv.indexOf("-gpu") + 1]).toBe("host");
+    expect(resolveEmulatorLaunch).toHaveBeenCalled();
   });
 
   it("getOrCreate is idempotent — a second call for the same alive id returns the SAME Device, no second spawn", async () => {

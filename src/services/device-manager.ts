@@ -56,8 +56,16 @@ export interface DeviceManagerOptions {
   videoMaxSize?: number;
   videoMaxFps?: number;
   videoBitRate?: number;
-  /** Emulator `-gpu` mode — see env.ts's DEVICE_EMULATOR_GPU comment. */
+  /** Emulator `-gpu` mode — see env.ts's DEVICE_EMULATOR_GPU comment.
+   * Used only when `resolveEmulatorLaunch` is absent (tests, and any caller
+   * that doesn't have settings). The plugin passes the resolver so a
+   * Settings override wins over this construction-time default. */
   emulatorGpu?: string;
+  /** Headless (`-no-window`) and `-gpu` for the next emulator start.
+   * Called from Device.spawn(), not at construction, so a settings change
+   * applies without restarting Mullion. Absent means today's secure
+   * default: headless, and `emulatorGpu` (or SwiftShader). */
+  resolveEmulatorLaunch?: () => { headless: boolean; gpu: string };
   /** Same directory PtyManager's own scopes are namespaced against
    * (src/plugins/pty.ts's `ensureSessionsDir` output) — passed in rather
    * than read from app.config directly so this manager always agrees with
@@ -291,6 +299,11 @@ export class Device {
     try {
       this.status = "starting";
       touchDeviceMarker(this.manager.sessionsDir, this.id);
+      const launch = this.manager.resolveEmulatorLaunch?.() ?? {
+        headless: true,
+        gpu: this.manager.emulatorGpu ?? DEFAULT_DEVICE_EMULATOR_GPU,
+      };
+      const gpu = launch.gpu || this.manager.emulatorGpu || DEFAULT_DEVICE_EMULATOR_GPU;
       const plan = buildDeviceLaunchPlan({
         id: this.id,
         sessionsDir: this.manager.sessionsDir,
@@ -299,10 +312,13 @@ export class Device {
         extraArgs: [
           "-port",
           String(port),
-          "-no-window",
+          // A host window is opt-in. Headless is the default because the
+          // panel already shows the guest through scrcpy, and `-no-window`
+          // is what lets a display-less service boot at all.
+          ...(launch.headless ? ["-no-window"] : []),
           "-no-audio",
           "-gpu",
-          this.manager.emulatorGpu ?? DEFAULT_DEVICE_EMULATOR_GPU,
+          gpu,
         ],
       });
 

@@ -23,17 +23,21 @@ vi.mock("node:child_process", async (importOriginal) => {
 // call the service functions directly (avds.ts has no plugin/decorator
 // seam), and mocking the binary would make this suite depend on a real
 // Android SDK being installed in CI.
-vi.mock("../../src/services/avd-manager.js", () => ({
-  listAvds: vi.fn(),
-  listDeviceProfiles: vi.fn(),
-  listInstalledSystemImages: vi.fn(),
-  createAvd: vi.fn(),
-  listAvailableSystemImages: vi.fn(),
-  installSystemImage: vi.fn(),
-  uninstallSystemImage: vi.fn(),
-  acceptLicenses: vi.fn(),
-  licensesMayBePending: vi.fn(),
-}));
+vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    listAvds: vi.fn(),
+    listDeviceProfiles: vi.fn(),
+    listInstalledSystemImages: vi.fn(),
+    createAvd: vi.fn(),
+    listAvailableSystemImages: vi.fn(),
+    installSystemImage: vi.fn(),
+    uninstallSystemImage: vi.fn(),
+    acceptLicenses: vi.fn(),
+    licensesMayBePending: vi.fn(),
+  };
+});
 
 // buildTestApp (not a static `import { buildApp } from "../../src/app.js"`)
 // — it dynamically `import()`s app.js at call time, inside each test body,
@@ -45,6 +49,7 @@ vi.mock("../../src/services/avd-manager.js", () => ({
 // failure test/routes/devices.test.ts's own use of buildTestApp avoids.
 import { buildTestApp } from "../helpers/app.js";
 import {
+  AvdCreatedError,
   createAvd,
   listAvds,
   listDeviceProfiles,
@@ -355,6 +360,96 @@ describe("avds routes", () => {
         });
         expect(res.statusCode).toBe(400);
         expect(res.json().message).toContain("already exists");
+      });
+
+      it("POST /api/avds forwards optional hardware sizes and normalizes RAM to megabytes", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+            sdcardSize: "2048M",
+            ramSize: "2G",
+            dataPartitionSize: "6g",
+          },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(vi.mocked(createAvd)).toHaveBeenCalledWith(
+          expect.objectContaining({
+            avdmanagerPath: "/opt/sdk/avdmanager",
+            sdcardSize: "2048M",
+            ramSizeMb: "2048",
+            dataPartitionSize: "6G",
+          }),
+        );
+      });
+
+      it("POST /api/avds treats blank hardware fields as unset", async () => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+            sdcardSize: "  ",
+            ramSize: "",
+          },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(vi.mocked(createAvd)).toHaveBeenCalledWith(
+          expect.not.objectContaining({
+            sdcardSize: expect.anything(),
+            ramSizeMb: expect.anything(),
+          }),
+        );
+      });
+
+      it.each([
+        ["sdcardSize", "512", "sdcardSize must be a size"],
+        ["ramSize", "64", "ramSize must be megabytes"],
+        ["dataPartitionSize", "nope", "dataPartitionSize must be a size"],
+      ])("POST /api/avds rejects an invalid %s before creating", async (field, value, message) => {
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+            [field]: value,
+          },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain(message);
+        expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
+      });
+
+      it("POST /api/avds returns 201 with a warning when the AVD exists but config.ini was not patched", async () => {
+        vi.mocked(createAvd).mockRejectedValueOnce(
+          new AvdCreatedError(
+            "AVD pixel_7 was created, but its config directory is outside the AVD home",
+          ),
+        );
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+            ramSize: "2048",
+          },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().name).toBe("pixel_7");
+        expect(res.json().warning).toContain("was created");
       });
     });
   });

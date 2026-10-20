@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { AppSettings, LogLevel } from "./settings.js";
+import { DEFAULT_DEVICE_EMULATOR_GPU } from "./device-defaults.js";
 
 // Env-configured behaviour knobs that the Settings UI can override at
 // runtime. Each settings field uses -1 / "inherit" to mean "no override";
@@ -14,6 +15,8 @@ export interface RuntimeEnvDefaults {
   browserFramerate: number;
   browserMaxInstances: number;
   deviceDiscoveryEnabled: boolean;
+  deviceEmulatorHeadless: boolean;
+  deviceEmulatorGpu: string;
   logLevel: LogLevel;
 }
 
@@ -28,6 +31,8 @@ export function runtimeEnvDefaults(app: ConfigSource): RuntimeEnvDefaults {
     browserFramerate: app.config.BROWSER_FRAMERATE,
     browserMaxInstances: app.config.BROWSER_MAX_INSTANCES,
     deviceDiscoveryEnabled: app.config.DEVICE_DISCOVERY_ENABLED,
+    deviceEmulatorHeadless: app.config.DEVICE_EMULATOR_HEADLESS,
+    deviceEmulatorGpu: app.config.DEVICE_EMULATOR_GPU,
     logLevel: app.config.LOG_LEVEL as LogLevel,
   };
 }
@@ -99,4 +104,25 @@ export function resolveBrowserMaxInstances(settings: AppSettings, app: ConfigSou
 export function resolveDeviceDiscoveryEnabled(settings: AppSettings, app: ConfigSource): boolean {
   const saved = settings.devices.discoveryEnabled;
   return saved === "inherit" ? runtimeEnvDefaults(app).deviceDiscoveryEnabled : saved === "on";
+}
+
+// Emulator launch flags. Unlike discovery, these are read on every spawn
+// (src/plugins/device.ts wires this into DeviceManager), so a Settings change
+// applies the next time an emulator starts — no restart. Host-wide on purpose:
+// GPU passthrough and a host window are properties of this machine, not of
+// one AVD. An empty GPU falls back to the software default rather than
+// launching the emulator with `-gpu ""`.
+export function resolveDeviceEmulatorLaunch(
+  settings: AppSettings,
+  app: ConfigSource,
+): { headless: boolean; gpu: string } {
+  const env = runtimeEnvDefaults(app);
+  const headless =
+    settings.devices.emulatorHeadless === "on"
+      ? true
+      : settings.devices.emulatorHeadless === "off"
+        ? false
+        : env.deviceEmulatorHeadless;
+  const gpu = settings.devices.emulatorGpu || env.deviceEmulatorGpu || DEFAULT_DEVICE_EMULATOR_GPU;
+  return { headless, gpu };
 }

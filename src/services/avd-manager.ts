@@ -1,9 +1,13 @@
 // AVD (Android Virtual Device) listing/creation — the counterpart to
 // device-manager.ts's *running* half.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { execFile as execFileCb } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
+import { normalizeAvdHardware } from "../shared/avd-hardware.js";
 import { armKillEscalation } from "./session-process.js";
+
+export { normalizeAvdHardware };
 
 // A raw `child_process.execFile` reference (callback style, not
 // promisified) — every exec-based function below needs the
@@ -225,8 +229,150 @@ export interface CreateAvdOptions {
   name: string;
   systemImage: string;
   deviceProfile: string;
+  /** `avdmanager create avd --sdcard`, e.g. `2048M`. Already validated. */
+  sdcardSize?: string;
+  /** config.ini `hw.ramSize`, integer megabytes, e.g. `2048`. */
+  ramSizeMb?: string;
+  /** config.ini `disk.dataPartition.size`, e.g. `6G`. */
+  dataPartitionSize?: string;
+  /**
+   * Directories a config.ini write is allowed under: the AVD home and the
+   * SDK root. Required whenever ram/data-partition patching runs — an empty
+   * list refuses the write.
+   */
+  configRoots?: readonly string[];
   timeoutMs?: number;
   execFileFn?: ExecFileFn;
+}
+
+/** The AVD was created, but the config.ini patch did not happen. The route
+ * turns this into 201 + warning so the UI selects the AVD instead of
+ * inviting a retry that hits "already exists". */
+export class AvdCreatedError extends Error {
+  readonly created = true as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AvdCreatedError";
+  }
+}
+
+// The only config.ini keys Mullion will write. RAM and the data partition
+// are not `avdmanager create` flags — they live in the AVD's generated
+// config.ini and have to be patched after create. An SD card is the
+// `--sdcard` flag instead, so it is not in this set.
+const AVD_CONFIG_INI_KEYS = ["hw.ramSize", "disk.dataPartition.size"] as const;
+type AvdConfigIniKey = (typeof AVD_CONFIG_INI_KEYS)[number];
+
+// Directories `avdmanager` will actually write an AVD into. A reported path
+// whose basename happens to be `<name>.avd` is not enough — the service
+// user must not overwrite an arbitrary directory of that name. AVD homes
+// live under `~/.android/avd`, or under `$ANDROID_USER_HOME/avd` /
+// `$ANDROID_AVD_HOME` / `$ANDROID_SDK_HOME/.android/avd` when those are set.
+// They do not live under the SDK root, so that directory is not a root.
+// These are the SDK's own overrides (read by avdmanager from the process
+// environment, not Mullion settings); a relocated AVD home has to stay on
+// the allowlist or the patch would refuse the directory the binary just
+// created.
+export function avdConfigRoots(): string[] {
+  const roots = [path.join(os.homedir(), ".android", "avd")];
+  const avdHome = process.env.ANDROID_AVD_HOME?.trim();
+  if (avdHome) roots.push(path.resolve(avdHome));
+  const userHome = process.env.ANDROID_USER_HOME?.trim();
+  if (userHome) roots.push(path.join(path.resolve(userHome), "avd"));
+  const sdkHome = process.env.ANDROID_SDK_HOME?.trim();
+  if (sdkHome) roots.push(path.join(path.resolve(sdkHome), ".android", "avd"));
+  return roots;
+}
+
+// A root may itself be a symlink (`~/.android/avd` → another volume). The
+// candidate is realpath'd before the write, so each root's real path has
+// to be on the list too — otherwise a legitimate AVD home fails the second
+// check and the patch is dropped with a wrong "outside the AVD home".
+function rootsWithRealpaths(roots: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    const resolved = path.resolve(root);
+    if (!out.includes(resolved)) out.push(resolved);
+    try {
+      const real = realpathSync(resolved);
+      if (!out.includes(real)) out.push(real);
+    } catch {
+      // The root isn't there. Keep the lexical path.
+    }
+  }
+  return out;
+}
+
+export function isInsideDirectory(root: string, candidate: string): boolean {
+  const base = path.resolve(root);
+  const target = path.resolve(candidate);
+  const rel = path.relative(base, target);
+  if (rel.length === 0 || rel === "..") return false;
+  if (rel.startsWith(`..${path.sep}`)) return false;
+  return !path.isAbsolute(rel);
+}
+
+// `avdmanager list avd` prints one block per AVD, separated by a dashed
+// line, with `Name:` and `Path:` lines. The path is the `.avd` directory
+// that holds config.ini. Accepted only when the basename is `<name>.avd`
+// AND the directory sits under one of `allowedRoots`.
+export function avdConfigDirFromListOutput(
+  output: string,
+  name: string,
+  allowedRoots: readonly string[],
+): string | null {
+  if (!name || name.includes("/") || name.includes("\\")) return null;
+  if (allowedRoots.length === 0) return null;
+  for (const block of output.split(/\n\s*-{3,}\s*(?:\n|$)/)) {
+    const nameMatch = /^\s*Name:\s*(.+)$/m.exec(block);
+    const pathMatch = /^\s*Path:\s*(.+)$/m.exec(block);
+    if (!nameMatch || !pathMatch) continue;
+    if (nameMatch[1].trim() !== name) continue;
+    const dir = path.resolve(pathMatch[1].trim());
+    if (path.basename(dir) !== `${name}.avd`) return null;
+    if (!allowedRoots.some((root) => isInsideDirectory(root, dir))) return null;
+    return dir;
+  }
+  return null;
+}
+
+// Rewrites only the allowlisted keys. An unknown key throws rather than
+// being written — this helper is the entire ini-write surface, and a
+// future caller must not be able to pass an arbitrary key through it.
+// Existing lines keep their key spelling; a missing key is appended.
+export function patchAvdConfigIni(
+  content: string,
+  updates: Partial<Record<AvdConfigIniKey, string>>,
+): string {
+  for (const key of Object.keys(updates)) {
+    if (!AVD_CONFIG_INI_KEYS.includes(key as AvdConfigIniKey)) {
+      throw new Error(`config.ini key not allowed: ${key}`);
+    }
+    const value = updates[key as AvdConfigIniKey];
+    if (value === undefined || !/^[0-9]+[KMG]?$/.test(value)) {
+      throw new Error(`config.ini value not allowed for ${key}`);
+    }
+  }
+  const lines = content.split("\n");
+  const seen = new Set<string>();
+  const next = lines.map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) return line;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) return line;
+    const key = trimmed.slice(0, eq).trim();
+    if (!Object.prototype.hasOwnProperty.call(updates, key)) return line;
+    const value = updates[key as AvdConfigIniKey];
+    if (value === undefined) return line;
+    seen.add(key);
+    return `${key}=${value}`;
+  });
+  while (next.length > 0 && next[next.length - 1] === "") next.pop();
+  for (const key of AVD_CONFIG_INI_KEYS) {
+    const value = updates[key];
+    if (value !== undefined && !seen.has(key)) next.push(`${key}=${value}`);
+  }
+  return `${next.join("\n")}\n`;
 }
 
 // `avdmanager create avd -k <systemImage> -d <deviceProfile>` — verified
@@ -238,15 +384,97 @@ export interface CreateAvdOptions {
 // without `--force` asks one) fails fast on EOF instead of hanging until
 // timeoutMs. Deliberately does NOT pass `--force` — a duplicate name should
 // surface as a clear "already exists" error, not silently overwrite an
-// existing AVD.
+// existing AVD. Optional `--sdcard` sets the SD-card size at create time. RAM and
+// the data partition are patched into config.ini afterwards because
+// avdmanager has no flag for them.
 export async function createAvd(opts: CreateAvdOptions): Promise<void> {
+  const args = ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile];
+  const sdcard = opts.sdcardSize;
+  if (sdcard !== undefined) {
+    // Rebuild from the capture. The request string itself never becomes an
+    // argument, and `--sdcard` is not `-c` (a variable program plus a literal
+    // `-c` is what CodeQL reads as `sh -c`).
+    const matched = /^([0-9]{1,6})([KMG])$/.exec(sdcard);
+    if (!matched) throw new Error("sdcardSize is not a size token");
+    args.push("--sdcard", `${matched[1]}${matched[2]}`);
+  }
   await execFileWithEscalation(
     opts.execFileFn ?? execFileCb,
     opts.avdmanagerPath,
-    ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile],
+    args,
     opts.timeoutMs ?? CREATE_AVD_TIMEOUT_MS,
     (child) => child.stdin?.end(),
   );
+  if (!opts.ramSizeMb && !opts.dataPartitionSize) return;
+
+  const roots = rootsWithRealpaths(opts.configRoots ?? []);
+  let dir: string | null;
+  try {
+    // The list call has its own budget. `timeoutMs` is the create budget
+    // (default 120s); reusing it here would silently shorten the list when
+    // a caller only meant to cap create.
+    const { stdout } = await execFileWithEscalation(
+      opts.execFileFn ?? execFileCb,
+      opts.avdmanagerPath,
+      ["list", "avd"],
+      LIST_TIMEOUT_MS,
+    );
+    dir = avdConfigDirFromListOutput(stdout, opts.name, roots);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but its config.ini path could not be found: ${detail}`,
+      { cause: err },
+    );
+  }
+  if (!dir) {
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but its config.ini path could not be found: avdmanager list avd did not report a config directory for this name under the AVD home`,
+    );
+  }
+
+  let realDir: string;
+  try {
+    realDir = realpathSync(dir);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but its config directory could not be resolved: ${detail}`,
+      { cause: err },
+    );
+  }
+  // A symlink whose lexical path is inside the AVD home can still point
+  // somewhere else. The real path has to pass the same check, against
+  // roots that have been realpath'd too (rootsWithRealpaths).
+  if (!roots.some((root) => isInsideDirectory(root, realDir))) {
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but its config directory is outside the AVD home`,
+    );
+  }
+
+  const iniPath = path.join(realDir, "config.ini");
+  let current: string;
+  try {
+    current = readFileSync(iniPath, "utf8");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but ${iniPath} could not be read: ${detail}`,
+      { cause: err },
+    );
+  }
+  const updates: Partial<Record<AvdConfigIniKey, string>> = {};
+  if (opts.ramSizeMb) updates["hw.ramSize"] = opts.ramSizeMb;
+  if (opts.dataPartitionSize) updates["disk.dataPartition.size"] = opts.dataPartitionSize;
+  try {
+    writeFileSync(iniPath, patchAvdConfigIni(current, updates));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but ${iniPath} could not be written: ${detail}`,
+      { cause: err },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

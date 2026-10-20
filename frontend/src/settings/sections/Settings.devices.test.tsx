@@ -65,6 +65,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   let avdsDb: string[];
   let avdsShouldFail: boolean;
   let avdsRefreshShouldFailAfterCreate: boolean;
+  let avdCreateWarning: string | null;
   let systemImagesDb: SystemImage[];
   let deviceProfilesDb: string[];
   let avdCreateCalls: unknown[];
@@ -92,6 +93,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     avdsDb = ["pixel_7"];
     avdsShouldFail = false;
     avdsRefreshShouldFailAfterCreate = false;
+    avdCreateWarning = null;
     systemImagesDb = [
       {
         packagePath: "system-images;android-35;google_apis;x86_64",
@@ -150,7 +152,10 @@ describe("Settings -> Devices (issue #1326)", () => {
         // Simulates creation succeeding but the picker's own post-create
         // refresh failing — a separate failure mode from creation itself.
         if (avdsRefreshShouldFailAfterCreate) avdsShouldFail = true;
-        return jsonResponse(201, { name: body.name });
+        return jsonResponse(201, {
+          name: body.name,
+          ...(avdCreateWarning ? { warning: avdCreateWarning } : {}),
+        });
       },
       "POST /api/devices": ({ init }) => {
         if (!deviceEnabled) {
@@ -690,6 +695,81 @@ describe("Settings -> Devices (issue #1326)", () => {
         deviceProfile: "pixel_6",
       },
     ]);
+  });
+
+  it("creating a new AVD sends optional hardware sizes and omits blank ones", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
+    await user.type(screen.getByLabelText("SD card size"), "2048M");
+    await user.type(screen.getByLabelText("RAM"), "2G");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    await waitFor(() => {
+      expect(avdCreateCalls).toEqual([
+        {
+          name: "pixel_9_hw",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_6",
+          sdcardSize: "2048M",
+          ramSize: "2G",
+        },
+      ]);
+    });
+  });
+
+  it("refuses a bare SD card number before posting", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_bad");
+    await user.type(screen.getByLabelText("SD card size"), "512");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    expect(await screen.findByText(/sdcardSize must be a size/)).toBeInTheDocument();
+    expect(avdCreateCalls).toEqual([]);
+  });
+
+  it("refuses a RAM size outside 128–16384 before posting", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_small");
+    await user.type(screen.getByLabelText("RAM"), "64");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    expect(await screen.findByText(/ramSize must be megabytes/)).toBeInTheDocument();
+    expect(avdCreateCalls).toEqual([]);
+  });
+
+  it("selects the new AVD and shows a warning when create succeeded but config.ini was not patched", async () => {
+    avdCreateWarning =
+      "AVD pixel_9_hw was created, but its config directory is outside the AVD home";
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
+    await user.type(screen.getByLabelText("RAM"), "2048");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    expect(await screen.findByText(/outside the AVD home/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Create AVD" })).not.toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue("pixel_9_hw")).toBeInTheDocument();
   });
 
   // Hermes review — a failure of the post-create picker refresh used to be

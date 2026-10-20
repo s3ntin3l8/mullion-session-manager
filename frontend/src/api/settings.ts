@@ -241,6 +241,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   devices: {
     discoveryEnabled: "inherit",
+    emulatorHeadless: "inherit",
+    emulatorGpu: null,
   },
   server: {
     logLevel: "inherit",

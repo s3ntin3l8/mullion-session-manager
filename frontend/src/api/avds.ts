@@ -14,6 +14,16 @@ export const avdsApi = {
   listAvailableSystemImages: () =>
     request<{ systemImages: AvailableSystemImage[] }>("/api/system-images/available"),
 
-  createAvd: (body: { name: string; systemImage: string; deviceProfile: string }) =>
-    request<{ name: string }>("/api/avds", { method: "POST", body: JSON.stringify(body) }),
+  createAvd: (body: {
+    name: string;
+    systemImage: string;
+    deviceProfile: string;
+    sdcardSize?: string;
+    ramSize?: string;
+    dataPartitionSize?: string;
+  }) =>
+    request<{ name: string; warning?: string }>("/api/avds", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

@@ -1,4 +1,5 @@
 import { sanitizeCacheDirIds, type CacheDirId } from "./cache-storage.js";
+import { DEVICE_EMULATOR_GPU_PATTERN } from "./device-defaults.js";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { settings as settingsTable } from "../db/schema.js";
@@ -478,6 +479,15 @@ export interface AppSettings {
     // DEVICE_DISCOVERY_ENABLED (mDNS phone discovery). Read once at boot: a
     // change needs a restart.
     discoveryEnabled: "inherit" | "on" | "off";
+    // DEVICE_EMULATOR_HEADLESS. "on" passes `-no-window` (today's default).
+    // Read on every emulator start, not at boot — a change applies to the
+    // next launch without a restart. Host-wide, not per device: the host
+    // either has a display for an emulator window or it does not.
+    emulatorHeadless: "inherit" | "on" | "off";
+    // DEVICE_EMULATOR_GPU. `null` inherits the env default. A string is a
+    // single token (`swiftshader_indirect`, `host`, …). Also read on every
+    // emulator start. Not an enum: newer emulators add modes.
+    emulatorGpu: string | null;
   };
   server: {
     // LOG_LEVEL. Applied live to the root logger.
@@ -626,6 +636,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   devices: {
     discoveryEnabled: "inherit",
+    emulatorHeadless: "inherit",
+    emulatorGpu: null,
   },
   server: {
     logLevel: "inherit",
@@ -883,6 +895,22 @@ function safeSentinelNumber(
   return Math.min(max, Math.max(min, value));
 }
 
+// A `-gpu` mode is one token, the same bound as env.ts's
+// DEVICE_EMULATOR_GPU pattern (DEVICE_EMULATOR_GPU_PATTERN). `null` (and
+// anything that isn't) means "inherit the env default" — never forward a
+// blank or a multi-word string to the emulator.
+const EMULATOR_GPU_TOKEN = new RegExp(DEVICE_EMULATOR_GPU_PATTERN);
+
+function sanitizeEmulatorGpu(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  // "inherit" is the UI sentinel for null, not a -gpu mode. A client that
+  // PATCHes the dropdown's value literally would otherwise pass the token
+  // check and launch with `-gpu inherit`.
+  if (trimmed.toLowerCase() === "inherit") return null;
+  return EMULATOR_GPU_TOKEN.test(trimmed) ? trimmed : null;
+}
+
 // Clamps/repairs numeric fields to a sane range, falling back to the
 // default on anything non-finite or out of bounds. The type guard in
 // deepMerge above only proves a patched leaf is *a* number, not a *sane*
@@ -1054,6 +1082,14 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         settings.devices.discoveryEnabled === "on" || settings.devices.discoveryEnabled === "off"
           ? settings.devices.discoveryEnabled
           : DEFAULT_SETTINGS.devices.discoveryEnabled,
+      emulatorHeadless:
+        settings.devices.emulatorHeadless === "on" || settings.devices.emulatorHeadless === "off"
+          ? settings.devices.emulatorHeadless
+          : DEFAULT_SETTINGS.devices.emulatorHeadless,
+      // null inherits DEVICE_EMULATOR_GPU. Anything that isn't one token
+      // (a space, empty, or a sentence) is not a `-gpu` value — drop it
+      // back to inherit rather than forwarding it to the emulator.
+      emulatorGpu: sanitizeEmulatorGpu(settings.devices.emulatorGpu),
     },
     server: {
       logLevel:
