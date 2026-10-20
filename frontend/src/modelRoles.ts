@@ -67,13 +67,3 @@ export function resolveOpencodeModelRoles(
   const reviewer = reviewerModel ?? null;
   return { implementer, reviewer, shared: reviewer === implementer };
 }
-
-/**
- * A short, human-readable name for the model a role resolves to, for the
- * warning text. An unset value means the CLI's own default — worth saying
- * out loud, because it is the case where the reviewer is NOT obviously
- * running on the implementer's model, but is.
- */
-export function describeModelRole(model: string | null): string {
-  return model ?? "the CLI's default";
-}

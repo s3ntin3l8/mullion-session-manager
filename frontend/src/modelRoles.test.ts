@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  describeModelRole,
-  resolveCliModelRoles,
-  resolveOpencodeModelRoles,
-} from "./modelRoles.js";
+import { resolveCliModelRoles, resolveOpencodeModelRoles } from "./modelRoles.js";
 
 // The DOM-free mirror of the backend's install-wide model-role fallback
 // (src/services/task-model-resolve.ts). The two families genuinely differ
@@ -86,15 +82,5 @@ describe("resolveOpencodeModelRoles", () => {
       "opencode-go/claude-haiku-5-5",
     );
     expect(roles.shared).toBe(false);
-  });
-});
-
-describe("describeModelRole", () => {
-  it("names the model when there is one", () => {
-    expect(describeModelRole("opusplan")).toBe("opusplan");
-  });
-
-  it("says the CLI's default when there is not", () => {
-    expect(describeModelRole(null)).toBe("the CLI's default");
   });
 });

@@ -5,7 +5,6 @@ import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
 import {
-  describeModelRole,
   resolveCliModelRoles,
   resolveOpencodeModelRoles,
 } from "../../modelRoles.js";
@@ -47,8 +46,8 @@ function reviewerModelWarning(
   if (!roles.shared || roles.implementer === null) return null;
   return (
     <p style={warningStyle}>
-      {cliName}'s reviewer runs on the same model as its implementer (
-      {describeModelRole(roles.implementer)}) — no second opinion.
+      {cliName}'s reviewer runs on the same model as its implementer ({roles.implementer}) — no
+      second opinion.
     </p>
   );
 }
