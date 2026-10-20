@@ -127,6 +127,16 @@ describe("PrDetailView", () => {
     expect(screen.getByRole("link", { name: "open on GitHub" })).toBeInTheDocument();
   });
 
+  it.each([
+    ["not_found", /the review run is no longer known to the relay/],
+    ["unknown", /the relay could not read the review run/],
+  ])("does not claim a %s review is still waiting", async (status, expected) => {
+    vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1", status }));
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the review bot/)).toBeNull();
+  });
+
   it("does not claim a failed review is still waiting", async () => {
     vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1", status: "failed" }));
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
@@ -135,21 +145,31 @@ describe("PrDetailView", () => {
   });
 
   it("does not show one PR's review under another PR's header", async () => {
-    vi.stubGlobal(
-      "fetch",
-      // PR 12 has a landed review; PR 13 has one of its own — so the
-      // assertion below is about the wrong state lingering, not about a
-      // payload that never arrives.
-      stubReview({
-        "12": { state: "landed", verdict: "APPROVED", author: "hermes[bot]", body: "## Review" },
-        "13": { state: "landed", verdict: "CHANGES_REQUESTED", author: "hermes[bot]" },
-      }),
-    );
+    // PR 12 has a landed review; PR 13's review never arrives — so the
+    // assertion below is about the previous PR's verdict lingering, not about
+    // a payload that eventually shows up.
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+      if (String(url).includes("/github/prs/12/review")) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            state: "landed",
+            verdict: "APPROVED",
+            author: "hermes[bot]",
+            body: "## Review",
+          }),
+        );
+      }
+      if (String(url).includes("/github/prs/13/review")) {
+        return new Promise<Response>(() => undefined); // never settles
+      }
+      return Promise.resolve(jsonResponse(200, PR));
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const { rerender } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText(/Approved by hermes\[bot\]/)).toBeInTheDocument();
-    // Another PR: the previous PR's verdict must not linger.
+    // Another PR: the previous PR's verdict must not linger, even before
+    // the new PR's own state arrives.
     rerender(<PrDetailView projectId={1} number={13} onBack={vi.fn()} />);
-    expect(await screen.findByText(/Changes requested by hermes\[bot\]/)).toBeInTheDocument();
     expect(screen.queryByText(/Approved by hermes\[bot\]/)).toBeNull();
   });
 
