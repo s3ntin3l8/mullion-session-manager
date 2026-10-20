@@ -359,6 +359,14 @@ type LandedReview =
     }
   | { checked: false };
 
+/**
+ * The review states that count as "a review landed": the ones a bot actually
+ * submits. A DISMISSED review was retracted, so it did not land. Both the
+ * landed-review check and the duplicate-review warning use this one
+ * definition, so `review status` and the warning never disagree.
+ */
+const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+
 // Best effort: the newest review by a bot account submitted after the run was
 // dispatched and pinned to the commit it was dispatched for. A GitHub failure
 // must not hide the Hermes status.
@@ -377,6 +385,11 @@ async function findLandedReview(
         (r) =>
           r.authorIsBot &&
           r.commitId === headSha &&
+          // The same "landed" definition the duplicate-review warning uses
+          // (LANDED_REVIEW_STATES) — a DISMISSED review was retracted, so
+          // it did not land, and "posted: <author> DISMISSED" would say
+          // otherwise.
+          LANDED_REVIEW_STATES.has(r.state) &&
           r.submittedAt &&
           Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
       )
@@ -402,12 +415,6 @@ async function findLandedReview(
     return { checked: false };
   }
 }
-
-/**
- * The review states that count as "a review landed": the ones a bot
- * actually submits. A DISMISSED review was retracted, so it did not land.
- */
-const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 
 /**
  * A warning for a request whose commit already carries a bot review

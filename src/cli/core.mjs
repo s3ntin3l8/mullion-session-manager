@@ -1538,8 +1538,11 @@ function formatReviewStatus(r) {
     // already bounded server-side; the CLI only cuts it to a readable length.
     const body = r.github.review?.body;
     if (body) {
+      // The cut is by code point, so it cannot leave a lone surrogate behind.
       const trimmed =
-        body.length > MAX_CLI_REVIEW_BODY ? `${body.slice(0, MAX_CLI_REVIEW_BODY)}…` : body;
+        [...body].length > MAX_CLI_REVIEW_BODY
+          ? `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`
+          : body;
       lines.push(`review text: ${trimmed}`);
       if (r.github.review.bodyTruncated) lines.push("(the review text was cut short)");
     }

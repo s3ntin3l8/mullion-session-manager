@@ -588,6 +588,23 @@ describe("review-request routes", () => {
       });
     });
 
+    it("reports a dismissed (retracted) review as not landed", async () => {
+      // The same "landed" definition the duplicate-review warning uses: a
+      // retracted review did not land, so `review status` must not say it
+      // posted.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "ccccccc3",
+          submittedAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await get(sessionId);
+      expect(res.json().github).toEqual({ checked: true, review: null });
+    });
+
     it("reports that nothing landed when no bot review follows the dispatch", async () => {
       const res = await get(sessionId, "?prNumber=99");
       expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(
