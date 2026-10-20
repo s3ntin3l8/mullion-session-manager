@@ -76,8 +76,14 @@ export function isDtachCreateFor(commandLine: string, socketPath: string): boole
   const needle = ` -n ${socketPath}`;
   const at = commandLine.indexOf(needle);
   if (at === -1) return false;
-  const argv0 = commandLine.slice(0, at);
-  if (argv0 !== "dtach" && !argv0.endsWith("/dtach")) return false;
+  // argv[0] is the FIRST token — the program. It cannot be read from the
+  // flag's position: a dtach invocation may carry options ahead of the flag
+  // (`dtach -E -n <socket>`), and everything between argv[0] and the flag
+  // is those options, not the program.
+  const firstToken = commandLine.split(/\s+/, 1)[0] ?? "";
+  if (path.basename(firstToken) !== "dtach") return false;
+  // The path must be the WHOLE argument — a longer path that merely starts
+  // with ours belongs to a different session.
   const after = commandLine.charAt(at + needle.length);
   return after === "" || after === " ";
 }

@@ -22,7 +22,7 @@ const TERMINATE_POLL_MS = 50;
  * `command=` is the one keyword both spell the same way — procps also accepts
  * `args=`, but BSD's `ps` does not, and BSD's `command=` is the same field —
  * so this form works unchanged on either. `-ax` (every process) and the
- * `pid=,ppid=,command=` selectors are likewise common to both.
+ * `pid=,ppid=,pgid=,command=` selectors are likewise common to both.
  *
  * COLUMNS is set wide: BSD's `ps` truncates its output to the terminal
  * width when stdout is a terminal. This is always piped (so it would not
@@ -30,21 +30,30 @@ const TERMINATE_POLL_MS = 50;
  * line — and the socket path this matches on sits at the FRONT of a dtach
  * master's argv, so even a truncated tail cannot corrupt the match.
  */
-const PS_ARGS = ["-ax", "-o", "pid=,ppid=,command="];
+const PS_ARGS = ["-ax", "-o", "pid=,ppid=,pgid=,command="];
 
 /** One row of the process table. */
 export interface ProcessEntry {
   pid: number;
   ppid: number;
+  /**
+   * The process group id.
+   *
+   * Load-bearing for teardown: dtach's daemonize calls `setsid()`, so its
+   * master LEADS a process group of its own — the master and everything it
+   * started, and nothing else. Signalling that group catches a child
+   * forked after the tree was snapshotted, which walking the tree cannot.
+   */
+  pgid: number;
   /** The process's full command line, as `ps` rendered it. */
   command: string;
 }
 
 /**
- * Parses `ps -ax -o pid=,ppid=,command=` output.
+ * Parses `ps -ax -o pid=,ppid=,pgid=,command=` output.
  *
- * The three fields are whitespace-delimited and the command line is LAST, so
- * the command is "everything after the second field" — a command line's own
+ * The four fields are whitespace-delimited and the command line is LAST, so
+ * the command is "everything after the third field" — a command line's own
  * spaces are preserved that way.
  */
 export function parseProcessTable(stdout: string): ProcessEntry[] {
@@ -53,11 +62,12 @@ export function parseProcessTable(stdout: string): ProcessEntry[] {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const parts = trimmed.split(/\s+/);
-    if (parts.length < 3) continue;
+    if (parts.length < 4) continue;
     const pid = Number.parseInt(parts[0], 10);
     const ppid = Number.parseInt(parts[1], 10);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
-    entries.push({ pid, ppid, command: parts.slice(2).join(" ") });
+    const pgid = Number.parseInt(parts[2], 10);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || !Number.isInteger(pgid)) continue;
+    entries.push({ pid, ppid, pgid, command: parts.slice(3).join(" ") });
   }
   return entries;
 }
@@ -145,9 +155,11 @@ async function waitForExit(pids: number[], timeoutMs: number): Promise<void> {
  * Removes a socket file that nothing is serving any more.
  *
  * dtach does NOT remove its socket when its master exits, so the file
- * outlives the session it belonged to — and a stale socket is exactly what
- * makes a later liveness check read "unknown" rather than "dead" (the
- * socket exists, but nothing answers on it).
+ * outlives the session it belonged to. That is harmless for liveness — the
+ * probe asks the SOCKET whether anything is serving it, and a stale file
+ * with nothing behind it answers ECONNREFUSED, i.e. "dead" — but it is not
+ * harmless for the next session at that id, because `bind()` refuses an
+ * existing path. So the teardown clears it.
  */
 function removeSocket(socketPath: string): void {
   try {
@@ -155,6 +167,30 @@ function removeSocket(socketPath: string): void {
   } catch {
     // ENOENT (already gone) or a permission problem — either way, nothing
     // the teardown should fail on.
+  }
+}
+
+/** Signals a pid, ignoring the failures that are not ours to fix. */
+function safeKill(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone, or not ours to signal — either way, not fatal here.
+  }
+}
+
+/**
+ * Signals a whole process group, ignoring the failures that are not ours to
+ * fix.
+ *
+ * The group is addressed by its NEGATIVE id, which is how `kill(2)` spells
+ * "every process in this group".
+ */
+function safeKillGroup(pgid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pgid, signal);
+  } catch {
+    // The group is already empty, or we may not signal it.
   }
 }
 
@@ -315,10 +351,10 @@ export class DetachedScopeBackend implements ScopeBackend {
     if (masterPid === undefined) {
       // No master we can see. If nothing is serving the socket either, the
       // session is definitively gone and the socket file is stale — remove
-      // it, so the session reads "dead" instead of lingering on a socket
-      // that will never answer again. A probe that could not answer is not
-      // evidence of anything, so the file stays (fail-closed: unlinking the
-      // socket of a live session would break its attach).
+      // it, so the next session at this id can bind that path. A probe that
+      // could not answer is not evidence of anything, so the file stays
+      // (fail-closed: unlinking the socket of a live session would break
+      // its attach).
       let probe: SocketProbeResult = "unknown";
       try {
         probe = await probeSocket(socketPath);
@@ -328,23 +364,37 @@ export class DetachedScopeBackend implements ScopeBackend {
       if (probe === "dead") removeSocket(socketPath);
       return;
     }
-    const tree = [masterPid, ...descendantsOf(table, masterPid).map((entry) => entry.pid)];
-    for (const pid of tree) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // Already gone, or not ours to signal — either way, not fatal here.
-      }
-    }
+    const master = table.find((entry) => entry.pid === masterPid);
+    // dtach's daemonize calls setsid(), so the master LEADS a process group
+    // of its own — the master and everything it started, and nothing else.
+    // Signalling that group is what catches a child forked DURING the grace
+    // window below, which a snapshot of the tree cannot: the snapshot
+    // predates the fork. The group is only signalled when the master
+    // actually leads it (pgid === pid), because "the group with this id"
+    // is only ours to signal in that case.
+    const group = master && master.pgid === master.pid ? master.pid : null;
+    let tree = [masterPid, ...descendantsOf(table, masterPid).map((entry) => entry.pid)];
+
+    for (const pid of tree) safeKill(pid, "SIGTERM");
+    if (group !== null) safeKillGroup(group, "SIGTERM");
     await waitForExit(tree, TERMINATE_GRACE_MS);
+
+    // Look again before escalating: a child the master forked during the
+    // grace window is in neither the snapshot nor the group kill's reach
+    // (if the master has since died, the child was reparented to launchd
+    // and is no longer attributed to it) — but while the master is still
+    // alive it is still its child, and the only way to see it is to read
+    // the table again.
+    const fresh = await this.readProcessTable();
+    if (fresh) {
+      tree = [...new Set([...tree, ...descendantsOf(fresh, masterPid).map((e) => e.pid)])];
+    }
+
     for (const pid of tree) {
       if (!isProcessAlive(pid)) continue;
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // Exited between the check and the signal.
-      }
+      safeKill(pid, "SIGKILL");
     }
+    if (group !== null) safeKillGroup(group, "SIGKILL");
     // The socket is stale now — dtach does not clean it up itself. Remove
     // it, but only once the tree is confirmed gone: unlinking the socket of
     // a LIVE session would break its attach.

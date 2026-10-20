@@ -18,6 +18,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { execFile } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -110,12 +111,17 @@ const { DetachedScopeBackend, parseProcessTable, dtachMasters, descendantsOf } =
 
 // --- helpers --------------------------------------------------------------
 
-/** One `ps -o pid=,ppid=,command=` row. */
-function psRow(pid: number, ppid: number, command: string): string {
-  return `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${command}`;
+/** One `ps -o pid=,ppid=,pgid=,command=` row. */
+function psRow(pid: number, ppid: number, command: string, pgid: number = pid): string {
+  return `${String(pid).padStart(5)} ${String(ppid).padStart(5)} ${String(pgid).padStart(5)} ${command}`;
 }
 
-/** A `ps` table for one session, its master and the process tree beneath it. */
+/**
+ * A `ps` table for one session, its master and the process tree beneath it.
+ *
+ * The group ids are realistic: dtach's master calls setsid(), so it LEADS a
+ * process group of its own, and the processes it starts inherit that group.
+ */
 function tableForSession(
   socketPath: string,
   opts: { masterPid?: number; shellPid?: number; agentPid?: number } = {},
@@ -124,10 +130,10 @@ function tableForSession(
   const shellPid = opts.shellPid ?? 101;
   const agentPid = opts.agentPid ?? 102;
   return [
-    psRow(1, 0, "/sbin/launchd"),
-    psRow(masterPid, 1, `dtach -n ${socketPath} /bin/zsh -lc claude`),
-    psRow(shellPid, masterPid, "/bin/zsh -lc claude"),
-    psRow(agentPid, shellPid, "claude --resume"),
+    psRow(1, 0, "/sbin/launchd", 1),
+    psRow(masterPid, 1, `dtach -n ${socketPath} /bin/zsh -lc claude`, masterPid),
+    psRow(shellPid, masterPid, "/bin/zsh -lc claude", masterPid),
+    psRow(agentPid, shellPid, "claude --resume", masterPid),
   ].join("\n");
 }
 
@@ -170,9 +176,10 @@ describe("parseProcessTable", () => {
     expect(table[0]).toEqual({
       pid: 100,
       ppid: 1,
+      pgid: 100,
       command: "dtach -n /tmp/1.sock /bin/zsh -lc claude",
     });
-    expect(table[1]).toEqual({ pid: 101, ppid: 100, command: "/bin/zsh" });
+    expect(table[1]).toEqual({ pid: 101, ppid: 100, pgid: 101, command: "/bin/zsh" });
   });
 
   it("keeps the spaces inside a command line", () => {
@@ -182,7 +189,7 @@ describe("parseProcessTable", () => {
 
   it("skips blank and malformed rows instead of producing NaN entries", () => {
     const table = parseProcessTable(
-      ["", "   ", "not-a-pid 1 /bin/sh", "100 1 /bin/sh", "100 1"].join("\n"),
+      ["", "   ", "not-a-pid 1 1 /bin/sh", "100 1 1 /bin/sh", "100 1 1"].join("\n"),
     );
     expect(table).toHaveLength(1);
     expect(table[0]?.pid).toBe(100);
@@ -247,6 +254,16 @@ describe("dtachMasters", () => {
     // single token here — it has to be MATCHED, not tokenized.
     const table = parseProcessTable(psRow(100, 1, "dtach -n /tmp/sp ace/1.sock /bin/zsh"));
     expect(dtachMasters(table, ["/tmp/sp ace/1.sock"]).get("/tmp/sp ace/1.sock")).toBe(100);
+  });
+
+  it("finds a master that carries dtach options ahead of the flag", () => {
+    // argv[0] is the FIRST token; everything between it and the flag is
+    // options, not the program. Reading argv[0] from the flag's position
+    // would make `dtach -E -n <socket>` look like a program called
+    // "dtach -E" — and the master would never be found, so teardown would
+    // silently no-op and leave the agent running.
+    const table = parseProcessTable(psRow(100, 1, "dtach -E -n /tmp/1.sock /bin/zsh"));
+    expect(dtachMasters(table, ["/tmp/1.sock"]).get("/tmp/1.sock")).toBe(100);
   });
 });
 
@@ -344,13 +361,22 @@ describe("DetachedScopeBackend.isAliveBatch", () => {
 describe("DetachedScopeBackend.stop", () => {
   let alivePids: Set<number>;
   let signals: Array<{ pid: number; signal: string | number }>;
+  let groupSignals: Array<{ pgid: number; signal: string | number }>;
   let killOnSigterm: boolean;
 
   beforeEach(() => {
     alivePids = new Set<number>();
     signals = [];
+    groupSignals = [];
     killOnSigterm = true;
     vi.spyOn(process, "kill").mockImplementation(((pid: number, signal?: string | number) => {
+      // A NEGATIVE pid addresses a whole process group — that is how
+      // kill(2) spells "every process in this group".
+      if (pid < 0) {
+        if (signal === 0) return true;
+        groupSignals.push({ pgid: -pid, signal: signal as string });
+        return true;
+      }
       if (signal === 0) {
         if (!alivePids.has(pid)) {
           const err = new Error("ESRCH") as NodeJS.ErrnoException;
@@ -427,6 +453,76 @@ describe("DetachedScopeBackend.stop", () => {
     probeResults.set(socketOf("1"), "dead");
     await backend.stop("1");
     expect(fs.existsSync(socketOf("1"))).toBe(false);
+  });
+
+  it("signals the master's process group, so a child forked during the grace window is caught", async () => {
+    // dtach's master calls setsid(), so it LEADS a group of its own. The
+    // tree is a snapshot; the group is not, so the group is what catches a
+    // child the master forks while the grace window is open.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = tableForSession(socketOf("1"));
+    alivePids = new Set([100, 101, 102]);
+    await backend.stop("1");
+    expect(groupSignals.map((entry) => entry.pgid)).toContain(100);
+    expect(groupSignals.some((entry) => entry.signal === "SIGTERM")).toBe(true);
+  });
+
+  it("does not signal a group the master does not lead", async () => {
+    // "The group with this id" is only ours to signal when the master
+    // actually leads it — otherwise it could be some other process's group.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = [
+      psRow(1, 0, "/sbin/launchd", 1),
+      psRow(100, 1, `dtach -n ${socketOf("1")} /bin/zsh -lc claude`, 999),
+      psRow(101, 100, "/bin/zsh -lc claude", 999),
+    ].join("\n");
+    alivePids = new Set([100, 101]);
+    await backend.stop("1");
+    expect(groupSignals).toEqual([]);
+  });
+
+  it("re-reads the process table before escalating, to catch a late-forked child", async () => {
+    // A child the master forks DURING the grace window is in neither the
+    // snapshot nor the first table read; the only way to see it is to look
+    // again, while the master is still alive to attribute it to.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    const original = tableForSession(socketOf("1"));
+    psOutput = original;
+    // 103 is alive: the master forked it during the grace window, so the
+    // first table read did not know about it.
+    alivePids = new Set([100, 101, 102, 103]);
+    // The SECOND read (the one before the SIGKILL pass) shows a new child.
+    vi.mocked(execFile)
+      .mockImplementationOnce(((
+        file: string,
+        args: string[],
+        _options: unknown,
+        callback: (err: Error | null, stdout: string) => void,
+      ) => {
+        callback(null, original);
+      }) as never)
+      .mockImplementationOnce(((
+        file: string,
+        args: string[],
+        _options: unknown,
+        callback: (err: Error | null, stdout: string) => void,
+      ) => {
+        callback(null, [original, psRow(103, 100, "/bin/sh -c some-late-fork", 100)].join("\n"));
+      }) as never);
+    await backend.stop("1");
+    expect(signals.some((entry) => entry.pid === 103)).toBe(true);
+  });
+
+  it("keeps the socket when the probe itself fails", async () => {
+    // A probe that threw tells us nothing, so the socket file stays
+    // (fail-closed: unlinking the socket of a live session would break its
+    // attach) and the teardown still completes.
+    const backend = new DetachedScopeBackend({ sessionsDir });
+    psOutput = psRow(1, 0, "/sbin/launchd");
+    fs.writeFileSync(socketOf("1"), "");
+    probeThrows.add(socketOf("1"));
+    await backend.stop("1");
+    expect(fs.existsSync(socketOf("1"))).toBe(true);
   });
 
   it("keeps the socket of a session that is still being served", async () => {

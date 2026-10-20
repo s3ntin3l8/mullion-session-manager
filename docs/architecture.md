@@ -74,7 +74,7 @@ The _process table_ is used for the two things it is actually good for:
 finding the master's pid (to terminate it) and building the process
 inventory. The scope's identity is the session's **dtach socket path** — the
 same anchor the systemd backend recovers from a unit's `Description` —
-matched against `ps -ax -o pid=,ppid=,command=` output (the one form BSD and
+matched against `ps -ax -o pid=,ppid=,pgid=,command=` output (the one form BSD and
 procps `ps` both spell the same way). `scope/dtach.ts` holds the conventions
 both backends share (the dtach argv pattern, the session-socket-path
 convention) so the two cannot drift apart on what a session's socket path
