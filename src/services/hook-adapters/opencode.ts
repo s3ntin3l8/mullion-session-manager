@@ -120,6 +120,14 @@ const OPENCODE_COMMAND_RE = /^(?:\S*\/)?opencode(?:\s|$)/;
 // no mapOpenCodeEvent output to parity-test it against) and `notification`
 // comes from v2's `worktree.failed` / `workspace.failed` /
 // `session.compaction.failed` (issue #1592).
+//
+// Issue #1700 — `stop_failure` and `tool_failure` have BOTH sources in v2,
+// and they are different things: `session.execution.failed` (the TURN failed —
+// a provider/API error) is a `stop_failure`, the same kind Claude Code's
+// StopFailure and Codex's Stop failure produce; `session.tool.failed` (one
+// tool call failed, the turn carries on) is a `tool_failure`. v2 reports a
+// non-zero shell exit as `session.tool.success` with an `exit` code, not as a
+// failure.
 /** Per-session files/dirs the opencode adapter writes under sessionsDir (#949). */
 export function opencodeTier0Path(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.opencode-tier0.md`);
@@ -148,6 +156,14 @@ export const OPENCODE_EMITS = [
   // `permission.replied` used to (incorrectly) map to; see
   // opencode-plugin.js's own comment on that event.
   "permission_resolved",
+  // Issue #1700 — a failed turn (`session.execution.failed`) maps to
+  // `stop_failure`, the same kind Claude Code's StopFailure and Codex's Stop
+  // failure produce. Before this, opencode's turn failures mapped to
+  // `tool_failure` (1.x's `session.error` mapping), which meant an opencode
+  // session could never reach the `api_error` status and Task Master's
+  // rate-limit grace (which keys off a `stop_failure`'s `errorType`) could
+  // never fire for an opencode worker.
+  "stop_failure",
   "tool_failure",
   "git_branch",
   "cwd_changed",

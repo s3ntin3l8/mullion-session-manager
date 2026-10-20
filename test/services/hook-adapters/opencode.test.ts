@@ -881,6 +881,20 @@ describe("OPENCODE_EMITS (issue #321)", () => {
     expect(OPENCODE_EMITS).toContain("session_diff");
     expect(OPENCODE_EMITS).toContain("notification");
   });
+
+  // Issue #1700 — a failed TURN is a `stop_failure` (the same kind Claude
+  // Code's StopFailure and Codex's Stop failure produce), which is what makes
+  // the `api_error` status reachable for opencode sessions and what the
+  // rate-limit grace keys off.
+  it("advertises stop_failure for a failed turn (session.execution.failed)", () => {
+    expect(OPENCODE_EMITS).toContain("stop_failure");
+  });
+
+  // The companion: a failed TOOL call (session.tool.failed) is a
+  // `tool_failure`, a different kind from the failed turn above.
+  it("advertises tool_failure for a failed tool call (session.tool.failed)", () => {
+    expect(OPENCODE_EMITS).toContain("tool_failure");
+  });
 });
 
 // Task Master — when ctx.taskId is set (only for worker / review / retry /

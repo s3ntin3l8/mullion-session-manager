@@ -43,6 +43,10 @@ const OPENCODE_EMITS = [
   "turn_start",
   "permission_request",
   "permission_resolved",
+  // Issue #1700 — a failed TURN is a `stop_failure` (opencode v2's
+  // `session.execution.failed`), which is what makes `api_error` reachable
+  // for opencode sessions.
+  "stop_failure",
   "tool_failure",
   "notification",
   "git_branch",
@@ -51,7 +55,6 @@ const OPENCODE_EMITS = [
   "compact",
   "subagent",
   "question",
-  "todo",
   "session_diff",
 ] as const satisfies readonly string[];
 const CODEX_EMITS = [
@@ -232,14 +235,19 @@ describe("isStatusReachable", () => {
 
   it("opencode (mid emits) — expected subset reachable", () => {
     // opencode emits: progress, file_change, turn_start, permission_request,
-    // permission_resolved, tool_failure, notification, git_branch,
-    // cwd_changed, promote_request, compact, subagent, question, todo, session_diff
+    // permission_resolved, stop_failure, tool_failure, notification,
+    // git_branch, cwd_changed, promote_request, compact, subagent, question,
+    // session_diff
     const reachable: SessionStatus[] = [
       "exited",
       "needs_input",
       "working",
       "idle",
       "awaiting_review_gate",
+      // Issue #1700 — "api_error" rides on the "stop_failure" hook, which
+      // opencode now emits for a failed turn (session.execution.failed) —
+      // before this it was unreachable for opencode sessions.
+      "api_error",
       "tool_failure",
       "awaiting_permission",
       "awaiting_promote",

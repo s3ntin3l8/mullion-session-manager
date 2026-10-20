@@ -29,6 +29,15 @@
 //    the server is private to the session and inherits its MULLION_* env —
 //    under the default shared background service they would be wrong.
 //  - the bash tool is now `shell` (`input.command`/`input.workdir`).
+//  - failures come in two shapes (issue #1700): `session.execution.failed`
+//    (the TURN failed — a provider/API error) maps to `stop_failure`, the same
+//    kind Claude Code's StopFailure and Codex's Stop failure produce, and
+//    `session.tool.failed` (ONE tool call failed, the turn carries on) maps
+//    to `tool_failure`. 1.x had a single `session.error` event for both, and
+//    Mullion's 1.x plugin mapped it to `tool_failure` — which is why an
+//    opencode session could never reach the `api_error` status, and why Task
+//    Master's rate-limit grace (keyed off a `stop_failure`'s `errorType`)
+//    could never fire for an opencode worker.
 //
 // Remote approval (issues #264 / #1594): the plugin never blocks opencode.
 // `ctx.permission.hook("evaluate")` is NOT wired — a blocking hook would hang
@@ -49,9 +58,15 @@ import { readFileSync } from "node:fs";
  * (`session.created` with a `parentID`), so a child's execution events must
  * not be mistaken for the main session's turn boundaries; and
  * `form.replied`/`form.cancelled` carry only a `sessionID`, so a pending
- * question must be remembered to know the reply resolves one. */
+ * question must be remembered to know the reply resolves one.
+ *
+ * `toolNames` (issue #1700) maps a tool call's id to the tool's name:
+ * `session.tool.failed` carries only the call id (no name), so the name is
+ * remembered from the call's own `session.tool.input.started` event. Entries
+ * are removed on the call's terminal event, so the map stays bounded by the
+ * number of in-flight tool calls. */
 function createMapState() {
-  return { childSessions: new Set(), questionSessions: new Set() };
+  return { childSessions: new Set(), questionSessions: new Set(), toolNames: new Map() };
 }
 
 /** Issue #1230 — opencode has no Stop-analogue field carrying the agent's
@@ -96,6 +111,60 @@ function createAssistantTextTracker() {
 
 function nonEmptyString(value) {
   return typeof value === "string" && value.length > 0;
+}
+
+/** Issue #1700 — opencode v2 reports a failed turn as a `StructuredError`
+ * `{ type, message, status?, response? }` whose `type` is opencode's own short
+ * classification (`provider.auth`, `provider.error`, `provider.no-route`,
+ * `provider.content-filter`, `provider.invalid-request`, `provider.invalid-output`,
+ * `provider.unknown`, `aborted`, `unknown`) — verified live against v2.0.32
+ * (a real `opencode run --standalone` turn against an unknown model produced
+ * `{type: "provider.no-route", message: "Model unavailable: …"}`).
+ *
+ * There is NO first-class `error_type` field like Claude Code's StopFailure
+ * payload carries (which is what Mullion's `stop_failure.errorType` is modeled
+ * on), and v2 does not populate `status` on this path — so a rate-limit
+ * classification has to come from the message text.
+ *
+ * Deliberately narrow, for the same reason agy's own `RESOURCE_EXHAUSTED`
+ * check is (see forwarder-core.mjs): task-reconciler.ts treats the exact label
+ * "rate_limit" as "recoverable — defer this task", so a loose wording match
+ * could defer a task that is genuinely broken. A bare "quota" is therefore NOT
+ * matched (a disk/storage quota error is not a provider rate limit); the
+ * provider's own quota-exhausted code (`insufficient_quota`) IS, because that
+ * one is unambiguous. */
+const RATE_LIMIT_PATTERNS = [
+  // The HTTP status code, as most providers report it ("429 Too Many
+  // Requests", "status: 429", "Error code: 429"). A stray 429 elsewhere in a
+  // provider's message is a theoretical false positive — the cost of one is a
+  // task deferred by the grace window rather than a task failed outright.
+  /\b429\b/,
+  /\brate[ _-]?limit\b/i, // "rate limit" / "rate_limit" / "rate-limit"
+  /\btoo many requests\b/i, // the HTTP status text
+  /\binsufficient_quota\b/i, // the provider's own quota-exhausted error code
+];
+
+/** Issue #1700 — classifies an opencode v2 turn failure into the
+ * `{ errorType, message }` pair Mullion's `stop_failure` message carries.
+ * `errorType` is the short, stable label — the exact value the rate-limit
+ * grace matches on ("rate_limit") and the label the session status shows as
+ * its detail — while `message` is the free-text error text.
+ *
+ * An opencode type of "unknown" (its own catch-all for an error it cannot
+ * classify) is deliberately NOT carried as the `errorType`: "API error:
+ * unknown" says less than the error's own message, and `errorType` wins over
+ * `errorDetails` when the backend derives the status detail. Dropping it
+ * leaves the message as the detail. */
+function classifyProviderError(error) {
+  const message = nonEmptyString(error?.message) ? error.message : "";
+  const type = nonEmptyString(error?.type) ? error.type : "";
+  if (RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) {
+    return { errorType: "rate_limit", message: message || type || "error" };
+  }
+  if (type && type !== "unknown") {
+    return { errorType: type, message: message || type };
+  }
+  return { message: message || type || "error" };
 }
 
 /** Maps one OpenCode v2 event (`{ type, data, location? }`) to an array of
@@ -160,32 +229,80 @@ function mapOpenCodeEvent(
     if (nonEmptyString(sessionID)) messages.push({ kind: "agent_session", sessionId: sessionID });
     return messages;
   }
-  // An agent-level error (provider auth, API failure, ...) is exactly a
-  // "needs your attention" event — `tool_failure` gets the dedicated red
-  // error dot and counts in the aggregate attention badge. A user abort is
-  // a separate `session.execution.interrupted` event in v2 (deliberately NOT
-  // mapped — not attention-worthy), unlike 1.x's `MessageAbortedError`.
-  // NOTE: `session.execution.failed` intentionally maps ONLY to `tool_failure`
-  // (as 1.x's `session.error` did) with no paired `notification` — adding one
-  // would double up the attention badge for the same failure.
+  // A failed turn (provider auth, API failure, ...) is exactly a "needs your
+  // attention" event. Issue #1700 — it maps to `stop_failure`, the same kind
+  // Claude Code's StopFailure and Codex's Stop failure produce, so an opencode
+  // session reaches the `api_error` status (and its "API Error" notification)
+  // the same way the other three CLIs do — 1.x's `session.error` mapped to
+  // `tool_failure` instead, which is why opencode could never reach that
+  // status and Task Master's rate-limit grace (which keys off a
+  // `stop_failure`'s `errorType`) could never fire for an opencode worker.
+  //
+  // A user abort is NOT an error: v2 reports it as a separate
+  // `session.execution.interrupted` event (deliberately not mapped — not
+  // attention-worthy), and its own `MessageAbortedError` classification
+  // ("aborted") is carved out here for the same reason — the user pressed
+  // Esc, so an "API error" dot and notification would be noise.
+  //
+  // NOTE: `session.execution.failed` intentionally maps ONLY to `stop_failure`
+  // with no paired `notification` — adding one would double up the attention
+  // badge for the same failure.
   if (type === "session.execution.failed") {
     const error = data.error;
     if (!error || typeof error !== "object") return null;
     const errorType = nonEmptyString(error.type) ? error.type : "error";
-    const messages = [
-      {
-        kind: "tool_failure",
-        tool: "opencode",
-        error: errorType,
-        summary: nonEmptyString(error.message) ? error.message : errorType,
-      },
-    ];
+    const messages = [];
+    if (errorType !== "aborted") {
+      const classified = classifyProviderError(error);
+      messages.push({
+        kind: "stop_failure",
+        error: classified.message,
+        errorDetails: classified.message,
+        ...(classified.errorType ? { errorType: classified.errorType } : {}),
+      });
+    }
     // A turn that dies with a question still pending will never see its
     // form.replied/cancelled — don't leave "awaiting answer" latched.
     if (nonEmptyString(sessionID) && state.questionSessions.delete(sessionID)) {
       messages.push({ kind: "question", state: "finished" });
     }
-    return messages;
+    return messages.length > 0 ? messages : null;
+  }
+  // Issue #1700 — a tool call that failed. v2's `session.tool.failed` carries
+  // the call's id and the error, but NOT the tool's name, so the name is
+  // remembered from the call's own `session.tool.input.started` event (see
+  // createMapState's `toolNames`). A non-zero shell exit is NOT a failure —
+  // opencode reports that as `session.tool.success` with an `exit` code.
+  if (type === "session.tool.input.started") {
+    if (nonEmptyString(data.id) && nonEmptyString(data.name)) {
+      state.toolNames.set(data.id, data.name);
+    }
+    return null;
+  }
+  if (type === "session.tool.failed") {
+    const callId = nonEmptyString(data.id) ? data.id : null;
+    const tool = (callId ? state.toolNames.get(callId) : null) ?? "opencode";
+    // Drop the remembered name even for a child session's failure — the
+    // child is ignored below, but its entry must not linger.
+    if (callId) state.toolNames.delete(callId);
+    if (isChild) return null;
+    const error = data.error;
+    if (!error || typeof error !== "object") return null;
+    const errorType = nonEmptyString(error.type) ? error.type : "error";
+    return [
+      {
+        kind: "tool_failure",
+        tool,
+        error: errorType,
+        summary: nonEmptyString(error.message) ? error.message : errorType,
+      },
+    ];
+  }
+  if (type === "session.tool.success") {
+    // The call is over — drop its remembered name (the failure branch does
+    // the same) so the map stays bounded by the in-flight calls.
+    if (nonEmptyString(data.id)) state.toolNames.delete(data.id);
+    return null;
   }
   if (type === "session.execution.interrupted") {
     // Same pending-question cleanup (e.g. Esc while a question form is open).
