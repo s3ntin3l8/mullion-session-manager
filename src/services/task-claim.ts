@@ -361,6 +361,7 @@ export async function dispatchClaimedTask(
       worktreePath: predictedWorktreePath,
       budgetMinutes: taskMasterConfig.budgetMinutes,
       mode: "claim",
+      agentCommand: command,
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
@@ -780,6 +781,7 @@ export async function retryTask(
       worktreePath: worktree.path,
       budgetMinutes: taskMasterConfig.budgetMinutes,
       mode: "retry",
+      agentCommand: command,
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles

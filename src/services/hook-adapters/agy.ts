@@ -520,6 +520,13 @@ export const agyAdapter: HookAgentAdapter = {
   matches: (command) => AGY_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: AGY_EMITS,
+  delegationHint:
+    "If this task has parts that could be done independently, delegate them: " +
+    "`invoke_subagent` takes a subagent spec carrying its own `model` and " +
+    "`modelTier` — so route the mechanical parts to a cheaper tier, and " +
+    "keep the parts that need your own judgement for yourself. You remain " +
+    "responsible for the final commit on this branch: whatever you " +
+    "delegate still has to end up committed here.",
   // `-i <prompt>`/`--prompt-interactive` — "Run an initial prompt
   // interactively and continue the session." Unlike Claude Code/Codex this
   // is a flag+value, not a bare positional, so it's built as one unit here

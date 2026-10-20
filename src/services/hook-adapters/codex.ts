@@ -738,6 +738,14 @@ export const codexAdapter: HookAgentAdapter = {
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: CODEX_EMITS,
+  delegationHint:
+    "If this task has parts that could be done independently, delegate them: " +
+    "`spawn_agent` creates a child agent, and it accepts the child's own " +
+    "`model` and reasoning effort — so route the mechanical parts to a " +
+    "cheaper child model with lower reasoning effort, and keep the parts " +
+    "that need your own judgement for yourself. You remain responsible for " +
+    "the final commit on this branch: whatever you delegate still has to " +
+    "end up committed here.",
   // `codex [OPTIONS] [PROMPT]` — "Optional user prompt to start the
   // session," a plain trailing positional in interactive mode (the default;
   // `exec`/`review` subcommands are the non-interactive path and aren't

@@ -13,6 +13,7 @@ import {
   renderReviewFindingsMarkdown,
   severityPrefix,
   renderCiSummary,
+  wrapPromptText,
   type ReviewCiInfo,
   type TaskPromptTask,
 } from "../../src/services/task-prompt.js";
@@ -148,6 +149,97 @@ describe("buildTaskMasterPreamble", () => {
     });
     expect(out).toContain("/srv/mullion-sessions/task-42.title");
     expect(out).toContain("Conventional Commits title");
+  });
+});
+
+// The CLI-aware delegation clause. `buildTaskMasterPreamble` is the single
+// chokepoint every worker prompt renders through, so a clause here reaches
+// the claim/retry/reject/CI-failure/review-feedback/rebase/PR-comment paths
+// at once — and `buildReviewPrompt` (which has its own preamble array) is
+// deliberately unaffected: a reviewer must not decompose the work it judges.
+//
+// The clause is soft-wrapped, so assertions run against a whitespace-
+// normalized copy: a phrase that happens to straddle a line break is still
+// present in the prompt, and asserting on the raw rendering would make the
+// test fail on a reflow rather than on a behaviour change.
+describe("wrapPromptText", () => {
+  it("keeps a short text on one line", () => {
+    expect(wrapPromptText("one two three")).toEqual(["one two three"]);
+  });
+
+  it("wraps on whitespace without splitting a word", () => {
+    const out = wrapPromptText("aaa bbb ccc ddd", 7);
+    expect(out).toEqual(["aaa bbb", "ccc ddd"]);
+    for (const line of out) expect(line.length).toBeLessThanOrEqual(7);
+  });
+
+  it("keeps a word longer than the width on its own line rather than splitting it", () => {
+    const out = wrapPromptText("short supercalifragilisticexpialidocious", 10);
+    expect(out).toEqual(["short", "supercalifragilisticexpialidocious"]);
+  });
+
+  it("collapses runs of whitespace and trims", () => {
+    expect(wrapPromptText("  a   b  ")).toEqual(["a b"]);
+  });
+
+  it("returns no lines for empty or whitespace-only input", () => {
+    expect(wrapPromptText("")).toEqual([]);
+    expect(wrapPromptText("   \n\t ")).toEqual([]);
+  });
+});
+
+describe("buildTaskMasterPreamble — delegation clause", () => {
+  const flatten = (text: string): string => text.replace(/\s+/g, " ");
+
+  it("emits the CLI's own delegation sentence when the worker runs under a known agent", () => {
+    const claude = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" }));
+    expect(claude).toContain("Task tool");
+
+    const codex = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "codex" }));
+    expect(codex).toContain("spawn_agent");
+
+    const opencode = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "opencode" }));
+    expect(opencode).toContain("agents.<name>");
+
+    const agy = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "agy" }));
+    expect(agy).toContain("invoke_subagent");
+  });
+
+  it("emits no delegation clause for a command with no agent adapter", () => {
+    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "bash" });
+    expect(out).not.toContain("delegate");
+  });
+
+  it("emits no delegation clause when no command is supplied at all", () => {
+    const out = buildTaskMasterPreamble(BASE);
+    expect(out).not.toContain("delegate");
+  });
+
+  it("keeps the worker responsible for the final commit", () => {
+    for (const agentCommand of ["claude", "codex", "opencode", "agy"]) {
+      const out = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand }));
+      expect(out).toContain("responsible for the final commit");
+    }
+  });
+
+  it("places the clause before the 'When you are done:' checklist", () => {
+    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" });
+    expect(out.indexOf("delegate")).toBeLessThan(out.indexOf("When you are done:"));
+  });
+
+  it("wraps the clause rather than emitting one long line", () => {
+    const out = buildTaskMasterPreamble({ ...BASE, agentCommand: "claude" });
+    const lines = out.split("\n");
+    const start = lines.findIndex((line) => line.includes("delegate"));
+    const end = lines.findIndex((line) => line.includes("When you are done:"));
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    // Every rendered line of the clause stays inside the wrap width — the
+    // clause is one long sentence authored in the adapter, so without a wrap
+    // it would read very differently from the hand-wrapped rest of the block.
+    for (const line of lines.slice(start, end)) {
+      expect(line.length).toBeLessThanOrEqual(78);
+    }
   });
 });
 
@@ -374,6 +466,19 @@ describe("buildReviewPrompt", () => {
       findingsPath: FINDINGS_PATH,
     });
     expect(out).toContain("Review this task's diff. You are not expected to make changes.");
+  });
+
+  // A reviewer must not decompose the work it judges — it has its own
+  // preamble (buildReviewPrompt builds its own, not buildTaskMasterPreamble's),
+  // and the delegation clause must not leak into it.
+  it("carries no delegation clause", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).not.toContain("delegate");
+    expect(out).not.toContain("subagent");
   });
 
   // The review agent runs in the WORKER's worktree, so anything it writes
