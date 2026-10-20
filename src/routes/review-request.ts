@@ -404,6 +404,12 @@ async function findLandedReview(
 }
 
 /**
+ * The review states that count as "a review landed": the ones a bot
+ * actually submits. A DISMISSED review was retracted, so it did not land.
+ */
+const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
+
+/**
  * A warning for a request whose commit already carries a bot review
  * (issue #1705).
  *
@@ -422,7 +428,16 @@ async function existingBotReviewWarning(
 ): Promise<{ warning?: string }> {
   try {
     const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
-    const existing = reviews.filter((r) => r.authorIsBot && r.commitId === t.headSha).at(-1);
+    const existing = reviews
+      .filter(
+        (r) =>
+          r.authorIsBot &&
+          r.commitId === t.headSha &&
+          // A DISMISSED review was retracted — it did not land, so warning
+          // about it would assert the opposite of what happened.
+          LANDED_REVIEW_STATES.has(r.state),
+      )
+      .at(-1);
     if (!existing) return {};
     return {
       warning: `A review by ${existing.author} (${existing.state}) already landed on this commit`,

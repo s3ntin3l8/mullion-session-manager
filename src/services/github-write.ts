@@ -718,7 +718,7 @@ export const MAX_REVIEW_BODY_CHARS = 4_000;
  * an ellipsis, so a truncated body reads as truncated.
  */
 export function truncateText(text: string, max: number): string {
-  if (text.length <= max) return text;
+  if ([...text].length <= max) return text;
   const cut = [...text].slice(0, max).join("");
   return `${cut}…`;
 }
@@ -754,7 +754,9 @@ export async function listPullRequestReviews(
     );
     for (const r of reviews) {
       const body = typeof r.body === "string" ? r.body : "";
-      const truncated = body.length > MAX_REVIEW_BODY_CHARS;
+      // The cut is by code point, so the flag has to be too — a body of
+      // 4000 emoji is 8000 UTF-16 units but no code point is dropped.
+      const truncated = [...body].length > MAX_REVIEW_BODY_CHARS;
       out.push({
         author: r.user?.login ?? "ghost",
         authorIsBot: r.user?.type === "Bot",

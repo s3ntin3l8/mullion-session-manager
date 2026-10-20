@@ -219,6 +219,21 @@ describe("review-request routes", () => {
       expect(res.json().warning).toBeUndefined();
     });
 
+    it("says nothing about a dismissed (retracted) review", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "sha42",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toBeUndefined();
+    });
+
     it("dispatches without a warning when the GitHub lookup fails", async () => {
       mocks.listPullRequestReviews.mockRejectedValue(new GitHubApiError("boom", 500));
       const res = await post(sessionId, {});

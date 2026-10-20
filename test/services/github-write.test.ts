@@ -276,12 +276,22 @@ describe("github-write service", () => {
     it("never leaves a lone surrogate behind when it cuts a body (#1704)", async () => {
       // A body of emoji: every character is a surrogate pair, so a plain
       // slice would cut one in half.
-      const emoji = "😀".repeat(MAX_REVIEW_BODY_CHARS);
+      const emoji = "😀".repeat(MAX_REVIEW_BODY_CHARS + 10);
       fetchMock.mockResolvedValueOnce(jsonResponse(200, [review(1, { body: emoji })]));
       const result = await listPullRequestReviews("tok", "owner", "repo", 9);
       const body = result[0].body ?? "";
       expect([...body].every((ch) => ch === "😀" || ch === "…")).toBe(true);
       expect(result[0].bodyTruncated).toBe(true);
+    });
+
+    it("does not flag a body that is exactly at the cap as truncated (#1704)", async () => {
+      // The cap counts code points, so 4000 emoji (8000 UTF-16 units) is
+      // exactly at the cap — nothing is dropped, and it is not truncated.
+      const emoji = "😀".repeat(MAX_REVIEW_BODY_CHARS);
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [review(1, { body: emoji })]));
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result[0].bodyTruncated).toBeUndefined();
+      expect(result[0].body?.endsWith("…")).toBe(false);
     });
 
     it("follows full pages so the newest review (on the last page) is seen", async () => {
