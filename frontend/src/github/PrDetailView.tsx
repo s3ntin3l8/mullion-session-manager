@@ -219,7 +219,8 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
       </div>
       {state.body && (
         <div className="gh-detail-meta">
-          {state.body.length > 600 ? `${state.body.slice(0, 600)}…` : state.body}
+          {/* Cut by code point, so an emoji on the boundary is not split. */}
+          {[...state.body].length > 600 ? `${[...state.body].slice(0, 600).join("")}…` : state.body}
           {state.bodyTruncated ? " (the review text was cut short)" : ""}
         </div>
       )}
