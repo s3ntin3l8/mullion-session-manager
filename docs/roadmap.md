@@ -633,6 +633,8 @@ against a Linux-only fleet in the meantime.
 
 ---
 
+## Long-Term: Post-Phase 6
+
 Once the Task Master is operational, the remaining frontier is **team-scale orchestration**:
 
 - Multi-user task queues — multiple developers submitting and reviewing tasks

@@ -22,7 +22,9 @@
 //
 // PtyManager keeps thin instance methods (isMasterAliveState,
 // isMasterAliveStateBatch, listSessionProcesses) that delegate to the
-// functions here, rather than having callers import the
+// functions here — the single-id read goes through the scope BACKEND
+// (see src/services/scope/), since the answer is no longer this module's
+// to give — rather than having callers import the
 // functions directly — that keeps `app.pty.*` the one call surface routes/
 // session-reconciler.ts/session-backend.ts and their tests already use
 // (session-reconciler.test.ts spies on `app.pty.isMasterAliveStateBatch`
@@ -709,23 +711,6 @@ export async function isMasterAliveStateBatch(
     }
   }
   return result;
-}
-
-/**
- * Single-id read off isMasterAliveStateBatch() above — see that function's
- * own doc comment for the trust rule this preserves (issue #1232's original
- * motivation: `startStackSession`/`findActiveStackSession` take a
- * DESTRUCTIVE action on "not alive" and must not fold a merely-unverifiable
- * or timed-out listing into a confident "dead").
- */
-export async function isMasterAliveState(
-  sessionsDir: string,
-  instanceId: string,
-  id: string,
-  prefix = "crs-session",
-): Promise<SessionLiveness> {
-  const result = await isMasterAliveStateBatch(sessionsDir, instanceId, [id], prefix);
-  return result[id];
 }
 
 /**

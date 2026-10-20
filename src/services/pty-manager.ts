@@ -3459,7 +3459,39 @@ export class PtyManager {
   // another host: a primary and its remote agents are separate processes,
   // each running its own backend, and the primary only ever speaks HTTP/WS
   // to a remote host anyway.
-  private readonly scope: ScopeBackend;
+  //
+  // Resolved LAZILY, on first use: a host with no backend for its platform
+  // (macOS today) must still be able to BOOT and serve a fleet of remote
+  // agents, and only fail when a LOCAL scope is genuinely needed. See the
+  // `scope` getter below.
+  private scopeBackend: ScopeBackend | null = null;
+  // A caller-supplied backend, bypassing platform selection. Tests use it to
+  // inject a stub; production never sets it.
+  private readonly scopeOverride: ScopeBackend | undefined;
+
+  /**
+   * The scope backend for this host — resolved on first use.
+   *
+   * Issue #1715 — the resolution is deliberately lazy. `getScopeBackend()`
+   * throws on a platform with no backend, and that throw must not gate the
+   * app's BOOT: a macOS primary whose sessions all run on remote Linux
+   * agents never needs a local scope backend, and refusing to start would
+   * make that topology impossible. The failure surfaces the first time a
+   * local scope is actually needed — a local session spawning, a local
+   * session's liveness being read, a local session being stopped — with a
+   * message that says exactly which platform is unsupported.
+   */
+  private get scope(): ScopeBackend {
+    if (this.scopeBackend === null) {
+      this.scopeBackend =
+        this.scopeOverride ??
+        getScopeBackend({
+          sessionsDir: this.sessionsDir,
+          instanceId: this.instanceId,
+        });
+    }
+    return this.scopeBackend;
+  }
   // Issue #1427 — a fresh, random id generated once per PROCESS INCARNATION
   // (unlike instanceId above, which is deterministic and stays the same
   // across restarts of this same sessionsDir). eventSeq/lastSeenSeq are
@@ -3561,6 +3593,13 @@ export class PtyManager {
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
     getInjectMullionBundle?: () => boolean;
+    /**
+     * Issue #1715 — overrides the scope backend, bypassing platform
+     * selection. Tests use it to inject a stub; production never sets it
+     * (the backend is chosen from the host's own platform, and only when a
+     * local scope is actually needed).
+     */
+    scope?: ScopeBackend;
   }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
@@ -3569,15 +3608,15 @@ export class PtyManager {
     this.sessionsDir = path.resolve(opts.sessionsDir);
     mkdirSync(this.sessionsDir, { recursive: true });
     this.instanceId = deriveInstanceId(this.sessionsDir);
-    // Issue #1715 — the backend is resolved from THIS host's platform, once,
-    // and shared by every session it owns. On a platform with no backend
-    // (macOS today — issue #1716 adds it) this throws with a message that
-    // says so plainly, rather than letting every session fail later with a
-    // confusing "spawn systemd-run ENOENT".
-    this.scope = getScopeBackend({
-      sessionsDir: this.sessionsDir,
-      instanceId: this.instanceId,
-    });
+    // Issue #1715 — the scope backend is resolved LAZILY, on first use (see
+    // the `scope` getter), not here. A platform with no backend (macOS
+    // today — issue #1716 adds it) must not stop the whole app from BOOTING:
+    // a macOS primary whose sessions all run on remote Linux agents never
+    // needs a local scope backend, and refusing to start would make that
+    // (perfectly reasonable) topology impossible. The failure surfaces the
+    // first time a LOCAL scope is actually needed, with a message that says
+    // so plainly rather than a confusing "spawn systemd-run ENOENT".
+    this.scopeOverride = opts.scope;
     // Lives alongside the per-session dtach sockets in the same directory —
     // SESSIONS_DIR is already host-local, per-install storage with no other
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to

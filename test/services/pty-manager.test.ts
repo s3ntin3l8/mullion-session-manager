@@ -2344,6 +2344,33 @@ describe("PtyManager", () => {
       });
       await expect(manager.isMasterAliveState("1")).resolves.toBe("unknown");
     });
+
+    // Issue #1715 — a backend's batch answer is contractually TOTAL (every
+    // requested id is always present), but that is now a TRUST BOUNDARY: the
+    // answer comes from a ScopeBackend implementation, not from the function
+    // this module used to call directly. The systemd backend is total by
+    // construction, so only a stub can produce the omission — and the guard
+    // has to be pinned by one, because an omitted id that read as anything
+    // other than "unknown" would fall through BOTH guards in
+    // routes/projects.ts's startStackSession conflict check and land in its
+    // "confirmed dead" branch, which marks a live session exited and
+    // orphans its scope for good.
+    it('resolves "unknown" for an id the backend\'s answer omits', async () => {
+      const stubScope = {
+        kind: "stub",
+        start: vi.fn(async () => undefined),
+        // Omits every id — the contract violation this guard exists for.
+        isAliveBatch: vi.fn(async () => Object.create(null)),
+        stop: vi.fn(async () => undefined),
+        listProcesses: vi.fn(async () => []),
+      };
+      const stubManager = new PtyManager({ sessionsDir, scope: stubScope });
+      try {
+        await expect(stubManager.isMasterAliveState("1")).resolves.toBe("unknown");
+      } finally {
+        stubManager.killAll();
+      }
+    });
   });
 
   // Issue #1715 — the process inventory goes through the scope backend like

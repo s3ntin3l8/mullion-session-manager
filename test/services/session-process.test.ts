@@ -159,7 +159,6 @@ const {
   invalidateOwnedScopesCache,
   stopScope,
   describeScope,
-  isMasterAliveState,
   isMasterAliveStateBatch,
   listSessionProcesses,
   parseScopeUnitsListing,
@@ -520,33 +519,6 @@ describe("stopScope", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-// Issue #1232 — the three-way single-id read off isMasterAliveStateBatch
-// below, added so a caller that takes a DESTRUCTIVE action on "not alive"
-// (routes/projects.ts's startStackSession/findActiveStackSession) can tell
-// an unverifiable/timed-out listing apart from a confident "dead" — see
-// isMasterAliveState's own doc comment in session-process.ts.
-describe("isMasterAliveState", () => {
-  it('resolves "alive" for an id this instance owns and has listed', async () => {
-    listUnitsReply = [ownedLine("1")];
-    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("alive");
-  });
-
-  it('resolves "dead" when nothing in the listing claims this id', async () => {
-    listUnitsReply = [];
-    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("dead");
-  });
-
-  it('resolves "unknown" (not "dead") when a row names this id but ownership can\'t be confirmed', async () => {
-    listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("unknown");
-  });
-
-  it('resolves "unknown" (not "dead"), never rejects, when the underlying listing spawn fails', async () => {
-    listUnitsShouldError = true;
-    await expect(isMasterAliveState(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBe("unknown");
   });
 });
 
