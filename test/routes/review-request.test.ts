@@ -192,6 +192,9 @@ describe("review-request routes", () => {
       expect(mocks.requestHermesReview).toHaveBeenCalled();
       expect(res.json().warning).toContain("hermes[bot]");
       expect(res.json().warning).toContain("APPROVED");
+      // No promise about a second review: on a replay no new run is
+      // dispatched, so there is none to promise.
+      expect(res.json().warning).not.toContain("second");
     });
 
     it("says nothing when the commit has no bot review", async () => {
@@ -222,6 +225,15 @@ describe("review-request routes", () => {
       expect(res.statusCode).toBe(200);
       expect(res.json().warning).toBeUndefined();
       expect(mocks.requestHermesReview).toHaveBeenCalled();
+    });
+
+    it("does not walk the PR's reviews for a request the relay refuses", async () => {
+      // The cooldown refuses inside requestHermesReview — the duplicate check
+      // runs after the dispatch is admitted, so it must not run at all.
+      mocks.requestHermesReview.mockRejectedValue(new ReviewCooldownError(240));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
     });
   });
 
@@ -352,13 +364,19 @@ describe("review-request routes", () => {
   });
 
   it("resolves a remote-host session's branch on its host and dispatches (#1628)", async () => {
-    const resolveGitBranch = vi.fn(async () => "feat/remote");
-    mocks.getRemoteHostClient.mockReturnValue({ resolveGitBranch });
+    const resolveGitStatus = vi.fn(async () => ({
+      isRepo: true,
+      status: { branch: "feat/remote" },
+    }));
+    mocks.getRemoteHostClient.mockReturnValue({ resolveGitStatus });
     const res = await post(remoteSessionId, {});
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: "dispatched", repo: "acme/widgets", prNumber: 42 });
     expect(mocks.getRemoteHostClient).toHaveBeenCalledWith(expect.anything(), "some-agent-host");
-    expect(resolveGitBranch).toHaveBeenCalledWith("/srv/remote");
+    // resolveGitStatus, NOT resolveGitBranch: the latter is a bare .git/HEAD
+    // read that does not follow a worktree's .git file redirect, and reports
+    // a detached HEAD as a short SHA instead of the "(detached)" sentinel.
+    expect(resolveGitStatus).toHaveBeenCalledWith("/srv/remote");
     expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
       "ghs_token",
       "acme",
@@ -371,9 +389,27 @@ describe("review-request routes", () => {
     expect(mocks.getRemoteHostClient).not.toHaveBeenCalled();
   });
 
+  it("404s a remote-host session whose cwd is not a repo (#1628)", async () => {
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({ isRepo: false, status: null })),
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
+  });
+
+  it("404s a remote-host session whose status has no branch (#1628)", async () => {
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({ isRepo: true, status: null })),
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
+  });
+
   it("404s a remote-host session whose host cannot resolve a branch (#1628)", async () => {
     mocks.getRemoteHostClient.mockReturnValue({
-      resolveGitBranch: vi.fn(async () => {
+      resolveGitStatus: vi.fn(async () => {
         throw new Error("host unreachable");
       }),
     });

@@ -383,6 +383,15 @@ describe("hermes review relay", () => {
         expect(calls("/v1/runs")).toHaveLength(2);
       });
 
+      it("refuses a target without a head commit rather than collapsing every commit into one key", async () => {
+        // An empty sha would make the cooldown key PR-wide again — silently
+        // restoring the behavior this change removes.
+        await expect(requestHermesReview(app, { ...PR, headSha: "" })).rejects.toBeInstanceOf(
+          HermesNotConfiguredError,
+        );
+        expect(calls("/v1/runs")).toHaveLength(0);
+      });
+
       it("is per commit and case-insensitive on the repo", async () => {
         await requestHermesReview(app, PR);
         await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toMatchObject({

@@ -101,8 +101,17 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
  * reports it, so it survives a commit the agent made between polls) and from
  * `git status` as the fallback. A remote-hosted session has **no local PTY** —
  * the PTY lives on the agent host — so its branch is resolved through
- * `RemoteHostClient.resolveGitBranch`, the same call the project list makes
- * for a remote project's `currentBranch` (routes/projects.ts).
+ * `RemoteHostClient.resolveGitStatus`, the same call the project list makes
+ * for a remote **session**'s cwd (routes/projects.ts).
+ *
+ * `resolveGitStatus`, not `resolveGitBranch`: the latter is a bare
+ * `<cwd>/.git/HEAD` read that deliberately does not follow a worktree's
+ * `.git` *file* redirect (a session's cwd is often a worktree), and it
+ * reports a detached HEAD as a short SHA rather than the `"(detached)"`
+ * sentinel the caller checks for. `git status` — which is what
+ * `resolveGitStatus` runs on the agent — follows worktree redirects and
+ * normalizes a detached HEAD the same way the local path does, so the two
+ * hosts behave the same.
  *
  * A host that is unreachable degrades to "no branch" (null), which the caller
  * turns into the same 404 an undeterminable local branch produces.
@@ -116,10 +125,15 @@ async function resolveSessionBranch(
   if (project.hostId !== LOCAL_HOST_ID) {
     try {
       const client = getRemoteHostClient(app, project.hostId);
-      return await client.resolveGitBranch(cwd);
+      const result = await client.resolveGitStatus(cwd);
+      // Not a repo (or a repo whose status could not be read) — no branch.
+      if (!result.isRepo) return null;
+      return result.status?.branch ?? null;
     } catch (err) {
       // getRemoteHostClient() throws SYNCHRONOUSLY for a missing host row or a
-      // null baseUrl, so it needs its own catch, not just the await's.
+      // null baseUrl, so it needs its own catch, not just the await's. A
+      // worktree cwd outside the agent's own PROJECTS_ROOTS surfaces here as
+      // a 4xx HostRequestError — same "no branch" outcome.
       app.log.warn(
         { hostId: project.hostId, projectId: project.id, err },
         "review-request: could not resolve the session branch on its host",
@@ -240,12 +254,6 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!target) return reply;
       const { owner, repo, prNumber, headSha } = target;
 
-      // Checked BEFORE the dispatch so the warning describes the state the
-      // request found — a bot review for this commit may already exist (the
-      // repository reviews new PRs on its own), which is NOT an error
-      // (issue #1705). Warn, never refuse.
-      const warning = await existingBotReviewWarning(app, target);
-
       try {
         const run = await requestHermesReview(app, { owner, repo, prNumber, headSha, sessionId });
         return {
@@ -255,7 +263,16 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           runId: run.runId,
           runStatus: run.status,
           replayed: run.replayed,
-          ...(warning ? { warning } : {}),
+          // A bot review for this commit may already exist — the repository
+          // reviews new PRs on its own, so this fires routinely and is NOT an
+          // error (issue #1705). Warn, never refuse.
+          //
+          // Computed AFTER the dispatch, not before: a request the cooldown
+          // refuses would otherwise pay a full `/pulls/{n}/reviews` walk (up
+          // to 10 pages) for a warning it never returns. The wording makes no
+          // promise about a second review — on a replay no new run is
+          // dispatched, so there is no second review to promise.
+          ...(await existingBotReviewWarning(app, target)),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -384,17 +401,19 @@ async function findLandedReview(
 async function existingBotReviewWarning(
   app: FastifyInstance,
   t: ReviewTarget,
-): Promise<string | undefined> {
+): Promise<{ warning?: string }> {
   try {
     const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
     const existing = reviews.filter((r) => r.authorIsBot && r.commitId === t.headSha).at(-1);
-    if (!existing) return undefined;
-    return `A review by ${existing.author} (${existing.state}) already landed on this commit — this request will post a second one`;
+    if (!existing) return {};
+    return {
+      warning: `A review by ${existing.author} (${existing.state}) already landed on this commit`,
+    };
   } catch (err) {
     app.log.warn(
       { detail: (err as Error).message },
       "review-request: duplicate-review check failed (continuing without a warning)",
     );
-    return undefined;
+    return {};
   }
 }

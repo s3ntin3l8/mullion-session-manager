@@ -175,7 +175,11 @@ function prKey(owner: string, repo: string, prNumber: number): string {
  * in sync.
  */
 function commitKey(owner: string, repo: string, prNumber: number, headSha: string): string {
-  return `${prKey(owner, repo, prNumber)}@${(headSha ?? "").toLowerCase()}`;
+  // `headSha` is required, and an empty one would collapse every commit of
+  // the PR into one key — silently restoring the PR-wide cooldown this
+  // change removes. Fail loudly instead.
+  if (!headSha) throw new HermesNotConfiguredError("A review target needs its head commit");
+  return `${prKey(owner, repo, prNumber)}@${headSha.toLowerCase()}`;
 }
 
 function trackRun(incoming: ReviewRunRecord): void {
