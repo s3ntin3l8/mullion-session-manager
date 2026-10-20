@@ -695,6 +695,31 @@ function landedMemoFor(app: FastifyInstance): Map<string, { landed: LandedReview
 }
 
 /**
+ * Keeps the landed-review memo within its cap.
+ *
+ * The age sweep first: an entry past its TTL is worthless anyway. When that
+ * frees nothing — a burst of *fresh* entries, which is exactly what a burst
+ * of re-reviews is, since the key is per (PR, runId) — the oldest entries
+ * are evicted instead, so the map cannot grow past the cap.
+ */
+export function pruneLandedMemo(
+  memo: Map<string, { at: number }>,
+  now: number,
+  max: number = MAX_LANDED_MEMO_ENTRIES,
+): void {
+  if (memo.size <= max) return;
+  for (const [key, entry] of memo) {
+    if (now - entry.at >= LANDED_MEMO_TTL_MS) memo.delete(key);
+  }
+  if (memo.size <= max) return;
+  const oldest = [...memo.entries()].sort((a, b) => a[1].at - b[1].at);
+  for (const [key] of oldest) {
+    memo.delete(key);
+    if (memo.size <= max) break;
+  }
+}
+
+/**
  * The relay's state for a pull request, as the operator's UI sees it
  * (issue #1630). Needs a GitHub token to look for the landed review; without
  * one it still reports the request itself.
@@ -740,11 +765,7 @@ export async function getRelayReviewState(
     memo.set(memoKey, { landed, at: now });
     // The memo holds a review body per PR; drop the entries that can no
     // longer be hit, so it cannot grow with the process.
-    if (memo.size > MAX_LANDED_MEMO_ENTRIES) {
-      for (const [key, entry] of memo) {
-        if (now - entry.at >= LANDED_MEMO_TTL_MS) memo.delete(key);
-      }
-    }
+    pruneLandedMemo(memo, now);
   }
 
   if (landed.checked && landed.review) {

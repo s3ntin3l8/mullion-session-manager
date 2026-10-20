@@ -132,6 +132,7 @@ export type {
   GitHubCiStatus,
   GitHubPROrWithChecks,
   GitHubPRsStatus,
+  RelayReviewState,
   GitHubPrDetail,
   GitHubPrDetailComment,
   GitHubPrDetailThread,

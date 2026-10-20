@@ -721,21 +721,43 @@ async function attachRelayReviewState(
   );
   if (withRuns.size === 0) return prs;
   // A read token for the landed check. Without one the PR still shows that a
-  // review was requested — it just cannot say whether it landed.
-  const token = await resolveGitHubToken(app, repoRef, "read");
+  // review was requested — it just cannot say whether it landed. A token
+  // that cannot be resolved at all must not take the PR list down with it:
+  // the relay's state is a nicety, the list is not.
+  const token = await resolveGitHubToken(app, repoRef, "read").catch((err) => {
+    app.log.warn(
+      { detail: (err as Error).message, owner: repoRef.owner, repo: repoRef.repo },
+      "pr list: no GitHub token for the relay's landed check",
+    );
+    return null;
+  });
   return Promise.all(
     prs.map(async (pr) => {
       if (!withRuns.has(pr.number)) return pr;
-      const relayReview = await getRelayReviewState(app, {
-        owner: repoRef.owner,
-        repo: repoRef.repo,
-        prNumber: pr.number,
-        token,
-      });
-      // The list renders the state, the verdict and the author — not the
-      // review's whole text, which the drill-in fetches when it is opened.
-      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
-      return { ...pr, relayReview: summary };
+      try {
+        const relayReview = await getRelayReviewState(app, {
+          owner: repoRef.owner,
+          repo: repoRef.repo,
+          prNumber: pr.number,
+          token,
+        });
+        // The list renders the state, the verdict and the author — not the
+        // review's whole text, which the drill-in fetches when it is opened.
+        const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
+        return { ...pr, relayReview: summary };
+      } catch (err) {
+        // Same reasoning: one PR's relay state must not fail the whole list.
+        app.log.warn(
+          {
+            detail: (err as Error).message,
+            owner: repoRef.owner,
+            repo: repoRef.repo,
+            pr: pr.number,
+          },
+          "pr list: the relay's state for a pull request is unavailable",
+        );
+        return pr;
+      }
     }),
   );
 }
@@ -2950,7 +2972,19 @@ export async function projectsRoute(app: FastifyInstance) {
             const ci = getCachedDefaultBranchCi(result.value.owner, result.value.repo);
             if (ci !== undefined) defaultBranchCiResult[project.id] = ci;
             const status = getPRsStatus(result.value.owner, result.value.repo);
-            prsResult[project.id] = status && status.prs.length > 0 ? status : null;
+            if (!status || status.prs.length === 0) {
+              prsResult[project.id] = null;
+              return;
+            }
+            // The relay's state for each PR the relay knows about (issue
+            // #1630). This half is where the panel's PR list comes from in a
+            // running app (the batch route feeds the Zustand store, which
+            // shadows the per-project fetch), so annotating only the
+            // per-project route would leave the list's review marker dead.
+            prsResult[project.id] = {
+              ...status,
+              prs: await attachRelayReviewState(app, status.prs, result.value),
+            };
           })();
 
           await Promise.all([branchesPromise, prsPromise]);

@@ -12,6 +12,7 @@ import type {
   ProjectReleaseStatus,
 } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { useDashboardStore } from "./store/index.js";
 
 // Every test below that doesn't care about the Release section (the vast
 // majority) still triggers GitHubPanel's own GET .../release fetch — this
@@ -192,6 +193,9 @@ function mockFetchWithAccordion(opts: {
 describe("GitHubPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    // The store is shared across the file's tests — a PR list set by one
+    // test must not leak into the next.
+    useDashboardStore.setState({ prsByProject: {} });
   });
 
   it("lists pull requests and issues with titles and links once loaded", async () => {
@@ -234,6 +238,44 @@ describe("GitHubPanel", () => {
     expect(await screen.findByText("Review requested")).toBeInTheDocument();
     expect(screen.getByText("Review posted")).toBeInTheDocument();
     expect(screen.getByTitle("Review posted: APPROVED by hermes[bot]")).toBeInTheDocument();
+  });
+
+  it("says a review that could not be confirmed is not simply on its way", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: STATUS,
+        prs: {
+          ...PRS_LOADED,
+          prs: [
+            { ...PRS_LOADED.prs[0], relayReview: { state: "requested", landedChecked: false } },
+          ],
+        },
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+
+    expect(
+      await screen.findByTitle(/it could not be confirmed on the pull request/),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a PR from the store's list too — that is the list a running app shows", async () => {
+    // The panel prefers the store's PRs (fed by the batch route) over its own
+    // fetch, so the marker has to survive that swap — otherwise it renders
+    // only until the first refresh, and then vanishes.
+    useDashboardStore.setState({
+      prsByProject: {
+        1: {
+          ...PRS_LOADED,
+          prs: [{ ...PRS_LOADED.prs[0], relayReview: { state: "requested" } }],
+        },
+      },
+    });
+    vi.stubGlobal("fetch", mockFetch({ status: STATUS, prs: PRS_LOADED }));
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText("Review requested")).toBeInTheDocument();
   });
 
   it("shows a not-applicable message on a 204 response, without listing anything", async () => {

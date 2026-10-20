@@ -2168,6 +2168,55 @@ describe("projects route", () => {
           expect(pr.relayReview.bodyTruncated).toBeUndefined();
         });
 
+        it("annotates the batch route's PR half too — that is the list a running app shows", async () => {
+          // The panel's list comes from the batch route (it feeds the Zustand
+          // store, which shadows the per-project fetch), so the relay's state
+          // has to be annotated there too — otherwise the list's review
+          // marker is dead in the live path.
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          const { setRepoPRsStatus } = await import("../../src/services/github.js");
+          setRepoPRsStatus("acme", "widgets", {
+            prs: [
+              {
+                number: 41,
+                title: "PR 41",
+                htmlUrl: "https://github.com/acme/widgets/pull/41",
+                author: "me",
+                headSha: "sha41",
+                headBranch: "feat",
+                baseBranch: "main",
+                ciStatus: null,
+                actionsRuns: [],
+                isDraft: false,
+                updatedAt: null,
+                reviewDecision: null,
+                mergeable: null,
+                mergeStateStatus: null,
+                reviewers: [],
+                requestedReviewers: [],
+                unresolvedThreads: null,
+                commentCount: null,
+                reviewStateKnown: false,
+                ciFetched: false,
+                prPhase: "unknown",
+              },
+            ],
+            prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+          });
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews") ? jsonResponse(200, []) : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/git-refs?ids=${id}`,
+          });
+          expect(res.statusCode).toBe(200);
+          const prs = res.json().prs[String(id)].prs as Array<{ relayReview?: unknown }>;
+          expect(prs[0].relayReview).toMatchObject({ state: "requested" });
+        });
+
         it("leaves a PR the relay knows nothing about untouched", async () => {
           // The run index is in-memory: a PR this Mullion never dispatched a
           // review for must come back exactly as it was — no `relayReview`
