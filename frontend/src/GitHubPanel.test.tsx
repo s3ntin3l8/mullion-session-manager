@@ -210,6 +210,32 @@ describe("GitHubPanel", () => {
     expect(screen.getByText("Issues (1)")).toBeInTheDocument();
   });
 
+  it("marks a PR whose review was requested, and one whose review landed (#1630)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: STATUS,
+        prs: {
+          ...PRS_LOADED,
+          prs: [
+            { ...PRS_LOADED.prs[0], relayReview: { state: "requested" } },
+            {
+              ...PRS_LOADED.prs[0],
+              number: 43,
+              title: "Another PR",
+              relayReview: { state: "landed", verdict: "APPROVED", author: "hermes[bot]" },
+            },
+          ],
+        },
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+
+    expect(await screen.findByText("Review requested")).toBeInTheDocument();
+    expect(screen.getByText("Review posted")).toBeInTheDocument();
+    expect(screen.getByTitle("Review posted: APPROVED by hermes[bot]")).toBeInTheDocument();
+  });
+
   it("shows a not-applicable message on a 204 response, without listing anything", async () => {
     vi.stubGlobal(
       "fetch",

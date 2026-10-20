@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitHubPrDetail, GitHubPrDetailThread } from "../api/types.js";
+import type { GitHubPrDetail, GitHubPrDetailThread, RelayReviewState } from "../api/types.js";
 import { checkDotClass } from "./checkDot.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -162,6 +162,57 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
 
 const PR_REFRESH_MS = 30_000;
 
+/**
+ * The review relay's state for this pull request (issue #1630) — the same
+ * relay the agent-facing `review_status` reports, seen from the operator's
+ * side.
+ *
+ * `"none"` means no relay run is known for this PR (never requested here, or
+ * the server restarted). It does NOT mean "no review is pending" — the relay's
+ * run index is in-memory — so this renders nothing at all in that case,
+ * rather than claiming there is no review.
+ */
+function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
+  // Anything but a known state renders nothing: "no relay run is known" and
+  // "the server answered with something else" must both look like silence,
+  // never like "no review is pending".
+  if (!state || (state.state !== "requested" && state.state !== "landed")) return null;
+  if (state.state === "requested") {
+    return (
+      <div className="github-panel-section">
+        <div className="github-panel-section-title">Review</div>
+        <div className="github-panel-empty-row">
+          A review was requested{state.dispatchedAt ? " — waiting for the review bot" : ""}
+          {state.status ? ` (${state.status})` : ""}.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="github-panel-section">
+      <div className="github-panel-section-title">Review</div>
+      <div className="github-panel-empty-row">
+        {state.verdict ?? "Review posted"}
+        {state.author ? ` by ${state.author}` : ""}
+        {state.htmlUrl ? (
+          <>
+            {" — "}
+            <a href={state.htmlUrl} target="_blank" rel="noreferrer" className="gh-link-button">
+              open on GitHub
+            </a>
+          </>
+        ) : null}
+      </div>
+      {state.body && (
+        <div className="gh-detail-meta">
+          {state.body.length > 600 ? `${state.body.slice(0, 600)}…` : state.body}
+          {state.bodyTruncated ? " (the review text was cut short)" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PrDetailView({
   projectId,
   number,
@@ -172,6 +223,9 @@ export function PrDetailView({
   onBack: () => void;
 }) {
   const [pr, setPr] = useState<GitHubPrDetail | null>(null);
+  // The review relay's state for this PR (issue #1630) — refreshed with the
+  // PR itself, so a review that lands shows up within the same 30s tick.
+  const [relayReview, setRelayReview] = useState<RelayReviewState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<"merge" | "review" | "handoff" | null>(null);
@@ -200,6 +254,23 @@ export function PrDetailView({
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Could not load the PR");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, number, reloadKey]);
+
+  // The relay's state for this PR (issue #1630). A failure here is not the
+  // PR's failure — the PR still renders, just without the review block.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getProjectPrReview(projectId, number)
+      .then((res) => {
+        if (!cancelled) setRelayReview(res);
+      })
+      .catch(() => {
+        if (!cancelled) setRelayReview(null);
       });
     return () => {
       cancelled = true;
@@ -304,6 +375,7 @@ export function PrDetailView({
         {pr.baseBranch} ← {pr.headBranch} · {pr.author ?? "unknown"} · updated{" "}
         {formatRelativeAge(Date.parse(pr.updatedAt))}
       </div>
+      <RelayReviewBlock state={relayReview} />
       {pr.bodyHtml && (
         <>
           <SafeHtml className={`gh-html${showBody ? "" : " gh-clamp"}`} html={pr.bodyHtml} />

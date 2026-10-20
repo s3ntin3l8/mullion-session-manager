@@ -269,6 +269,20 @@ function PRCard({
         )}
         {pr.author && <span className="github-panel-pr-author">{pr.author}</span>}
         {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
+        {pr.relayReview && pr.relayReview.state !== "none" && (
+          <span
+            className={`github-panel-pr-relay-pill ${pr.relayReview.state}`}
+            title={
+              pr.relayReview.state === "landed"
+                ? `Review posted: ${pr.relayReview.verdict ?? "review"}${
+                    pr.relayReview.author ? ` by ${pr.relayReview.author}` : ""
+                  }`
+                : "A review was requested for this pull request"
+            }
+          >
+            {pr.relayReview.state === "landed" ? "Review posted" : "Review requested"}
+          </span>
+        )}
         <ChevronDownIcon
           size={12}
           style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}

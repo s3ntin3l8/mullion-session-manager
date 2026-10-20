@@ -31,6 +31,7 @@ import type {
   SoundName,
   LayoutMode,
   TabletPaneCap,
+  RelayReviewState,
 } from "../../../src/shared/types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
 
@@ -45,6 +46,9 @@ export type {
   ReleaseMergeReason,
   ReleaseMergeResult,
 };
+// The review relay's state for a pull request (issue #1630) — shared with the
+// backend so the two cannot drift.
+export type { RelayReviewState };
 
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };
@@ -946,6 +950,13 @@ export interface GitHubPROrWithChecks {
   baseBranch: string;
   ciStatus: GitHubCiStatus;
   actionsRuns: GitHubActionsRun[];
+  /**
+   * The review relay's state for this PR (issue #1630) — present only when a
+   * review was requested for it through Mullion's Hermes relay. Absent means
+   * "no relay run is known for this PR" — which is NOT "no review is
+   * pending" (the relay's run index is in-memory, so a restart loses it).
+   */
+  relayReview?: RelayReviewState;
   // Review state (backend github-pr-reviews.ts). Optional: absent from a
   // server that predates it, and from the many hand-built test fixtures.
   isDraft?: boolean;

@@ -82,8 +82,51 @@ function stub(pr: GitHubPrDetail, extra?: (url: string, init?: RequestInit) => R
   return fn;
 }
 
+// The review relay's state for the PR (issue #1630) — its own endpoint, so
+// it needs its own stub.
+function stubReview(state: unknown) {
+  return vi.fn((url: string, _init?: RequestInit) => {
+    if (String(url).includes("/github/prs/12/review")) {
+      return Promise.resolve(jsonResponse(200, state));
+    }
+    return Promise.resolve(jsonResponse(200, PR));
+  });
+}
+
 describe("PrDetailView", () => {
   afterEach(() => vi.unstubAllGlobals());
+
+  // The review relay's state for the PR (issue #1630).
+  it("shows that a review was requested while it has not landed", async () => {
+    vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1", status: "running" }));
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(/A review was requested/)).toBeInTheDocument();
+  });
+
+  it("shows the landed review, with its verdict and what the bot said", async () => {
+    vi.stubGlobal(
+      "fetch",
+      stubReview({
+        state: "landed",
+        verdict: "CHANGES_REQUESTED",
+        author: "hermes[bot]",
+        body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+        htmlUrl: "https://github.com/a/b/pull/12#pullrequestreview-1",
+      }),
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(/CHANGES_REQUESTED by hermes\[bot\]/)).toBeInTheDocument();
+    expect(screen.getByText(/Verdict/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "open on GitHub" })).toBeInTheDocument();
+  });
+
+  it("shows nothing when no relay run is known for the PR", async () => {
+    vi.stubGlobal("fetch", stubReview({ state: "none" }));
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText("Add thing")).toBeInTheDocument();
+    expect(screen.queryByText(/A review was requested/)).toBeNull();
+    expect(screen.queryByText(/Review posted/)).toBeNull();
+  });
 
   it("shows status rows, changes, and the conversation with open threads first", async () => {
     stub(PR);

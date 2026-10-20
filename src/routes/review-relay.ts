@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
+import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
@@ -657,6 +658,76 @@ async function findLandedReview(
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
     return { checked: false };
   }
+}
+
+/**
+ * The relay's state for one pull request (issue #1630) — the state the
+ * operator needs to see: was a review requested, is it still in flight, did
+ * the bot's review land, and what did it say.
+ *
+ * The shape lives in src/shared/types.ts so the frontend cannot drift from
+ * it; the doc there says what `"none"` does and does not mean.
+ */
+export type { RelayReviewState } from "../shared/types.js";
+
+// The landed check costs a GitHub call, and the UI polls while a review is
+// pending — so the answer is memoized per run for a short while. The window
+// is shorter than the PR drill-in's own poll interval (30s), so a review that
+// lands now is never hidden for more than one poll cycle.
+const LANDED_MEMO_TTL_MS = 30_000;
+const landedMemo = new Map<string, { landed: LandedReview; at: number }>();
+
+/** Test hook — clears the memoized landed checks. */
+export function resetLandedMemo(): void {
+  landedMemo.clear();
+}
+
+/**
+ * The relay's state for a pull request, as the operator's UI sees it
+ * (issue #1630). Needs a GitHub token to look for the landed review; without
+ * one it still reports the request itself.
+ */
+export async function getRelayReviewState(
+  app: FastifyInstance,
+  opts: { owner: string; repo: string; prNumber: number; token?: string | null },
+): Promise<RelayReviewState> {
+  const { owner, repo, prNumber } = opts;
+  const record = getReviewRunForPr(owner, repo, prNumber);
+  if (!record) return { state: "none" };
+
+  const base: RelayReviewState = {
+    state: "requested",
+    runId: record.runId,
+    dispatchedAt: new Date(record.dispatchedAt).toISOString(),
+  };
+  if (!opts.token) return base;
+
+  // The memo is keyed by the run, so a new dispatch re-checks immediately.
+  const memoKey = `${owner}/${repo}#${prNumber}@${record.runId}`;
+  const memo = landedMemo.get(memoKey);
+  const landed =
+    memo && Date.now() - memo.at < LANDED_MEMO_TTL_MS
+      ? memo.landed
+      : await findLandedReview(
+          app,
+          opts.token,
+          { owner, repo, prNumber, headSha: record.headSha, token: opts.token },
+          record,
+        );
+  landedMemo.set(memoKey, { landed, at: Date.now() });
+
+  if (landed.checked && landed.review) {
+    return {
+      ...base,
+      state: "landed",
+      author: landed.review.author,
+      verdict: landed.review.state,
+      ...(landed.review.body !== undefined ? { body: landed.review.body } : {}),
+      ...(landed.review.bodyTruncated ? { bodyTruncated: true } : {}),
+      ...(landed.review.htmlUrl !== undefined ? { htmlUrl: landed.review.htmlUrl } : {}),
+    };
+  }
+  return base;
 }
 
 type LandedComment =

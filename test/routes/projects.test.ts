@@ -11,6 +11,13 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
+import type * as HermesReview from "../../src/services/hermes-review.js";
+// The mocked module's own value import (see the vi.mock above) — a test
+// asserts on the run lookup with it.
+import { getReviewRunForPr } from "../../src/services/hermes-review.js";
+// The relay's landed-check memo (issue #1630) — cleared per test so one
+// test's answer is not the next one's.
+import { resetLandedMemo } from "../../src/routes/review-relay.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
@@ -45,6 +52,14 @@ vi.mock("node-pty", () => plainNodePtyMock());
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubIntegration>();
   return { ...actual, resolveGitHubToken: vi.fn(actual.resolveGitHubToken) };
+});
+
+// The same trick for the review relay's run lookup (issue #1630): the route
+// asks "does this Mullion know a review run for this PR?", and a test can
+// answer that without dispatching a real run.
+vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof HermesReview>();
+  return { ...actual, getReviewRunForPr: vi.fn(actual.getReviewRunForPr) };
 });
 
 // Marker substring a target cwd can contain to make runGitInit's own `git
@@ -1978,6 +1993,130 @@ describe("projects route", () => {
           return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
         });
       }
+
+      // The review relay's state for a PR (issue #1630) — what the operator's
+      // panel shows: was a review requested, did it land, what did it say.
+      describe("the relay's state for a PR (#1630)", () => {
+        const relayRun = {
+          runId: "run_1",
+          kind: "pull_request" as const,
+          owner: "acme",
+          repo: "widgets",
+          prNumber: 41,
+          headSha: "sha41",
+          dispatchedAt: Date.now(),
+        };
+
+        beforeEach(() => {
+          // The landed check is memoized per run (one GitHub call, not one per
+          // poll), so each test starts from a clean memo.
+          resetLandedMemo();
+        });
+
+        it("reports 'none' when this Mullion knows no run for the PR", async () => {
+          vi.mocked(getReviewRunForPr).mockReturnValue(null);
+          mockGithub(gqlPr(41));
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs/41/review`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toEqual({ state: "none" });
+        });
+
+        it("reports the requested state while the review has not landed", async () => {
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews") ? jsonResponse(200, []) : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs/41/review`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toMatchObject({ state: "requested", runId: "run_1" });
+        });
+
+        it("annotates the PR list with the relay's state", async () => {
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          const { setRepoPRsStatus } = await import("../../src/services/github.js");
+          setRepoPRsStatus("acme", "widgets", {
+            prs: [
+              {
+                number: 41,
+                title: "PR 41",
+                htmlUrl: "https://github.com/acme/widgets/pull/41",
+                author: "me",
+                headSha: "sha41",
+                headBranch: "feat",
+                baseBranch: "main",
+                ciStatus: null,
+                actionsRuns: [],
+                isDraft: false,
+                updatedAt: null,
+                reviewDecision: null,
+                mergeable: null,
+                mergeStateStatus: null,
+                reviewers: [],
+                requestedReviewers: [],
+                unresolvedThreads: null,
+                commentCount: null,
+                reviewStateKnown: false,
+                ciFetched: false,
+                prPhase: "unknown",
+              },
+            ],
+            prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+          });
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews") ? jsonResponse(200, []) : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json().prs[0].relayReview).toMatchObject({ state: "requested" });
+        });
+
+        it("reports the landed review, with what the bot said", async () => {
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews")
+              ? jsonResponse(200, [
+                  {
+                    user: { login: "hermes[bot]", type: "Bot" },
+                    state: "CHANGES_REQUESTED",
+                    commit_id: "sha41",
+                    submitted_at: new Date().toISOString(),
+                    body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+                    html_url: "https://github.com/acme/widgets/pull/41#pullrequestreview-1",
+                  },
+                ])
+              : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs/41/review`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toMatchObject({
+            state: "landed",
+            verdict: "CHANGES_REQUESTED",
+            author: "hermes[bot]",
+            body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+            htmlUrl: "https://github.com/acme/widgets/pull/41#pullrequestreview-1",
+          });
+        });
+      });
 
       it("returns the PR detail with the derived phase", async () => {
         mockGithub(gqlPr(41));

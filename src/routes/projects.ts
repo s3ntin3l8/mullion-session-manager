@@ -77,6 +77,7 @@ import {
   getDefaultBranch,
   type GitHubCiStatus,
   type GitHubPRsStatus,
+  type PROrWithChecks,
   detectReleasePleaseConfig,
 } from "../services/github.js";
 import {
@@ -97,8 +98,13 @@ import {
 import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js";
 import { derivePrPhase } from "../services/github-pr-phase.js";
 import { buildHandoffPrompt } from "../services/pr-handoff.js";
-import { assertReviewerConfigured, requestHermesReview } from "../services/hermes-review.js";
-import { replyReviewError } from "./review-relay.js";
+import {
+  assertReviewerConfigured,
+  getHermesReviewStatus,
+  getReviewRunForPr,
+  requestHermesReview,
+} from "../services/hermes-review.js";
+import { getRelayReviewState, replyReviewError } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
@@ -705,6 +711,41 @@ interface LoadProjectRepoContextOptions {
  * apart from "no github.com remote configured" (204); see host-git.ts's
  * own doc comments on both functions.
  */
+/**
+ * Annotates a project's pull requests with the review relay's state for
+ * each (issue #1630).
+ *
+ * Only a PR the relay knows about costs anything: the run index is
+ * in-memory, so a PR with no run in it is left exactly as it was, and the
+ * GitHub call that looks for a landed review happens only for the few PRs
+ * that actually have a run.
+ */
+async function attachRelayReviewState(
+  app: FastifyInstance,
+  prs: PROrWithChecks[],
+  repoRef: { owner: string; repo: string },
+): Promise<PROrWithChecks[]> {
+  const withRuns = prs.filter(
+    (pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null,
+  );
+  if (withRuns.length === 0) return prs;
+  // A read token for the landed check. Without one the PR still shows that a
+  // review was requested — it just cannot say whether it landed.
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  return Promise.all(
+    prs.map(async (pr) => {
+      if (!withRuns.includes(pr)) return pr;
+      const relayReview = await getRelayReviewState(app, {
+        owner: repoRef.owner,
+        repo: repoRef.repo,
+        prNumber: pr.number,
+        token,
+      });
+      return { ...pr, relayReview };
+    }),
+  );
+}
+
 async function loadProjectRepoContext(
   app: FastifyInstance,
   reply: FastifyReply,
@@ -1882,14 +1923,18 @@ export async function projectsRoute(app: FastifyInstance) {
       }
 
       const { branch } = request.query;
-      if (branch === undefined) return status;
-
-      const filtered = status.prs.filter((pr) => pr.headBranch === branch);
-      if (filtered.length === 0) {
+      const prs =
+        branch === undefined ? status.prs : status.prs.filter((pr) => pr.headBranch === branch);
+      if (prs.length === 0) {
         reply.code(204);
         return;
       }
-      return { prs: filtered, prSummary: computePRSummary(filtered) };
+      // The review relay's state per PR (issue #1630) — the panel shows a
+      // "review requested" marker on a PR a review was asked for. Only a PR
+      // with a known relay run costs anything (one GitHub call, memoized);
+      // the rest of the list is untouched.
+      const annotated = await attachRelayReviewState(app, prs, repoRef);
+      return { prs: annotated, prSummary: computePRSummary(annotated) };
     },
   );
 
@@ -2067,6 +2112,58 @@ export async function projectsRoute(app: FastifyInstance) {
       projectId,
     };
   }
+
+  // The review relay's state for one pull request (issue #1630) — was a
+  // review requested, is it still in flight, did the bot's review land, and
+  // what did it say. This is the operator's view of the same relay the
+  // agent-facing `reviews.status` op reports (routes/review-relay.ts), for a
+  // PR of a *project* rather than of a session.
+  app.get<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/prs/:number/review",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr review state",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      const { owner, repo } = ctx.repoRef;
+      try {
+        const token = await resolveGitHubToken(app, ctx.repoRef, "read");
+        const state = await getRelayReviewState(app, {
+          owner,
+          repo,
+          prNumber: number,
+          token,
+        });
+        // The Hermes run's own status, when a run is known: it tells the
+        // operator whether a review that has not landed yet is still on its
+        // way or has failed outright.
+        if (state.runId) {
+          try {
+            const run = await getHermesReviewStatus(app, { owner, repo, prNumber: number });
+            if (typeof run.status === "string") state.status = run.status;
+          } catch (err) {
+            // The run's status is a nicety — the request/landed state is the
+            // answer, and a Hermes hiccup must not fail the whole read.
+            app.log.warn(
+              { detail: (err as Error).message, projectId, number },
+              "pr review state: Hermes status unavailable",
+            );
+          }
+        }
+        return state;
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        app.log.warn({ statusCode: err.statusCode, projectId, number }, "github pr unavailable");
+        return reply
+          .code(502)
+          .send({ message: "GitHub pull request unavailable", statusCode: 502 });
+      }
+    },
+  );
 
   app.get<{ Params: { id: string; number: string } }>(
     "/api/projects/:id/github/prs/:number",
