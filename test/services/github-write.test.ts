@@ -145,12 +145,17 @@ describe("github-write service", () => {
     expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({
       state: "closed",
       labels: ["mullion-reviewing", "bug"],
+      isPullRequest: false,
     });
   });
 
   it("getIssueState defaults to an empty label list when the issue has none", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { state: "open" }));
-    expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({ state: "open", labels: [] });
+    expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({
+      state: "open",
+      labels: [],
+      isPullRequest: false,
+    });
   });
 
   it("getIssueState tolerates a bare-string label list, not just label objects", async () => {
@@ -160,6 +165,7 @@ describe("github-write service", () => {
     expect(await getIssueState("tok", "owner", "repo", 5)).toEqual({
       state: "open",
       labels: ["mullion-task", "bug"],
+      isPullRequest: false,
     });
   });
 
@@ -734,6 +740,12 @@ describe("github-write service", () => {
       const result = await listIssueComments("tok", "owner", "repo", 5);
       expect(result[0].body).toHaveLength(MAX_ISSUE_COMMENT_CHARS);
       expect(result[0].bodyTruncated).toBe(true);
+    });
+
+    it("narrows the walk with `since` when the caller knows it", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [comment(1)]));
+      await listIssueComments("tok", "owner", "repo", 5, { since: "2026-01-01T00:00:00Z" });
+      expect(String(fetchMock.mock.calls[0][0])).toContain("since=2026-01-01T00%3A00%3A00Z");
     });
 
     it("follows full pages so the newest comment is seen", async () => {

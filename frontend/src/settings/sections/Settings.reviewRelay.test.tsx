@@ -194,9 +194,10 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("commits the prompt repository on Enter", async () => {
     const user = userEvent.setup();
     await renderCard();
-    // Two fields share the "owner/repo" placeholder — the review prompt's
-    // and the triage prompt's (#1629). The first is the review one.
-    await user.type(screen.getAllByPlaceholderText("owner/repo")[0], "acme/.github{Enter}");
+    // Named, not positional: the review prompt's and the triage prompt's
+    // (#1629) fields share a placeholder, so a query by position would
+    // silently re-point if the rows were reordered.
+    await user.type(screen.getByLabelText("Prompt repository"), "acme/.github{Enter}");
     await waitFor(() =>
       expect(settingsPatches).toContainEqual({ reviewRelay: { promptRepo: "acme/.github" } }),
     );
@@ -205,8 +206,7 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("commits the triage prompt repository and path (#1629)", async () => {
     const user = userEvent.setup();
     await renderCard();
-    // The second "owner/repo" field is the triage prompt's (#1629).
-    await user.type(screen.getAllByPlaceholderText("owner/repo")[1], "acme/.github{Enter}");
+    await user.type(screen.getByLabelText("Triage prompt repository"), "acme/.github{Enter}");
     await waitFor(() =>
       expect(settingsPatches).toContainEqual({ reviewRelay: { triagePromptRepo: "acme/.github" } }),
     );
@@ -224,7 +224,7 @@ describe("Settings -> Integrations -> Review relay", () => {
   it("doesn't patch settings when a field is blurred unchanged", async () => {
     const user = userEvent.setup();
     await renderCard();
-    await user.click(screen.getAllByPlaceholderText("owner/repo")[0]);
+    await user.click(screen.getByLabelText("Prompt repository"));
     await user.tab();
     expect(settingsPatches).toEqual([]);
   });

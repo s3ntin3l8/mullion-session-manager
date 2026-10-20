@@ -53,7 +53,7 @@ interface ReviewRequestBody {
 }
 
 interface TriageRequestBody {
-  issueNumber?: number;
+  issueNumber: number;
 }
 
 const triageRequestSchema = {
@@ -368,10 +368,15 @@ async function resolveTriageTarget(
 
   // Confirm the issue exists before dispatching: a triage of a number that
   // is not an issue would send Hermes off to triage nothing. A pull request
-  // shares the numbering namespace, so this also catches "that number is a
-  // PR, not an issue".
+  // shares the numbering namespace and GitHub answers `/issues/{n}` for a
+  // PR too, so the `pull_request` key is what tells the two apart (the same
+  // check github-issues.ts's own detail fetch makes).
   try {
-    await getIssueState(token, owner, repo, issueNumber);
+    const issue = await getIssueState(token, owner, repo, issueNumber);
+    if (issue.isPullRequest) {
+      reply.notFound(`#${issueNumber} is a pull request, not an issue`);
+      return null;
+    }
   } catch (err) {
     if (!(err instanceof GitHubApiError)) throw err;
     if (err.statusCode === 404) {
@@ -485,8 +490,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
 
+      // The schema requires issueNumber, so Fastify has already refused a
+      // request without one.
       const issueNumber = request.body.issueNumber;
-      if (issueNumber === undefined) return reply.badRequest("issueNumber is required");
       const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
       if (!target) return reply;
       const { owner, repo } = target;
@@ -516,7 +522,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
 
   // Status of the latest triage run for an issue, plus whether the triage
   // comment actually landed on it.
-  app.get<{ Params: { id: string }; Querystring: { issueNumber?: number } }>(
+  app.get<{ Params: { id: string }; Querystring: { issueNumber: number } }>(
     "/api/sessions/:id/triage-request",
     { schema: triageStatusSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -524,8 +530,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
 
+      // The schema requires issueNumber, so Fastify has already refused a
+      // request without one.
       const issueNumber = request.query.issueNumber;
-      if (issueNumber === undefined) return reply.badRequest("issueNumber is required");
       const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
       if (!target) return reply;
       const { owner, repo, token } = target;
@@ -648,7 +655,11 @@ async function findLandedComment(
   if (!record) return { checked: false };
   const { dispatchedAt } = record;
   try {
-    const comments = await listIssueComments(token, t.owner, t.repo, t.issueNumber);
+    // `since` narrows the walk to comments touched after the dispatch, so a
+    // busy issue does not cost ten pages of comments on every poll.
+    const comments = await listIssueComments(token, t.owner, t.repo, t.issueNumber, {
+      since: new Date(dispatchedAt - 60_000).toISOString(),
+    });
     const landed = comments
       .filter(
         (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,

@@ -555,6 +555,9 @@ export interface ReviewRun {
   /** What the run acts on: a pull request review or an issue triage (issue #1629). */
   kind?: "pull_request" | "issue";
   repo: string;
+  /** The PR or issue number the run acts on (#1629) — "prNumber" is the same
+   * number under its review-era name. */
+  number?: number;
   prNumber: number;
   headSha: string;
   dispatchedAt: string;

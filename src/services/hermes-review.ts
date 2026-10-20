@@ -181,8 +181,13 @@ Verdict:
  * Used when no triage prompt repo is configured (issue #1629). The triage
  * run posts a comment on the issue — the same "post as the App bot" rule as
  * a review, but there is no verdict to submit: a triage is advice.
+ *
+ * Self-contained on purpose: it names no skill, because there is no
+ * issue-triage skill to name (the review-bot profile has none, and a prompt
+ * that opens by hunting a skill that does not exist sends every install
+ * down a dead end). The procedure below is the whole instruction.
  */
-export const BUILTIN_TRIAGE_PROMPT = `Triage the issue named above using your issue-triage skill.
+export const BUILTIN_TRIAGE_PROMPT = `Triage the issue named above.
 
 Procedure:
 1. Read the issue's title, description, labels and any linked PRs (gh issue view).
@@ -689,6 +694,12 @@ export interface ReviewRunStatus {
   error?: string;
   shuttingDown: boolean;
   repo: string;
+  /**
+   * The PR or issue number the run acts on. `prNumber` below is the same
+   * number under its review-era name — kept for the review path's existing
+   * consumers, but "prNumber" for an issue reads wrong (issue #1629).
+   */
+  number: number;
   prNumber: number;
   headSha: string;
   dispatchedAt: string;
@@ -706,6 +717,7 @@ function toStatus(record: ReviewRunRecord, run: Record<string, unknown> | null):
     error: text(run?.error),
     shuttingDown: run?.shutdown_requested_at != null,
     repo: `${record.owner}/${record.repo}`,
+    number: record.prNumber,
     prNumber: record.prNumber,
     headSha: record.headSha,
     dispatchedAt: new Date(record.dispatchedAt).toISOString(),
@@ -785,6 +797,7 @@ export async function getRelayStatus(
       provider: "hermes";
       status: "not_found";
       repo: string;
+      number: number;
       prNumber: number;
       kind: RelayTargetKind;
     }
@@ -800,6 +813,7 @@ export async function getRelayStatus(
       provider: "hermes",
       status: "not_found",
       repo: `${target.owner}/${target.repo}`,
+      number: target.number,
       prNumber: target.number,
       kind: target.kind,
     };

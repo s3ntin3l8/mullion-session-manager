@@ -156,7 +156,7 @@ describe("review-request routes", () => {
     // dispatch — an empty list is the common case.
     mocks.listPullRequestReviews.mockResolvedValue([]);
     mocks.listIssueComments.mockResolvedValue([]);
-    mocks.getIssueState.mockResolvedValue({ state: "open", labels: [] });
+    mocks.getIssueState.mockResolvedValue({ state: "open", labels: [], isPullRequest: false });
   });
 
   // The route is rate-limited per client IP (10/min); a distinct address per
@@ -789,6 +789,20 @@ describe("review-request routes", () => {
       const res = await triagePost(sessionId, { issueNumber: 12 });
       expect(res.statusCode).toBe(404);
       expect(res.json().message).toContain("Issue #12");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("404s a number that is a pull request, not an issue", async () => {
+      // GitHub answers /issues/{n} for a pull request too — only the
+      // `pull_request` key tells the two apart.
+      mocks.getIssueState.mockResolvedValue({
+        state: "open",
+        labels: [],
+        isPullRequest: true,
+      });
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("pull request");
       expect(mocks.requestRelay).not.toHaveBeenCalled();
     });
 
