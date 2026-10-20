@@ -1,4 +1,5 @@
 import { spawn as spawnChild, spawnSync } from "node:child_process";
+import path from "node:path";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 // GitDiffStats now physically lives in src/shared/types.ts (hand-mirrored
@@ -223,23 +224,10 @@ const FILE_DIFF_TRUNCATED_MARKER =
  * user-click-triggered fetch (not a poll loop), and the patch is inherently
  * single-use.
  */
-export async function getFileDiff(
-  cwd: string,
-  filePath: string,
-  baseRef?: string,
-): Promise<string | null> {
-  if (!isGitRepo(cwd)) return null;
-
-  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
-  const pending = fileDiffInFlight.get(key);
-  if (pending) return pending;
-
-  const promise = new Promise<string | null>((resolve) => {
+function runDiffProcess(args: string[]): Promise<{ out: string | null; code: number | null }> {
+  return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const args = baseRef
-      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
-      : ["-C", cwd, "diff", "HEAD", "--", filePath];
     const child = spawnChild("git", args, {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
@@ -264,12 +252,12 @@ export async function getFileDiff(
       }, KILL_ESCALATION_MS);
     };
 
-    const finish = (value: string | null) => {
+    const finish = (out: string | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.stdout?.off("data", onStdoutData);
-      resolve(value);
+      resolve({ out, code });
     };
 
     let stdoutBytes = 0;
@@ -280,7 +268,7 @@ export async function getFileDiff(
         // diff keep growing `stdout`; return only what's been buffered so
         // far plus the marker, not the full (unbounded) patch.
         killWithEscalation();
-        finish(stdout + FILE_DIFF_TRUNCATED_MARKER);
+        finish(stdout + FILE_DIFF_TRUNCATED_MARKER, 0);
         return;
       }
       stdout += chunk.toString("utf8");
@@ -289,21 +277,85 @@ export async function getFileDiff(
 
     const timer = setTimeout(() => {
       killWithEscalation();
-      finish(null);
+      finish(null, null);
     }, GIT_TIMEOUT_MS);
 
     child.on("error", () => {
       clearKillTimer();
-      finish(null);
+      finish(null, null);
     });
     child.on("close", (code) => {
       clearKillTimer();
       // git diff exit codes: 0 = no differences found, 1 = differences
       // found, >1 = error. Either 0 or 1 is valid — stdout content is the
       // patch in both cases (empty when exit 0, populated when exit 1).
-      finish(code != null && code <= 1 ? stdout || null : null);
+      finish(code != null && code <= 1 ? stdout || null : null, code);
     });
-  }).finally(() => {
+  });
+}
+
+export async function getFileDiff(
+  cwd: string,
+  filePath: string,
+  baseRef?: string,
+): Promise<string | null> {
+  if (!isGitRepo(cwd)) return null;
+
+  const key = baseRef ? `${cwd}\0${filePath}\0${baseRef}` : `${cwd}\0${filePath}`;
+  const pending = fileDiffInFlight.get(key);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    const args = baseRef
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
+      : ["-C", cwd, "diff", "HEAD", "--", filePath];
+    const { out: patch, code } = await runDiffProcess(args);
+    if (patch) return patch;
+
+    // If working-tree diff against HEAD exited (code !== null, i.e. did not
+    // time out or fail to spawn — covers both code === 0 in a normal repo and
+    // code === 128 in a freshly initialized repo with an unborn HEAD) with no
+    // output, check if filePath is an untracked file on disk or a staged file
+    // in an unborn-HEAD repo.
+    if (!baseRef && code !== null) {
+      const resolvedCwd = path.resolve(cwd);
+      const fullPath = path.resolve(cwd, filePath);
+      if (fullPath.startsWith(resolvedCwd + path.sep)) {
+        const { out: lsOut } = await runDiffProcess([
+          "-C",
+          cwd,
+          "ls-files",
+          "--others",
+          "-z",
+          "--",
+          filePath,
+        ]);
+        if (lsOut === `${filePath}\0`) {
+          const { out: untrackedPatch } = await runDiffProcess([
+            "-C",
+            cwd,
+            "diff",
+            "--no-index",
+            "--",
+            "/dev/null",
+            filePath,
+          ]);
+          if (untrackedPatch) return untrackedPatch;
+        } else if (code === 128) {
+          const { out: stagedPatch } = await runDiffProcess([
+            "-C",
+            cwd,
+            "diff",
+            "--cached",
+            "--",
+            filePath,
+          ]);
+          if (stagedPatch) return stagedPatch;
+        }
+      }
+    }
+    return null;
+  })().finally(() => {
     fileDiffInFlight.delete(key);
   });
 

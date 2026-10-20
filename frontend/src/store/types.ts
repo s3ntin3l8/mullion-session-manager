@@ -247,6 +247,8 @@ export interface GitSlice {
   fetchProjectGit: (projectId: number) => Promise<void>;
   pullProjectGit: (projectId: number) => Promise<GitPullResult>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
+  gitRefreshTrigger: number;
+  bumpGitRefreshTrigger: () => void;
 }
 
 export interface GithubSlice {

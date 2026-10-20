@@ -3,6 +3,8 @@ import { GitBranchesSection } from "../git/GitBranchesSection.js";
 import { GitHistorySection } from "../git/GitHistorySection.js";
 import { GitWorktreesSection } from "../git/GitWorktreesSection.js";
 import { SourceControlSection } from "../SourceControlSection.js";
+import { ChevronDownIcon } from "../ui/icons.js";
+import { useDashboardStore } from "../store/index.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 const STORAGE_KEY = "crs.gitSidebarSections";
@@ -27,32 +29,51 @@ function readOpen(): Record<SectionId, boolean> {
 
 function Section({
   title,
+  count,
   open,
   onToggle,
   children,
 }: {
   title: string;
+  count?: number;
   open: boolean;
   onToggle: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <div className="github-panel-section">
+    <div className="github-panel-section git-sidebar-section">
       <button
         type="button"
         className="github-panel-section-title gh-section-toggle"
         aria-expanded={open}
         onClick={onToggle}
       >
-        {open ? "▾" : "▸"} {title}
+        <span className="gh-section-toggle-left">
+          <ChevronDownIcon
+            size={12}
+            className={open ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+          />
+          <span>{title}</span>
+        </span>
+        {count !== undefined && count > 0 && (
+          <span className="gh-section-count-badge">{count}</span>
+        )}
       </button>
-      {open && children}
+      {open && <div className="git-sidebar-section-body">{children}</div>}
     </div>
   );
 }
 
 export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const [open, setOpen] = useState(readOpen);
+  const gitStatus = useDashboardStore((s) => s.gitStatuses[projectId]);
+  const branchesCount = useDashboardStore(
+    (s) => s.gitBranchesByProject[projectId]?.branches?.length,
+  );
+  const worktreesCount = useDashboardStore(
+    (s) => s.gitBranchesByProject[projectId]?.worktrees?.length,
+  );
+
   // Worktree the History section is scoped to; undefined = the project root.
   // Tied to the project it was chosen for: this component does not remount on
   // a project switch, and another project's worktree path is invalid here.
@@ -76,17 +97,36 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
 
   return (
     <div className="git-sidebar-view">
-      <Section title="Changes" open={open.changes} onToggle={() => toggle("changes")}>
+      <Section
+        title="Changes"
+        count={gitStatus?.files?.length}
+        open={open.changes}
+        onToggle={() => toggle("changes")}
+      >
         <SourceControlSection embedded projectId={projectId} onOpenGit={actions.onOpenGit} />
       </Section>
-      <Section title="Branches" open={open.branches} onToggle={() => toggle("branches")}>
+      <Section
+        title="Branches"
+        count={branchesCount}
+        open={open.branches}
+        onToggle={() => toggle("branches")}
+      >
         <GitBranchesSection projectId={projectId} />
       </Section>
-      <Section title="Worktrees" open={open.worktrees} onToggle={() => toggle("worktrees")}>
+      <Section
+        title="Worktrees"
+        count={worktreesCount}
+        open={open.worktrees}
+        onToggle={() => toggle("worktrees")}
+      >
         <GitWorktreesSection projectId={projectId} selected={historyCwd} onSelect={setHistoryCwd} />
       </Section>
       <Section title="History" open={open.history} onToggle={() => toggle("history")}>
-        <GitHistorySection projectId={projectId} cwd={historyCwd} />
+        <GitHistorySection
+          projectId={projectId}
+          cwd={historyCwd}
+          onClearCwd={() => setHistoryCwd(undefined)}
+        />
       </Section>
     </div>
   );

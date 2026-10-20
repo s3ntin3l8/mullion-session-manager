@@ -475,6 +475,230 @@ describe("GitBranchesSection / GitWorktreesSection", () => {
     await userEvent.click(screen.getByRole("button", { name: "repo" }));
     expect(onSelect).toHaveBeenCalledWith(undefined);
   });
+
+  it("deletes a branch and refreshes on confirmation", async () => {
+    let deletedCall: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, opts?: RequestInit) => {
+        if (url.includes("/git-branch-delete")) {
+          deletedCall = JSON.parse(String(opts?.body));
+          return Promise.resolve(jsonResponse(200, { deleted: true }));
+        }
+        if (url.includes("detail=1")) {
+          return Promise.resolve(
+            jsonResponse(200, {
+              branches: [{ name: "feature", isCurrent: false }],
+              worktrees: [],
+              remoteBranches: [],
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse(204, undefined));
+      }),
+    );
+    useDashboardStore.setState({
+      gitBranchesByProject: {
+        1: {
+          branches: [{ name: "feature", isCurrent: false, upstream: "origin/feature" }],
+          worktrees: [],
+          remoteBranches: [],
+        },
+      },
+    } as never);
+    render(<GitBranchesSection projectId={1} />);
+    const branchTitle = screen.getByText("feature");
+    expect(branchTitle).toHaveAttribute("title", "feature\nTracks: origin/feature");
+
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
+
+    expect(deletedCall).toEqual({ name: "feature", force: false });
+  });
+
+  it("handles branch delete refusal and allows force delete", async () => {
+    let forceCall: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, opts?: RequestInit) => {
+        if (url.includes("/git-branch-delete")) {
+          const body = JSON.parse(String(opts?.body));
+          if (!body.force) {
+            return Promise.resolve(
+              jsonResponse(200, { deleted: false, reason: "unmerged", detail: "not fully merged" }),
+            );
+          }
+          forceCall = body;
+          return Promise.resolve(jsonResponse(200, { deleted: true }));
+        }
+        if (url.includes("detail=1")) {
+          return Promise.resolve(
+            jsonResponse(200, {
+              branches: [{ name: "unmerged-feat", isCurrent: false }],
+              worktrees: [],
+              remoteBranches: [],
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse(204, undefined));
+      }),
+    );
+    useDashboardStore.setState({
+      gitBranchesByProject: {
+        1: {
+          branches: [{ name: "unmerged-feat", isCurrent: false }],
+          worktrees: [],
+          remoteBranches: [],
+        },
+      },
+    } as never);
+    render(<GitBranchesSection projectId={1} />);
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
+
+    expect(
+      await screen.findByText((content) => content.includes("not merged")),
+    ).toBeInTheDocument();
+    const forceBtn = screen.getByRole("button", { name: "Force" });
+    await userEvent.click(forceBtn);
+    await userEvent.click(forceBtn);
+
+    expect(forceCall).toEqual({ name: "unmerged-feat", force: true });
+  });
+
+  it("prunes stale worktrees and removes worktree on confirmation", async () => {
+    let pruneCalled = false;
+    let removeCalled: unknown = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, opts?: RequestInit) => {
+        if (url.includes("/git-worktree-prune")) {
+          pruneCalled = true;
+          return Promise.resolve(jsonResponse(200, { pruned: true }));
+        }
+        if (url.includes("/git-worktree-remove")) {
+          removeCalled = JSON.parse(String(opts?.body));
+          return Promise.resolve(jsonResponse(200, { removed: true }));
+        }
+        if (url.includes("detail=1")) {
+          return Promise.resolve(
+            jsonResponse(200, {
+              branches: [],
+              worktrees: [
+                { path: "/repo", branch: "main", isMain: true },
+                { path: "/repo-extra", branch: "extra", isMain: false },
+              ],
+              remoteBranches: [],
+            }),
+          );
+        }
+        return Promise.resolve(jsonResponse(204, undefined));
+      }),
+    );
+    useDashboardStore.setState({
+      gitBranchesByProject: {
+        1: {
+          branches: [],
+          remoteBranches: [],
+          worktrees: [
+            { path: "/repo", branch: "main", isMain: true },
+            { path: "/repo-extra", branch: "extra", isMain: false },
+          ],
+        },
+      },
+    } as never);
+    render(<GitWorktreesSection projectId={1} selected={undefined} onSelect={vi.fn()} />);
+    const pruneBtn = screen.getByRole("button", { name: /Prune stale/ });
+    await userEvent.click(pruneBtn);
+    expect(pruneCalled).toBe(true);
+
+    const removeBtn = screen.getByRole("button", { name: "Remove" });
+    await userEvent.click(removeBtn);
+    await userEvent.click(removeBtn);
+
+    expect(removeCalled).toEqual({ worktreePath: "/repo-extra", force: false });
+  });
+
+  it("clears branch rowErrors and worktree pruneError when projectId changes, including late in-flight responses", async () => {
+    let settleSlowBranchDelete!: (r: Response) => void;
+    let settleSlowPrune!: (err: Error) => void;
+    let callIdx = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/git-branch-delete")) {
+          callIdx += 1;
+          if (callIdx === 1) {
+            return Promise.resolve(
+              jsonResponse(200, { deleted: false, reason: "unmerged", detail: "not merged" }),
+            );
+          }
+          return new Promise<Response>((res) => {
+            settleSlowBranchDelete = res;
+          });
+        }
+        if (url.includes("/git-worktree-prune")) {
+          return new Promise<Response>((_, rej) => {
+            settleSlowPrune = rej;
+          });
+        }
+        return Promise.resolve(jsonResponse(204, undefined));
+      }),
+    );
+    useDashboardStore.setState({
+      gitBranchesByProject: {
+        1: {
+          branches: [{ name: "shared-name", isCurrent: false }],
+          worktrees: [{ path: "/repo1", branch: "main", isMain: true }],
+          remoteBranches: [],
+        },
+        2: {
+          branches: [{ name: "shared-name", isCurrent: false }],
+          worktrees: [{ path: "/repo2", branch: "main", isMain: true }],
+          remoteBranches: [],
+        },
+      },
+    } as never);
+
+    const { rerender, unmount } = render(<GitBranchesSection projectId={1} />);
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
+    expect(
+      await screen.findByText((content) => content.includes("not merged")),
+    ).toBeInTheDocument();
+
+    // Start a second (slow) delete on project 1, then switch to project 2 before it settles
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
+    rerender(<GitBranchesSection projectId={2} />);
+    expect(screen.queryByText((content) => content.includes("not merged"))).toBeNull();
+
+    settleSlowBranchDelete(
+      jsonResponse(200, { deleted: false, reason: "unmerged", detail: "late project 1 refusal" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByText((content) => content.includes("not merged"))).toBeNull(),
+    );
+    unmount();
+
+    const wtRender = render(
+      <GitWorktreesSection projectId={1} selected={undefined} onSelect={vi.fn()} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Prune stale/ }));
+    expect(screen.getByRole("button", { name: /Pruning/ })).toBeDisabled();
+
+    // Switch to project 2 while project 1's prune is still in flight
+    wtRender.rerender(
+      <GitWorktreesSection projectId={2} selected={undefined} onSelect={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: /Prune stale/ })).not.toBeDisabled();
+
+    settleSlowPrune(new Error("prune boom"));
+    await waitFor(() => expect(screen.queryByText("prune boom")).toBeNull());
+  });
 });
 
 describe("GitSidebarView", () => {

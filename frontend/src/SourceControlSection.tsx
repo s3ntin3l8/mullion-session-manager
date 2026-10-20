@@ -46,18 +46,14 @@ function syncSummary(status: GitStatus): string {
     .join(" ");
 }
 
-interface ProjectFileDiffProps {
+export interface ProjectFileDiffProps {
   projectId: number;
   filePath: string;
 }
 
-// Sibling of Sidebar.tsx's own SessionFileDiff, not a shared abstraction —
-// same "small guards get duplicated, not shared" precedent as
-// lib/sidebarStatus.ts's sessionGitDotClass doc comment (PR 27 phase 1),
-// and the two fetch from genuinely different endpoints (project- vs
-// session-scoped).
-function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
+export function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
   const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
+  const gitRefreshTrigger = useDashboardStore((s) => s.gitRefreshTrigger);
 
   // No explicit "reset to undefined on filePath change" here — the call
   // site (below) only ever renders one ProjectFileDiff at a time, keyed by
@@ -68,7 +64,7 @@ function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
     () => api.getProjectGitFileDiff(projectId, filePath),
     (r) => setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null),
     () => setDiffLines(null),
-    [projectId, filePath],
+    [projectId, filePath, gitRefreshTrigger],
   );
 
   if (diffLines === undefined) {
@@ -413,24 +409,30 @@ function SourceControlView({
                 <div className="github-panel-empty-row">Working tree clean</div>
               ) : (
                 <div className="github-panel-section">
-                  {gitStatus.files.map((file) => (
-                    <div key={file.path}>
-                      <button
-                        type="button"
-                        className="github-panel-row source-control-file-row"
-                        onClick={() =>
-                          setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
-                        }
-                      >
-                        <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
-                        <span className="github-panel-row-number">{file.status}</span>
-                        <span className="github-panel-row-title">{file.path}</span>
-                      </button>
-                      {expandedFilePath === file.path && (
-                        <ProjectFileDiff projectId={effectiveProjectId} filePath={file.path} />
-                      )}
-                    </div>
-                  ))}
+                  {gitStatus.files.map((file) => {
+                    const isDirectory = file.path.endsWith("/");
+                    return (
+                      <div key={file.path}>
+                        <button
+                          type="button"
+                          className="github-panel-row source-control-file-row"
+                          disabled={isDirectory}
+                          aria-expanded={isDirectory ? undefined : expandedFilePath === file.path}
+                          onClick={() =>
+                            !isDirectory &&
+                            setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
+                          }
+                        >
+                          <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
+                          <span className="github-panel-row-number">{file.status}</span>
+                          <span className="github-panel-row-title">{file.path}</span>
+                        </button>
+                        {!isDirectory && expandedFilePath === file.path && (
+                          <ProjectFileDiff projectId={effectiveProjectId} filePath={file.path} />
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

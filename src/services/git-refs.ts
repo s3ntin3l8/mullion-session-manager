@@ -169,7 +169,10 @@ export async function listBranches(
             .map((line) => line.trim())
             .filter((line) => line.length > 0),
         );
-        for (const branch of branches) branch.isMerged = mergedNames.has(branch.name);
+        const defaultBranchName = base.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
+        for (const branch of branches) {
+          branch.isMerged = branch.name !== defaultBranchName && mergedNames.has(branch.name);
+        }
       }
     }
   }

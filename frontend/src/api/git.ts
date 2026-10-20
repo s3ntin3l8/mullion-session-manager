@@ -162,6 +162,6 @@ export const gitApi = {
   // Control sidebar section, which has no session to anchor to).
   getProjectGitFileDiff: (projectId: number, path: string): Promise<GitFileDiffResponse> =>
     request<GitFileDiffResponse>(
-      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}&base=AUTO`,
+      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}`,
     ),
 };

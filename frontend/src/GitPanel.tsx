@@ -7,80 +7,15 @@ import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
 import { Toggle } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
+import { ProjectFileDiff } from "./SourceControlSection.js";
+import { GitHistorySection } from "./git/GitHistorySection.js";
+import { PHASE_LABEL, phaseTone } from "./github/prPhase.js";
 
 export interface GitPanelParams {
   projectId: number;
 }
 
-// Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
-// offering a Force retry for. Every other reason (invalid-name, no-such-
-// branch, not-a-repo, delete-failed, current-branch, checked-out, not-
-// listed, is-main, remove-failed) is either not fixable by force at all,
-// or already prevented client-side by disabling the action outright — see
-// the plan's "Errors and force" design.
-const FORCEABLE_REASONS = new Set([
-  "unmerged",
-  "task-branch",
-  "dirty",
-  "conflicts",
-  "sessions-active",
-]);
-
-function reasonMessage(reason: string | undefined, detail: string | undefined): string {
-  switch (reason) {
-    case "current-branch":
-      return "This is the current branch.";
-    case "checked-out":
-      return `Checked out in another worktree${detail ? `: ${detail}` : ""}.`;
-    case "unmerged":
-      return "This branch has commits not merged into the default base.";
-    case "task-branch":
-      return `Referenced by task ${detail ?? "?"} — Force will break its Retry.`;
-    case "no-such-branch":
-      return "Branch no longer exists.";
-    case "invalid-name":
-      return "Invalid branch name.";
-    case "not-a-repo":
-      return "Not a git repository.";
-    case "delete-failed":
-    case "remove-failed":
-      // Hermes review on PR #505 — git-branch-delete.ts now includes a
-      // truncated stderr in `detail` for this reason rather than
-      // discarding it, so an unexpected refusal is diagnosable here too.
-      return `The operation failed.${detail ? ` ${detail}` : ""}`;
-    case "not-listed":
-      return "This worktree is no longer reported by git.";
-    case "is-main":
-      return "The main worktree can't be removed.";
-    case "dirty":
-      return "This worktree has uncommitted changes.";
-    case "conflicts":
-      return "This worktree has unresolved merge conflicts.";
-    case "sessions-active":
-      return `Active session${detail?.includes(",") ? "s" : ""}: ${detail ?? "?"}.`;
-    case "directory-gone":
-      // Hermes review on PR #505 — distinct from the generic "not-a-repo",
-      // and deliberately not forceable: Prune stale is the correct action
-      // here, not a stronger form of Remove.
-      return "This worktree's directory no longer exists — use Prune stale instead.";
-    case "dirty-tree":
-      return "Working tree has uncommitted changes or conflicts.";
-    case "detached-head":
-      return "Cannot pull in a detached HEAD state.";
-    case "unborn-head":
-      return "The current branch has no commits.";
-    case "no-upstream":
-      return "No upstream tracking branch configured.";
-    case "not-fast-forward":
-      return "Branch has diverged from upstream (cannot fast-forward).";
-    case "already-up-to-date":
-      return "Already up to date.";
-    case "pull-failed":
-      return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
-    default:
-      return "Action failed.";
-  }
-}
+import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./git/gitReasons.js";
 
 // Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
 // convention (same technique as Dock.tsx's own isDockPreviewPath) — a
@@ -178,6 +113,13 @@ export function GitPanel({
   // in-flight guard; a double-click could create two sessions before the
   // first `createSession` call resolves.
   const [openingSessionFor, setOpeningSessionFor] = useState<Set<string>>(new Set());
+  const [expandedFilePath, setExpandedFilePath] = useState<string | null>(null);
+
+  const prs = useDashboardStore((s) => s.prsByProject[params.projectId]);
+  const sessions = useDashboardStore((s) => s.sessions);
+  const projectCwd = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === params.projectId)?.cwd,
+  );
 
   const autoFetch = useDashboardStore(
     (s) => s.projects.find((p) => p.id === params.projectId)?.autoFetch ?? null,
@@ -282,6 +224,7 @@ export function GitPanel({
     await refreshBranches();
     await fetchStatus();
     void useDashboardStore.getState().refreshGitRefs();
+    useDashboardStore.getState().bumpGitRefreshTrigger();
   }, [refreshBranches, fetchStatus]);
 
   const setRowError = useCallback(
@@ -554,23 +497,42 @@ export function GitPanel({
           {status.isClean ? "Clean" : `Changes (${status.files.length})`}
         </div>
         {status.isClean && <div className="github-panel-empty-row">Working tree clean</div>}
-        {status.files.map((file) => (
-          <div key={file.path} className="github-panel-row">
-            <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
-            <span className="github-panel-row-number">{file.status}</span>
-            <span className="github-panel-row-title">{file.path}</span>
-            {onEditFile && file.status !== "D" && !file.path.endsWith("/") && (
-              <button
-                className="git-panel-fetch-btn"
-                aria-label={`Edit ${file.path}`}
-                title={`Open ${file.path} in the file editor`}
-                onClick={() => onEditFile(file.path)}
-              >
-                Edit
-              </button>
-            )}
-          </div>
-        ))}
+        {status.files.map((file) => {
+          const isDirectory = file.path.endsWith("/");
+          return (
+            <div key={file.path}>
+              <div className="github-panel-row">
+                <button
+                  type="button"
+                  className="source-control-file-toggle"
+                  disabled={isDirectory}
+                  aria-expanded={isDirectory ? undefined : expandedFilePath === file.path}
+                  onClick={() =>
+                    !isDirectory &&
+                    setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
+                  }
+                >
+                  <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
+                  <span className="github-panel-row-number">{file.status}</span>
+                  <span className="github-panel-row-title">{file.path}</span>
+                </button>
+                {onEditFile && file.status !== "D" && !isDirectory && (
+                  <button
+                    className="git-panel-fetch-btn"
+                    aria-label={`Edit ${file.path}`}
+                    title={`Open ${file.path} in the file editor`}
+                    onClick={() => onEditFile(file.path)}
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+              {!isDirectory && expandedFilePath === file.path && (
+                <ProjectFileDiff projectId={params.projectId} filePath={file.path} />
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {status.hasConflicts && (
@@ -593,8 +555,10 @@ export function GitPanel({
               (w) => w.branch === branch.name && !w.isMain,
             );
             const deleteDisabled = branch.isCurrent || Boolean(checkedOutElsewhere);
+            const pr = prs?.prs?.find((p) => p.headBranch === branch.name);
+            const isDefaultBranch = isDefaultBranchName(branch.name, branchesResult.defaultBranch);
             const hints: string[] = [];
-            if (branch.isMerged) hints.push("merged");
+            if (!isDefaultBranch && branch.isMerged) hints.push("merged");
             if (branch.ahead || branch.behind) {
               hints.push(
                 `${branch.ahead ? `↑${branch.ahead}` : ""}${
@@ -606,14 +570,27 @@ export function GitPanel({
             if (branch.lastCommitRelative) hints.push(branch.lastCommitRelative);
             if (checkedOutElsewhere) hints.push(`in ${basename(checkedOutElsewhere.path)}`);
             const rowError = rowErrors[`branch:${branch.name}`];
+            const tooltip = branch.upstream
+              ? `${branch.name}\nTracks: ${branch.upstream}`
+              : branch.name;
             return (
               <div key={branch.name}>
                 <div className="github-panel-row">
                   <span
                     className={`github-panel-ci-dot ${branch.isCurrent ? "good" : "pending"}`}
                   />
-                  <span className="github-panel-row-title">{branch.name}</span>
+                  <span className="github-panel-row-title" title={tooltip}>
+                    {branch.name}
+                  </span>
                   {branch.isCurrent && <span className="github-panel-row-number">current</span>}
+                  {pr && (
+                    <span
+                      className={`gh-phase-pill ${pr.prPhase ? phaseTone(pr.prPhase) : "dim"}`}
+                      title={pr.prPhase ? PHASE_LABEL[pr.prPhase] : undefined}
+                    >
+                      #{pr.number}
+                    </span>
+                  )}
                   {hints.length > 0 && (
                     <span className="github-panel-row-number">{hints.join(" · ")}</span>
                   )}
@@ -671,15 +648,27 @@ export function GitPanel({
           </div>
           {branchesResult.worktrees.map((worktree) => {
             const rowError = rowErrors[`worktree:${worktree.path}`];
+            const pr = worktree.branch
+              ? prs?.prs?.find((p) => p.headBranch === worktree.branch)
+              : undefined;
+            const live = sessions.filter(
+              (s) =>
+                s.projectId === params.projectId &&
+                s.status === "active" &&
+                (s.liveCwd ?? s.cwd ?? projectCwd) === worktree.path,
+            );
             return (
               <div key={worktree.path}>
                 <div className="github-panel-row">
-                  <span className="github-panel-row-title">{worktree.path}</span>
+                  <span className="github-panel-row-title" title={worktree.path}>
+                    {worktree.path}
+                  </span>
                   <span className="github-panel-row-number">
                     {worktree.branch ?? "detached"}
                     {worktree.isMain ? " (main)" : ""}
                     {isDockPreviewWorktreePath(worktree.path) ? " auto" : ""}
                   </span>
+                  {pr && <span className="gh-task-chip">#{pr.number}</span>}
                   <span className="git-panel-row-actions">
                     {!worktree.isMain && (
                       <button
@@ -699,6 +688,21 @@ export function GitPanel({
                     </ConfirmButton>
                   </span>
                 </div>
+                {live.length > 0 && (
+                  <div className="git-worktree-sessions" style={{ paddingLeft: "14px" }}>
+                    {live.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        className="git-worktree-session-pill"
+                        title={`Open session ${s.name ?? s.id}`}
+                        onClick={() => onOpenSession?.(s)}
+                      >
+                        <span className="git-worktree-session-label">▶ {s.name ?? `#${s.id}`}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {rowError && (
                   <div className="github-panel-empty-row github-panel-conflicts">
                     {rowError.message}
@@ -719,6 +723,11 @@ export function GitPanel({
           })}
         </div>
       )}
+
+      <div className="github-panel-section">
+        <div className="github-panel-section-title">History</div>
+        <GitHistorySection projectId={params.projectId} />
+      </div>
     </div>
   );
 }

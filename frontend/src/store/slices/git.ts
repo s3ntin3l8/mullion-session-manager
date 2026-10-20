@@ -43,6 +43,8 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   gitBranchesByProject: {},
   prsByProject: {},
   defaultBranchCiByProject: {},
+  gitRefreshTrigger: 0,
+  bumpGitRefreshTrigger: () => set((s) => ({ gitRefreshTrigger: s.gitRefreshTrigger + 1 })),
 
   // Batch git-status fetch: replaces N parallel per-project requests with
   // a single request to GET /api/projects/git-statuses (which replaces N
@@ -240,11 +242,14 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // Manual git fetch for a project — runs `git fetch origin` now.
   fetchProjectGit: async (projectId: number) => {
     await api.postProjectGitFetch(projectId);
+    get().bumpGitRefreshTrigger();
   },
 
   // Issue #745 — Manual fast-forward git pull for a project.
   pullProjectGit: async (projectId: number) => {
-    return await api.postProjectGitPull(projectId);
+    const res = await api.postProjectGitPull(projectId);
+    get().bumpGitRefreshTrigger();
+    return res;
   },
 
   // Toggle auto-fetch for a project (null = inherit from global setting).

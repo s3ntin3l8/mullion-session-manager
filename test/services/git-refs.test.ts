@@ -170,6 +170,33 @@ describe("listBranches enrichment (issue #442)", () => {
     const branches = await listBranches(tmpDir, { detail: true });
     expect(branches?.find((b) => b.name === "merged-branch")?.isMerged).toBe(true);
     expect(branches?.find((b) => b.name === "unmerged-branch")?.isMerged).toBe(false);
+    expect(branches?.find((b) => b.name === "main")?.isMerged).toBe(false);
+  });
+
+  it("excludes a non-standard default branch (e.g. trunk) from isMerged when origin/HEAD points to it", async () => {
+    const trunkRepo = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-trunk-repo-"));
+    const trunkRemote = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-trunk-origin-"));
+    try {
+      git(trunkRemote, ["init", "--bare", "-b", "trunk"]);
+      fs.mkdirSync(trunkRepo, { recursive: true });
+      git(trunkRepo, ["init", "-b", "trunk"]);
+      fs.writeFileSync(path.join(trunkRepo, "a.txt"), "a");
+      commitAll(trunkRepo, "initial");
+      git(trunkRepo, ["remote", "add", "origin", trunkRemote]);
+      git(trunkRepo, ["push", "-u", "origin", "trunk"]);
+      git(trunkRepo, ["remote", "set-head", "origin", "trunk"]);
+      git(trunkRepo, ["branch", "merged-into-trunk"]);
+      git(trunkRepo, ["branch", "main"]);
+      git(trunkRepo, ["checkout", "-b", "working-feature"]);
+
+      const branches = await listBranches(trunkRepo, { detail: true });
+      expect(branches?.find((b) => b.name === "trunk")?.isMerged).toBe(false);
+      expect(branches?.find((b) => b.name === "merged-into-trunk")?.isMerged).toBe(true);
+      expect(branches?.find((b) => b.name === "main")?.isMerged).toBe(true);
+    } finally {
+      fs.rmSync(trunkRepo, { recursive: true, force: true });
+      fs.rmSync(trunkRemote, { recursive: true, force: true });
+    }
   });
 
   it("suppresses isMerged (leaves it undefined) when the base-ref chain falls through to HEAD", async () => {
