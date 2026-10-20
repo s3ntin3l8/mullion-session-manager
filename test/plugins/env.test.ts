@@ -117,6 +117,7 @@ describe("env plugin", () => {
       "DEVICE_VIDEO_MAX_FPS",
       "DEVICE_VIDEO_BIT_RATE",
       "DEVICE_EMULATOR_GPU",
+      "DEVICE_EMULATOR_HEADLESS",
     ];
     afterEach(() => {
       for (const v of VARS) delete process.env[v];
@@ -128,6 +129,7 @@ describe("env plugin", () => {
       expect(app.config.DEVICE_VIDEO_MAX_FPS).toBe(60);
       expect(app.config.DEVICE_VIDEO_BIT_RATE).toBe(8_000_000);
       expect(app.config.DEVICE_EMULATOR_GPU).toBe("swiftshader_indirect");
+      expect(app.config.DEVICE_EMULATOR_HEADLESS).toBe(true);
       await app.close();
     });
 

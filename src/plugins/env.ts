@@ -750,11 +750,23 @@ export const schema = {
     // login shell: the emulator inherits the service process environment via
     // systemd-run --user --scope. See docs/device-panel.md. Common values: auto,
     // host, swiftshader_indirect, swangle_indirect, guest.
-    // Deliberately not an enum: newer emulators add modes.
+    // Deliberately not an enum: newer emulators add modes. Settings → Devices
+    // can override this for the next emulator start (settings.devices.emulatorGpu);
+    // changing this env var still needs a restart to become the new default.
     DEVICE_EMULATOR_GPU: {
       type: "string",
       default: DEFAULT_DEVICE_EMULATOR_GPU,
       pattern: "^\\S+$",
+    },
+    // Pass `-no-window` when launching an emulator. Default true: Mullion
+    // streams the guest through scrcpy, so a host window is usually useless
+    // and, on a headless service, fails the boot. Set false only when a
+    // workflow needs the emulator's own window on the host display (camera,
+    // AR, visual debugging). Settings → Devices can override this for the
+    // next emulator start without a restart.
+    DEVICE_EMULATOR_HEADLESS: {
+      type: "boolean",
+      default: true,
     },
     // mDNS scanner for the physical-device pairing flow (src/services/
     // device-discovery.ts). When enabled, the backend binds a Bonjour/
@@ -1008,6 +1020,7 @@ declare module "fastify" {
       DEVICE_VIDEO_MAX_FPS: number;
       DEVICE_VIDEO_BIT_RATE: number;
       DEVICE_EMULATOR_GPU: string;
+      DEVICE_EMULATOR_HEADLESS: boolean;
       DEVICE_AVDMANAGER_PATH: string;
       DEVICE_SDKMANAGER_PATH: string;
       DEVICE_ANDROID_SDK_ROOT: string;

@@ -32,7 +32,11 @@ import { CloseIcon, PlusIcon, SearchIcon, TrashIcon } from "../../ui/icons.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
 import { findReconnectSuggestions } from "./deviceReconnect.js";
 import { useServerInfo } from "../useServerInfo.js";
-import { DeviceDiscoverySetting } from "../RuntimeSettings.js";
+import {
+  DeviceDiscoverySetting,
+  EmulatorGpuSetting,
+  EmulatorWindowSetting,
+} from "../RuntimeSettings.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -45,6 +49,34 @@ const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
 
 function isAvdNameValid(name: string): boolean {
   return AVD_NAME_PATTERN.test(name) && AVD_NAME_HAS_ALPHANUMERIC.test(name);
+}
+
+// Mirrors normalizeAvdHardware in src/services/avd-manager.ts. The server
+// check is authoritative; this only fails fast in the form. Empty is unset.
+const AVD_SIZE_TOKEN = /^(\d{1,6})([KMG])?$/i;
+
+function avdHardwareError(sdcard: string, ram: string, data: string): string | null {
+  const sd = sdcard.trim();
+  if (sd && !/^(\d{1,6})([KMG])$/i.test(sd)) {
+    return "sdcardSize must be a size like 512M or 2G (16M–128G)";
+  }
+  const ramTrimmed = ram.trim();
+  if (ramTrimmed && !AVD_SIZE_TOKEN.test(ramTrimmed)) {
+    return "ramSize must be megabytes (128–16384), or a size like 2048M or 2G";
+  }
+  if (ramTrimmed.toUpperCase().endsWith("K")) {
+    return "ramSize must be megabytes (128–16384), or a size like 2048M or 2G";
+  }
+  const dataTrimmed = data.trim();
+  if (dataTrimmed && !/^(\d{1,6})([KMG])$/i.test(dataTrimmed)) {
+    return "dataPartitionSize must be a size like 6G or 800M (64M–512G)";
+  }
+  return null;
+}
+
+function optionalSize(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 // Names what's wrong with *this* value (the Row desc already states the
@@ -219,6 +251,9 @@ export function DevicesSection() {
   const [deviceProfiles, setDeviceProfiles] = useState<string[]>([]);
   const [selectedSystemImage, setSelectedSystemImage] = useState("");
   const [selectedDeviceProfile, setSelectedDeviceProfile] = useState("");
+  const [sdcardSize, setSdcardSize] = useState("");
+  const [ramSize, setRamSize] = useState("");
+  const [dataPartitionSize, setDataPartitionSize] = useState("");
   const [provisioningLoaded, setProvisioningLoaded] = useState(false);
   const [creatingAvd, setCreatingAvd] = useState(false);
   const [createAvdError, setCreateAvdError] = useState<string | null>(null);
@@ -551,13 +586,24 @@ export function DevicesSection() {
     if (!isAvdNameValid(trimmedName) || !selectedSystemImage || !selectedDeviceProfile) {
       return;
     }
+    const hardwareError = avdHardwareError(sdcardSize, ramSize, dataPartitionSize);
+    if (hardwareError) {
+      setCreateAvdError(hardwareError);
+      return;
+    }
     setCreateAvdError(null);
     setCreatingAvd(true);
+    const sdcard = optionalSize(sdcardSize);
+    const ram = optionalSize(ramSize);
+    const data = optionalSize(dataPartitionSize);
     api
       .createAvd({
         name: trimmedName,
         systemImage: selectedSystemImage,
         deviceProfile: selectedDeviceProfile,
+        ...(sdcard ? { sdcardSize: sdcard } : {}),
+        ...(ram ? { ramSize: ram } : {}),
+        ...(data ? { dataPartitionSize: data } : {}),
       })
       .then(() => {
         // Creation itself succeeded — close the sub-form and select the new
@@ -569,6 +615,9 @@ export function DevicesSection() {
         // stale until the next refresh.
         setNewAvdOpen(false);
         setNewAvdName("");
+        setSdcardSize("");
+        setRamSize("");
+        setDataPartitionSize("");
         setAvdName(trimmedName);
         return api
           .listAvds()
@@ -657,6 +706,8 @@ export function DevicesSection() {
         </div>
       )}
       <DeviceDiscoverySetting />
+      <EmulatorWindowSetting />
+      <EmulatorGpuSetting />
       <GroupHeading
         title="Android devices"
         desc="Emulators and phones whose screens you can open in a panel."
@@ -904,6 +955,45 @@ export function DevicesSection() {
                   No device profiles found. Check the Android SDK command-line tools installation.
                 </div>
               )}
+              <Row
+                label="SD card"
+                desc="Optional. A size like 2048M or 2G. Blank keeps the SDK default."
+              >
+                <div className="settings-numberfield" style={{ width: 160 }}>
+                  <input
+                    aria-label="SD card size"
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="2048M"
+                    value={sdcardSize}
+                    onChange={(e) => setSdcardSize(e.target.value)}
+                  />
+                </div>
+              </Row>
+              <Row label="RAM" desc="Optional. Megabytes, or a size like 2048M or 2G.">
+                <div className="settings-numberfield" style={{ width: 160 }}>
+                  <input
+                    aria-label="RAM"
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="2048"
+                    value={ramSize}
+                    onChange={(e) => setRamSize(e.target.value)}
+                  />
+                </div>
+              </Row>
+              <Row
+                label="Data partition"
+                desc="Optional. A size like 6G or 800M. Blank keeps the SDK default."
+              >
+                <div className="settings-numberfield" style={{ width: 160 }}>
+                  <input
+                    aria-label="Data partition"
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="6G"
+                    value={dataPartitionSize}
+                    onChange={(e) => setDataPartitionSize(e.target.value)}
+                  />
+                </div>
+              </Row>
               <div style={{ marginTop: 8 }}>
                 <SecondaryButton
                   onClick={submitCreateAvd}

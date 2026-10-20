@@ -136,6 +136,65 @@ export function DeviceDiscoverySetting() {
   );
 }
 
+const EMULATOR_GPU_MODES = [
+  "swiftshader_indirect",
+  "host",
+  "auto",
+  "swangle_indirect",
+  "guest",
+] as const;
+
+export function EmulatorWindowSetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const env = useServerInfo()?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
+  const saved = settings.devices.emulatorHeadless;
+  return (
+    <Row
+      label="Emulator window"
+      desc="Headless skips the emulator's own window — the panel already shows the screen. Show window needs a display on this machine. Applies the next time an emulator starts."
+    >
+      <Dropdown<"inherit" | "on" | "off">
+        ariaLabel="Emulator window"
+        value={saved}
+        onChange={(v) => updateSettings({ devices: { emulatorHeadless: v } })}
+        options={[
+          {
+            value: "inherit",
+            label: `Server default (${env.deviceEmulatorHeadless ? "Headless" : "Show window"})`,
+          },
+          { value: "on", label: "Headless" },
+          { value: "off", label: "Show window" },
+        ]}
+      />
+    </Row>
+  );
+}
+
+export function EmulatorGpuSetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const env = useServerInfo()?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
+  const saved = settings.devices.emulatorGpu;
+  const known = EMULATOR_GPU_MODES as readonly string[];
+  const options = [
+    { value: "inherit", label: `Server default (${env.deviceEmulatorGpu})` },
+    ...EMULATOR_GPU_MODES.map((mode) => ({ value: mode, label: mode })),
+    ...(saved && !known.includes(saved) ? [{ value: saved, label: saved }] : []),
+  ];
+  return (
+    <Row
+      label="Emulator GPU"
+      desc="How the emulator draws. Software rendering works everywhere; host uses this machine's GPU and needs a display. Applies the next time an emulator starts. Other modes stay on the server default (DEVICE_EMULATOR_GPU)."
+    >
+      <Dropdown<string>
+        ariaLabel="Emulator GPU"
+        value={saved ?? "inherit"}
+        onChange={(v) => updateSettings({ devices: { emulatorGpu: v === "inherit" ? null : v } })}
+        options={options}
+      />
+    </Row>
+  );
+}
+
 export function BrowserFramerateSetting() {
   const { settings, updateSettings } = useDashboardStore();
   const info = useServerInfo();

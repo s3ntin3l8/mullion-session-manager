@@ -5,6 +5,7 @@ import {
   resolveBrowserFramerate,
   resolveBrowserMaxInstances,
   resolveDeviceDiscoveryEnabled,
+  resolveDeviceEmulatorLaunch,
   resolveGitHubPoll,
   resolveHeartbeatSeconds,
   resolveLogLevel,
@@ -21,6 +22,8 @@ const app = {
     BROWSER_FRAMERATE: 10,
     BROWSER_MAX_INSTANCES: 4,
     DEVICE_DISCOVERY_ENABLED: true,
+    DEVICE_EMULATOR_HEADLESS: true,
+    DEVICE_EMULATOR_GPU: "swiftshader_indirect",
     LOG_LEVEL: "info",
   },
 } as unknown as FastifyInstance;
@@ -39,6 +42,8 @@ describe("runtime-config", () => {
       browserFramerate: 10,
       browserMaxInstances: 4,
       deviceDiscoveryEnabled: true,
+      deviceEmulatorHeadless: true,
+      deviceEmulatorGpu: "swiftshader_indirect",
       logLevel: "info",
     });
   });
@@ -59,7 +64,7 @@ describe("runtime-config", () => {
       github: { pollActiveSeconds: 20, pollQuietSeconds: 120, pollStaleThresholdSeconds: 600 },
       hosts: { heartbeatSeconds: 0 },
       browser: { framerate: 24, maxInstances: 8 },
-      devices: { discoveryEnabled: "off" },
+      devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" },
       server: { logLevel: "debug" },
     });
     expect(resolveGitHubPoll(s, app)).toEqual({
@@ -90,15 +95,39 @@ describe("runtime-config", () => {
     expect(resolveDeviceDiscoveryEnabled(DEFAULT_SETTINGS, app)).toBe(true);
     const s = withOverrides({
       browser: { framerate: -1, maxInstances: 8 },
-      devices: { discoveryEnabled: "off" },
+      devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" },
     });
     expect(resolveBrowserMaxInstances(s, app)).toBe(8);
     expect(resolveDeviceDiscoveryEnabled(s, app)).toBe(false);
-    const on = withOverrides({ devices: { discoveryEnabled: "on" } });
+    const on = withOverrides({
+      devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "on" },
+    });
     expect(
       resolveDeviceDiscoveryEnabled(on, {
         config: { ...app.config, DEVICE_DISCOVERY_ENABLED: false },
       } as unknown as FastifyInstance),
     ).toBe(true);
+  });
+
+  it("resolves emulator launch flags from settings, then env", () => {
+    expect(resolveDeviceEmulatorLaunch(DEFAULT_SETTINGS, app)).toEqual({
+      headless: true,
+      gpu: "swiftshader_indirect",
+    });
+    const overridden = withOverrides({
+      devices: { ...DEFAULT_SETTINGS.devices, emulatorHeadless: "off", emulatorGpu: "host" },
+    });
+    expect(resolveDeviceEmulatorLaunch(overridden, app)).toEqual({ headless: false, gpu: "host" });
+    const windowedEnv = {
+      config: { ...app.config, DEVICE_EMULATOR_HEADLESS: false, DEVICE_EMULATOR_GPU: "auto" },
+    } as unknown as FastifyInstance;
+    expect(resolveDeviceEmulatorLaunch(DEFAULT_SETTINGS, windowedEnv)).toEqual({
+      headless: false,
+      gpu: "auto",
+    });
+    const forcedHeadless = withOverrides({
+      devices: { ...DEFAULT_SETTINGS.devices, emulatorHeadless: "on" },
+    });
+    expect(resolveDeviceEmulatorLaunch(forcedHeadless, windowedEnv).headless).toBe(true);
   });
 });

@@ -672,6 +672,20 @@ describe("sanitizeSettings: runtime env overrides", () => {
     ).toBe("inherit");
   });
 
+  it("keeps emulator launch overrides and drops a GPU value that is not one token", () => {
+    const on = mergeSettings({
+      devices: { emulatorHeadless: "off", emulatorGpu: "host" },
+    });
+    expect(on.devices.emulatorHeadless).toBe("off");
+    expect(on.devices.emulatorGpu).toBe("host");
+    const dropped = mergeSettings({
+      devices: { emulatorHeadless: "sometimes" as never, emulatorGpu: "host swiftshader" },
+    });
+    expect(dropped.devices.emulatorHeadless).toBe("inherit");
+    expect(dropped.devices.emulatorGpu).toBeNull();
+    expect(mergeSettings({}).devices.emulatorGpu).toBeNull();
+  });
+
   it("accepts a known log level and rejects anything else", () => {
     expect(mergeSettings({ server: { logLevel: "debug" } }).server.logLevel).toBe("debug");
     expect(mergeSettings({ server: { logLevel: "verbose" } }).server.logLevel).toBe("inherit");

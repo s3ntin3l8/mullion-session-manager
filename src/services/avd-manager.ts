@@ -1,6 +1,6 @@
 // AVD (Android Virtual Device) listing/creation — the counterpart to
 // device-manager.ts's *running* half.
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { execFile as execFileCb } from "node:child_process";
 import path from "node:path";
 import { armKillEscalation } from "./session-process.js";
@@ -225,8 +225,190 @@ export interface CreateAvdOptions {
   name: string;
   systemImage: string;
   deviceProfile: string;
+  /** `avdmanager create avd -c`, e.g. `2048M`. Already validated. */
+  sdcardSize?: string;
+  /** config.ini `hw.ramSize`, integer megabytes, e.g. `2048`. */
+  ramSizeMb?: string;
+  /** config.ini `disk.dataPartition.size`, e.g. `6G`. */
+  dataPartitionSize?: string;
   timeoutMs?: number;
   execFileFn?: ExecFileFn;
+}
+
+// The only config.ini keys Mullion will write. RAM and the data partition
+// are not `avdmanager create` flags — they live in the AVD's generated
+// config.ini and have to be patched after create. An SD card is the `-c`
+// flag instead, so it is not in this set.
+const AVD_CONFIG_INI_KEYS = ["hw.ramSize", "disk.dataPartition.size"] as const;
+type AvdConfigIniKey = (typeof AVD_CONFIG_INI_KEYS)[number];
+
+const SIZE_TOKEN = /^(\d{1,6})([KMG])?$/i;
+
+function sizeToBytes(amount: number, unit: string): number | null {
+  const mult = unit === "K" ? 1024 : unit === "M" ? 1024 * 1024 : 1024 * 1024 * 1024;
+  const bytes = amount * mult;
+  return Number.isSafeInteger(bytes) ? bytes : null;
+}
+
+function parseSizeToken(
+  raw: string,
+): { amount: number; unit: "K" | "M" | "G" | null; bytes: number | null } | null {
+  const match = SIZE_TOKEN.exec(raw.trim());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) return null;
+  const unit = match[2] ? (match[2].toUpperCase() as "K" | "M" | "G") : null;
+  // A bare number has no byte size of its own — callers that require a unit
+  // reject it, and RAM treats a bare number as megabytes.
+  const bytes = unit === null ? null : sizeToBytes(amount, unit);
+  if (unit !== null && bytes === null) return null;
+  return { amount, unit, bytes };
+}
+
+function within(bytes: number, min: number, max: number): boolean {
+  return bytes >= min && bytes <= max;
+}
+
+const SDCARD_MIN = 16 * 1024 * 1024;
+const SDCARD_MAX = 128 * 1024 * 1024 * 1024;
+const RAM_MIN_MB = 128;
+const RAM_MAX_MB = 16 * 1024;
+const DATA_MIN = 64 * 1024 * 1024;
+const DATA_MAX = 512 * 1024 * 1024 * 1024;
+
+export function normalizeAvdHardware(input: {
+  sdcardSize?: unknown;
+  ramSize?: unknown;
+  dataPartitionSize?: unknown;
+}):
+  | { ok: true; value: { sdcardSize?: string; ramSizeMb?: string; dataPartitionSize?: string } }
+  | { ok: false; message: string } {
+  const value: { sdcardSize?: string; ramSizeMb?: string; dataPartitionSize?: string } = {};
+
+  const sdcard = readOptionalSize(input.sdcardSize, "sdcardSize");
+  if (!sdcard.ok) return sdcard;
+  if (sdcard.value !== undefined) {
+    const parsed = parseSizeToken(sdcard.value);
+    const bytes = parsed?.bytes ?? null;
+    if (
+      !parsed ||
+      parsed.unit === null ||
+      bytes === null ||
+      !within(bytes, SDCARD_MIN, SDCARD_MAX)
+    ) {
+      return {
+        ok: false,
+        message: "sdcardSize must be a size like 512M or 2G (16M–128G)",
+      };
+    }
+    value.sdcardSize = `${parsed.amount}${parsed.unit}`;
+  }
+
+  const ram = readOptionalSize(input.ramSize, "ramSize");
+  if (!ram.ok) return ram;
+  if (ram.value !== undefined) {
+    const parsed = parseSizeToken(ram.value);
+    // config.ini's hw.ramSize is megabytes. A bare number is already MB;
+    // `2048M` is the same; `2G` converts. Kilobytes are not a RAM size.
+    const mb =
+      parsed === null || parsed.unit === "K"
+        ? null
+        : parsed.unit === null || parsed.unit === "M"
+          ? parsed.amount
+          : parsed.amount * 1024;
+    if (mb === null || !Number.isSafeInteger(mb) || mb < RAM_MIN_MB || mb > RAM_MAX_MB) {
+      return {
+        ok: false,
+        message: "ramSize must be megabytes (128–16384), or a size like 2048M or 2G",
+      };
+    }
+    value.ramSizeMb = String(mb);
+  }
+
+  const data = readOptionalSize(input.dataPartitionSize, "dataPartitionSize");
+  if (!data.ok) return data;
+  if (data.value !== undefined) {
+    const parsed = parseSizeToken(data.value);
+    const bytes = parsed?.bytes ?? null;
+    if (!parsed || parsed.unit === null || bytes === null || !within(bytes, DATA_MIN, DATA_MAX)) {
+      return {
+        ok: false,
+        message: "dataPartitionSize must be a size like 6G or 800M (64M–512G)",
+      };
+    }
+    value.dataPartitionSize = `${parsed.amount}${parsed.unit}`;
+  }
+
+  return { ok: true, value };
+}
+
+function readOptionalSize(
+  raw: unknown,
+  field: string,
+): { ok: true; value?: string } | { ok: false; message: string } {
+  if (raw === undefined || raw === null) return { ok: true };
+  if (typeof raw !== "string") return { ok: false, message: `${field} must be a string` };
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return { ok: true };
+  return { ok: true, value: trimmed };
+}
+
+// `avdmanager list avd` prints one block per AVD, separated by a dashed
+// line, with `Name:` and `Path:` lines. The path is the `.avd` directory
+// that holds config.ini. Only a path whose basename is `<name>.avd` is
+// accepted — the name is caller-supplied, and a mismatched or relative
+// path must not become a write target.
+export function avdConfigDirFromListOutput(output: string, name: string): string | null {
+  if (!name || name.includes("/") || name.includes("\\")) return null;
+  for (const block of output.split(/\n\s*-{3,}\s*(?:\n|$)/)) {
+    const nameMatch = /^\s*Name:\s*(.+)$/m.exec(block);
+    const pathMatch = /^\s*Path:\s*(.+)$/m.exec(block);
+    if (!nameMatch || !pathMatch) continue;
+    if (nameMatch[1].trim() !== name) continue;
+    const dir = path.resolve(pathMatch[1].trim());
+    if (path.basename(dir) !== `${name}.avd`) return null;
+    return dir;
+  }
+  return null;
+}
+
+// Rewrites only the allowlisted keys. An unknown key throws rather than
+// being written — this helper is the entire ini-write surface, and a
+// future caller must not be able to pass an arbitrary key through it.
+// Existing lines keep their key spelling; a missing key is appended.
+export function patchAvdConfigIni(
+  content: string,
+  updates: Partial<Record<AvdConfigIniKey, string>>,
+): string {
+  for (const key of Object.keys(updates)) {
+    if (!AVD_CONFIG_INI_KEYS.includes(key as AvdConfigIniKey)) {
+      throw new Error(`config.ini key not allowed: ${key}`);
+    }
+    const value = updates[key as AvdConfigIniKey];
+    if (value === undefined || !/^[0-9]+[KMG]?$/.test(value)) {
+      throw new Error(`config.ini value not allowed for ${key}`);
+    }
+  }
+  const lines = content.split("\n");
+  const seen = new Set<string>();
+  const next = lines.map((line) => {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || trimmed.startsWith("#")) return line;
+    const eq = trimmed.indexOf("=");
+    if (eq === -1) return line;
+    const key = trimmed.slice(0, eq).trim();
+    if (!Object.prototype.hasOwnProperty.call(updates, key)) return line;
+    const value = updates[key as AvdConfigIniKey];
+    if (value === undefined) return line;
+    seen.add(key);
+    return `${key}=${value}`;
+  });
+  while (next.length > 0 && next[next.length - 1] === "") next.pop();
+  for (const key of AVD_CONFIG_INI_KEYS) {
+    const value = updates[key];
+    if (value !== undefined && !seen.has(key)) next.push(`${key}=${value}`);
+  }
+  return `${next.join("\n")}\n`;
 }
 
 // `avdmanager create avd -k <systemImage> -d <deviceProfile>` — verified
@@ -238,15 +420,57 @@ export interface CreateAvdOptions {
 // without `--force` asks one) fails fast on EOF instead of hanging until
 // timeoutMs. Deliberately does NOT pass `--force` — a duplicate name should
 // surface as a clear "already exists" error, not silently overwrite an
-// existing AVD.
+// existing AVD. Optional `-c` sets the SD-card size at create time. RAM and
+// the data partition are patched into config.ini afterwards because
+// avdmanager has no flag for them.
 export async function createAvd(opts: CreateAvdOptions): Promise<void> {
+  const args = ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile];
+  if (opts.sdcardSize) args.push("-c", opts.sdcardSize);
   await execFileWithEscalation(
     opts.execFileFn ?? execFileCb,
     opts.avdmanagerPath,
-    ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile],
+    args,
     opts.timeoutMs ?? CREATE_AVD_TIMEOUT_MS,
     (child) => child.stdin?.end(),
   );
+  if (!opts.ramSizeMb && !opts.dataPartitionSize) return;
+
+  let dir: string | null;
+  try {
+    const { stdout } = await execFileWithEscalation(
+      opts.execFileFn ?? execFileCb,
+      opts.avdmanagerPath,
+      ["list", "avd"],
+      opts.timeoutMs ?? LIST_TIMEOUT_MS,
+    );
+    dir = avdConfigDirFromListOutput(stdout, opts.name);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `AVD ${opts.name} was created, but its config.ini path could not be found: ${detail}`,
+      { cause: err },
+    );
+  }
+  if (!dir) {
+    throw new Error(
+      `AVD ${opts.name} was created, but its config.ini path could not be found: avdmanager list avd did not report a config directory for this name`,
+    );
+  }
+
+  const iniPath = path.join(dir, "config.ini");
+  let current: string;
+  try {
+    current = readFileSync(iniPath, "utf8");
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`AVD ${opts.name} was created, but ${iniPath} could not be read: ${detail}`, {
+      cause: err,
+    });
+  }
+  const updates: Partial<Record<AvdConfigIniKey, string>> = {};
+  if (opts.ramSizeMb) updates["hw.ramSize"] = opts.ramSizeMb;
+  if (opts.dataPartitionSize) updates["disk.dataPartition.size"] = opts.dataPartitionSize;
+  writeFileSync(iniPath, patchAvdConfigIni(current, updates));
 }
 
 // ---------------------------------------------------------------------------

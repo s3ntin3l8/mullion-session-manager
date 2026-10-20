@@ -478,6 +478,15 @@ export interface AppSettings {
     // DEVICE_DISCOVERY_ENABLED (mDNS phone discovery). Read once at boot: a
     // change needs a restart.
     discoveryEnabled: "inherit" | "on" | "off";
+    // DEVICE_EMULATOR_HEADLESS. "on" passes `-no-window` (today's default).
+    // Read on every emulator start, not at boot — a change applies to the
+    // next launch without a restart. Host-wide, not per device: the host
+    // either has a display for an emulator window or it does not.
+    emulatorHeadless: "inherit" | "on" | "off";
+    // DEVICE_EMULATOR_GPU. `null` inherits the env default. A string is a
+    // single token (`swiftshader_indirect`, `host`, …). Also read on every
+    // emulator start. Not an enum: newer emulators add modes.
+    emulatorGpu: string | null;
   };
   server: {
     // LOG_LEVEL. Applied live to the root logger.
@@ -626,6 +635,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   devices: {
     discoveryEnabled: "inherit",
+    emulatorHeadless: "inherit",
+    emulatorGpu: null,
   },
   server: {
     logLevel: "inherit",
@@ -883,6 +894,16 @@ function safeSentinelNumber(
   return Math.min(max, Math.max(min, value));
 }
 
+// A `-gpu` mode is one token, the same constraint as env.ts's
+// DEVICE_EMULATOR_GPU pattern. `null` (and anything that isn't) means
+// "inherit the env default" — never forward a blank or a multi-word string
+// to the emulator. Capped so a settings blob can't store an unbounded token.
+function sanitizeEmulatorGpu(value: string | null): string | null {
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return /^\S{1,64}$/.test(trimmed) ? trimmed : null;
+}
+
 // Clamps/repairs numeric fields to a sane range, falling back to the
 // default on anything non-finite or out of bounds. The type guard in
 // deepMerge above only proves a patched leaf is *a* number, not a *sane*
@@ -1054,6 +1075,14 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         settings.devices.discoveryEnabled === "on" || settings.devices.discoveryEnabled === "off"
           ? settings.devices.discoveryEnabled
           : DEFAULT_SETTINGS.devices.discoveryEnabled,
+      emulatorHeadless:
+        settings.devices.emulatorHeadless === "on" || settings.devices.emulatorHeadless === "off"
+          ? settings.devices.emulatorHeadless
+          : DEFAULT_SETTINGS.devices.emulatorHeadless,
+      // null inherits DEVICE_EMULATOR_GPU. Anything that isn't one token
+      // (a space, empty, or a sentence) is not a `-gpu` value — drop it
+      // back to inherit rather than forwarding it to the emulator.
+      emulatorGpu: sanitizeEmulatorGpu(settings.devices.emulatorGpu),
     },
     server: {
       logLevel:

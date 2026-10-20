@@ -10,6 +10,7 @@ import {
   uninstallSystemImage,
   acceptLicenses,
   licensesMayBePending,
+  normalizeAvdHardware,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
 
@@ -39,6 +40,9 @@ interface CreateAvdBody {
   name?: string;
   systemImage?: string;
   deviceProfile?: string;
+  sdcardSize?: string;
+  ramSize?: string;
+  dataPartitionSize?: string;
 }
 
 export async function avdsRoute(app: FastifyInstance): Promise<void> {
@@ -136,12 +140,20 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
       return reply.badRequest("deviceProfile must be one of the host's known device profiles");
     }
 
+    // Optional hardware. Empty/absent leaves avdmanager's own defaults.
+    // Invalid sizes fail before createAvd so a bad SD-card string never
+    // reaches the binary, and a bad RAM string never leaves a half-patched
+    // AVD behind.
+    const hardware = normalizeAvdHardware(request.body ?? {});
+    if (!hardware.ok) return reply.badRequest(hardware.message);
+
     try {
       await createAvd({
         avdmanagerPath: app.config.DEVICE_AVDMANAGER_PATH,
         name,
         systemImage,
         deviceProfile,
+        ...hardware.value,
       });
     } catch (err) {
       return reply.badRequest(err instanceof Error ? err.message : String(err));

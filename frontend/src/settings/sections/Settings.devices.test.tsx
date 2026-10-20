@@ -692,6 +692,46 @@ describe("Settings -> Devices (issue #1326)", () => {
     ]);
   });
 
+  it("creating a new AVD sends optional hardware sizes and omits blank ones", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
+    await user.type(screen.getByLabelText("SD card size"), "2048M");
+    await user.type(screen.getByLabelText("RAM"), "2G");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    await waitFor(() => {
+      expect(avdCreateCalls).toEqual([
+        {
+          name: "pixel_9_hw",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_6",
+          sdcardSize: "2048M",
+          ramSize: "2G",
+        },
+      ]);
+    });
+  });
+
+  it("refuses a bare SD card number before posting", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_bad");
+    await user.type(screen.getByLabelText("SD card size"), "512");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    expect(await screen.findByText(/sdcardSize must be a size/)).toBeInTheDocument();
+    expect(avdCreateCalls).toEqual([]);
+  });
+
   // Hermes review — a failure of the post-create picker refresh used to be
   // reported as "Could not create this AVD" even though creation itself
   // succeeded, leaving the sub-form open with a stale picker (a retry would

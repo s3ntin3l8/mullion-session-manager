@@ -1,15 +1,18 @@
 import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ExecFileFn } from "../../src/services/avd-manager.js";
 import {
+  avdConfigDirFromListOutput,
   createAvd,
   listAvds,
   listDeviceProfiles,
   listInstalledSystemImages,
+  normalizeAvdHardware,
   parseSdkManagerList,
+  patchAvdConfigIni,
   listAvailableSystemImages,
   installSystemImage,
   uninstallSystemImage,
@@ -281,6 +284,139 @@ describe("createAvd", () => {
     expect(execFileFn.mock.calls[0][1]).not.toContain("--force");
     expect(execFileFn.mock.calls[0][1]).not.toContain("-f");
     expect(child.stdin.end).toHaveBeenCalled();
+  });
+
+  it("appends -c and does not list AVDs when only an SD card size is set", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child);
+
+    await createAvd({
+      avdmanagerPath: "/opt/sdk/avdmanager",
+      name: "pixel_7",
+      systemImage: "system-images;android-35;google_apis;x86_64",
+      deviceProfile: "pixel_6",
+      sdcardSize: "2048M",
+      execFileFn,
+    });
+
+    expect(execFileFn).toHaveBeenCalledTimes(1);
+    expect(execFileFn).toHaveBeenCalledWith(
+      "/opt/sdk/avdmanager",
+      [
+        "create",
+        "avd",
+        "-n",
+        "pixel_7",
+        "-k",
+        "system-images;android-35;google_apis;x86_64",
+        "-d",
+        "pixel_6",
+        "-c",
+        "2048M",
+      ],
+      expect.any(Function),
+    );
+  });
+
+  it("patches hw.ramSize and disk.dataPartition.size in the AVD config.ini avdmanager reports", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-ini-"));
+    const dir = path.join(root, "pixel_7.avd");
+    mkdirSync(dir);
+    const iniPath = path.join(dir, "config.ini");
+    writeFileSync(iniPath, "hw.ramSize=512\nhw.lcd.width=1080\n");
+    const listOutput = `Available Android Virtual Devices:
+    Name: other
+    Path: /tmp/other.avd
+---------
+    Name: pixel_7
+    Path: ${dir}
+---------
+`;
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? listOutput : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        dataPartitionSize: "6G",
+        execFileFn,
+      });
+      const ini = readFileSync(iniPath, "utf8");
+      expect(ini).toBe("hw.ramSize=2048\nhw.lcd.width=1080\ndisk.dataPartition.size=6G\n");
+      expect(execFileFn).toHaveBeenCalledTimes(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says the AVD was created when its config directory cannot be found", async () => {
+    const child = makeFakeChild();
+    const execFileFn = fakeExecFileResolving(child, {
+      stdout: "Available Android Virtual Devices:\n",
+    });
+    await expect(
+      createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        execFileFn,
+      }),
+    ).rejects.toThrow(/pixel_7 was created/);
+  });
+});
+
+describe("AVD hardware helpers", () => {
+  it("normalizes sizes and rejects ones outside the allowlist", () => {
+    expect(
+      normalizeAvdHardware({ sdcardSize: "2048m", ramSize: "2G", dataPartitionSize: "800M" }),
+    ).toEqual({
+      ok: true,
+      value: { sdcardSize: "2048M", ramSizeMb: "2048", dataPartitionSize: "800M" },
+    });
+    expect(normalizeAvdHardware({ sdcardSize: "  ", ramSize: "" })).toEqual({
+      ok: true,
+      value: {},
+    });
+    expect(normalizeAvdHardware({ sdcardSize: "512" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ ramSize: "64" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ dataPartitionSize: "4K" }).ok).toBe(false);
+    expect(normalizeAvdHardware({ ramSize: 2048 }).ok).toBe(false);
+  });
+
+  it("only accepts an avdmanager Path whose directory is named <avd>.avd", () => {
+    expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "pixel_7")).toBe(
+      "/home/user/.android/avd/pixel_7.avd",
+    );
+    expect(
+      avdConfigDirFromListOutput(
+        "    Name: pixel_7\n    Path: /tmp/pixel_7.avd/../../etc\n",
+        "pixel_7",
+      ),
+    ).toBeNull();
+    expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "missing")).toBeNull();
+  });
+
+  it("refuses to write a config.ini key outside the allowlist", () => {
+    expect(() => patchAvdConfigIni("hw.ramSize=512\n", { "hw.keyboard": "no" } as never)).toThrow(
+      /not allowed/,
+    );
   });
 
   it("rejects with the process's own stderr on failure (e.g. duplicate AVD name)", async () => {

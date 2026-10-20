@@ -1482,6 +1482,8 @@ export interface ServerInfo {
     browserFramerate: number;
     browserMaxInstances: number;
     deviceDiscoveryEnabled: boolean;
+    deviceEmulatorHeadless: boolean;
+    deviceEmulatorGpu: string;
     logLevel: LogLevel;
   };
   // What this process booted with for the restart-required settings; a saved
@@ -1993,6 +1995,10 @@ export interface AppSettings {
   devices: {
     // Read once at boot: a change needs a restart.
     discoveryEnabled: "inherit" | "on" | "off";
+    // Applied the next time an emulator starts. "on" is headless (-no-window).
+    emulatorHeadless: "inherit" | "on" | "off";
+    // null inherits DEVICE_EMULATOR_GPU.
+    emulatorGpu: string | null;
   };
   server: {
     logLevel: "inherit" | LogLevel;

@@ -6,6 +6,8 @@ import {
   BrowserFramerateSetting,
   BrowserPoolSizeSetting,
   DeviceDiscoverySetting,
+  EmulatorGpuSetting,
+  EmulatorWindowSetting,
   GitHubPollingSettings,
   HostHeartbeatSetting,
   LogLevelSetting,
@@ -154,5 +156,23 @@ describe("runtime settings controls", () => {
     render(<DeviceDiscoverySetting />);
     await waitFor(() => expect(screen.getByText("Find phones on the network")).toBeInTheDocument());
     expect(screen.queryByText(/Restart required/)).toBeNull();
+  });
+
+  it("stores an emulator window and GPU override for the next launch", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <EmulatorWindowSetting />
+        <EmulatorGpuSetting />
+      </>,
+    );
+    expect(await screen.findByLabelText("Emulator window")).toHaveDisplayValue(/Headless/);
+    expect(screen.getByLabelText("Emulator GPU")).toHaveDisplayValue(/swiftshader_indirect/);
+
+    await user.selectOptions(screen.getByLabelText("Emulator window"), "off");
+    await user.selectOptions(screen.getByLabelText("Emulator GPU"), "host");
+
+    expect(useDashboardStore.getState().settings.devices.emulatorHeadless).toBe("off");
+    expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBe("host");
   });
 });
