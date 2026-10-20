@@ -7,6 +7,7 @@
 // independently testable).
 
 import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
+import type { RelayReviewState } from "../shared/types.js";
 import {
   derivePrPhase,
   type PrMergeable,
@@ -90,6 +91,16 @@ export interface PROrWithChecks {
   headBranch: string;
   baseBranch: string;
   ciStatus: GitHubCiStatus;
+  /**
+   * The review relay's state for this PR (issue #1630) — present only when a
+   * review was requested for it through Mullion's Hermes relay. Absent means
+   * "no relay run is known for this PR" — which is NOT "no review is
+   * pending" (the relay's run index is in-memory, so a restart loses it).
+   *
+   * Declared on BOTH sides (this type and the frontend's copy) so the
+   * compiler catches a drift between them.
+   */
+  relayReview?: RelayReviewState;
   actionsRuns: GitHubActionsRun[];
   // Review state — filled by github-pr-reviews.ts's GraphQL enrichment in the
   // background poller. Best-effort: when that fails (or the PR is past the

@@ -2662,6 +2662,33 @@ button.github-panel-row.gh-issue-row {
   font-family: "Geist Mono", monospace;
 }
 
+/* The review relay's state for a PR (issue #1630): a review was requested,
+   or one has landed. */
+.github-panel-pr-relay-pill {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  white-space: nowrap;
+}
+.github-panel-pr-relay-pill.requested {
+  border-color: color-mix(in srgb, var(--accent-solid) 45%, transparent);
+  color: var(--accent-solid);
+}
+.github-panel-pr-relay-pill.landed {
+  border-color: color-mix(in srgb, var(--good, #4caf50) 45%, transparent);
+  color: var(--good, #4caf50);
+}
+/* A landed review that asked for changes is not the good news an approval
+   is — the tone follows the verdict, not merely the fact that a review
+   landed. */
+.github-panel-pr-relay-pill.landed.changes-requested {
+  border-color: color-mix(in srgb, var(--y) 45%, transparent);
+  color: var(--y);
+}
+
 /* A workflow run in a PR's expanded CI list: a plain label above its jobs. */
 .github-panel-ci-group {
   padding-bottom: 4px;

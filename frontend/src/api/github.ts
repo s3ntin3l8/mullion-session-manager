@@ -20,6 +20,7 @@ import type {
   ProjectReleaseStatus,
   ReleaseRunResult,
   ReleaseMergeResult,
+  RelayReviewState,
 } from "./types.js";
 
 export const githubApi = {
@@ -75,6 +76,11 @@ export const githubApi = {
       `/api/projects/${projectId}/github/issues/${number}/queue`,
       { method: "POST" },
     ),
+
+  // The review relay's state for one PR (issue #1630): whether a review was
+  // requested, whether it has landed, and what the review bot said.
+  getProjectPrReview: (projectId: number, number: number) =>
+    request<RelayReviewState>(`/api/projects/${projectId}/github/prs/${number}/review`),
 
   // PR drill-in: detail, actions and the session hand-off prompt.
   getProjectPr: (projectId: number, number: number) =>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitHubPrDetail, GitHubPrDetailThread } from "../api/types.js";
+import type { GitHubPrDetail, GitHubPrDetailThread, RelayReviewState } from "../api/types.js";
 import { checkDotClass } from "./checkDot.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -162,6 +162,108 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
 
 const PR_REFRESH_MS = 30_000;
 
+/** What a review that has not landed is doing, in words. */
+function pendingLabel(status: string | undefined, landedChecked: boolean | undefined): string {
+  switch (status) {
+    case "failed":
+    case "interrupted":
+    case "cancelled":
+      return "the review did not finish";
+    case "completed":
+      // The run finished — but the landed-review lookup is what says whether
+      // it posted anything. If that lookup failed, the review may well be on
+      // the PR, so this must not claim the bot posted nothing.
+      return landedChecked === false
+        ? "the review could not be confirmed on the pull request"
+        : "the review finished without posting";
+    case "stopping":
+    case "stopped":
+      return "the review is being stopped";
+    case "not_found":
+      // Hermes no longer knows the run (it expired, or the server restarted
+      // and lost it) — nothing is coming.
+      return "the review run is no longer known to the relay";
+    case "unknown":
+    case undefined:
+      // No status at all — the run-status read failed, so this says nothing
+      // about the review. Claiming it is "waiting" would be an assertion
+      // made from no data.
+      return "the relay could not read the review run";
+    default:
+      // The run's status says it is still going. The landed-review lookup is
+      // what separates "still waiting" from "we could not confirm it" — a
+      // failed lookup must not be read as "no review yet".
+      return landedChecked === false
+        ? "the review could not be confirmed on the pull request"
+        : "waiting for the review bot";
+  }
+}
+
+/** A review's GitHub state, in words. */
+function verdictLabel(verdict: string | undefined): string {
+  switch (verdict) {
+    case "APPROVED":
+      return "Approved";
+    case "CHANGES_REQUESTED":
+      return "Changes requested";
+    case "COMMENTED":
+      return "Commented";
+    default:
+      return verdict ?? "Review posted";
+  }
+}
+
+/**
+ * The review relay's state for this pull request (issue #1630) — the same
+ * relay the agent-facing `review_status` reports, seen from the operator's
+ * side.
+ *
+ * `"none"` means no relay run is known for this PR (never requested here, or
+ * the server restarted). It does NOT mean "no review is pending" — the relay's
+ * run index is in-memory — so this renders nothing at all in that case,
+ * rather than claiming there is no review.
+ */
+function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
+  // Anything but a known state renders nothing: "no relay run is known" and
+  // "the server answered with something else" must both look like silence,
+  // never like "no review is pending".
+  if (!state || (state.state !== "requested" && state.state !== "landed")) return null;
+  if (state.state === "requested") {
+    return (
+      <div className="github-panel-section">
+        <div className="github-panel-section-title">Review</div>
+        <div className="github-panel-empty-row">
+          A review was requested — {pendingLabel(state.status, state.landedChecked)}.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="github-panel-section">
+      <div className="github-panel-section-title">Review</div>
+      <div className="github-panel-empty-row">
+        {verdictLabel(state.verdict)}
+        {state.author ? ` by ${state.author}` : ""}
+        {state.htmlUrl ? (
+          <>
+            {" — "}
+            <a href={state.htmlUrl} target="_blank" rel="noreferrer" className="gh-link-button">
+              open on GitHub
+            </a>
+          </>
+        ) : null}
+      </div>
+      {state.body && (
+        <div className="gh-detail-meta">
+          {/* Cut by code point, so an emoji on the boundary is not split. */}
+          {[...state.body].length > 600 ? `${[...state.body].slice(0, 600).join("")}…` : state.body}
+          {state.bodyTruncated ? " (the review text was cut short)" : ""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PrDetailView({
   projectId,
   number,
@@ -172,6 +274,17 @@ export function PrDetailView({
   onBack: () => void;
 }) {
   const [pr, setPr] = useState<GitHubPrDetail | null>(null);
+  // The relay's state for this PR (issue #1630) — refreshed with the PR
+  // itself, so a review that lands shows up within the same 30s tick. The PR
+  // it belongs to is remembered alongside it, so switching PRs never shows the
+  // previous PR's verdict under the new PR's header (cleared by derivation,
+  // not by a setState inside the effect).
+  const [relay, setRelay] = useState<{
+    projectId: number;
+    pr: number;
+    state: RelayReviewState | null;
+  }>({ projectId, pr: number, state: null });
+  const relayReview = relay.projectId === projectId && relay.pr === number ? relay.state : null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<"merge" | "review" | "handoff" | null>(null);
@@ -206,6 +319,23 @@ export function PrDetailView({
     };
   }, [projectId, number, reloadKey]);
 
+  // The relay's state for this PR (issue #1630). A failure here is not the
+  // PR's failure — the PR still renders, just without the review block.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getProjectPrReview(projectId, number)
+      .then((res) => {
+        if (!cancelled) setRelay({ projectId, pr: number, state: res });
+      })
+      .catch(() => {
+        if (!cancelled) setRelay({ projectId, pr: number, state: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, number, reloadKey]);
+
   const run = async (kind: "merge" | "review" | "handoff", fn: () => Promise<string | void>) => {
     setBusy(kind);
     setNotice(null);
@@ -231,6 +361,10 @@ export function PrDetailView({
   const reReview = () =>
     run("review", async () => {
       await api.reReviewProjectPr(projectId, number);
+      // Refetch: the request produced a new run, so the old verdict on screen
+      // is stale (the state is memoized per run, so a refetch shows the new
+      // one straight away).
+      setReloadKey((k) => k + 1);
       return "Re-review requested";
     });
 
@@ -304,6 +438,7 @@ export function PrDetailView({
         {pr.baseBranch} ← {pr.headBranch} · {pr.author ?? "unknown"} · updated{" "}
         {formatRelativeAge(Date.parse(pr.updatedAt))}
       </div>
+      <RelayReviewBlock state={relayReview} />
       {pr.bodyHtml && (
         <>
           <SafeHtml className={`gh-html${showBody ? "" : " gh-clamp"}`} html={pr.bodyHtml} />
