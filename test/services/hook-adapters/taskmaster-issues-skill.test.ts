@@ -145,7 +145,12 @@ describe("taskmaster-issues skill — `Manual: true` is documented as the except
   });
 
   it("still names the narrow case where it belongs — a human weighing in first", () => {
-    expect(skillBody).toMatch(/genuinely needs a human\s+to\s+weigh in/i);
+    // Anchored to the NEW section's own wording ("a human genuinely has to
+    // weigh in"), not to the "Common mistakes" bullet — that bullet says
+    // "needs a human to weigh in", so a test written against the looser
+    // phrase would pass on the bullet alone and keep passing even if the
+    // positive guidance above were deleted.
+    expect(skillBody).toMatch(/a human\s+genuinely has to\s+weigh in/i);
   });
 
   it("warns against marking deferred work as manual", () => {

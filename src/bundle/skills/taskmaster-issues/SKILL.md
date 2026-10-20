@@ -200,7 +200,7 @@ worker's Scope.
   watching it sit in `backlog` forever — `Manual: true` means "a human
   must weigh in before this starts", not "this is a follow-up". See
   "`Manual: true` is the exception, not the default" above.
-- Adding `Manual: true` to something that genuinely needs a human to
+- Forgetting `Manual: true` on something that genuinely needs a human to
   weigh in before work starts, and being surprised when it auto-claims.
 - Sequencing a roadmap with parent/sub-issue nesting instead of
   `blocked_by` — nesting doesn't gate auto-claim, only dependencies do.
