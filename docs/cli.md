@@ -458,7 +458,8 @@ takes a run id and does not look at the project.
   The triage is dispatched asynchronously and posts its findings as a
   comment on the issue within a few minutes; a repeat request for the same
   issue inside the configured cooldown exits non-zero with a 409. The
-  confirmation names the run id.
+  confirmation names the run id, and carries a warning when the issue is
+  closed (the triage still goes out).
 - `triage status --issue <n>` — troubleshoots a requested triage: the run's
   Hermes status, the triage bot's reply or error, and whether a comment
   actually landed on the issue after the request — including the comment's

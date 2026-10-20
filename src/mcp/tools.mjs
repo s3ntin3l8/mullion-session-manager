@@ -697,7 +697,8 @@ const requestTriage = {
     "wait for it rather than requesting again (the result carries a runId; use triage_status " +
     "only to troubleshoot a triage that never shows up); a repeat request for the same issue " +
     "is refused for a cooldown period. Fails with a clear message if the relay isn't " +
-    "configured in Mullion's Settings → Integrations or the issue does not exist.",
+    "configured in Mullion's Settings → Integrations or the issue does not exist. The " +
+    "result may carry a warning when the issue is closed — the request still goes through.",
   inputSchema: {
     type: "object",
     properties: {

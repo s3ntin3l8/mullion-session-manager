@@ -1623,15 +1623,18 @@ async function runTriage(client, args, opts, io) {
   if (sub === "status") {
     return { json: result, text: formatTriageStatus(result) };
   }
+  // The route warns when the issue is closed (and the triage goes out
+  // anyway) — the same way the review formatter renders its warning.
+  const warning = result.warning ? ` — warning: ${result.warning}` : "";
   if (result.replayed) {
     return {
       json: result,
-      text: `no new triage started for ${result.repo}#${result.issueNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion triage status"`,
+      text: `no new triage started for ${result.repo}#${result.issueNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion triage status"${warning}`,
     };
   }
   return {
     json: result,
-    text: `triage requested for ${result.repo}#${result.issueNumber} (run ${result.runId}) — it will comment on the issue in a few minutes`,
+    text: `triage requested for ${result.repo}#${result.issueNumber} (run ${result.runId}) — it will comment on the issue in a few minutes${warning}`,
   };
 }
 

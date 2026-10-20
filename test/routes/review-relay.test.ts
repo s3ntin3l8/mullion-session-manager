@@ -822,6 +822,48 @@ describe("review-request routes", () => {
       expect((await triagePost(999_999, { issueNumber: 12 })).statusCode).toBe(404);
     });
 
+    it("503s when the project host is unreachable, rather than blaming the remote (#1628)", async () => {
+      // A downed agent is not "this project has no GitHub remote".
+      mocks.resolveRepoRefResult.mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "host unreachable",
+      });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("412s when the project host cannot resolve a repo ref at all (#1628)", async () => {
+      mocks.resolveRepoRefResult.mockResolvedValue({ ok: false, reason: "unsupported" });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(412);
+      expect(res.json().message).toContain("host");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("503s a triage when the project host is unreachable, rather than blaming the remote", async () => {
+      // The triage path resolves its repo ref the host-aware way too.
+      mocks.resolveRepoRefResult.mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "host unreachable",
+      });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("412s a triage when the project host cannot resolve a repo ref at all", async () => {
+      mocks.resolveRepoRefResult.mockResolvedValue({ ok: false, reason: "unsupported" });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(412);
+      expect(res.json().message).toContain("host");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
     it("412s when no GitHub credentials are available", async () => {
       mocks.resolveGitHubToken.mockResolvedValue(null);
       expect((await triagePost(sessionId, { issueNumber: 12 })).statusCode).toBe(412);

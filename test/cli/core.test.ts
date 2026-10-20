@@ -1530,6 +1530,34 @@ describe("runCommand", () => {
         expect(printed).toContain("\u2026");
       });
 
+      it("prints the closed-issue warning", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            warning: "Issue #12 is closed",
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "--issue", "12"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("triage requested for acme/widgets#12");
+        expect(out).toContain("warning: Issue #12 is closed");
+      });
+
+      it("prints the warning the route returns (e.g. a closed issue)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            warning: "Issue #12 is closed",
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "--issue", "12"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("triage requested for acme/widgets#12");
+        expect(out).toContain("warning: Issue #12 is closed");
+      });
+
       it("says when the comment was only a fallback attribution", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({
