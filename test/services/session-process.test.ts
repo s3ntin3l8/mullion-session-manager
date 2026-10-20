@@ -4,8 +4,8 @@ import { spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 
 // This module owns only the systemd `--user` scope naming/lifecycle glue
-// (scopeUnitName, stopScope, isMasterAliveState, isMasterAliveStateBatch,
-// listSessionProcesses, and — issue #1140 — the
+// (scopeUnitName, stopScope, isMasterAliveStateBatch, listSessionProcesses,
+// and — issue #1140 — the
 // socket-path ownership check they're all built on,
 // listOwnedScopes/deriveInstanceId) extracted out of pty-manager.ts — see
 // that file's own header comment for why these are plain functions (no

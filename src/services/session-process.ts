@@ -6,7 +6,7 @@
 //
 // This module owns everything that talks to `systemctl --user` keyed off a
 // bare session id string — scope naming (scopeUnitName), stopping a scope
-// (stopScope), the liveness checks (isMasterAliveState/isMasterAliveStateBatch) —
+// (stopScope), the batched liveness check (isMasterAliveStateBatch) —
 // plus listSessionProcesses(), which derives the scope unit name the same
 // way and hands it to cgroup-inventory.ts's listScopeProcesses() (the actual
 // cgroup-walk/procfs logic already lived there, extracted independently;

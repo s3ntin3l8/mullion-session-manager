@@ -1453,7 +1453,7 @@ export class Session {
    * path platform-neutral: the PROGRAM (a dtach master) is the same on every
    * platform, and only the supervisor around it differs.
    */
-  private bootstrapMaster(): Promise<void> {
+  private async bootstrapMaster(): Promise<void> {
     const plan = buildLaunchPlan({
       id: this.id,
       cwd: this.cwd,
@@ -3472,6 +3472,14 @@ export class PtyManager {
   /**
    * The scope backend for this host — resolved on first use.
    *
+   * Issue #1715 — the resolution is deliberately lazy, and it can THROW (a
+   * platform with no backend). Every method that reaches it through this
+   * getter is therefore `async`, so a synchronous throw becomes a REJECTED
+   * promise — which is what a `Promise<T>` return type promises. A plain
+   * method returning `Promise<T>` that throws synchronously breaks any
+   * caller doing `.catch()` on the result rather than awaiting it inside
+   * an async function.
+   *
    * Issue #1715 — the resolution is deliberately lazy. `getScopeBackend()`
    * throws on a platform with no backend, and that throw must not gate the
    * app's BOOT: a macOS primary whose sessions all run on remote Linux
@@ -4204,7 +4212,7 @@ export class PtyManager {
    * stays the one call surface routes/projects.ts's
    * startStackSession/findActiveStackSession and their tests use.
    */
-  isMasterAliveState(id: string): Promise<SessionLiveness> {
+  async isMasterAliveState(id: string): Promise<SessionLiveness> {
     // Issue #1715 — the backend's batch answer is contractually TOTAL (every
     // requested id is always present), but this is now a TRUST BOUNDARY: the
     // answer comes from a `ScopeBackend` implementation, and a future one
@@ -4229,7 +4237,7 @@ export class PtyManager {
    * isMasterAliveState() above — session-backend.ts calls
    * `app.pty.listSessionProcesses(id)`.
    */
-  listSessionProcesses(id: string): Promise<CgroupProcess[]> {
+  async listSessionProcesses(id: string): Promise<CgroupProcess[]> {
     return this.scope.listProcesses(id);
   }
 
@@ -4242,7 +4250,7 @@ export class PtyManager {
    * `session-reconciler.ts` (via that seam) consume — kept as a real method
    * for the same reason as isMasterAliveState() above.
    */
-  isMasterAliveStateBatch(ids: string[]): Promise<Record<string, SessionLiveness>> {
+  async isMasterAliveStateBatch(ids: string[]): Promise<Record<string, SessionLiveness>> {
     return this.scope.isAliveBatch(ids);
   }
 
@@ -4266,7 +4274,7 @@ export class PtyManager {
    * seam, not inside one implementation of it. The systemd-level copy is
    * gone; there is exactly one adapter, and it is the one the route calls.
    */
-  isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
+  async isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
     return this.scope.isAliveBatch(ids).then((state) => {
       const result: Record<string, boolean> = Object.create(null);
       for (const id of ids) {
