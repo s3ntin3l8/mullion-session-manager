@@ -4194,20 +4194,26 @@ export class PtyManager {
   }
 
   /**
-   * Perf audit finding B8(2) — wire-format adapter ONLY. See
-   * isMasterAliveBatch() in session-process.ts for why this
-   * boolean-with-omitted-keys shape is preserved byte-for-byte (the
-   * `/internal/sessions/liveness` route this backs must keep working across
-   * a version-skewed primary/agent pair). Every other caller should use
-   * isMasterAliveStateBatch() above instead.
+   * Perf audit finding B8(2) — wire-format adapter ONLY, for
+   * `/internal/sessions/liveness`.
+   *
+   * This boolean-with-omitted-keys shape is preserved byte-for-byte (issue
+   * #1265) purely so an already-deployed remote agent's response stays
+   * parseable by an already-deployed primary and vice versa (remote agents
+   * run different builds than the primary by design — see docs/multi-host.md's
+   * "Agent updates"). Every OTHER caller in this codebase should use
+   * isMasterAliveStateBatch() above instead — the omitted-key convention
+   * this function preserves is exactly the footgun #1265 exists to stop new
+   * callers from reaching for.
+   *
+   * Issue #1715 — this used to live in session-process.ts, as the systemd
+   * implementation's own adapter over isMasterAliveStateBatch(). It lives
+   * HERE now because the tri-state it adapts comes from the scope BACKEND,
+   * not from any one implementation of it — so the adapter belongs above the
+   * seam, not inside one implementation of it. The systemd-level copy is
+   * gone; there is exactly one adapter, and it is the one the route calls.
    */
   isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
-    // Issue #1715 — the same wire contract as before, now derived from the
-    // scope backend's tri-state answer: "alive" -> true, "dead" -> false,
-    // "unknown" -> the key is OMITTED. That omission is the whole point of
-    // the shape — see session-process.ts's isMasterAliveBatch() for why it
-    // must stay byte-for-byte compatible with an already-deployed peer's
-    // reply.
     return this.scope.isAliveBatch(ids).then((state) => {
       const result: Record<string, boolean> = Object.create(null);
       for (const id of ids) {

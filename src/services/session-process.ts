@@ -6,7 +6,7 @@
 //
 // This module owns everything that talks to `systemctl --user` keyed off a
 // bare session id string — scope naming (scopeUnitName), stopping a scope
-// (stopScope), the two liveness checks (isMasterAlive/isMasterAliveBatch) —
+// (stopScope), the liveness checks (isMasterAliveState/isMasterAliveStateBatch) —
 // plus listSessionProcesses(), which derives the scope unit name the same
 // way and hands it to cgroup-inventory.ts's listScopeProcesses() (the actual
 // cgroup-walk/procfs logic already lived there, extracted independently;
@@ -21,8 +21,8 @@
 // that ignore `this` entirely.
 //
 // PtyManager keeps thin instance methods (isMasterAliveState,
-// isMasterAliveStateBatch, isMasterAliveBatch, listSessionProcesses) that
-// delegate to the functions here, rather than having callers import the
+// isMasterAliveStateBatch, listSessionProcesses) that delegate to the
+// functions here, rather than having callers import the
 // functions directly — that keeps `app.pty.*` the one call surface routes/
 // session-reconciler.ts/session-backend.ts and their tests already use
 // (session-reconciler.test.ts spies on `app.pty.isMasterAliveStateBatch`
@@ -56,7 +56,7 @@
 //   session already legitimately owns getting misread as this instance's
 //   own, or worse, stopped by mistake (`terminate("1")` from one instance
 //   killing a different instance's real session "1") — by having
-//   stopScope/isMasterAlive/isMasterAliveBatch/listSessionProcesses confirm
+//   stopScope/isMasterAliveState/listSessionProcesses confirm
 //   OWNERSHIP of a `crs-session-*` unit via its dtach socket path (always
 //   `<sessionsDir>/<id>.sock`, systemd's own rendering of the launch argv —
 //   see extractDtachSocketPath below) rather than trusting the unit name
@@ -358,8 +358,8 @@ function escapeRegExp(value: string): string {
  * socket basename, never from splitting the unit name).
  *
  * `opts.states`/`opts.all` are passed straight through to `--state=`/
- * `--all` — callers need different filters (isMasterAliveBatch's `active,
- * deactivating`, per issue #988's DefaultTimeoutStopSec window, vs.
+ * `--all` — callers need different filters (isMasterAliveStateBatch's
+ * `active,deactivating`, per issue #988's DefaultTimeoutStopSec window, vs.
  * stopScope's/listSessionProcesses's broader `--all`), so this stays one
  * parameterized listing rather than two near-duplicate ones.
  */
@@ -371,8 +371,8 @@ export interface ScopeOwnershipListing {
    *  candidateIdForUnit above) but whose Description didn't yield a socket
    *  path at all — ownership can't be confirmed OR denied for these. Every
    *  caller must treat this as "unknown," never as "not owned" — see this
-   *  module's own header comment and isMasterAliveBatch's doc comment on
-   *  the mass-exit landmine that collapsing "unknown" to "false" would
+   *  module's own header comment and isMasterAliveStateBatch's doc comment
+   *  on the mass-exit landmine that collapsing "unknown" to "false" would
    *  reintroduce. */
   unverifiable: Set<string>;
   /** The systemctl listing spawn/parse itself failed — `owned` and
@@ -470,7 +470,7 @@ async function fetchOwnedScopes(
   args.push("--no-legend", "--plain", `${prefix}-*.scope`);
 
   // Issue #1232 — bounded: a wedged `--user` D-Bus bus used to leave this
-  // pending forever, and every isMasterAliveStateBatch/isMasterAliveBatch
+  // pending forever, and every isMasterAliveStateBatch
   // caller (including routes/projects.ts's withStackLock-serialized
   // stack-session mutex, issue #1182) bottoms out here. A timeout, a spawn
   // error and a non-zero exit all map to `failed: true` — the "everything
@@ -642,7 +642,7 @@ export type SessionLiveness = ScopeLiveness;
  * Perf audit finding B8(2) — the batched liveness check for MANY sessions in
  * one go (session-backend.ts's LocalBackend.liveness, and
  * routes/internal.ts's `/internal/sessions/liveness` for a remote agent's
- * own sessions, via the isMasterAliveBatch wire-adapter below). A single
+ * own sessions, via the wire adapter in pty-manager.ts). A single
  * `systemctl --user list-units` call (via listOwnedScopes(), filtered to
  * `--state=active,deactivating` — issue #988: a scope Mullion itself just
  * asked systemd to stop sits in "deactivating" for up to systemd's own
@@ -726,36 +726,6 @@ export async function isMasterAliveState(
 ): Promise<SessionLiveness> {
   const result = await isMasterAliveStateBatch(sessionsDir, instanceId, [id], prefix);
   return result[id];
-}
-
-/**
- * Wire-format adapter for `/internal/sessions/liveness` ONLY — this
- * boolean-with-omitted-keys shape is preserved byte-for-byte (issue #1265)
- * purely so an already-deployed remote agent's response stays parseable by
- * an already-deployed primary and vice versa (remote agents run different
- * builds than the primary by design — see docs/multi-host.md's "Agent
- * updates"). Every OTHER caller in this codebase should use
- * isMasterAliveStateBatch()/isMasterAliveState() above instead — the
- * omitted-key convention this function preserves is exactly the footgun
- * #1265 exists to stop new callers from reaching for.
- */
-export async function isMasterAliveBatch(
-  sessionsDir: string,
-  instanceId: string,
-  ids: string[],
-  prefix = "crs-session",
-): Promise<Record<string, boolean>> {
-  const state = await isMasterAliveStateBatch(sessionsDir, instanceId, ids, prefix);
-  const result: Record<string, boolean> = Object.create(null);
-  for (const id of ids) {
-    if (state[id] === "alive") {
-      result[id] = true;
-    } else if (state[id] === "dead") {
-      result[id] = false;
-    }
-    // "unknown" -> omitted, matching this route's existing wire contract.
-  }
-  return result;
 }
 
 /**
