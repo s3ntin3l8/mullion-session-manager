@@ -49,13 +49,17 @@ remote-host support uses.
 
 The right sidebar's Git view (`right-sidebar/GitSidebarView.tsx`) composes
 four collapsible sections (open/closed state is kept per user in
-`localStorage`): **Changes** (the source-control section), **Branches**
-(ahead/behind, last-commit age, merged tag — fetched with `?detail=1` — and the
-PR's phase chip), **Worktrees** (the sessions running in each, and a selector
-that scopes History to a worktree) and **History** (a lane graph computed by
-`git/graphLayout.ts`, ref chips, per-commit files and diffs, "Load more"
-paging). History and commit detail are local-host only for now; remote-host
-projects show "No history available" (tracked in #1672).
+`localStorage`): **Changes** (the source-control section with inline working-tree
+diffs), **Branches** (ahead/behind, last-commit age, merged tag — fetched with
+`?detail=1` — the PR's phase chip, and two-step branch deletion with `Force`
+override), **Worktrees** (the sessions running in each, a selector that scopes
+History to a worktree, `Prune stale`, and two-step worktree removal with `Force`
+override) and **History** (a lane graph computed by `git/graphLayout.ts`, ref
+chips, per-commit files and diffs, "Load more" paging). Mutations in either the
+sidebar or `GitPanel` bump the store's `gitRefreshTrigger` counter so the
+sidebar's detailed branch list and commit history re-fetch immediately. History
+and commit detail are local-host only for now; remote-host projects show "No
+history available" (tracked in #1672).
 
 ## Safety guards, and what `force` actually overrides
 

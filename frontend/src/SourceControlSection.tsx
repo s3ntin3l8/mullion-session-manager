@@ -413,6 +413,7 @@ function SourceControlView({
                       <button
                         type="button"
                         className="github-panel-row source-control-file-row"
+                        aria-expanded={expandedFilePath === file.path}
                         onClick={() =>
                           setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
                         }

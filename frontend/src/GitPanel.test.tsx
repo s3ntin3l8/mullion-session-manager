@@ -29,7 +29,7 @@ function mockFetch(opts: {
   branches?: () => Response | Promise<Response>;
   pull?: () => Response | Promise<Response>;
   fetch?: () => Response | Promise<Response>;
-  fileDiff?: () => Response | Promise<Response>;
+  fileDiff?: (url: string) => Response | Promise<Response>;
   log?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
@@ -42,7 +42,9 @@ function mockFetch(opts: {
     }
     if (url.includes("/git-file-diff")) {
       return Promise.resolve(
-        opts.fileDiff ? opts.fileDiff() : jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" }),
+        opts.fileDiff
+          ? opts.fileDiff(url)
+          : jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" }),
       );
     }
     if (url.includes("/git-log")) {
@@ -853,6 +855,7 @@ describe("GitPanel", () => {
     });
 
     it("expands and collapses inline diff when a changed file row is clicked", async () => {
+      let requestedDiffUrl = "";
       vi.stubGlobal(
         "fetch",
         mockFetch({
@@ -862,18 +865,26 @@ describe("GitPanel", () => {
               isClean: false,
               files: [{ path: "src/a.ts", status: "M" }],
             }),
-          fileDiff: () => jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" }),
+          fileDiff: (url) => {
+            requestedDiffUrl = url;
+            return jsonResponse(200, { patch: "@@ -1 +1 @@\n-old\n+new" });
+          },
         }),
       );
       const user = userEvent.setup();
       render(<GitPanel params={{ projectId: 23 }} />);
 
-      const fileRow = await screen.findByText("src/a.ts");
-      await user.click(fileRow);
+      const fileToggle = await screen.findByRole("button", { name: /src\/a\.ts/ });
+      expect(fileToggle).toHaveAttribute("aria-expanded", "false");
+      await user.click(fileToggle);
+      expect(fileToggle).toHaveAttribute("aria-expanded", "true");
       expect(await screen.findByText("+new")).toBeInTheDocument();
+      expect(requestedDiffUrl).toContain("projectId=23");
+      expect(requestedDiffUrl).not.toContain("base=AUTO");
 
       // Clicking again collapses the diff
-      await user.click(fileRow);
+      await user.click(fileToggle);
+      expect(fileToggle).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByText("+new")).toBeNull();
     });
 

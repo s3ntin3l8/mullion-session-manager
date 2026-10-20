@@ -160,14 +160,8 @@ export const gitApi = {
 
   // Same endpoint, keyed by project instead of session (issue #433's Source
   // Control sidebar section, which has no session to anchor to).
-  getProjectGitFileDiff: (
-    projectId: number,
-    path: string,
-    base?: string,
-  ): Promise<GitFileDiffResponse> => {
-    const qs = base ? `&base=${encodeURIComponent(base)}` : "";
-    return request<GitFileDiffResponse>(
-      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}${qs}`,
-    );
-  },
+  getProjectGitFileDiff: (projectId: number, path: string): Promise<GitFileDiffResponse> =>
+    request<GitFileDiffResponse>(
+      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}`,
+    ),
 };

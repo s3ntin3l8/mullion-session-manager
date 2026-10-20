@@ -1,5 +1,4 @@
 import { spawn as spawnChild, spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
@@ -225,8 +224,11 @@ const FILE_DIFF_TRUNCATED_MARKER =
  * user-click-triggered fetch (not a poll loop), and the patch is inherently
  * single-use.
  */
-function runDiffProcess(cwd: string, args: string[]): Promise<string | null> {
-  return new Promise<string | null>((resolve) => {
+function runDiffProcess(
+  cwd: string,
+  args: string[],
+): Promise<{ out: string | null; code: number | null }> {
+  return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
     const child = spawnChild("git", args, {
@@ -253,12 +255,12 @@ function runDiffProcess(cwd: string, args: string[]): Promise<string | null> {
       }, KILL_ESCALATION_MS);
     };
 
-    const finish = (value: string | null) => {
+    const finish = (out: string | null, code: number | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       child.stdout?.off("data", onStdoutData);
-      resolve(value);
+      resolve({ out, code });
     };
 
     let stdoutBytes = 0;
@@ -269,7 +271,7 @@ function runDiffProcess(cwd: string, args: string[]): Promise<string | null> {
         // diff keep growing `stdout`; return only what's been buffered so
         // far plus the marker, not the full (unbounded) patch.
         killWithEscalation();
-        finish(stdout + FILE_DIFF_TRUNCATED_MARKER);
+        finish(stdout + FILE_DIFF_TRUNCATED_MARKER, 0);
         return;
       }
       stdout += chunk.toString("utf8");
@@ -278,19 +280,19 @@ function runDiffProcess(cwd: string, args: string[]): Promise<string | null> {
 
     const timer = setTimeout(() => {
       killWithEscalation();
-      finish(null);
+      finish(null, null);
     }, GIT_TIMEOUT_MS);
 
     child.on("error", () => {
       clearKillTimer();
-      finish(null);
+      finish(null, null);
     });
     child.on("close", (code) => {
       clearKillTimer();
       // git diff exit codes: 0 = no differences found, 1 = differences
       // found, >1 = error. Either 0 or 1 is valid — stdout content is the
       // patch in both cases (empty when exit 0, populated when exit 1).
-      finish(code != null && code <= 1 ? stdout || null : null);
+      finish(code != null && code <= 1 ? stdout || null : null, code);
     });
   });
 }
@@ -310,40 +312,36 @@ export async function getFileDiff(
     const args = baseRef
       ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--", filePath]
       : ["-C", cwd, "diff", "HEAD", "--", filePath];
-    const patch = await runDiffProcess(cwd, args);
+    const { out: patch, code } = await runDiffProcess(cwd, args);
     if (patch) return patch;
 
-    // If working-tree diff against HEAD returned nothing, check if filePath
-    // is an untracked new file on disk (not known to git index).
-    if (!baseRef) {
-      try {
-        const fullPath = path.resolve(cwd, filePath);
-        const resolvedCwd = path.resolve(cwd);
-        if (
-          (fullPath === resolvedCwd || fullPath.startsWith(resolvedCwd + path.sep)) &&
-          fs.existsSync(fullPath) &&
-          fs.statSync(fullPath).isFile()
-        ) {
-          const lsCheck = spawnSync(
-            "git",
-            ["-C", cwd, "ls-files", "--error-unmatch", "--", filePath],
-            { env: gitEnv(), stdio: "ignore" },
-          );
-          if (lsCheck.status !== 0) {
-            const untrackedPatch = await runDiffProcess(cwd, [
-              "-C",
-              cwd,
-              "diff",
-              "--no-index",
-              "--",
-              "/dev/null",
-              filePath,
-            ]);
-            if (untrackedPatch) return untrackedPatch;
-          }
+    // If working-tree diff against HEAD exited cleanly (code === 0) with no
+    // output, check if filePath is an untracked new file on disk.
+    if (!baseRef && code === 0) {
+      const resolvedCwd = path.resolve(cwd);
+      const fullPath = path.resolve(cwd, filePath);
+      if (fullPath.startsWith(resolvedCwd + path.sep)) {
+        const { out: lsOut } = await runDiffProcess(cwd, [
+          "-C",
+          cwd,
+          "ls-files",
+          "--others",
+          "-z",
+          "--",
+          filePath,
+        ]);
+        if (lsOut === `${filePath}\0`) {
+          const { out: untrackedPatch } = await runDiffProcess(cwd, [
+            "-C",
+            cwd,
+            "diff",
+            "--no-index",
+            "--",
+            "/dev/null",
+            filePath,
+          ]);
+          if (untrackedPatch) return untrackedPatch;
         }
-      } catch {
-        // Fall through to null on any filesystem error
       }
     }
     return null;

@@ -17,6 +17,11 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
   const [rowErrors, setRowErrors] = useState<Record<string, { message: string; reason?: string }>>(
     {},
   );
+  const [prevProjectId, setPrevProjectId] = useState(projectId);
+  if (projectId !== prevProjectId) {
+    setPrevProjectId(projectId);
+    setRowErrors({});
+  }
 
   const fetchDetailed = useCallback(() => {
     let cancelled = false;
@@ -48,7 +53,6 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
             delete next[key];
             return next;
           });
-          fetchDetailed();
           void useDashboardStore.getState().refreshGitRefs([projectId]);
           useDashboardStore.getState().bumpGitRefreshTrigger();
           return;
@@ -62,7 +66,7 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
         setRowErrors((prev) => ({ ...prev, [key]: { message } }));
       }
     },
-    [projectId, fetchDetailed],
+    [projectId],
   );
 
   if (!branches) return <div className="github-panel-empty-row">No branch data</div>;

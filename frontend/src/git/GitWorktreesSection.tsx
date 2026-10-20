@@ -26,6 +26,12 @@ export function GitWorktreesSection({
   const [rowErrors, setRowErrors] = useState<Record<string, { message: string; reason?: string }>>(
     {},
   );
+  const [prevProjectId, setPrevProjectId] = useState(projectId);
+  if (projectId !== prevProjectId) {
+    setPrevProjectId(projectId);
+    setPruneError(null);
+    setRowErrors({});
+  }
 
   const handlePruneStale = useCallback(async () => {
     setIsPruning(true);
@@ -143,7 +149,7 @@ export function GitWorktreesSection({
                     title={`Open session ${s.name ?? s.id}`}
                     onClick={() => requestOpenSession(s.id)}
                   >
-                    ▶ {s.name ?? `#${s.id}`}
+                    <span className="git-worktree-session-label">▶ {s.name ?? `#${s.id}`}</span>
                   </button>
                 ))}
               </div>

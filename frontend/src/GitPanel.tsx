@@ -15,8 +15,6 @@ export interface GitPanelParams {
   projectId: number;
 }
 
-// Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
-// offering a Force retry for. Every other reason (invalid-name, no-such-
 import { FORCEABLE_REASONS, reasonMessage } from "./git/gitReasons.js";
 
 // Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
@@ -226,6 +224,7 @@ export function GitPanel({
     await refreshBranches();
     await fetchStatus();
     void useDashboardStore.getState().refreshGitRefs();
+    useDashboardStore.getState().bumpGitRefreshTrigger();
   }, [refreshBranches, fetchStatus]);
 
   const setRowError = useCallback(
@@ -500,23 +499,25 @@ export function GitPanel({
         {status.isClean && <div className="github-panel-empty-row">Working tree clean</div>}
         {status.files.map((file) => (
           <div key={file.path}>
-            <div
-              className="github-panel-row source-control-file-row"
-              onClick={() => setExpandedFilePath((prev) => (prev === file.path ? null : file.path))}
-              style={{ cursor: "pointer" }}
-            >
-              <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
-              <span className="github-panel-row-number">{file.status}</span>
-              <span className="github-panel-row-title">{file.path}</span>
+            <div className="github-panel-row">
+              <button
+                type="button"
+                className="source-control-file-toggle"
+                aria-expanded={expandedFilePath === file.path}
+                onClick={() =>
+                  setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
+                }
+              >
+                <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
+                <span className="github-panel-row-number">{file.status}</span>
+                <span className="github-panel-row-title">{file.path}</span>
+              </button>
               {onEditFile && file.status !== "D" && !file.path.endsWith("/") && (
                 <button
                   className="git-panel-fetch-btn"
                   aria-label={`Edit ${file.path}`}
                   title={`Open ${file.path} in the file editor`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onEditFile(file.path);
-                  }}
+                  onClick={() => onEditFile(file.path)}
                 >
                   Edit
                 </button>
@@ -692,7 +693,7 @@ export function GitPanel({
                         title={`Open session ${s.name ?? s.id}`}
                         onClick={() => onOpenSession?.(s)}
                       >
-                        ▶ {s.name ?? `#${s.id}`}
+                        <span className="git-worktree-session-label">▶ {s.name ?? `#${s.id}`}</span>
                       </button>
                     ))}
                   </div>

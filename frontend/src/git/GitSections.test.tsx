@@ -620,6 +620,60 @@ describe("GitBranchesSection / GitWorktreesSection", () => {
 
     expect(removeCalled).toEqual({ worktreePath: "/repo-extra", force: false });
   });
+
+  it("clears branch rowErrors and worktree pruneError when projectId changes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/git-branch-delete")) {
+          return Promise.resolve(
+            jsonResponse(200, { deleted: false, reason: "unmerged", detail: "not merged" }),
+          );
+        }
+        if (url.includes("/git-worktree-prune")) {
+          return Promise.reject(new Error("prune boom"));
+        }
+        return Promise.resolve(jsonResponse(204, undefined));
+      }),
+    );
+    useDashboardStore.setState({
+      gitBranchesByProject: {
+        1: {
+          branches: [{ name: "shared-name", isCurrent: false }],
+          worktrees: [{ path: "/repo1", branch: "main", isMain: true }],
+          remoteBranches: [],
+        },
+        2: {
+          branches: [{ name: "shared-name", isCurrent: false }],
+          worktrees: [{ path: "/repo2", branch: "main", isMain: true }],
+          remoteBranches: [],
+        },
+      },
+    } as never);
+
+    const { rerender, unmount } = render(<GitBranchesSection projectId={1} />);
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(deleteBtn);
+    await userEvent.click(deleteBtn);
+    expect(
+      await screen.findByText((content) => content.includes("not merged")),
+    ).toBeInTheDocument();
+
+    rerender(<GitBranchesSection projectId={2} />);
+    expect(screen.queryByText((content) => content.includes("not merged"))).toBeNull();
+    unmount();
+
+    const wtRender = render(
+      <GitWorktreesSection projectId={1} selected={undefined} onSelect={vi.fn()} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Prune stale/ }));
+    expect(await screen.findByText("prune boom")).toBeInTheDocument();
+
+    wtRender.rerender(
+      <GitWorktreesSection projectId={2} selected={undefined} onSelect={vi.fn()} />,
+    );
+    expect(screen.queryByText("prune boom")).toBeNull();
+  });
 });
 
 describe("GitSidebarView", () => {

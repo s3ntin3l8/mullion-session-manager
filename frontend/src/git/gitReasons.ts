@@ -1,4 +1,8 @@
-// Reasons a delete or remove refusal can be overridden via force: true.
+// Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
+// offering a Force retry for. Every other reason (invalid-name, no-such-
+// branch, not-a-repo, current-branch, checked-out, is-main, not-listed,
+// directory-gone, delete-failed, remove-failed) either cannot succeed under
+// force or has a dedicated alternative (e.g. Prune stale for directory-gone).
 export const FORCEABLE_REASONS = new Set([
   "unmerged",
   "task-branch",
