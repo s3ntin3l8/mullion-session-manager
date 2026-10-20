@@ -36,9 +36,19 @@ describe("createSuiteTmpDir", () => {
     expect(path.dirname(dir)).toBe(shortBase);
   });
 
-  it("the suite's own os.tmpdir() leaves room for the deepest socket path tests build", () => {
-    // global-setup points TMPDIR at the suite dir; a socket under it must fit
-    // regardless of how long the invoking shell's TMPDIR was.
+  it("keeps the deepest socket path tests build beneath it within sun_path, whatever the base", () => {
+    const longBase = path.join(os.tmpdir(), "x".repeat(80));
+    fs.mkdirSync(longBase, { recursive: true });
+    made.push(longBase);
+    const suite = createSuiteTmpDir(longBase);
+    made.push(suite);
+    const deepest = path.join(suite, "mullion-opencode-gate-XXXXXX", "hooks.sock");
+    expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
+  });
+
+  it("the suite's own os.tmpdir() (set by global-setup) leaves room for the same socket path", () => {
+    // Pins the wiring too: global-setup must point TMPDIR at the suite dir,
+    // so a long TMPDIR in the invoking shell cannot leak through.
     const deepest = path.join(os.tmpdir(), "mullion-opencode-gate-XXXXXX", "hooks.sock");
     expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
   });
