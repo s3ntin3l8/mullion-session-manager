@@ -82,18 +82,22 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   `make format-check` hook covers it).
 - **`test-e2e`**: Custom job — checkout, `npm ci`,
   `npx playwright install --with-deps chromium`, then installs a **pinned,
-  integrity-checked `opencode` binary** (currently `1.18.26`) via a
+  integrity-checked `opencode` binary** (currently `2.0.29`) via a
   dedicated `test/e2e/opencode/` workspace with its own `package-lock.json`
   — `npm ci` there enforces the lockfile's integrity hash, so a registry
   republish of that version tag with different content fails loudly instead
   of silently installing a tampered binary — and prepends it to `PATH`
   before `npm run test:e2e`. The pin exists because
-  `test/e2e/opencode-permission-merge.e2e.test.ts` asserts a specific,
-  empirically-verified opencode behavior — its `permission` config key
-  deep-merges per top-level key with the user's own config, rather than
-  shallow-replacing it — that a future opencode release could silently
-  change; bumping the pin means re-verifying that behavior and regenerating
-  the lockfile. See `test/e2e/README.md`.
+  `test/e2e/opencode-v2-contract.e2e.test.ts` asserts specific,
+  empirically-verified opencode behaviors — `--standalone` on the default
+  command, `OPENCODE_CONFIG_CONTENT` layering ALONGSIDE the user's own
+  config (its `permission` key deep-merges per top-level key with the
+  user's own `~/.config/opencode/opencode.json`/project config rather than
+  shallow-replacing it), a plugin directory being loaded and actually
+  receiving events, and the `session export`/`import` subcommands — that a
+  future opencode release could silently change; bumping the pin means
+  re-verifying those behaviors and regenerating the lockfile. See
+  `test/e2e/README.md`.
   Deliberately **not** a required status check yet — this is its first run
   anywhere outside a developer's own machine, and it needs a stretch of
   real, unattended CI runs before every merge is gated on it.

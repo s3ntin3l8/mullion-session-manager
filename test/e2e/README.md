@@ -46,10 +46,10 @@ first.
   arbitrary setup command (like installing a browser) before its own Test
   step, and this repo can't add one without editing the upstream
   `s3ntin3l8/.github` repo. The job also installs a **pinned, integrity-
-  checked `opencode` binary** (currently `1.18.26`, via `test/e2e/opencode/`'s
+  checked `opencode` binary** (currently `2.0.29`, via `test/e2e/opencode/`'s
   own `package.json`/`package-lock.json` — `npm ci` there enforces the
   lockfile's integrity hash) and prepends it to `PATH` before the test step,
-  for `opencode-permission-merge.e2e.test.ts` below — see that test's own
+  for `opencode-v2-contract.e2e.test.ts` below — see that test's own
   header comment for why the version is pinned rather than "whatever's
   latest." `test-e2e` is deliberately **not yet** a required
   branch-protection status check — give it a run of real, unattended CI
@@ -110,13 +110,18 @@ first.
   one path neither `test/integration/multi-host.test.ts` (pty proxying only)
   nor `test/routes/browser-automation.test.ts` (local browser only)
   exercises.
-- **`opencode-permission-merge.e2e.test.ts`** (PR #966) — a real, pinned
-  `opencode` binary (`opencode debug config`), asserting that
-  `OPENCODE_CONFIG_CONTENT`'s `permission` key deep-merges per top-level key
-  with the user's own `~/.config/opencode/opencode.json`/project config,
-  rather than shallow-replacing it — the assumption Task Master's per-skill
-  permission deny list for unattended workers depends on. Skips gracefully
-  if `opencode` isn't on `PATH` (CI installs it explicitly; see above).
+- **`opencode-v2-contract.e2e.test.ts`** (PR #1596) — a real, pinned
+  `opencode` binary, asserting the v2 facts Mullion's integration depends
+  on: `--standalone` exists on the default command; `OPENCODE_CONFIG_CONTENT`
+  layers ALONGSIDE the user's own config (its `permission` key deep-merges
+  per top-level key with the user's own `~/.config/opencode/opencode.json`/
+  project config, rather than shallow-replacing it — the assumption Task
+  Master's per-skill permission deny list for unattended workers depends on);
+  a plugin DIRECTORY is loaded and actually receives events (driven through
+  Mullion's real `src/hooks/opencode-plugin.js` against a real Unix-socket
+  hook server); and the `session export`/`import` subcommands the promote
+  flow uses exist. Skips gracefully if `opencode` isn't on `PATH` (CI
+  installs it explicitly; see above).
 - **`scaffold-generate-agy.e2e.test.ts`** (issue #1130) — a real, live agy
   generation turn (`scaffold-generate.ts`'s `buildInvocation` `"agy"` case)
   against a throwaway fixture repo, asserting the output reflects a

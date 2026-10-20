@@ -1601,7 +1601,12 @@ GCP/Antigravity backend, mapped onto the same `errorType: "rate_limit"`
 classification `mapClaudeCodeStopFailure` already used, since agy has no
 `error_type` enum of its own the way Claude Code does), the reconciler
 holds the task alive for `rateLimitGraceMinutes` before falling through to
-the normal fail path. The worker path gates `in_progress → reviewing` on
+the normal fail path. opencode joined that set with issue `#1700`: v2 has no
+`error_type` field either (its turn failures carry a `StructuredError`
+`{type, message}`), so its plugin classifies a rate limit from a narrow
+message-token list (the HTTP status `429`, "rate limit", "too many
+requests", `insufficient_quota`) and reports `errorType: "rate_limit"` the
+same way. The worker path gates `in_progress → reviewing` on
 `checkReviewingGate` (no-commits → fail) — without this grace, a worker
 that hit a subscription quota before committing anything would be failed
 immediately. The review-agent path gates `isUsableSignal` for review
