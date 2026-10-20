@@ -32,7 +32,10 @@ import {
   getAdapterResumeSessionArgs,
   resolveForwarderPath,
 } from "./hook-adapters/index.js";
-import { deriveInstanceId, scopeUnitName } from "./session-process.js";
+// Issue #1715 — the scope seam (src/services/scope/) owns scope NAMING now;
+// this module composes the PROGRAM to run and the constraints to apply to it,
+// and the backend decides how to supervise it. See LaunchPlan below.
+import type { ScopeConstraints } from "./scope/types.js";
 import { getAvailableHostCores, computeTaskMasterCpuQuota } from "./host-resources.js";
 
 // Per-agent skip-permissions flag lookup. Anchored at the start of the
@@ -170,17 +173,33 @@ export interface LaunchPlan {
    * also the shell bootstrapMaster's dtach master runs `finalCommand`
    * under. */
   shell: string;
-  /** The deterministic systemd --user scope unit name for this session —
-   * needed by bootstrapMaster() both for the `-u` argv entry below (already
-   * baked into `argv`) and for its own bootstrap-failure error message. */
-  unitName: string;
   /** The fully scrubbed + augmented env the dtach master (and therefore the
    * launched agent process) should receive. */
   env: NodeJS.ProcessEnv;
-  /** The exact argv to pass as `spawnChild("systemd-run", argv, ...)` —
-   * everything after the `systemd-run` binary itself, including the trailing
-   * `dtach -n <socketPath> <shell> -lc <finalCommand>` invocation. */
+  /**
+   * The PROGRAM to run, fully composed — the argv AFTER the supervisor:
+   * `["dtach", "-n", "<socketPath>", "<shell>", "-lc", "<finalCommand>"]`.
+   *
+   * Issue #1715 — this used to be the whole `systemd-run --user --scope ... --`
+   * argv, because the supervisor was baked into the plan. It isn't any more:
+   * the plan describes WHAT to run, and the scope backend (see
+   * src/services/scope/) decides HOW to keep it alive — a systemd transient
+   * scope on Linux today, something else on another platform. The program
+   * itself is identical either way, which is what makes the seam portable
+   * rather than a re-implementation of the launch.
+   */
   argv: string[];
+  /**
+   * Optional resource constraints for the scope the program runs in.
+   *
+   * Issue #1715 — these used to be pre-rendered systemd cgroup properties
+   * (`-p CPUWeight=100` and friends) inside the argv above. They are
+   * platform-neutral NUMBERS now, and the backend renders them into whatever
+   * its platform offers — a backend with no cgroup equivalent simply drops
+   * the ones it cannot honor, instead of emitting a property its supervisor
+   * would reject.
+   */
+  constraints?: ScopeConstraints;
   /** Whether a hook adapter actually matched AND applied successfully — see
    * hook-adapters/index.ts's AppliedHooks.matched for the exact semantics.
    * Mirrors what bootstrapMaster used to assign directly to
@@ -210,14 +229,10 @@ export interface LaunchPlan {
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const shell = process.env.SHELL || "/bin/bash";
-  // Issue #1140 (PR 2) — derived inline rather than threaded as a new
-  // LaunchPlanSession field: a sha256 of a short string is free, and this
-  // runs over the same already-`path.resolve`d value PtyManager's own
-  // `this.instanceId` derives from (`this.sessionsDir`, passed straight
-  // through as `session.sessionsDir` below — pty-manager.ts's
-  // bootstrapMaster() call site), so the two can never disagree.
-  const instanceId = deriveInstanceId(session.sessionsDir);
-  const unitName = scopeUnitName(instanceId, session.id);
+  // Issue #1715 — the scope NAME (and the systemd unit it maps to) is the
+  // scope backend's business now, not this module's: the plan describes the
+  // program and the constraints, and the backend decides how to supervise it
+  // and what to call the scope. See src/services/scope/types.ts.
   // Strip this server's own Mullion config (PORT, DATABASE_URL,
   // SESSIONS_DIR, secrets, ...) before it reaches the session's shell — a
   // session must not inherit the identity of the process that spawned it,
@@ -477,39 +492,27 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   const taskQuotaPercent = computeTaskMasterCpuQuota(totalCores);
   const manualQuota = process.env.MULLION_SESSION_CPU_QUOTA;
   const validManualQuota = manualQuota && /^[1-9]\d*%$/.test(manualQuota) ? manualQuota : undefined;
-  const quotaArgs = isTaskSession
-    ? ["-p", `CPUQuota=${taskQuotaPercent}%`]
+  const quotaPercent = isTaskSession
+    ? taskQuotaPercent
     : validManualQuota
-      ? ["-p", `CPUQuota=${validManualQuota}`]
-      : [];
+      ? Number.parseInt(validManualQuota, 10)
+      : undefined;
 
-  const cgroupArgs = [
-    "-p",
-    isTaskSession ? "CPUWeight=25" : "CPUWeight=100",
-    "-p",
-    isTaskSession ? "IOWeight=25" : "IOWeight=100",
-    ...quotaArgs,
-  ];
+  // Issue #1715 — platform-neutral constraint NUMBERS; the backend renders
+  // them into whatever its platform offers (the systemd backend turns these
+  // into `-p CPUWeight=25 -p IOWeight=25 -p CPUQuota=300%`). A backend with
+  // no cgroup equivalent drops the ones it cannot honor.
+  const constraints: ScopeConstraints = {
+    cpuWeight: isTaskSession ? 25 : 100,
+    ioWeight: isTaskSession ? 25 : 100,
+    ...(quotaPercent !== undefined ? { cpuQuotaPercent: quotaPercent } : {}),
+  };
 
   return {
     shell,
-    unitName,
     env: sessionEnv,
-    argv: [
-      "--user",
-      "--scope",
-      "--collect",
-      "-u",
-      unitName,
-      ...cgroupArgs,
-      "--",
-      "dtach",
-      "-n",
-      session.socketPath,
-      shell,
-      "-lc",
-      finalCommand,
-    ],
+    argv: ["dtach", "-n", session.socketPath, shell, "-lc", finalCommand],
+    constraints,
     hooksActive: matched,
     hookEmits: emits,
   };
