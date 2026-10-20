@@ -1153,6 +1153,23 @@ describe("runCommand", () => {
         expect(out).toContain("run_1 (completed)");
       });
 
+      it("keeps the duplicate-review warning on a replay (#1705)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            runStatus: "completed",
+            replayed: true,
+            warning: "A review by hermes[bot] (APPROVED) already landed on this commit",
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("no new review started");
+        expect(out).toContain("warning:");
+        expect(out).toContain("already landed on this commit");
+      });
+
       it("prints the duplicate-review warning without failing the request (#1705)", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({

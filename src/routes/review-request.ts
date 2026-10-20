@@ -145,6 +145,24 @@ async function resolveSessionBranch(
 }
 
 /**
+ * Whether a branch name is really a detached HEAD.
+ *
+ * `git status` reports a detached checkout as its short commit SHA (7 hex
+ * characters — git-status.ts's own `oid.slice(0, 7)`), not as the
+ * `"(detached)"` sentinel the porcelain output starts with: git-status.ts
+ * rewrites the sentinel to that short SHA before returning it. So the
+ * sentinel never reaches this route, on either host, and a short SHA is the
+ * signal that actually arrives.
+ *
+ * A branch genuinely named like a 7-character hex string is misread as
+ * detached — vanishingly rare, and the 404 tells the caller to pass
+ * `prNumber`, which works either way.
+ */
+function isDetachedBranch(branch: string): boolean {
+  return /^[0-9a-f]{7}$/i.test(branch);
+}
+
+/**
  * Session → repo + PR (+ head SHA and a read token). Sends the error reply
  * itself and returns null when the target can't be resolved.
  */
@@ -188,7 +206,7 @@ async function resolveReviewTarget(
   try {
     if (prNumber === undefined) {
       const branch = await resolveSessionBranch(app, project, session);
-      if (!branch || branch === "(detached)") {
+      if (!branch || branch === "(detached)" || isDetachedBranch(branch)) {
         reply.notFound("Could not determine this session's branch — pass prNumber");
         return null;
       }

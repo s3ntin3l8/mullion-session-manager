@@ -392,6 +392,30 @@ describe("hermes review relay", () => {
         expect(calls("/v1/runs")).toHaveLength(0);
       });
 
+      it("sweeps expired cooldown entries so the map cannot grow without bound", async () => {
+        // The cooldown is keyed by commit now, so its key space is every
+        // commit ever reviewed. Entries older than the window can no longer
+        // throttle anything.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const base = Date.now();
+          for (let i = 0; i < 1_100; i += 1) {
+            vi.setSystemTime(base + i);
+            await requestHermesReview(app, { ...PR, headSha: `sha${i}` });
+          }
+          vi.setSystemTime(base + 11 * 60_000);
+          // One more request triggers the sweep, which drops every entry
+          // older than the cooldown window.
+          await requestHermesReview(app, { ...PR, headSha: "fresh" });
+          // The old commit is no longer throttled — its entry was swept.
+          await expect(requestHermesReview(app, { ...PR, headSha: "sha0" })).resolves.toMatchObject(
+            { runId: "run_1" },
+          );
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
       it("is per commit and case-insensitive on the repo", async () => {
         await requestHermesReview(app, PR);
         await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toMatchObject({

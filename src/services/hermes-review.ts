@@ -143,6 +143,19 @@ Verdict:
 // rate limit.
 const lastRequested = new Map<string, number>();
 
+// The cooldown's key space is every commit ever reviewed (issue #1703), so a
+// long-lived process would grow this map without bound. Entries older than
+// the cooldown window can no longer throttle anything, so they are swept —
+// but only once the map is big enough for the sweep to be worth its O(n) pass.
+const MAX_COOLDOWN_ENTRIES = 1_000;
+
+function sweepCooldown(now: number, windowMs: number): void {
+  if (lastRequested.size <= MAX_COOLDOWN_ENTRIES) return;
+  for (const [key, at] of lastRequested) {
+    if (now - at >= windowMs) lastRequested.delete(key);
+  }
+}
+
 export interface ReviewRunRecord {
   runId: string;
   owner: string;
@@ -364,6 +377,7 @@ export async function requestHermesReview(
   const root = baseUrl(apiUrl);
 
   const cooldownKey = commitKey(owner, repo, prNumber, headSha);
+  sweepCooldown(Date.now(), cooldownMinutes * 60_000);
   const last = lastRequested.get(cooldownKey);
   if (last !== undefined) {
     const remainingMs = cooldownMinutes * 60_000 - (Date.now() - last);

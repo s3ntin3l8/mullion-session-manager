@@ -423,14 +423,12 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   optional, and an empty one uses Mullion's built-in review prompt. The
   review is dispatched asynchronously and posts to the PR within a few
   minutes; a repeat request for the **same commit** inside the configured
-  cooldown exits non-zero with a 409, as does a request for a commit that
-  already has a review run (for example one the repository's own workflow
-  started). A request for a **new** head commit — the normal re-review after
-  pushing fixes — is dispatched right away, even inside the cooldown window
-  of the previous one. The confirmation names the run id, and carries a
-  warning when a bot review for that commit already landed (the repository
-  reviews new PRs on its own, so this is routine — the request still goes
-  through and posts a second review).
+  cooldown exits non-zero with a 409. A request for a **new** head commit —
+  the normal re-review after pushing fixes — is dispatched right away, even
+  inside the cooldown window of the previous one. The confirmation names the
+  run id, and carries a warning when a bot review for that commit already
+  landed (the repository reviews new PRs on its own, so this is routine — the
+  request still goes through).
 - `review status [--pr <n>]` — troubleshoots a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes

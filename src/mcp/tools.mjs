@@ -625,8 +625,8 @@ const requestReview = {
     "goes through right away). Omit pr_number to use the open PR for the session's current " +
     "branch. Fails with a clear message if the relay isn't configured in Mullion's " +
     "Settings → Integrations or no PR exists yet. The result may carry a warning that a bot " +
-    "review for this commit already landed — the request still goes through, but it will post a " +
-    "second review. Use this for a re-review after pushing fixes; a newly opened PR is " +
+    "review for this commit already landed — the request still goes through. Use this " +
+    "for a re-review after pushing fixes; a newly opened PR is " +
     "reviewed automatically.",
   inputSchema: {
     type: "object",

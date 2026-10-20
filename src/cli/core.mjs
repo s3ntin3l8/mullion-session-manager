@@ -1500,9 +1500,13 @@ async function runReview(client, args, opts, io) {
     return { json: result, text: formatReviewStatus(result) };
   }
   if (result.replayed) {
+    // A replay dispatched no new run — but the warning (a bot review for this
+    // commit already landed) is still the answer the caller wanted, so it is
+    // not thrown away with the rest of the result.
+    const warning = result.warning ? ` — warning: ${result.warning}` : "";
     return {
       json: result,
-      text: `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion review status"`,
+      text: `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion review status"${warning}`,
     };
   }
   // Issue #1705 — the request may carry a warning (a bot review already landed

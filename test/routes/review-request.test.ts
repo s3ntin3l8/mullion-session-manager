@@ -237,6 +237,25 @@ describe("review-request routes", () => {
     });
   });
 
+  it("404s a detached session's branch, on either host", async () => {
+    // `git status` reports a detached checkout as its short commit SHA, not
+    // as the "(detached)" sentinel — that is the signal that arrives.
+    mocks.getGitStatus.mockResolvedValue({ branch: "abc1234" });
+    const res = await post(sessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("pass prNumber");
+
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({
+        isRepo: true,
+        status: { branch: "abc1234" },
+      })),
+    });
+    const remote = await post(remoteSessionId, {});
+    expect(remote.statusCode).toBe(404);
+    expect(remote.json().message).toContain("pass prNumber");
+  });
+
   it("derives the repo from the session's project, never the body", async () => {
     const res = await post(sessionId, { prNumber: 99 });
     expect(res.statusCode).toBe(200);
