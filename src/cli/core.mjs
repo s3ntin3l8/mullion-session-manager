@@ -134,7 +134,15 @@ const TOP_LEVEL_ALIASES = {
 // resolve verb="--kind" -> "unknown command" if it were a NOUNS entry
 // instead — `history` has no noun/verb split at all, just flags, the same
 // shape `notify`/`config` already have.
-const STANDALONE_COMMANDS = new Set(["notify", "status", "mcp", "config", "history", "review"]);
+const STANDALONE_COMMANDS = new Set([
+  "notify",
+  "status",
+  "mcp",
+  "config",
+  "history",
+  "review",
+  "triage",
+]);
 const NOUNS = new Set([
   "session",
   "browser",
@@ -1551,6 +1559,102 @@ function formatReviewStatus(r) {
   return lines.join("\n");
 }
 
+/**
+ * `mullion triage` — the issue-triage half of the relay (issue #1629).
+ *
+ * Mirrors `mullion review`: a bare `mullion triage` requests a triage,
+ * `mullion triage status` troubleshoots one, and `mullion triage stop <runId>`
+ * cancels one (the stop is a relay run, so it uses the shared stop op).
+ *
+ * The issue number is always required: unlike a PR, there is no "current
+ * issue" to infer from the session's branch.
+ */
+async function runTriage(client, args, opts, io) {
+  const sub = args[0] === "status" || args[0] === "stop" ? args[0] : "request";
+  const rest = sub === "request" ? args : args.slice(1);
+  const { flags, rest: positionals } = extractFlags(rest, { issue: "string" });
+  const body = {};
+  if (flags.issue !== undefined) {
+    const issueNumber = Number(flags.issue);
+    if (!Number.isInteger(issueNumber) || issueNumber < 1) {
+      throw new CliUsageError("--issue must be a positive integer");
+    }
+    body.issueNumber = issueNumber;
+  }
+  if (sub === "stop") {
+    if (positionals.length !== 1) throw new CliUsageError("usage: mullion triage stop <runId>");
+    // The run is named, not derived from an issue.
+    delete body.issueNumber;
+    body.runId = positionals[0];
+  } else if (body.issueNumber === undefined) {
+    throw new CliUsageError(
+      sub === "status"
+        ? "usage: mullion triage status --issue <n>"
+        : "usage: mullion triage --issue <n>",
+    );
+  }
+  if (opts.session !== undefined) body.sessionId = opts.session;
+  client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
+  const op =
+    sub === "request" ? "triage.request" : sub === "status" ? "triage.status" : "reviews.stop";
+  const result =
+    opts.session !== undefined
+      ? await client.request(op, body)
+      : await requestOwnSessionFallback(
+          client,
+          op,
+          body,
+          io,
+          "'sessionId' is required",
+          (ownId) => ({
+            ...body,
+            sessionId: ownId,
+          }),
+        );
+  if (sub === "stop") {
+    return { json: result, text: `triage run ${result.runId}: ${result.status}` };
+  }
+  if (sub === "status") {
+    return { json: result, text: formatTriageStatus(result) };
+  }
+  if (result.replayed) {
+    return {
+      json: result,
+      text: `no new triage started for ${result.repo}#${result.issueNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion triage status"`,
+    };
+  }
+  return {
+    json: result,
+    text: `triage requested for ${result.repo}#${result.issueNumber} (run ${result.runId}) — it will comment on the issue in a few minutes`,
+  };
+}
+
+function formatTriageStatus(r) {
+  if (r.status === "not_found") {
+    return `no triage run known for ${r.repo}#${r.prNumber} — none requested from this Mullion, or the server restarted`;
+  }
+  const lines = [`triage run ${r.runId} for ${r.repo}#${r.prNumber}: ${r.status}`];
+  if (r.shuttingDown) lines.push("the triage gateway is shutting down");
+  if (r.error) lines.push(`error: ${r.error}`);
+  if (r.output) lines.push(`reply: ${r.output}`);
+  if (r.github?.checked) {
+    lines.push(
+      r.github.comment
+        ? `posted: ${r.github.comment.author} at ${r.github.comment.createdAt}`
+        : "posted: nothing from a triage bot yet",
+    );
+    const body = r.github.comment?.body;
+    if (body) {
+      const trimmed =
+        body.length > MAX_CLI_REVIEW_BODY ? `${body.slice(0, MAX_CLI_REVIEW_BODY)}…` : body;
+      lines.push(`triage text: ${trimmed}`);
+      if (r.github.comment.bodyTruncated) lines.push("(the triage text was cut short)");
+    }
+    if (r.github.comment?.htmlUrl) lines.push(`comment: ${r.github.comment.htmlUrl}`);
+  }
+  return lines.join("\n");
+}
+
 async function runConfig(client, _args, _opts, io) {
   const info = {
     socketPath: client.socketPath,
@@ -1618,6 +1722,7 @@ export const COMMANDS = {
   notify: runNotify,
   status: runStatus,
   review: runReview,
+  triage: runTriage,
   config: runConfig,
   history: runHistory,
 };
@@ -1642,6 +1747,9 @@ Commands:
   review [--pr <n>]
   review status [--pr <n>]
   review stop <runId>
+  triage --issue <n>
+  triage status --issue <n>
+  triage stop <runId>
   mcp
   config
 

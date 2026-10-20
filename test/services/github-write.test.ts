@@ -12,6 +12,8 @@ import {
   getPullRequestByNumber,
   listPullRequestReviews,
   MAX_REVIEW_BODY_CHARS,
+  listIssueComments,
+  MAX_ISSUE_COMMENT_CHARS,
   mergePullRequest,
   updatePullRequestBranch,
   deleteRemoteBranch,
@@ -685,6 +687,69 @@ describe("github-write service", () => {
     await expect(markPullRequestReadyForReview("tok", "PR_node9")).rejects.toBeInstanceOf(
       GitHubWriteScopeError,
     );
+  });
+
+  describe("listIssueComments (#1629)", () => {
+    const comment = (i: number, over: Record<string, unknown> = {}) => ({
+      user: { login: `u${i}`, type: "User" },
+      body: `body ${i}`,
+      created_at: "2026-01-01T00:00:00Z",
+      html_url: `https://github.com/owner/repo/issues/5#issuecomment-${i}`,
+      ...over,
+    });
+
+    it("maps comments, flags bot authors and keeps their text", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [
+          comment(1, { user: { login: "hermes[bot]", type: "Bot" }, body: "## Triage" }),
+          comment(2, { user: null }),
+        ]),
+      );
+      const result = await listIssueComments("tok", "owner", "repo", 5);
+      expect(result).toEqual([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          body: "## Triage",
+          bodyTruncated: false,
+          createdAt: "2026-01-01T00:00:00Z",
+          htmlUrl: "https://github.com/owner/repo/issues/5#issuecomment-1",
+        },
+        {
+          author: "ghost",
+          authorIsBot: false,
+          body: "body 2",
+          bodyTruncated: false,
+          createdAt: "2026-01-01T00:00:00Z",
+          htmlUrl: "https://github.com/owner/repo/issues/5#issuecomment-2",
+        },
+      ]);
+      expect(fetchMock.mock.calls[0][0]).toContain("/issues/5/comments?per_page=100&page=1");
+    });
+
+    it("caps an oversized comment body and says so", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [comment(1, { body: "x".repeat(MAX_ISSUE_COMMENT_CHARS + 100) })]),
+      );
+      const result = await listIssueComments("tok", "owner", "repo", 5);
+      expect(result[0].body).toHaveLength(MAX_ISSUE_COMMENT_CHARS);
+      expect(result[0].bodyTruncated).toBe(true);
+    });
+
+    it("follows full pages so the newest comment is seen", async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse(
+            200,
+            Array.from({ length: 100 }, (_, i) => comment(i)),
+          ),
+        )
+        .mockResolvedValueOnce(jsonResponse(200, [comment(100)]));
+      const result = await listIssueComments("tok", "owner", "repo", 5);
+      expect(result).toHaveLength(101);
+      expect(result.at(-1)?.author).toBe("u100");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   // #737 — the aggregate verdict `attemptMerge`'s "blocked" arm reads to

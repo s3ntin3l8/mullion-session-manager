@@ -98,7 +98,7 @@ import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js
 import { derivePrPhase } from "../services/github-pr-phase.js";
 import { buildHandoffPrompt } from "../services/pr-handoff.js";
 import { assertReviewerConfigured, requestHermesReview } from "../services/hermes-review.js";
-import { replyReviewError } from "./review-request.js";
+import { replyReviewError } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";

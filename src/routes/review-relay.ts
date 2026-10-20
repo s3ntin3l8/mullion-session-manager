@@ -8,7 +8,9 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import {
   findPullRequestByHead,
+  getIssueState,
   getPullRequestByNumber,
+  listIssueComments,
   listPullRequestReviews,
 } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github-fetch.js";
@@ -23,7 +25,10 @@ import {
   assertReviewerConfigured,
   getHermesReviewStatus,
   getReviewRunForPr,
+  getRelayStatus,
+  getRunForTarget,
   requestHermesReview,
+  requestRelay,
   stopHermesReview,
 } from "../services/hermes-review.js";
 
@@ -35,10 +40,39 @@ import {
 // about a PR in the repo it is working in, and can only stop runs it
 // dispatched itself. The Hermes URL/key never leave the server
 // (services/hermes-integration.ts).
+//
+// The same relay also serves issue triage (issue #1629): `triage.request` /
+// `triage_status` (MCP) and `mullion triage` (CLI) reach the routes below.
+// A triage's target is an issue *number* in the session's repo — there is no
+// "current issue" to infer, so the number always comes from the caller — and
+// the same scoping rules apply: the repo comes from the session's project,
+// never from the request body.
 
 interface ReviewRequestBody {
   prNumber?: number;
 }
+
+interface TriageRequestBody {
+  issueNumber?: number;
+}
+
+const triageRequestSchema = {
+  body: {
+    type: "object",
+    additionalProperties: false,
+    required: ["issueNumber"],
+    properties: { issueNumber: { type: "integer", minimum: 1 } },
+  },
+};
+
+const triageStatusSchema = {
+  querystring: {
+    type: "object",
+    additionalProperties: false,
+    required: ["issueNumber"],
+    properties: { issueNumber: { type: "integer", minimum: 1 } },
+  },
+};
 
 const reviewRequestSchema = {
   body: {
@@ -70,6 +104,13 @@ interface ReviewTarget {
   repo: string;
   prNumber: number;
   headSha: string;
+  token: string;
+}
+
+interface TriageTarget {
+  owner: string;
+  repo: string;
+  issueNumber: number;
   token: string;
 }
 
@@ -287,6 +328,71 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
   }
 }
 
+/**
+ * Session → repo + issue number (+ a read token), for the triage relay
+ * (issue #1629). The repo comes from the session's project — never from the
+ * request body — exactly as the review path does, so a session can only
+ * triage an issue in the repo it is working in. The issue *number* always
+ * comes from the caller: there is no "current issue" to infer from a
+ * session's branch.
+ */
+async function resolveTriageTarget(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  sessionId: number,
+  issueNumber: number,
+): Promise<TriageTarget | null> {
+  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  if (!session) {
+    reply.notFound("Session not found");
+    return null;
+  }
+  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
+  if (!project) {
+    reply.notFound("Project not found");
+    return null;
+  }
+
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) {
+    reply.preconditionFailed("This project has no GitHub remote");
+    return null;
+  }
+  const { owner, repo } = repoRef;
+
+  const token = await resolveGitHubToken(app, { owner, repo }, "read");
+  if (!token) {
+    reply.preconditionFailed("No GitHub credentials are configured");
+    return null;
+  }
+
+  // Confirm the issue exists before dispatching: a triage of a number that
+  // is not an issue would send Hermes off to triage nothing. A pull request
+  // shares the numbering namespace, so this also catches "that number is a
+  // PR, not an issue".
+  try {
+    await getIssueState(token, owner, repo, issueNumber);
+  } catch (err) {
+    if (!(err instanceof GitHubApiError)) throw err;
+    if (err.statusCode === 404) {
+      reply.notFound(`Issue #${issueNumber} was not found in ${owner}/${repo}`);
+      return null;
+    }
+    app.log.warn(
+      { status: err.statusCode, detail: err.message },
+      "triage-request: GitHub lookup failed",
+    );
+    reply.badGateway(
+      err.statusCode === 0
+        ? "GitHub is unreachable — try again shortly"
+        : `GitHub rejected the issue lookup (HTTP ${err.statusCode})`,
+    );
+    return null;
+  }
+
+  return { owner, repo, issueNumber, token };
+}
+
 export async function reviewRequestRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: ReviewRequestBody }>(
     "/api/sessions/:id/review-request",
@@ -368,6 +474,79 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       }
     },
   );
+
+  // Issue triage (issue #1629): the same relay, aimed at an issue instead of
+  // a pull request. The run posts its findings as a comment on the issue.
+  app.post<{ Params: { id: string }; Body: TriageRequestBody }>(
+    "/api/sessions/:id/triage-request",
+    { schema: triageRequestSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      if (!gateReviewer(app, reply)) return reply;
+
+      const issueNumber = request.body.issueNumber;
+      if (issueNumber === undefined) return reply.badRequest("issueNumber is required");
+      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      if (!target) return reply;
+      const { owner, repo } = target;
+
+      try {
+        const run = await requestRelay(app, {
+          kind: "issue",
+          owner,
+          repo,
+          number: issueNumber,
+          sessionId,
+        });
+        return {
+          status: "dispatched",
+          kind: "issue",
+          repo: `${owner}/${repo}`,
+          issueNumber,
+          runId: run.runId,
+          runStatus: run.status,
+          replayed: run.replayed,
+        };
+      } catch (err) {
+        return replyReviewError(reply, err);
+      }
+    },
+  );
+
+  // Status of the latest triage run for an issue, plus whether the triage
+  // comment actually landed on it.
+  app.get<{ Params: { id: string }; Querystring: { issueNumber?: number } }>(
+    "/api/sessions/:id/triage-request",
+    { schema: triageStatusSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      if (!gateReviewer(app, reply)) return reply;
+
+      const issueNumber = request.query.issueNumber;
+      if (issueNumber === undefined) return reply.badRequest("issueNumber is required");
+      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      if (!target) return reply;
+      const { owner, repo, token } = target;
+
+      try {
+        const status = await getRelayStatus(app, {
+          kind: "issue",
+          owner,
+          repo,
+          number: issueNumber,
+        });
+        const record = getRunForTarget("issue", owner, repo, issueNumber);
+        return {
+          ...status,
+          github: await findLandedComment(app, token, target, record),
+        };
+      } catch (err) {
+        return replyReviewError(reply, err);
+      }
+    },
+  );
 }
 
 type LandedReview =
@@ -440,6 +619,55 @@ async function findLandedReview(
     };
   } catch (err) {
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
+    return { checked: false };
+  }
+}
+
+type LandedComment =
+  | {
+      checked: true;
+      comment: {
+        author: string;
+        body: string;
+        bodyTruncated: boolean;
+        createdAt: string;
+        htmlUrl?: string;
+      } | null;
+    }
+  | { checked: false };
+
+// Best effort: the newest comment by a bot account on the issue, posted after
+// the triage run was dispatched. A GitHub failure must not hide the Hermes
+// status. The issue-comment counterpart of `findLandedReview` (issue #1629).
+async function findLandedComment(
+  app: FastifyInstance,
+  token: string,
+  t: TriageTarget,
+  record: { dispatchedAt: number } | null,
+): Promise<LandedComment> {
+  if (!record) return { checked: false };
+  const { dispatchedAt } = record;
+  try {
+    const comments = await listIssueComments(token, t.owner, t.repo, t.issueNumber);
+    const landed = comments
+      .filter(
+        (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,
+      )
+      .at(-1);
+    return {
+      checked: true,
+      comment: landed
+        ? {
+            author: landed.author,
+            body: landed.body,
+            bodyTruncated: landed.bodyTruncated,
+            createdAt: landed.createdAt as string,
+            ...(landed.htmlUrl !== undefined ? { htmlUrl: landed.htmlUrl } : {}),
+          }
+        : null,
+    };
+  } catch (err) {
+    app.log.warn({ detail: (err as Error).message }, "triage-status: GitHub comment lookup failed");
     return { checked: false };
   }
 }

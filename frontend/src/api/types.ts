@@ -552,6 +552,8 @@ export interface ReviewRun {
   runId: string;
   /** Hermes' status, "not_found" once expired, or "unknown" when it couldn't be read. */
   status: string;
+  /** What the run acts on: a pull request review or an issue triage (issue #1629). */
+  kind?: "pull_request" | "issue";
   repo: string;
   prNumber: number;
   headSha: string;
@@ -1985,6 +1987,9 @@ export interface AppSettings {
     model: string;
     promptRepo: string;
     promptPath: string;
+    /** The issue-triage relay's own prompt (issue #1629). */
+    triagePromptRepo: string;
+    triagePromptPath: string;
     cooldownMinutes: number;
   };
   browser: {

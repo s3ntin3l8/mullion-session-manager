@@ -156,6 +156,8 @@ describe("mcp/server.mjs (issue #271)", () => {
       "request_review",
       "review_status",
       "stop_review",
+      "request_triage",
+      "triage_status",
       "list_projects",
       "list_actions",
       "create_preview",

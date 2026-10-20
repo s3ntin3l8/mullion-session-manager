@@ -447,6 +447,30 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 remote session's branch is resolved on the host that owns it. `review stop`
 takes a run id and does not look at the project.
 
+### triage
+
+- `triage --issue <n>` — asks the Mullion server to relay an issue triage to
+  the configured reviewer (Settings → Integrations → Review relay; currently
+  Hermes) for an issue in the session's project (the `triage.request` op,
+  `request_triage` over MCP). The issue number is required: unlike a pull
+  request, there is no "current issue" to infer from the session's branch.
+  The repo comes from the session's project, never from the command line.
+  The triage is dispatched asynchronously and posts its findings as a
+  comment on the issue within a few minutes; a repeat request for the same
+  issue inside the configured cooldown exits non-zero with a 409. The
+  confirmation names the run id.
+- `triage status --issue <n>` — troubleshoots a requested triage: the run's
+  Hermes status, the triage bot's reply or error, and whether a comment
+  from a bot account actually landed on the issue after the request —
+  including the comment's own text and a link to it. `not_found` means this
+  Mullion has no run for the issue (nothing was requested here, or the
+  server restarted).
+- `triage stop <runId>` — stops a run **this session** dispatched (the same
+  op as `review stop` — a relay run is stopped by its id, whatever kind it
+  is); another session's run is refused (403).
+
+`triage` works for local and remote-hosted projects, exactly like `review`.
+
 ### mcp
 
 - `mullion mcp` — execs `dist/mcp/server.mjs` (`src/mcp/server.mjs` in dev),

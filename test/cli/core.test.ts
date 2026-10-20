@@ -1406,6 +1406,111 @@ describe("runCommand", () => {
       });
     });
 
+    describe("triage (#1629)", () => {
+      const dispatched = {
+        status: "dispatched",
+        kind: "issue",
+        repo: "acme/widgets",
+        issueNumber: 12,
+        runId: "run_triage",
+      };
+
+      it("requests a triage of the given issue", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        const io = fakeIo();
+        const code = await runCommand(["triage", "--issue", "12"], { client, io });
+        expect(code).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("triage.request", { issueNumber: 12 });
+        expect(io.written.join("")).toContain("triage requested for acme/widgets#12");
+      });
+
+      it("requires an issue number", async () => {
+        const client = fakeClient();
+        const io = fakeIo();
+        expect(await runCommand(["triage"], { client, io })).toBe(2);
+        expect(io.stderr.write).toHaveBeenCalledWith(
+          expect.stringContaining("usage: mullion triage --issue <n>"),
+        );
+        expect(client.request).not.toHaveBeenCalled();
+      });
+
+      it.each(["abc", "0", "-3", "1.5"])("--issue %s is a usage error (exit 2)", async (bad) => {
+        const client = fakeClient();
+        const io = fakeIo();
+        expect(await runCommand(["triage", "--issue", bad], { client, io })).toBe(2);
+        expect(io.stderr.write).toHaveBeenCalledWith(
+          expect.stringContaining("--issue must be a positive integer"),
+        );
+        expect(client.request).not.toHaveBeenCalled();
+      });
+
+      it("status asks triage.status and prints the run and the landed comment", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_triage",
+            repo: "acme/widgets",
+            prNumber: 12,
+            status: "completed",
+            github: {
+              checked: true,
+              comment: {
+                author: "hermes[bot]",
+                body: "## Triage",
+                bodyTruncated: false,
+                createdAt: "2026-10-20T10:00:00Z",
+                htmlUrl: "https://github.com/acme/widgets/issues/12#issuecomment-1",
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("triage.status", { issueNumber: 12 });
+        const out = io.written.join("");
+        expect(out).toContain("triage run run_triage for acme/widgets#12: completed");
+        expect(out).toContain("posted: hermes[bot]");
+        expect(out).toContain("triage text: ## Triage");
+      });
+
+      it("stop stops the named run through the shared relay stop op", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({ runId: "run_triage", status: "stopping" })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "stop", "run_triage"], { client, io })).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("reviews.stop", { runId: "run_triage" });
+        expect(io.written.join("")).toContain("triage run run_triage: stopping");
+      });
+
+      it("says no new triage started when Hermes replayed an earlier run", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            runStatus: "completed",
+            replayed: true,
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "--issue", "12"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("no new triage started for acme/widgets#12");
+        expect(out).toContain("run_triage (completed)");
+      });
+
+      it("status says when no triage run is known", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            status: "not_found",
+            repo: "acme/widgets",
+            prNumber: 12,
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
+        expect(io.written.join("")).toContain("no triage run known for acme/widgets#12");
+      });
+    });
+
     describe("MULLION_SESSION_ID fallback on an auth-disabled host (issue #1457)", () => {
       it("session get retries with MULLION_SESSION_ID after the direct attempt 400s", async () => {
         let calls = 0;

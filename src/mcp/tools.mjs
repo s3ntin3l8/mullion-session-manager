@@ -674,7 +674,8 @@ const stopReview = {
   description:
     "Stop a review run that this session started with request_review (pass its runId). " +
     "Runs started by other sessions are refused. Stopping is rarely needed — use it only for " +
-    "a review that is stuck or was requested by mistake.",
+    "a review that is stuck or was requested by mistake. Also stops a triage run this session " +
+    "started with request_triage.",
   inputSchema: {
     type: "object",
     properties: {
@@ -684,6 +685,57 @@ const stopReview = {
   },
   async handler(args, client) {
     return JSON.stringify(await client.stopReview(args?.run_id));
+  },
+};
+
+const requestTriage = {
+  name: "request_triage",
+  description:
+    "Ask the Mullion server to relay an automated Hermes triage of an issue in this " +
+    "session's repository. Reachable from inside a normal agent session (session scope). The " +
+    "triage is dispatched asynchronously and posts its findings as a comment on the issue — " +
+    "wait for it rather than requesting again (the result carries a runId; use triage_status " +
+    "only to troubleshoot a triage that never shows up); a repeat request for the same issue " +
+    "is refused for a cooldown period. Fails with a clear message if the relay isn't " +
+    "configured in Mullion's Settings → Integrations or the issue does not exist.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      issue_number: {
+        type: "integer",
+        minimum: 1,
+        description: "The issue number to triage, in this session's repository.",
+      },
+    },
+    required: ["issue_number"],
+  },
+  async handler(args, client) {
+    return JSON.stringify(await client.requestTriage(args?.issue_number));
+  },
+};
+
+const triageStatus = {
+  name: "triage_status",
+  description:
+    "Troubleshoot a triage requested with request_triage: returns the run's Hermes status " +
+    "(queued, running, stopping, completed, failed, cancelled, interrupted, unknown, " +
+    "not_found), the triage bot's reply or error, and whether its comment actually landed on " +
+    "the issue — including the comment's text and a link to it. Use it when a requested triage " +
+    "has not appeared after several minutes — not to poll in a loop. not_found means this " +
+    "Mullion has no run for the issue (never requested here, or the server restarted).",
+  inputSchema: {
+    type: "object",
+    properties: {
+      issue_number: {
+        type: "integer",
+        minimum: 1,
+        description: "The issue number the triage was requested for.",
+      },
+    },
+    required: ["issue_number"],
+  },
+  async handler(args, client) {
+    return JSON.stringify(await client.triageStatus(args?.issue_number));
   },
 };
 
@@ -1063,6 +1115,8 @@ export const TOOLS = [
   requestReview,
   reviewStatus,
   stopReview,
+  requestTriage,
+  triageStatus,
   listProjects,
   listActions,
   createPreview,

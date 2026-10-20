@@ -131,6 +131,8 @@ describe("Hermes review relay integration routes", () => {
         model: "hermes-agent",
         promptRepo: "",
         promptPath: "hermes-review-prompt.md",
+        triagePromptRepo: "",
+        triagePromptPath: "hermes-triage-prompt.md",
         cooldownMinutes: 10,
       });
     });

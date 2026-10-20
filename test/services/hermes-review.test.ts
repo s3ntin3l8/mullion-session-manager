@@ -14,19 +14,24 @@ import {
 import {
   assertReviewerConfigured,
   getHermesReviewStatus,
+  getRelayStatus,
   getReviewRunForPr,
+  getRunForTarget,
   listHermesReviews,
   ReviewConflictError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   stopHermesReview,
   buildReviewMessage,
+  buildRelayMessage,
   BUILTIN_REVIEW_PROMPT,
+  BUILTIN_TRIAGE_PROMPT,
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
   isValidPromptLocation,
   requestHermesReview,
+  requestRelay,
   resetHermesReviewState,
   cooldownEntryCount,
   ReviewCooldownError,
@@ -37,7 +42,9 @@ const tmpDb = path.join(os.tmpdir(), `hermes-review-test-${process.pid}.db`);
 
 const API = "http://192.168.2.6:8643";
 const PROMPT_URL = "https://raw.githubusercontent.com/acme/.github/HEAD/review.md";
+const TRIAGE_PROMPT_URL = "https://raw.githubusercontent.com/acme/.github/HEAD/triage.md";
 const PR = { owner: "acme", repo: "widgets", prNumber: 7, headSha: "abc1234" };
+const ISSUE = { kind: "issue" as const, owner: "acme", repo: "widgets", number: 7 };
 
 const accepted = (runId = "run_1") =>
   new Response(JSON.stringify({ run_id: runId, status: "queued" }), { status: 202 });
@@ -84,6 +91,7 @@ describe("hermes review relay", () => {
     promptResponse = async () => new Response("REVIEW PROMPT BODY", { status: 200 });
     fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === PROMPT_URL) return promptResponse();
+      if (url === TRIAGE_PROMPT_URL) return promptResponse();
       if (url === `${API}/health`) return health();
       if (url === `${API}/v1/runs`) return dispatch(init ?? {});
       if (url.startsWith(`${API}/v1/runs/`)) return runEndpoint(url, init ?? {});
@@ -131,6 +139,91 @@ describe("hermes review relay", () => {
       expect(msg).toContain("Do NOT ask the human for secrets.");
       expect(msg).toContain("Honor a maximum of 30 agent turns.");
       expect(msg.endsWith("PROMPT")).toBe(true);
+    });
+
+    it("names an issue target as an issue, not a pr (#1629)", () => {
+      const msg = buildRelayMessage("issue", "acme", "widgets", 7, "PROMPT");
+      expect(msg).toContain("Target: issue #7 in repo acme/widgets");
+      expect(msg).not.toContain("Target: pr #7");
+      expect(msg.endsWith("PROMPT")).toBe(true);
+    });
+  });
+
+  describe("issue triage (#1629)", () => {
+    it("dispatches an issue triage with the triage prompt and target", async () => {
+      applySettingsPatch(app, {
+        reviewRelay: { triagePromptRepo: "acme/.github", triagePromptPath: "triage.md" },
+      });
+      await requestRelay(app, ISSUE);
+
+      const [post] = calls("/v1/runs");
+      const init = post[1] as RequestInit;
+      const body = JSON.parse(init.body as string) as { input: string };
+      expect(body.input).toContain("Target: issue #7 in repo acme/widgets");
+      expect(body.input).toContain("REVIEW PROMPT BODY");
+      expect(fetchMock).toHaveBeenCalledWith(TRIAGE_PROMPT_URL, expect.anything());
+    });
+
+    it("falls back to the built-in triage prompt", async () => {
+      applySettingsPatch(app, {
+        reviewRelay: { triagePromptRepo: "", triagePromptPath: "triage.md" },
+      });
+      await requestRelay(app, ISSUE);
+      const [post] = calls("/v1/runs");
+      const init = post[1] as RequestInit;
+      const body = JSON.parse(init.body as string) as { input: string };
+      expect(body.input).toContain("## Triage");
+      expect(body.input).toContain(BUILTIN_TRIAGE_PROMPT.trim().slice(0, 40));
+    });
+
+    it("uses its own idempotency key namespace", async () => {
+      await requestRelay(app, ISSUE);
+      const [post] = calls("/v1/runs");
+      const init = post[1] as RequestInit;
+      const headers = init.headers as Record<string, string>;
+      expect(headers["Idempotency-Key"]).toContain("mullion-triage:acme/widgets#7");
+    });
+
+    it("keeps a triage and a review of the same number apart", async () => {
+      // Distinct run ids, as Hermes assigns — a replayed run id means the
+      // SAME request, so two targets never share one.
+      dispatch = async () => accepted("run_triage");
+      await requestRelay(app, ISSUE);
+      dispatch = async () => accepted("run_review");
+      await requestHermesReview(app, PR);
+      // Same number, different kinds — each has its own run, and neither
+      // displaces the other in the run index.
+      expect(getRunForTarget("issue", "acme", "widgets", 7)).toMatchObject({ kind: "issue" });
+      expect(getRunForTarget("pull_request", "acme", "widgets", 7)).toMatchObject({
+        kind: "pull_request",
+      });
+    });
+
+    it("throttles a repeat triage of the same issue, but not a review of a PR with that number", async () => {
+      await requestRelay(app, ISSUE);
+      const err = await requestRelay(app, ISSUE).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ReviewCooldownError);
+      expect((err as Error).message).toContain("triage");
+      // A review of PR #7 is a different target — it is not throttled.
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
+    });
+
+    it("reports the triage's status under its own kind", async () => {
+      dispatch = async () => accepted("run_triage");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ status: "running" }), { status: 200 });
+      await requestRelay(app, ISSUE);
+      const status = await getRelayStatus(app, ISSUE);
+      expect(status).toMatchObject({ kind: "issue", status: "running" });
+      const missing = await getRelayStatus(app, { ...ISSUE, number: 99 });
+      expect(missing).toMatchObject({ status: "not_found", kind: "issue" });
+    });
+
+    it("rejects an invalid triage prompt location", async () => {
+      applySettingsPatch(app, {
+        reviewRelay: { triagePromptRepo: "acme/../evil", triagePromptPath: "triage.md" },
+      });
+      await expect(requestRelay(app, ISSUE)).rejects.toBeInstanceOf(HermesNotConfiguredError);
     });
   });
 

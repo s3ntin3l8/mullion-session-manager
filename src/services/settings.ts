@@ -466,6 +466,12 @@ export interface AppSettings {
     promptRepo: string;
     // Path of the review prompt inside promptRepo.
     promptPath: string;
+    // The same pair for the issue-triage relay (issue #1629): a triage run
+    // gets its own prompt, because "review this PR" and "triage this issue"
+    // are different jobs. Empty = Mullion's built-in triage prompt.
+    triagePromptRepo: string;
+    // Path of the triage prompt inside triagePromptRepo.
+    triagePromptPath: string;
     // Minimum minutes between two requests for the same PR.
     cooldownMinutes: number;
   };
@@ -628,6 +634,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: "hermes-agent",
     promptRepo: "",
     promptPath: "hermes-review-prompt.md",
+    triagePromptRepo: "",
+    triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
   },
   browser: {
@@ -1174,6 +1182,14 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       promptPath: safeString(
         settings.reviewRelay.promptPath,
         DEFAULT_SETTINGS.reviewRelay.promptPath,
+      ),
+      triagePromptRepo: safeString(
+        settings.reviewRelay.triagePromptRepo,
+        DEFAULT_SETTINGS.reviewRelay.triagePromptRepo,
+      ),
+      triagePromptPath: safeString(
+        settings.reviewRelay.triagePromptPath,
+        DEFAULT_SETTINGS.reviewRelay.triagePromptPath,
       ),
       cooldownMinutes: safeNumber(settings.reviewRelay.cooldownMinutes, {
         min: 0,
