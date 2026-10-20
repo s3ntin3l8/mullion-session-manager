@@ -9,11 +9,16 @@ import { FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
 /** Local branches with ahead/behind, last commit age, merged tag, PR phase chip, and delete. */
 export function GitBranchesSection({ projectId }: { projectId: number }) {
   const storeBranches = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.branches);
+  const storeDefaultBranch = useDashboardStore(
+    (s) => s.gitBranchesByProject[projectId]?.defaultBranch,
+  );
   const worktrees = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.worktrees);
   const gitRefreshTrigger = useDashboardStore((s) => s.gitRefreshTrigger);
-  const [detailed, setDetailed] = useState<{ projectId: number; branches: GitBranchInfo[] } | null>(
-    null,
-  );
+  const [detailed, setDetailed] = useState<{
+    projectId: number;
+    branches: GitBranchInfo[];
+    defaultBranch?: string | null;
+  } | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, { message: string; reason?: string }>>(
     {},
   );
@@ -27,7 +32,13 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
     let cancelled = false;
     api
       .getProjectGitBranches(projectId, true)
-      .then((r) => !cancelled && setDetailed(r ? { projectId, branches: r.branches } : null))
+      .then(
+        (r) =>
+          !cancelled &&
+          setDetailed(
+            r ? { projectId, branches: r.branches, defaultBranch: r.defaultBranch } : null,
+          ),
+      )
       .catch(() => undefined);
     return () => {
       cancelled = true;
@@ -39,6 +50,11 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
   }, [fetchDetailed, gitRefreshTrigger]);
 
   const branches = detailed?.projectId === projectId ? detailed.branches : storeBranches;
+  const rawDefaultBranch =
+    detailed?.projectId === projectId ? detailed.defaultBranch : storeDefaultBranch;
+  const resolvedDefaultBranch = rawDefaultBranch
+    ?.replace(/^refs\/remotes\//, "")
+    .replace(/^origin\//, "");
   const prs = useDashboardStore((s) => s.prsByProject[projectId]);
 
   const handleDeleteBranch = useCallback(
@@ -80,7 +96,9 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
         const deleteDisabled = b.isCurrent || Boolean(checkedOutElsewhere);
         const tooltip = b.upstream ? `${b.name}\nTracks: ${b.upstream}` : b.name;
         const rowError = rowErrors[`${projectId}:branch:${b.name}`];
-        const isDefaultBranch = b.name === "main" || b.name === "master";
+        const isDefaultBranch = resolvedDefaultBranch
+          ? b.name === resolvedDefaultBranch
+          : b.name === "main" || b.name === "master";
 
         return (
           <div key={b.name} className="git-branch-card">

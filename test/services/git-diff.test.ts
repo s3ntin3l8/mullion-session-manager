@@ -299,9 +299,24 @@ describe("getFileDiff", () => {
     expect(a).toBe(b);
   });
 
-  it("returns null for an unborn repository", async () => {
+  it("returns null for an unborn repository when the file does not exist", async () => {
     initRepo(tmpDir);
     expect(await getFileDiff(tmpDir, "a.txt")).toBeNull();
+  });
+
+  it("returns unified diff for an untracked or staged file in an unborn repository", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "new.txt"), "unborn untracked\n");
+
+    const untrackedPatch = await getFileDiff(tmpDir, "new.txt");
+    expect(untrackedPatch).toBeTruthy();
+    expect(untrackedPatch!).toContain("+unborn untracked");
+
+    fs.writeFileSync(path.join(tmpDir, "staged.txt"), "unborn staged\n");
+    git(tmpDir, ["add", "staged.txt"]);
+    const stagedPatch = await getFileDiff(tmpDir, "staged.txt");
+    expect(stagedPatch).toBeTruthy();
+    expect(stagedPatch!).toContain("+unborn staged");
   });
 
   it("returns unified diff for an untracked new file", async () => {

@@ -854,7 +854,7 @@ describe("GitPanel", () => {
       ).toBeInTheDocument();
     });
 
-    it("expands and collapses inline diff when a changed file row is clicked", async () => {
+    it("expands and collapses inline diff when a changed file row is clicked, and disables directory rows", async () => {
       let requestedDiffUrl = "";
       vi.stubGlobal(
         "fetch",
@@ -863,7 +863,10 @@ describe("GitPanel", () => {
             jsonResponse(200, {
               ...CLEAN_STATUS,
               isClean: false,
-              files: [{ path: "src/a.ts", status: "M" }],
+              files: [
+                { path: "src/a.ts", status: "M" },
+                { path: "sub/", status: "?" },
+              ],
             }),
           fileDiff: (url) => {
             requestedDiffUrl = url;
@@ -873,6 +876,9 @@ describe("GitPanel", () => {
       );
       const user = userEvent.setup();
       render(<GitPanel params={{ projectId: 23 }} />);
+
+      const dirToggle = await screen.findByRole("button", { name: /sub\// });
+      expect(dirToggle).toBeDisabled();
 
       const fileToggle = await screen.findByRole("button", { name: /src\/a\.ts/ });
       expect(fileToggle).toHaveAttribute("aria-expanded", "false");

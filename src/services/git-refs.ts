@@ -171,11 +171,7 @@ export async function listBranches(
         );
         const defaultBranchName = base.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
         for (const branch of branches) {
-          branch.isMerged =
-            branch.name !== defaultBranchName &&
-            branch.name !== "main" &&
-            branch.name !== "master" &&
-            mergedNames.has(branch.name);
+          branch.isMerged = branch.name !== defaultBranchName && mergedNames.has(branch.name);
         }
       }
     }

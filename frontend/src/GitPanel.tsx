@@ -497,37 +497,42 @@ export function GitPanel({
           {status.isClean ? "Clean" : `Changes (${status.files.length})`}
         </div>
         {status.isClean && <div className="github-panel-empty-row">Working tree clean</div>}
-        {status.files.map((file) => (
-          <div key={file.path}>
-            <div className="github-panel-row">
-              <button
-                type="button"
-                className="source-control-file-toggle"
-                aria-expanded={expandedFilePath === file.path}
-                onClick={() =>
-                  setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
-                }
-              >
-                <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
-                <span className="github-panel-row-number">{file.status}</span>
-                <span className="github-panel-row-title">{file.path}</span>
-              </button>
-              {onEditFile && file.status !== "D" && !file.path.endsWith("/") && (
+        {status.files.map((file) => {
+          const isDirectory = file.path.endsWith("/");
+          return (
+            <div key={file.path}>
+              <div className="github-panel-row">
                 <button
-                  className="git-panel-fetch-btn"
-                  aria-label={`Edit ${file.path}`}
-                  title={`Open ${file.path} in the file editor`}
-                  onClick={() => onEditFile(file.path)}
+                  type="button"
+                  className="source-control-file-toggle"
+                  disabled={isDirectory}
+                  aria-expanded={isDirectory ? undefined : expandedFilePath === file.path}
+                  onClick={() =>
+                    !isDirectory &&
+                    setExpandedFilePath((prev) => (prev === file.path ? null : file.path))
+                  }
                 >
-                  Edit
+                  <span className={`github-panel-ci-dot ${statusDotClass(file.status)}`} />
+                  <span className="github-panel-row-number">{file.status}</span>
+                  <span className="github-panel-row-title">{file.path}</span>
                 </button>
+                {onEditFile && file.status !== "D" && !isDirectory && (
+                  <button
+                    className="git-panel-fetch-btn"
+                    aria-label={`Edit ${file.path}`}
+                    title={`Open ${file.path} in the file editor`}
+                    onClick={() => onEditFile(file.path)}
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+              {!isDirectory && expandedFilePath === file.path && (
+                <ProjectFileDiff projectId={params.projectId} filePath={file.path} />
               )}
             </div>
-            {expandedFilePath === file.path && (
-              <ProjectFileDiff projectId={params.projectId} filePath={file.path} />
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {status.hasConflicts && (
@@ -551,7 +556,12 @@ export function GitPanel({
             );
             const deleteDisabled = branch.isCurrent || Boolean(checkedOutElsewhere);
             const pr = prs?.prs?.find((p) => p.headBranch === branch.name);
-            const isDefaultBranch = branch.name === "main" || branch.name === "master";
+            const resolvedDefault = branchesResult.defaultBranch
+              ?.replace(/^refs\/remotes\//, "")
+              .replace(/^origin\//, "");
+            const isDefaultBranch = resolvedDefault
+              ? branch.name === resolvedDefault
+              : branch.name === "main" || branch.name === "master";
             const hints: string[] = [];
             if (!isDefaultBranch && !branch.isCurrent && branch.isMerged) hints.push("merged");
             if (branch.ahead || branch.behind) {

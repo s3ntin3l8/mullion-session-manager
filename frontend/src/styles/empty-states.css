@@ -2575,6 +2575,10 @@ button.github-panel-row.gh-issue-row {
   cursor: pointer;
   text-align: left;
 }
+.source-control-file-toggle:disabled,
+.source-control-file-row:disabled {
+  cursor: default;
+}
 
 /* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
    structured expand/collapse with ciStatus dot + branch labels + run rows. */

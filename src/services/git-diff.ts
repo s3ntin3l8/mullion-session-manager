@@ -312,9 +312,12 @@ export async function getFileDiff(
     const { out: patch, code } = await runDiffProcess(args);
     if (patch) return patch;
 
-    // If working-tree diff against HEAD exited cleanly (code === 0) with no
-    // output, check if filePath is an untracked new file on disk.
-    if (!baseRef && code === 0) {
+    // If working-tree diff against HEAD exited (code !== null, i.e. did not
+    // time out or fail to spawn — covers both code === 0 in a normal repo and
+    // code === 128 in a freshly initialized repo with an unborn HEAD) with no
+    // output, check if filePath is an untracked file on disk or a staged file
+    // in an unborn-HEAD repo.
+    if (!baseRef && code !== null) {
       const resolvedCwd = path.resolve(cwd);
       const fullPath = path.resolve(cwd, filePath);
       if (fullPath.startsWith(resolvedCwd + path.sep)) {
@@ -338,6 +341,16 @@ export async function getFileDiff(
             filePath,
           ]);
           if (untrackedPatch) return untrackedPatch;
+        } else if (code === 128) {
+          const { out: stagedPatch } = await runDiffProcess([
+            "-C",
+            cwd,
+            "diff",
+            "--cached",
+            "--",
+            filePath,
+          ]);
+          if (stagedPatch) return stagedPatch;
         }
       }
     }

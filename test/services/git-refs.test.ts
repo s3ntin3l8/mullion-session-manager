@@ -186,11 +186,13 @@ describe("listBranches enrichment (issue #442)", () => {
       git(trunkRepo, ["push", "-u", "origin", "trunk"]);
       git(trunkRepo, ["remote", "set-head", "origin", "trunk"]);
       git(trunkRepo, ["branch", "merged-into-trunk"]);
+      git(trunkRepo, ["branch", "main"]);
       git(trunkRepo, ["checkout", "-b", "working-feature"]);
 
       const branches = await listBranches(trunkRepo, { detail: true });
       expect(branches?.find((b) => b.name === "trunk")?.isMerged).toBe(false);
       expect(branches?.find((b) => b.name === "merged-into-trunk")?.isMerged).toBe(true);
+      expect(branches?.find((b) => b.name === "main")?.isMerged).toBe(true);
     } finally {
       fs.rmSync(trunkRepo, { recursive: true, force: true });
       fs.rmSync(trunkRemote, { recursive: true, force: true });
