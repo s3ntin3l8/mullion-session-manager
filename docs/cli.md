@@ -422,25 +422,32 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   Hermes API URL and key never reach the session; the prompt repository is
   optional, and an empty one uses Mullion's built-in review prompt. The
   review is dispatched asynchronously and posts to the PR within a few
-  minutes; a repeat request for the same PR inside the configured cooldown
-  exits non-zero with a 409, as does a request for a commit that already has
-  a review run (for example one the repository's own workflow started). The
-  confirmation names the run id.
+  minutes; a repeat request for the **same commit** inside the configured
+  cooldown exits non-zero with a 409, as does a request for a commit that
+  already has a review run (for example one the repository's own workflow
+  started). A request for a **new** head commit — the normal re-review after
+  pushing fixes — is dispatched right away, even inside the cooldown window
+  of the previous one. The confirmation names the run id, and carries a
+  warning when a bot review for that commit already landed (the repository
+  reviews new PRs on its own, so this is routine — the request still goes
+  through and posts a second review).
 - `review status [--pr <n>]` — troubleshoots a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes
   answered with something unreadable — retry later — or `not_found`), the review bot's reply or error, and whether
   a review from a bot account actually landed on the PR after the request
   (Hermes can report `completed` for a run that posted nothing, e.g. when it
-  had no App credentials). `not_found` means this Mullion has no run for the
+  had no App credentials) — including the review's own text and a link to
+  it. `not_found` means this Mullion has no run for the
   PR: nothing was requested here, or the server restarted. Use it when a
   review has not appeared after several minutes, not to poll.
 - `review stop <runId>` — stops a run **this session** dispatched; another
   session's run is refused (403). Operators can stop any tracked run from
   Settings → Integrations → Review relay → Recent reviews.
 
-`review` and `review status` are local-host-project only; `review stop` takes a run id and
-does not look at the project.
+`review` and `review status` work for local and remote-hosted projects — a
+remote session's branch is resolved on the host that owns it. `review stop`
+takes a run id and does not look at the project.
 
 ### mcp
 

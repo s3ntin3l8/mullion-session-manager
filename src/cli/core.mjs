@@ -1451,6 +1451,11 @@ async function runStatus(client, args, opts, io) {
 // PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
 // client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
 const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
+// How much of a review's own text the CLI prints (issue #1704). The server
+// already bounds it (MAX_REVIEW_BODY_CHARS in services/github-write.ts); this
+// is the shorter excerpt a terminal can show without wrapping into a wall of
+// text.
+const MAX_CLI_REVIEW_BODY = 1_500;
 
 async function runReview(client, args, opts, io) {
   // `mullion review` requests; `status` and `stop <runId>` troubleshoot / cancel.
@@ -1500,9 +1505,13 @@ async function runReview(client, args, opts, io) {
       text: `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion review status"`,
     };
   }
+  // Issue #1705 — the request may carry a warning (a bot review already landed
+  // on this commit). It is not an error, but the caller asked for a review and
+  // deserves to know a second one is on its way.
+  const warning = result.warning ? ` — warning: ${result.warning}` : "";
   return {
     json: result,
-    text: `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}) — it will post to the PR in a few minutes`,
+    text: `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}) — it will post to the PR in a few minutes${warning}`,
   };
 }
 
@@ -1520,6 +1529,17 @@ function formatReviewStatus(r) {
         ? `posted: ${r.github.review.author} ${r.github.review.state} at ${r.github.review.commitId.slice(0, 7)}`
         : "posted: nothing from a review bot yet",
     );
+    // Issue #1704 — the reviewer's actual words, so an agent that asked for a
+    // review does not have to go and fetch the PR to read them. The body is
+    // already bounded server-side; the CLI only cuts it to a readable length.
+    const body = r.github.review?.body;
+    if (body) {
+      const trimmed =
+        body.length > MAX_CLI_REVIEW_BODY ? `${body.slice(0, MAX_CLI_REVIEW_BODY)}…` : body;
+      lines.push(`review text: ${trimmed}`);
+      if (r.github.review.bodyTruncated) lines.push("(the review text was cut short)");
+    }
+    if (r.github.review?.htmlUrl) lines.push(`review: ${r.github.review.htmlUrl}`);
   }
   return lines.join("\n");
 }

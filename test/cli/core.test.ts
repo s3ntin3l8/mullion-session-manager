@@ -1153,6 +1153,21 @@ describe("runCommand", () => {
         expect(out).toContain("run_1 (completed)");
       });
 
+      it("prints the duplicate-review warning without failing the request (#1705)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            warning: "A review by hermes[bot] (APPROVED) already landed on this commit",
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("review requested for acme/widgets#42");
+        expect(out).toContain("warning:");
+        expect(out).toContain("already landed on this commit");
+      });
+
       it("gives the request a longer timeout than the 30s default", async () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
         await runCommand(["review"], { client, io: fakeIo() });
@@ -1251,6 +1266,58 @@ describe("runCommand", () => {
           io: none,
         });
         expect(none.written.join("")).toContain("no review run known for acme/widgets#42");
+      });
+
+      it("status prints the landed review's own text and link (#1704)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_1",
+            repo: "acme/widgets",
+            prNumber: 42,
+            status: "completed",
+            github: {
+              checked: true,
+              review: {
+                author: "hermes[bot]",
+                state: "CHANGES_REQUESTED",
+                commitId: "abc1234",
+                body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+                htmlUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review", "status"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("posted: hermes[bot] CHANGES_REQUESTED at abc1234");
+        expect(out).toContain("review text: ## Review");
+        expect(out).toContain("REQUEST_CHANGES");
+        expect(out).toContain("https://github.com/acme/widgets/pull/42#pullrequestreview-1");
+      });
+
+      it("status says the review text was cut short (#1704)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_1",
+            repo: "acme/widgets",
+            prNumber: 42,
+            status: "completed",
+            github: {
+              checked: true,
+              review: {
+                author: "hermes[bot]",
+                state: "COMMENTED",
+                commitId: "abc1234",
+                body: "x".repeat(100),
+                bodyTruncated: true,
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        await runCommand(["review", "status"], { client, io });
+        expect(io.written.join("")).toContain("the review text was cut short");
       });
 
       it("stop sends the run id and prints the resulting status", async () => {

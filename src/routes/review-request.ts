@@ -4,6 +4,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRef } from "../services/host-git.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import {
   findPullRequestByHead,
@@ -93,6 +94,43 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
 }
 
 /**
+ * The branch a session is working on, resolved on the host that owns it
+ * (issue #1628).
+ *
+ * A local session's branch comes from the live PTY first (the hook adapter
+ * reports it, so it survives a commit the agent made between polls) and from
+ * `git status` as the fallback. A remote-hosted session has **no local PTY** —
+ * the PTY lives on the agent host — so its branch is resolved through
+ * `RemoteHostClient.resolveGitBranch`, the same call the project list makes
+ * for a remote project's `currentBranch` (routes/projects.ts).
+ *
+ * A host that is unreachable degrades to "no branch" (null), which the caller
+ * turns into the same 404 an undeterminable local branch produces.
+ */
+async function resolveSessionBranch(
+  app: FastifyInstance,
+  project: { id: number; cwd: string; hostId: string },
+  session: { id: number; cwd: string | null },
+): Promise<string | null> {
+  const cwd = session.cwd ?? project.cwd;
+  if (project.hostId !== LOCAL_HOST_ID) {
+    try {
+      const client = getRemoteHostClient(app, project.hostId);
+      return await client.resolveGitBranch(cwd);
+    } catch (err) {
+      // getRemoteHostClient() throws SYNCHRONOUSLY for a missing host row or a
+      // null baseUrl, so it needs its own catch, not just the await's.
+      app.log.warn(
+        { hostId: project.hostId, projectId: project.id, err },
+        "review-request: could not resolve the session branch on its host",
+      );
+      return null;
+    }
+  }
+  return app.pty.get(String(session.id))?.liveBranch ?? (await getGitStatus(cwd))?.branch ?? null;
+}
+
+/**
  * Session → repo + PR (+ head SHA and a read token). Sends the error reply
  * itself and returns null when the target can't be resolved.
  */
@@ -113,16 +151,12 @@ async function resolveReviewTarget(
     return null;
   }
 
-  // v1: branch detection below reads the local filesystem, so a
-  // remote-host project would silently look at the wrong checkout.
-  if (project.hostId !== LOCAL_HOST_ID) {
-    reply.preconditionFailed("The review relay supports local-host projects only");
-    return null;
-  }
-
   // The project's own cwd, not the session's: parseGitRemote reads
   // `<cwd>/.git/config` directly, which doesn't exist for a worktree
-  // (where `.git` is a file).
+  // (where `.git` is a file). resolveRepoRef already proxies to the agent
+  // for a remote-hosted project (services/host-git.ts), so the repo ref is
+  // host-agnostic — issue #1628 removed the local-only 412 below, and the
+  // branch detection further down now resolves through the same host.
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) {
     reply.preconditionFailed("This project has no GitHub remote");
@@ -139,9 +173,7 @@ async function resolveReviewTarget(
   let prNumber = requestedPr;
   try {
     if (prNumber === undefined) {
-      const branch =
-        app.pty.get(String(sessionId))?.liveBranch ??
-        (await getGitStatus(session.cwd ?? project.cwd))?.branch;
+      const branch = await resolveSessionBranch(app, project, session);
       if (!branch || branch === "(detached)") {
         reply.notFound("Could not determine this session's branch — pass prNumber");
         return null;
@@ -208,6 +240,12 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!target) return reply;
       const { owner, repo, prNumber, headSha } = target;
 
+      // Checked BEFORE the dispatch so the warning describes the state the
+      // request found — a bot review for this commit may already exist (the
+      // repository reviews new PRs on its own), which is NOT an error
+      // (issue #1705). Warn, never refuse.
+      const warning = await existingBotReviewWarning(app, target);
+
       try {
         const run = await requestHermesReview(app, { owner, repo, prNumber, headSha, sessionId });
         return {
@@ -217,6 +255,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           runId: run.runId,
           runStatus: run.status,
           replayed: run.replayed,
+          ...(warning ? { warning } : {}),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -271,7 +310,17 @@ export async function reviewRequestRoute(app: FastifyInstance) {
 type LandedReview =
   | {
       checked: true;
-      review: { author: string; state: string; commitId: string; submittedAt: string } | null;
+      review: {
+        author: string;
+        state: string;
+        commitId: string;
+        submittedAt: string;
+        /** The review's own text (issue #1704), bounded on the way in. */
+        body?: string;
+        bodyTruncated?: boolean;
+        /** The review's page on GitHub. */
+        htmlUrl?: string;
+      } | null;
     }
   | { checked: false };
 
@@ -305,11 +354,47 @@ async function findLandedReview(
             state: landed.state,
             commitId: landed.commitId,
             submittedAt: landed.submittedAt as string,
+            // The reviewer's actual words — the one thing an agent that asked
+            // for a review came for (issue #1704).
+            ...(landed.body !== undefined ? { body: landed.body } : {}),
+            ...(landed.bodyTruncated ? { bodyTruncated: true } : {}),
+            ...(landed.htmlUrl !== undefined ? { htmlUrl: landed.htmlUrl } : {}),
           }
         : null,
     };
   } catch (err) {
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
     return { checked: false };
+  }
+}
+
+/**
+ * A warning for a request whose commit already carries a bot review
+ * (issue #1705).
+ *
+ * The repository reviews new PRs on its own, so a relay request for a commit
+ * that already has a bot review is routine — it produces a second review of
+ * the same commit, which the requester may or may not want. This **warns and
+ * dispatches anyway**: refusing would break the legitimate "ask for a
+ * second opinion" case, and the warning is enough for the caller to see it.
+ *
+ * A GitHub failure degrades to "no warning" — it must never block or fail the
+ * dispatch it is attached to.
+ */
+async function existingBotReviewWarning(
+  app: FastifyInstance,
+  t: ReviewTarget,
+): Promise<string | undefined> {
+  try {
+    const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
+    const existing = reviews.filter((r) => r.authorIsBot && r.commitId === t.headSha).at(-1);
+    if (!existing) return undefined;
+    return `A review by ${existing.author} (${existing.state}) already landed on this commit — this request will post a second one`;
+  } catch (err) {
+    app.log.warn(
+      { detail: (err as Error).message },
+      "review-request: duplicate-review check failed (continuing without a warning)",
+    );
+    return undefined;
   }
 }

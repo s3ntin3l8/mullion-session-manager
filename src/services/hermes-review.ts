@@ -55,9 +55,15 @@ export class HermesAuthError extends Error {
 }
 
 export class ReviewCooldownError extends Error {
-  constructor(readonly retryAfterSeconds: number) {
+  constructor(
+    readonly retryAfterSeconds: number,
+    /** The commit whose review is being throttled (issue #1703). */
+    readonly headSha?: string,
+  ) {
     super(
-      `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
+      headSha
+        ? `A review of this commit (${headSha.slice(0, 7)}) was requested recently — wait ${retryAfterSeconds}s before requesting another, or request a review of the new head commit right away`
+        : `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
     );
     this.name = "ReviewCooldownError";
   }
@@ -156,6 +162,20 @@ const latestRunByPr = new Map<string, string>();
 
 function prKey(owner: string, repo: string, prNumber: number): string {
   return `${owner}/${repo}#${prNumber}`.toLowerCase();
+}
+
+/**
+ * The cooldown's key (issue #1703): the thing being throttled is a *commit*,
+ * not a PR. The idempotency key the run is dispatched under is already
+ * SHA-scoped (`mullion-review:owner/repo#pr@headSha:bucket`), so keying the
+ * cooldown by the PR alone made the two disagree — a re-review of a NEW head
+ * commit was refused for up to `cooldownMinutes`, even though it is a
+ * different review of a different commit. Keying both by the commit keeps
+ * "the same commit is throttled" and "a new commit is reviewed right away"
+ * in sync.
+ */
+function commitKey(owner: string, repo: string, prNumber: number, headSha: string): string {
+  return `${prKey(owner, repo, prNumber)}@${(headSha ?? "").toLowerCase()}`;
 }
 
 function trackRun(incoming: ReviewRunRecord): void {
@@ -339,15 +359,15 @@ export async function requestHermesReview(
   }
   const root = baseUrl(apiUrl);
 
-  const cooldownKey = prKey(owner, repo, prNumber);
+  const cooldownKey = commitKey(owner, repo, prNumber, headSha);
   const last = lastRequested.get(cooldownKey);
   if (last !== undefined) {
     const remainingMs = cooldownMinutes * 60_000 - (Date.now() - last);
-    if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000));
+    if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000), headSha);
   }
   // Reserve the slot BEFORE the awaits below: the check above and a later
-  // set would otherwise let two concurrent requests for one PR both pass and
-  // double-dispatch. A failed dispatch gives the slot back.
+  // set would otherwise let two concurrent requests for one commit both pass
+  // and double-dispatch. A failed dispatch gives the slot back.
   lastRequested.set(cooldownKey, Date.now());
   try {
     // Hermes replays an identical request that reuses a key (same run id, even
@@ -356,6 +376,11 @@ export async function requestHermesReview(
     // Bucketing by the cooldown window keeps a retry of one request (a failure
     // frees the cooldown slot) idempotent while a later request gets a new key.
     // With the cooldown disabled (0) there is no window: every request is fresh.
+    // The bucket window and the cooldown window are the same length on
+    // purpose (issue #1703): the cooldown is keyed by the commit, so "the
+    // cooldown has expired" and "the idempotency bucket has rolled over" stay
+    // in step — a same-commit request is refused by the cooldown until the
+    // bucket rolls, and dispatched fresh after it does.
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
     const idempotencyKey = `mullion-review:${owner}/${repo}#${prNumber}@${headSha}:${bucket}`;

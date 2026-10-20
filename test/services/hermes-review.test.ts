@@ -358,7 +358,7 @@ describe("hermes review relay", () => {
     });
 
     describe("cooldown", () => {
-      it("refuses a repeat request for the same PR with a retry-after", async () => {
+      it("refuses a repeat request for the same commit with a retry-after", async () => {
         await requestHermesReview(app, PR);
         const err = await requestHermesReview(app, PR).catch((e: unknown) => e);
         expect(err).toBeInstanceOf(ReviewCooldownError);
@@ -367,13 +367,35 @@ describe("hermes review relay", () => {
         expect(calls("/v1/runs")).toHaveLength(1);
       });
 
-      it("is per PR and case-insensitive on the repo", async () => {
+      it("names the commit it is throttling", async () => {
+        await requestHermesReview(app, PR);
+        const err = await requestHermesReview(app, PR).catch((e: unknown) => e);
+        expect((err as Error).message).toContain("abc123");
+      });
+
+      it("is per commit: a new head SHA is reviewed right away (#1703)", async () => {
+        await requestHermesReview(app, PR);
+        // A new commit on the same PR is a different review — the cooldown
+        // must not hold it back.
+        await expect(
+          requestHermesReview(app, { ...PR, headSha: "def5678" }),
+        ).resolves.toMatchObject({ runId: "run_1" });
+        expect(calls("/v1/runs")).toHaveLength(2);
+      });
+
+      it("is per commit and case-insensitive on the repo", async () => {
         await requestHermesReview(app, PR);
         await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toMatchObject({
           runId: "run_1",
         });
+        // The same commit on the same PR, whatever the repo's casing.
         await expect(
-          requestHermesReview(app, { owner: "ACME", repo: "Widgets", prNumber: 7 }),
+          requestHermesReview(app, {
+            owner: "ACME",
+            repo: "Widgets",
+            prNumber: 7,
+            headSha: PR.headSha.toUpperCase(),
+          }),
         ).rejects.toBeInstanceOf(ReviewCooldownError);
       });
 

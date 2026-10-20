@@ -688,10 +688,28 @@ export interface PullRequestReviewSummary {
   state: string;
   commitId: string;
   submittedAt: string | null;
+  /**
+   * The review's own text (issue #1704). A review body is attacker-controlled
+   * prose — it is what an untrusted PR author would have the review bot quote
+   * — so it is capped on the way in (see `MAX_REVIEW_BODY_CHARS`) rather than
+   * on the way out, so no caller can forget to bound it.
+   */
+  body?: string;
+  /** True when `body` was cut short by the cap. */
+  bodyTruncated?: boolean;
+  /** The review's own page on GitHub, for linking to. */
+  htmlUrl?: string;
 }
 
 const REVIEWS_PAGE_SIZE = 100;
 const REVIEWS_MAX_PAGES = 10;
+/**
+ * How much of a review body is kept (issue #1704). A review body is prose
+ * written by a bot (or by whoever the bot quotes) — long, but not unbounded:
+ * the same order of magnitude as the relay's own run-output cap
+ * (`MAX_RUN_OUTPUT_CHARS` in services/hermes-review.ts).
+ */
+export const MAX_REVIEW_BODY_CHARS = 4_000;
 
 /**
  * Reviews on a PR, oldest first, reduced to what "did the review bot's verdict
@@ -712,6 +730,8 @@ export async function listPullRequestReviews(
         state: string;
         commit_id: string;
         submitted_at: string | null;
+        body?: string | null;
+        html_url?: string | null;
       }>
     >(
       token,
@@ -721,12 +741,20 @@ export async function listPullRequestReviews(
       `/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
     );
     for (const r of reviews) {
+      const body = typeof r.body === "string" ? r.body : "";
+      const truncated = body.length > MAX_REVIEW_BODY_CHARS;
       out.push({
         author: r.user?.login ?? "ghost",
         authorIsBot: r.user?.type === "Bot",
         state: r.state,
         commitId: r.commit_id,
         submittedAt: r.submitted_at,
+        // An empty body is left undefined rather than "" — "this review said
+        // nothing" and "this review's text was not fetched" are the same
+        // thing to every caller, and neither is worth a field.
+        ...(body ? { body: truncated ? body.slice(0, MAX_REVIEW_BODY_CHARS) : body } : {}),
+        ...(truncated ? { bodyTruncated: true } : {}),
+        ...(typeof r.html_url === "string" ? { htmlUrl: r.html_url } : {}),
       });
     }
     if (reviews.length < REVIEWS_PAGE_SIZE) break;
