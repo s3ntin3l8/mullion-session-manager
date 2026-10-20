@@ -738,7 +738,9 @@ describe("github-write service", () => {
         jsonResponse(200, [comment(1, { body: "x".repeat(MAX_ISSUE_COMMENT_CHARS + 100) })]),
       );
       const result = await listIssueComments("tok", "owner", "repo", 5);
-      expect(result[0].body).toHaveLength(MAX_ISSUE_COMMENT_CHARS);
+      // The cut is by code point and marked with an ellipsis.
+      expect(result[0].body).toHaveLength(MAX_ISSUE_COMMENT_CHARS + 1);
+      expect(result[0].body?.endsWith("…")).toBe(true);
       expect(result[0].bodyTruncated).toBe(true);
     });
 

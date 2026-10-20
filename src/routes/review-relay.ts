@@ -639,9 +639,25 @@ type LandedComment =
         bodyTruncated: boolean;
         createdAt: string;
         htmlUrl?: string;
+        /**
+         * How the comment was attributed (issue #1629): "marked" when it
+         * carries the triage marker Mullion's own prompt asks for,
+         * "fallback" when it is the newest bot comment after the dispatch
+         * (a custom triage prompt may not use the marker).
+         */
+        attribution: "marked" | "fallback";
       } | null;
     }
   | { checked: false };
+
+/**
+ * The heading Mullion's built-in triage prompt asks the bot to start its
+ * comment with. It is what tells *our* comment apart from another bot's
+ * (dependabot, a stale-bot) in the window after the dispatch — the triage
+ * path has no commit to pin the comment to, the way the review path pins a
+ * review to its head commit.
+ */
+const TRIAGE_COMMENT_MARKER = "## Triage";
 
 // Best effort: the newest comment by a bot account on the issue, posted after
 // the triage run was dispatched. A GitHub failure must not hide the Hermes
@@ -660,16 +676,23 @@ async function findLandedComment(
     const comments = await listIssueComments(token, t.owner, t.repo, t.issueNumber, {
       since: new Date(dispatchedAt - 60_000).toISOString(),
     });
-    const landed = comments
-      .filter(
-        (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,
-      )
-      .at(-1);
+    const newBotComments = comments.filter(
+      (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,
+    );
+    // A comment carrying the triage marker is ours; another bot's comment is
+    // not. A custom triage prompt may not use the marker, so the newest bot
+    // comment is the fallback — with its author in the payload, so a wrong
+    // attribution is visible rather than silent.
+    const marked = newBotComments.filter((c) => c.body.includes(TRIAGE_COMMENT_MARKER)).at(-1);
+    const fallback = newBotComments.at(-1);
+    const landed = marked ?? fallback;
+    const attribution = marked ? "marked" : "fallback";
     return {
       checked: true,
       comment: landed
         ? {
             author: landed.author,
+            attribution,
             body: landed.body,
             bodyTruncated: landed.bodyTruncated,
             createdAt: landed.createdAt as string,

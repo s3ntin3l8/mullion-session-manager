@@ -244,11 +244,14 @@ export async function listIssueComments(
     );
     for (const c of comments) {
       const body = typeof c.body === "string" ? c.body : "";
-      const truncated = body.length > MAX_ISSUE_COMMENT_CHARS;
+      // truncateText cuts by code point and marks the cut with an ellipsis —
+      // the same helper the review body uses (a plain slice would split a
+      // surrogate pair).
+      const truncated = [...body].length > MAX_ISSUE_COMMENT_CHARS;
       out.push({
         author: c.user?.login ?? "ghost",
         authorIsBot: c.user?.type === "Bot",
-        body: truncated ? body.slice(0, MAX_ISSUE_COMMENT_CHARS) : body,
+        body: truncated ? truncateText(body, MAX_ISSUE_COMMENT_CHARS) : body,
         bodyTruncated: truncated,
         createdAt: c.created_at,
         ...(typeof c.html_url === "string" ? { htmlUrl: c.html_url } : {}),

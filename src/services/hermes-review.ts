@@ -144,9 +144,12 @@ export function buildRelayMessage(
   prompt: string,
 ): string {
   const target = kind === "issue" ? `issue #${number}` : `pr #${number}`;
+  // A triage posts a comment, not a review — telling it to "post the review"
+  // would ask for a verdict it has none to give.
+  const post = kind === "issue" ? "comment" : "review";
   const header =
     `Target: ${target} in repo ${owner}/${repo}\n` +
-    "Post the review as your GitHub App bot identity (an installation token from your profile's " +
+    `Post the ${post} as your GitHub App bot identity (an installation token from your profile's ` +
     "App credentials) — never with a personal user token. If you have no App credentials, do not " +
     "post; reply with the reason instead. Do NOT ask the human for secrets.\n" +
     `\nHonor a maximum of ${MAX_AGENT_TURNS} agent turns.\n\n`;

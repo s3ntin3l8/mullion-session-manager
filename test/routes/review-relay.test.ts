@@ -891,6 +891,55 @@ describe("review-request routes", () => {
       });
     });
 
+    it("prefers the comment carrying the triage marker over another bot's", async () => {
+      // The triage path has no commit to pin the comment to, so the marker
+      // (the heading Mullion's own prompt asks for) is what tells our
+      // comment apart from dependabot's.
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          body: "## Triage\n\n**Summary:** ours",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_700).toISOString(),
+        },
+        {
+          author: "dependabot[bot]",
+          authorIsBot: true,
+          body: "Bump lodash from 1.0 to 2.0",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github.comment).toMatchObject({
+        author: "hermes[bot]",
+        attribution: "marked",
+        body: "## Triage\n\n**Summary:** ours",
+      });
+    });
+
+    it("falls back to the newest bot comment, and says so", async () => {
+      // A custom triage prompt may not use the marker — the attribution is
+      // then a guess, and the payload says which it is.
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockResolvedValue([
+        {
+          author: "dependabot[bot]",
+          authorIsBot: true,
+          body: "Bump lodash from 1.0 to 2.0",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github.comment).toMatchObject({
+        author: "dependabot[bot]",
+        attribution: "fallback",
+      });
+    });
+
     it("reports that no triage comment landed yet", async () => {
       mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
       const res = await triageGet(sessionId, "?issueNumber=12");

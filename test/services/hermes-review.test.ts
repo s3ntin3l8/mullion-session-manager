@@ -147,6 +147,16 @@ describe("hermes review relay", () => {
       expect(msg).not.toContain("Target: pr #7");
       expect(msg.endsWith("PROMPT")).toBe(true);
     });
+
+    it("asks a triage to post a comment, not a review (#1629)", () => {
+      // A triage has no verdict to submit — telling it to "post the review"
+      // would ask for one.
+      const triage = buildRelayMessage("issue", "acme", "widgets", 7, "PROMPT");
+      expect(triage).toContain("Post the comment as your GitHub App bot identity");
+      expect(triage).not.toContain("Post the review as");
+      const review = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT");
+      expect(review).toContain("Post the review as your GitHub App bot identity");
+    });
   });
 
   describe("issue triage (#1629)", () => {
