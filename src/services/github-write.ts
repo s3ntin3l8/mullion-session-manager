@@ -712,6 +712,18 @@ const REVIEWS_MAX_PAGES = 10;
 export const MAX_REVIEW_BODY_CHARS = 4_000;
 
 /**
+ * Cuts a text to at most `max` characters without splitting a surrogate
+ * pair — a plain `slice` can leave a lone surrogate, which is not valid
+ * text and renders as a replacement character. The cut is made visible with
+ * an ellipsis, so a truncated body reads as truncated.
+ */
+export function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = [...text].slice(0, max).join("");
+  return `${cut}…`;
+}
+
+/**
  * Reviews on a PR, oldest first, reduced to what "did the review bot's verdict
  * land" needs. The endpoint is ascending, so every page is read (up to 1000
  * reviews): the newest review is on the last one. Read-only.
@@ -752,7 +764,7 @@ export async function listPullRequestReviews(
         // An empty body is left undefined rather than "" — "this review said
         // nothing" and "this review's text was not fetched" are the same
         // thing to every caller, and neither is worth a field.
-        ...(body ? { body: truncated ? body.slice(0, MAX_REVIEW_BODY_CHARS) : body } : {}),
+        ...(body ? { body: truncated ? truncateText(body, MAX_REVIEW_BODY_CHARS) : body } : {}),
         ...(truncated ? { bodyTruncated: true } : {}),
         ...(typeof r.html_url === "string" ? { htmlUrl: r.html_url } : {}),
       });

@@ -28,6 +28,7 @@ import {
   isValidPromptLocation,
   requestHermesReview,
   resetHermesReviewState,
+  cooldownEntryCount,
   ReviewCooldownError,
   testHermesConnection,
 } from "../../src/services/hermes-review.js";
@@ -394,8 +395,9 @@ describe("hermes review relay", () => {
 
       it("sweeps expired cooldown entries so the map cannot grow without bound", async () => {
         // The cooldown is keyed by commit now, so its key space is every
-        // commit ever reviewed. Entries older than the window can no longer
-        // throttle anything.
+        // commit ever reviewed. A swept entry and an expired-but-still-present
+        // one behave the same, so the only observable difference is the map's
+        // size — the test has to look at it.
         vi.useFakeTimers({ toFake: ["Date"] });
         try {
           const base = Date.now();
@@ -403,14 +405,14 @@ describe("hermes review relay", () => {
             vi.setSystemTime(base + i);
             await requestHermesReview(app, { ...PR, headSha: `sha${i}` });
           }
+          expect(cooldownEntryCount()).toBeGreaterThan(1_000);
+
+          // Well past the cooldown window: the next request sweeps.
           vi.setSystemTime(base + 11 * 60_000);
-          // One more request triggers the sweep, which drops every entry
-          // older than the cooldown window.
           await requestHermesReview(app, { ...PR, headSha: "fresh" });
-          // The old commit is no longer throttled — its entry was swept.
-          await expect(requestHermesReview(app, { ...PR, headSha: "sha0" })).resolves.toMatchObject(
-            { runId: "run_1" },
-          );
+          // Every entry older than the window is gone; only the fresh one
+          // remains.
+          expect(cooldownEntryCount()).toBeLessThanOrEqual(2);
         } finally {
           vi.useRealTimers();
         }

@@ -146,14 +146,24 @@ const lastRequested = new Map<string, number>();
 // The cooldown's key space is every commit ever reviewed (issue #1703), so a
 // long-lived process would grow this map without bound. Entries older than
 // the cooldown window can no longer throttle anything, so they are swept —
-// but only once the map is big enough for the sweep to be worth its O(n) pass.
+// but only once the map is big enough for the sweep to be worth its O(n) pass,
+// and at most once per window so a busy process does not pay the pass on
+// every request.
 const MAX_COOLDOWN_ENTRIES = 1_000;
+let lastCooldownSweep = 0;
 
 function sweepCooldown(now: number, windowMs: number): void {
   if (lastRequested.size <= MAX_COOLDOWN_ENTRIES) return;
+  if (now - lastCooldownSweep < windowMs) return;
+  lastCooldownSweep = now;
   for (const [key, at] of lastRequested) {
     if (now - at >= windowMs) lastRequested.delete(key);
   }
+}
+
+/** Test hook — how many cooldown entries are currently held. */
+export function cooldownEntryCount(): number {
+  return lastRequested.size;
 }
 
 export interface ReviewRunRecord {
@@ -237,6 +247,7 @@ const promptCache = new Map<string, { text: string; fetchedAt: number }>();
 /** Test hook — clears the cooldown, prompt and run-index caches. */
 export function resetHermesReviewState(): void {
   lastRequested.clear();
+  lastCooldownSweep = 0;
   promptCache.clear();
   runsById.clear();
   latestRunByPr.clear();
