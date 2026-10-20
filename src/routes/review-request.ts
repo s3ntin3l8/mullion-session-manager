@@ -193,14 +193,23 @@ async function resolveReviewTarget(
   // resolveRepoRefResult, not resolveRepoRef: the collapsing variant
   // answers "no GitHub remote" for a remote host that is DOWN or too old
   // for this route, which is a wrong (and unlogged) cause for a project
-  // this route now admits. The host cases answer 503 instead.
+  // this route now admits. The unreachable case answers 503; the version-skew
+  // case stays a 412.
   const repoResult = await resolveRepoRefResult(app, project);
   if (!repoResult.ok) {
+    // Logged like routes/projects.ts does — an unreachable host and an agent
+    // build that predates the route are two different problems, and the
+    // difference must not be visible only in the answer.
+    app.log.warn(
+      {
+        hostId: project.hostId,
+        projectId: project.id,
+        reason: repoResult.reason,
+        detail: repoResult.reason === "unreachable" ? repoResult.detail : undefined,
+      },
+      "review-request: could not resolve the project host's GitHub remote",
+    );
     if (repoResult.reason === "unreachable") {
-      app.log.warn(
-        { hostId: project.hostId, projectId: project.id, detail: repoResult.detail },
-        "review-request: could not resolve the repo ref on its host",
-      );
       reply.serviceUnavailable("The project host is unreachable — try again shortly");
       return null;
     }

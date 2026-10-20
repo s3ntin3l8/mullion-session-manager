@@ -1316,7 +1316,9 @@ describe("runCommand", () => {
       it("cuts a long review text by code point, never splitting a surrogate pair", async () => {
         // A body long enough to be cut, with an emoji right at the cut
         // boundary: a plain slice would leave half a surrogate behind.
-        const body = `${"a".repeat(1_500)}\u{1F600}${"b".repeat(100)}`;
+        // 1499 a's, so the emoji starts at UTF-16 index 1499 — one before
+        // the cut — and a naive slice would end in half a surrogate.
+        const body = `${"a".repeat(1_499)}\u{1F600}${"b".repeat(100)}`;
         const client = fakeClient({
           request: vi.fn(async () => ({
             runId: "run_1",
@@ -1338,8 +1340,13 @@ describe("runCommand", () => {
         await runCommand(["review", "status"], { client, io });
         const out = io.written.join("");
         const printed = out.slice(out.indexOf("review text: ") + "review text: ".length);
-        // No lone surrogate: every character is a whole code point.
-        expect([...printed].every((ch) => ch !== "\uFFFD")).toBe(true);
+        // A lone high surrogate (U+D83D without its pair) is what a naive
+        // slice leaves behind — U+FFFD only comes from a lossy decode.
+        // Two observable forms of a split pair: the lone high surrogate
+        // itself, and the U+FFFD the output pipeline's encode/decode turns
+        // it into.
+        expect(printed).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+        expect(printed).not.toContain("\uFFFD");
         expect(printed).toContain("\u2026");
       });
 
