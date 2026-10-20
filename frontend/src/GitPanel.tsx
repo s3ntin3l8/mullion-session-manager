@@ -423,6 +423,10 @@ export function GitPanel({
     return <EmptyStateNote>Not a git repository.</EmptyStateNote>;
   }
 
+  const resolvedDefaultBranch = branchesResult?.defaultBranch
+    ?.replace(/^refs\/remotes\//, "")
+    .replace(/^origin\//, "");
+
   return (
     <div className="github-panel cmux-scroll">
       <div className="github-panel-repo">
@@ -556,11 +560,8 @@ export function GitPanel({
             );
             const deleteDisabled = branch.isCurrent || Boolean(checkedOutElsewhere);
             const pr = prs?.prs?.find((p) => p.headBranch === branch.name);
-            const resolvedDefault = branchesResult.defaultBranch
-              ?.replace(/^refs\/remotes\//, "")
-              .replace(/^origin\//, "");
-            const isDefaultBranch = resolvedDefault
-              ? branch.name === resolvedDefault
+            const isDefaultBranch = resolvedDefaultBranch
+              ? branch.name === resolvedDefaultBranch
               : branch.name === "main" || branch.name === "master";
             const hints: string[] = [];
             if (!isDefaultBranch && !branch.isCurrent && branch.isMerged) hints.push("merged");

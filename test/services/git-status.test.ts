@@ -161,6 +161,20 @@ describe("getGitStatus", () => {
     expect(status?.files).toEqual([{ path: "new.txt", status: "?" }]);
   });
 
+  it("expands untracked directories (-uall) and preserves non-ASCII filenames unquoted (core.quotepath=false)", async () => {
+    initRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "src", "a.ts"), "export const a = 1;\n");
+    fs.writeFileSync(path.join(tmpDir, "ä.txt"), "umlaut\n");
+
+    const status = await getGitStatus(tmpDir);
+    expect(status?.isClean).toBe(false);
+    expect(status?.files).toEqual([
+      { path: "src/a.ts", status: "?" },
+      { path: "ä.txt", status: "?" },
+    ]);
+  });
+
   it("detects a staged-added file", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");

@@ -116,10 +116,14 @@ function runGitStatus(cwd: string): Promise<string | null> {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, "status", "--porcelain=v2", "--branch"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: gitEnv(),
-    });
+    const child = spawnChild(
+      "git",
+      ["-C", cwd, "-c", "core.quotepath=false", "status", "--porcelain=v2", "--branch", "-uall"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+        env: gitEnv(),
+      },
+    );
 
     const onStdoutData = (chunk: Buffer) => {
       stdout += chunk.toString("utf8");

@@ -319,16 +319,21 @@ describe("getFileDiff", () => {
     expect(stagedPatch!).toContain("+unborn staged");
   });
 
-  it("returns unified diff for an untracked new file", async () => {
+  it("returns unified diff for an untracked new file (including non-ASCII filenames)", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "init.txt"), "hello\n");
     commitAll(tmpDir, "initial");
     fs.writeFileSync(path.join(tmpDir, "untracked.txt"), "new file content\n");
+    fs.writeFileSync(path.join(tmpDir, "ä.txt"), "umlaut content\n");
 
     const patch = await getFileDiff(tmpDir, "untracked.txt");
     expect(patch).toBeTruthy();
     expect(patch!).toContain("--- /dev/null");
     expect(patch!).toContain("+++ b/untracked.txt");
     expect(patch!).toContain("+new file content");
+
+    const umlautPatch = await getFileDiff(tmpDir, "ä.txt");
+    expect(umlautPatch).toBeTruthy();
+    expect(umlautPatch!).toContain("+umlaut content");
   });
 });
