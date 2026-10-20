@@ -699,19 +699,6 @@ interface LoadProjectRepoContextOptions {
 }
 
 /**
- * The ~28-line preamble every `/api/projects/:id/github*` route below
- * shared verbatim (project lookup, host-aware repo-ref resolution, token
- * resolution), each with its own 400/404/503/204 short-circuits. Sends the
- * appropriate reply and returns `null` the moment any step comes up short;
- * returns the fully-resolved `{ project, repoRef, token }` otherwise.
- *
- * Repo-ref resolution goes through `resolveRepoRefResult` (host-git.ts) —
- * NOT the null-collapsing `resolveRepoRef` used elsewhere — because these
- * routes are the one place that needs to tell "host unreachable" (503)
- * apart from "no github.com remote configured" (204); see host-git.ts's
- * own doc comments on both functions.
- */
-/**
  * Annotates a project's pull requests with the review relay's state for
  * each (issue #1630).
  *
@@ -753,6 +740,19 @@ async function attachRelayReviewState(
   );
 }
 
+/**
+ * The ~28-line preamble every `/api/projects/:id/github*` route below
+ * shared verbatim (project lookup, host-aware repo-ref resolution, token
+ * resolution), each with its own 400/404/503/204 short-circuits. Sends the
+ * appropriate reply and returns `null` the moment any step comes up short;
+ * returns the fully-resolved `{ project, repoRef, token }` otherwise.
+ *
+ * Repo-ref resolution goes through `resolveRepoRefResult` (host-git.ts) —
+ * NOT the null-collapsing `resolveRepoRef` used elsewhere — because these
+ * routes are the one place that needs to tell "host unreachable" (503)
+ * apart from "no github.com remote configured" (204); see host-git.ts's
+ * own doc comments on both functions.
+ */
 async function loadProjectRepoContext(
   app: FastifyInstance,
   reply: FastifyReply,

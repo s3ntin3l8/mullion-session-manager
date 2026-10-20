@@ -120,6 +120,30 @@ describe("PrDetailView", () => {
     expect(screen.getByRole("link", { name: "open on GitHub" })).toBeInTheDocument();
   });
 
+  it("does not claim a failed review is still waiting", async () => {
+    vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1", status: "failed" }));
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(/the review did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the review bot/)).toBeNull();
+  });
+
+  it("does not show one PR's review under another PR's header", async () => {
+    vi.stubGlobal(
+      "fetch",
+      stubReview({
+        state: "landed",
+        verdict: "APPROVED",
+        author: "hermes[bot]",
+        body: "## Review",
+      }),
+    );
+    const { rerender } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText(/Approved by hermes\[bot\]/)).toBeInTheDocument();
+    // Another PR: the previous PR's verdict must not linger.
+    rerender(<PrDetailView projectId={1} number={13} onBack={vi.fn()} />);
+    expect(screen.queryByText(/Approved by hermes\[bot\]/)).toBeNull();
+  });
+
   it("shows nothing when no relay run is known for the PR", async () => {
     vi.stubGlobal("fetch", stubReview({ state: "none" }));
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

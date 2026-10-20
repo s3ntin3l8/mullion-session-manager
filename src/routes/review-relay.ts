@@ -694,11 +694,6 @@ function landedMemoFor(app: FastifyInstance): Map<string, { landed: LandedReview
   return memo;
 }
 
-/** Test hook — clears the memoized landed checks of one app. */
-export function resetLandedMemo(app: FastifyInstance): void {
-  landedMemos.delete(app);
-}
-
 /**
  * The relay's state for a pull request, as the operator's UI sees it
  * (issue #1630). Needs a GitHub token to look for the landed review; without

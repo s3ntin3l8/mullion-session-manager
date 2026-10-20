@@ -162,6 +162,23 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
 
 const PR_REFRESH_MS = 30_000;
 
+/** What a review that has not landed is doing, in words. */
+function pendingLabel(status: string | undefined): string {
+  switch (status) {
+    case "failed":
+    case "interrupted":
+    case "cancelled":
+      return "the review did not finish";
+    case "completed":
+      return "the review finished without posting";
+    case "stopping":
+    case "stopped":
+      return "the review is being stopped";
+    default:
+      return "waiting for the review bot";
+  }
+}
+
 /** A review's GitHub state, in words. */
 function verdictLabel(verdict: string | undefined): string {
   switch (verdict) {
@@ -196,7 +213,7 @@ function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
       <div className="github-panel-section">
         <div className="github-panel-section-title">Review</div>
         <div className="github-panel-empty-row">
-          A review was requested — waiting for the review bot
+          A review was requested — {pendingLabel(state.status)}
           {state.status ? ` (${state.status})` : ""}.
         </div>
       </div>
@@ -243,11 +260,12 @@ export function PrDetailView({
   // it belongs to is remembered alongside it, so switching PRs never shows the
   // previous PR's verdict under the new PR's header (cleared by derivation,
   // not by a setState inside the effect).
-  const [relay, setRelay] = useState<{ pr: number; state: RelayReviewState | null }>({
-    pr: number,
-    state: null,
-  });
-  const relayReview = relay.pr === number ? relay.state : null;
+  const [relay, setRelay] = useState<{
+    projectId: number;
+    pr: number;
+    state: RelayReviewState | null;
+  }>({ projectId, pr: number, state: null });
+  const relayReview = relay.projectId === projectId && relay.pr === number ? relay.state : null;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<"merge" | "review" | "handoff" | null>(null);
@@ -289,10 +307,10 @@ export function PrDetailView({
     api
       .getProjectPrReview(projectId, number)
       .then((res) => {
-        if (!cancelled) setRelay({ pr: number, state: res });
+        if (!cancelled) setRelay({ projectId, pr: number, state: res });
       })
       .catch(() => {
-        if (!cancelled) setRelay({ pr: number, state: null });
+        if (!cancelled) setRelay({ projectId, pr: number, state: null });
       });
     return () => {
       cancelled = true;

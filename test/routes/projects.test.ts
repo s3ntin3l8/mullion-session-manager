@@ -2085,6 +2085,34 @@ describe("projects route", () => {
           expect(reviews).toBeGreaterThan(1);
         });
 
+        it("does not ask Hermes for the run status once the review has landed", async () => {
+          // A landed review has nothing left to say — one gateway round-trip
+          // per drill-in tick, and a warn per tick while Hermes is down, for
+          // an answer nothing renders.
+          vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+          mockGithub(gqlPr(41), (url) =>
+            url.includes("/pulls/41/reviews")
+              ? jsonResponse(200, [
+                  {
+                    user: { login: "hermes[bot]", type: "Bot" },
+                    state: "APPROVED",
+                    commit_id: "sha41",
+                    submitted_at: new Date().toISOString(),
+                  },
+                ])
+              : null,
+          );
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/prs/41/review`,
+          });
+          expect(res.json()).toMatchObject({ state: "landed" });
+          // The Hermes run status was never asked for.
+          expect(res.json().status).toBeUndefined();
+        });
+
         it("annotates the PR list with the relay's state", async () => {
           vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
           const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -2126,7 +2154,12 @@ describe("projects route", () => {
             url: `/api/projects/${id}/github/prs`,
           });
           expect(res.statusCode).toBe(200);
-          expect(res.json().prs[0].relayReview).toMatchObject({ state: "requested" });
+          const pr = res.json().prs[0];
+          expect(pr.relayReview).toMatchObject({ state: "requested" });
+          // The list renders the state, the verdict and the author — not the
+          // review's whole text, which the drill-in fetches when it is opened.
+          expect(pr.relayReview.body).toBeUndefined();
+          expect(pr.relayReview.bodyTruncated).toBeUndefined();
         });
 
         it("reports the landed review, with what the bot said", async () => {
