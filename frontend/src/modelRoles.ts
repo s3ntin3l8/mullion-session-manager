@@ -23,6 +23,16 @@
 // Both are worth surfacing: in the first family an unset reviewer model is
 // a silent "same model as the implementer", and in the second family two
 // settings that happen to name the same model are the same thing.
+//
+// One deliberate omission: the backend also VALIDATES each candidate and
+// falls through to the next tier when a stored value is malformed
+// (`validateModel` / `validateCliModel`). A stored `reviewerModel` that
+// fails validation therefore resolves to the implementer's model on the
+// backend — a real collapse — while this mirror would report the two as
+// distinct. That is not reachable from the Settings UI (the picker's own
+// `MODEL_RE` rejects such a value before it can be saved), so it is
+// named here rather than mirrored: a validation tier would need the same
+// regexes the backend owns, and a copy of those drifts.
 
 export interface ModelRoleResolution {
   /** The model the implementer role resolves to, install-wide. */

@@ -173,20 +173,24 @@ export function ModelPicker({
   // not under the control: `.settings-row-control` is `flex-shrink: 0`, so a
   // note there would widen the control column and squeeze the description
   // beside it.
+  //
+  // Rendered inside an ALWAYS-MOUNTED live region (see below), not
+  // conditionally: `role="status"` only reliably announces a change to a
+  // region that already existed. A region inserted together with its
+  // content is missed by most screen readers — and the note appears exactly
+  // when the user changes the dropdown, which is the case this is for.
   warning?: ReactNode;
 }) {
   return (
     <Row
       label={label}
       desc={
-        warning ? (
-          <>
-            {desc}
-            {warning}
-          </>
-        ) : (
-          desc
-        )
+        <>
+          {desc}
+          {/* Always mounted so the warning's arrival is announced. Empty and
+              inert when there is nothing to say. */}
+          <span role="status">{warning}</span>
+        </>
       }
     >
       <ModelSelect

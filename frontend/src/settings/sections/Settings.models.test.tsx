@@ -446,5 +446,24 @@ describe("Settings -> Models", () => {
       render(<ModelsSection />);
       expect(screen.queryByText(opencodeWarning)).not.toBeInTheDocument();
     });
+
+    it("announces the warning through a live region", () => {
+      // role="status" only reliably announces a CHANGE to a region that
+      // already existed — a region inserted together with its content is
+      // missed by most screen readers. The note appears exactly when the
+      // reviewer dropdown changes, so the region has to be mounted before
+      // that happens.
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      const status = screen.getAllByRole("status");
+      expect(status.length).toBeGreaterThan(0);
+      expect(status.some((el) => /no second opinion/i.test(el.textContent ?? ""))).toBe(true);
+    });
   });
 });

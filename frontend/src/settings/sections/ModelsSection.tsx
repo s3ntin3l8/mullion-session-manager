@@ -42,12 +42,9 @@ function reviewerModelWarning(
 ): ReactNode {
   if (!roles.shared || roles.implementer === null) return null;
   return (
-    // role="status" so a screen reader announces the note when it appears:
-    // the warning appears and disappears as the reviewer model changes, and
-    // a colour-only change is invisible to one.
-    <p style={warningStyle} role="status">
+    <p style={warningStyle}>
       {cliName}'s reviewer runs on the same model as its implementer ({roles.implementer}) — no
-      second opinion.
+      second opinion, unless a task sets its own <code>Reviewer-Model:</code>.
     </p>
   );
 }
