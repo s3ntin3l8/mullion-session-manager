@@ -130,8 +130,9 @@ function nonEmptyString(value) {
  *
  * There is NO first-class `error_type` field like Claude Code's StopFailure
  * payload carries (which is what Mullion's `stop_failure.errorType` is modeled
- * on), and v2 does not populate `status` on this path — so a rate-limit
- * classification has to come from the message text.
+ * on), and v2 does not populate `status` on the failure path today — so a
+ * rate-limit classification comes from the message text (the `status` field
+ * IS honored when it happens to be there, see classifyProviderError).
  *
  * Deliberately narrow, for the same reason agy's own `RESOURCE_EXHAUSTED`
  * check is (see forwarder-core.mjs): task-reconciler.ts treats the exact label
@@ -165,6 +166,16 @@ const RATE_LIMIT_PATTERNS = [
 function classifyProviderError(error) {
   const message = nonEmptyString(error?.message) ? error.message : "";
   const type = nonEmptyString(error?.type) ? error.type : "";
+  // v2's StructuredError schema carries an optional `status` (and a
+  // `response.body`) — the HTTP status, when the failure path populates it.
+  // It is honored first when present, since it is the least ambiguous rate
+  // limit signal there is; today the failure path leaves it unset, and the
+  // message-token list below is what actually classifies.
+  const status = error?.status;
+  const responseStatus = error?.response?.status;
+  if (status === 429 || responseStatus === 429) {
+    return { errorType: "rate_limit", message: message || type || "error" };
+  }
   if (RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) {
     return { errorType: "rate_limit", message: message || type || "error" };
   }

@@ -173,6 +173,23 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
       ]);
     });
 
+    // v2's StructuredError schema carries an optional `status` (and a
+    // `response.body`) — the least ambiguous rate-limit signal there is, so
+    // it is honored whenever the failure path happens to populate it.
+    it.each([
+      [{ type: "provider.error", message: "slow down", status: 429 }],
+      [{ type: "provider.error", message: "slow down", response: { status: 429 } }],
+    ])("classifies a %j carrying the HTTP status 429 as a rate_limit", (error) => {
+      expect(mapOpenCodeEvent(ev("session.execution.failed", { error }))).toEqual([
+        {
+          kind: "stop_failure",
+          error: "slow down",
+          errorDetails: "slow down",
+          errorType: "rate_limit",
+        },
+      ]);
+    });
+
     // A user abort is not an API error — v2 reports it as its own
     // `session.execution.interrupted` event (deliberately unmapped), and its
     // own "aborted" classification must not raise an API-error bell either.
