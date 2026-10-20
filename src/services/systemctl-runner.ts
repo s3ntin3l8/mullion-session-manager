@@ -23,9 +23,10 @@ import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 export const SYSTEMCTL_TIMEOUT_MS = 5_000;
 export const KILL_ESCALATION_MS = 2_000;
 // setTimeout's delay is a resource-exhaustion sink. Every caller of
-// armKillEscalation is at or under sdkmanager's 10-minute install budget;
-// anything outside (0, this cap] uses the short systemctl budget instead
-// of arming an unbounded timer.
+// armKillEscalation is at or under sdkmanager's 10-minute install budget.
+// A larger budget is clamped to that cap (not swapped for the 5s systemctl
+// timeout — a future 15-minute job must not be SIGTERM'd at 5s). A
+// non-positive budget is not a duration and keeps the short default.
 const KILL_ESCALATION_MAX_MS = 600_000;
 
 /**
@@ -62,10 +63,10 @@ export function armKillEscalation(
     }
   };
 
-  let duration = SYSTEMCTL_TIMEOUT_MS;
-  if (timeoutMs <= KILL_ESCALATION_MAX_MS && timeoutMs > 0) {
-    duration = timeoutMs;
-  }
+  // Math.min against a constant is the upper bound. Non-positive stays on
+  // the short systemctl budget rather than becoming a 0-delay timer.
+  const duration =
+    timeoutMs > 0 ? Math.min(timeoutMs, KILL_ESCALATION_MAX_MS) : SYSTEMCTL_TIMEOUT_MS;
   const timer = setTimeout(() => {
     try {
       child.kill(); // SIGTERM

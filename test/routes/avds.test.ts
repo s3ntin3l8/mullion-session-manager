@@ -379,6 +379,7 @@ describe("avds routes", () => {
         expect(res.statusCode).toBe(201);
         expect(vi.mocked(createAvd)).toHaveBeenCalledWith(
           expect.objectContaining({
+            avdmanagerPath: "/opt/sdk/avdmanager",
             sdcardSize: "2048M",
             ramSizeMb: "2048",
             dataPartitionSize: "6G",

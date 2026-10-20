@@ -389,16 +389,14 @@ export function patchAvdConfigIni(
 // avdmanager has no flag for them.
 export async function createAvd(opts: CreateAvdOptions): Promise<void> {
   const args = ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile];
-  // `--sdcard`, not `-c`: same avdmanager option, but a variable executable
-  // plus a literal `-c` and the following argument is what CodeQL reports as
-  // `sh -c <user string>` (js/command-line-injection).
   const sdcard = opts.sdcardSize;
   if (sdcard !== undefined) {
-    if (sdcard.match(/^[0-9]{1,6}[KMG]$/)) {
-      args.push("--sdcard", sdcard);
-    } else {
-      throw new Error("sdcardSize is not a size token");
-    }
+    // Rebuild from the capture. The request string itself never becomes an
+    // argument, and `--sdcard` is not `-c` (a variable program plus a literal
+    // `-c` is what CodeQL reads as `sh -c`).
+    const matched = /^([0-9]{1,6})([KMG])$/.exec(sdcard);
+    if (!matched) throw new Error("sdcardSize is not a size token");
+    args.push("--sdcard", `${matched[1]}${matched[2]}`);
   }
   await execFileWithEscalation(
     opts.execFileFn ?? execFileCb,

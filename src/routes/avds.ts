@@ -150,12 +150,18 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
     if (!hardware.ok) return reply.badRequest(hardware.message);
 
     try {
+      // Do not spread `hardware.value` into this object. CodeQL treats that
+      // spread as tainting every property, including `avdmanagerPath`, which
+      // is the execFile executable (js/command-line-injection). The three
+      // size fields are copied by name so the path stays the config value.
       await createAvd({
         avdmanagerPath: app.config.DEVICE_AVDMANAGER_PATH,
         name,
         systemImage,
         deviceProfile,
-        ...hardware.value,
+        sdcardSize: hardware.value.sdcardSize,
+        ramSizeMb: hardware.value.ramSizeMb,
+        dataPartitionSize: hardware.value.dataPartitionSize,
         configRoots: avdConfigRoots(),
       });
     } catch (err) {
