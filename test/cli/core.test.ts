@@ -1497,6 +1497,31 @@ describe("runCommand", () => {
         expect(out).toContain("run_triage (completed)");
       });
 
+      it("says when the comment was only a fallback attribution", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_triage",
+            repo: "acme/widgets",
+            prNumber: 12,
+            status: "completed",
+            github: {
+              checked: true,
+              comment: {
+                author: "dependabot[bot]",
+                attribution: "fallback",
+                body: "Bump lodash from 1.0 to 2.0",
+                bodyTruncated: false,
+                createdAt: "2026-10-20T10:00:00Z",
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("may not be ours");
+      });
+
       it("status says when no triage run is known", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({

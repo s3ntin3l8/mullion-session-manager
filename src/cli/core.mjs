@@ -1651,10 +1651,20 @@ function formatTriageStatus(r) {
     );
     const body = r.github.comment?.body;
     if (body) {
+      // The cut is by code point, so it cannot leave a lone surrogate behind.
       const trimmed =
-        body.length > MAX_CLI_REVIEW_BODY ? `${body.slice(0, MAX_CLI_REVIEW_BODY)}…` : body;
+        [...body].length > MAX_CLI_REVIEW_BODY
+          ? `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`
+          : body;
       lines.push(`triage text: ${trimmed}`);
       if (r.github.comment.bodyTruncated) lines.push("(the triage text was cut short)");
+    }
+    // The attribution says how the comment was matched to the triage: the
+    // marker Mullion's own prompt asks for, or merely the newest bot comment
+    // after the dispatch (a custom prompt may not use the marker) — which
+    // may be another bot's comment.
+    if (r.github.comment?.attribution === "fallback") {
+      lines.push("(newest bot comment, marker missing — may not be ours)");
     }
     if (r.github.comment?.htmlUrl) lines.push(`comment: ${r.github.comment.htmlUrl}`);
   }
