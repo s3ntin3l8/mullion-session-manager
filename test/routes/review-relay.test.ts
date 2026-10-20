@@ -784,6 +784,18 @@ describe("review-request routes", () => {
       expect(mocks.requestRelay).not.toHaveBeenCalled();
     });
 
+    it("warns when the issue is closed, but still dispatches", async () => {
+      mocks.getIssueState.mockResolvedValue({
+        state: "closed",
+        labels: [],
+        isPullRequest: false,
+      });
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("dispatched");
+      expect(res.json().warning).toContain("closed");
+    });
+
     it("404s an issue that does not exist", async () => {
       mocks.getIssueState.mockRejectedValue(new GitHubApiError("not found", 404));
       const res = await triagePost(sessionId, { issueNumber: 12 });

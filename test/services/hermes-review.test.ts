@@ -22,8 +22,8 @@ import {
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   stopHermesReview,
-  buildReviewMessage,
   buildRelayMessage,
+  TRIAGE_COMMENT_MARKER,
   BUILTIN_REVIEW_PROMPT,
   BUILTIN_TRIAGE_PROMPT,
   HermesAuthError,
@@ -129,9 +129,9 @@ describe("hermes review relay", () => {
     });
   });
 
-  describe("buildReviewMessage", () => {
+  describe("buildRelayMessage", () => {
     it("builds a generic header requiring a bot identity, then appends the prompt", () => {
-      const msg = buildReviewMessage("acme", "widgets", 7, "PROMPT");
+      const msg = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT");
       expect(msg).toContain("Target: pr #7 in repo acme/widgets");
       expect(msg).toContain("GitHub App bot identity");
       expect(msg).toContain("never with a personal user token");
@@ -146,6 +146,13 @@ describe("hermes review relay", () => {
       expect(msg).toContain("Target: issue #7 in repo acme/widgets");
       expect(msg).not.toContain("Target: pr #7");
       expect(msg.endsWith("PROMPT")).toBe(true);
+    });
+
+    it("asks for the comment heading the route matches the triage on (#1629)", () => {
+      // The route prefers a comment carrying this marker over another bot's;
+      // if the prompt stopped asking for it, that match would silently
+      // degrade to the fallback.
+      expect(BUILTIN_TRIAGE_PROMPT).toContain(TRIAGE_COMMENT_MARKER);
     });
 
     it("asks a triage to post a comment, not a review (#1629)", () => {

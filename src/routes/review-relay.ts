@@ -15,6 +15,7 @@ import {
 } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github-fetch.js";
 import {
+  TRIAGE_COMMENT_MARKER,
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
@@ -112,6 +113,9 @@ interface TriageTarget {
   repo: string;
   issueNumber: number;
   token: string;
+  /** Whether the issue is open or closed — a triage of a closed issue still
+   * goes out, but the caller is told (issue #1629). */
+  issueState: "open" | "closed";
 }
 
 // Maps the service's errors to HTTP. Anything unexpected is rethrown (500).
@@ -371,12 +375,14 @@ async function resolveTriageTarget(
   // shares the numbering namespace and GitHub answers `/issues/{n}` for a
   // PR too, so the `pull_request` key is what tells the two apart (the same
   // check github-issues.ts's own detail fetch makes).
+  let issueState: "open" | "closed";
   try {
     const issue = await getIssueState(token, owner, repo, issueNumber);
     if (issue.isPullRequest) {
       reply.notFound(`#${issueNumber} is a pull request, not an issue`);
       return null;
     }
+    issueState = issue.state;
   } catch (err) {
     if (!(err instanceof GitHubApiError)) throw err;
     if (err.statusCode === 404) {
@@ -395,7 +401,7 @@ async function resolveTriageTarget(
     return null;
   }
 
-  return { owner, repo, issueNumber, token };
+  return { owner, repo, issueNumber, token, issueState };
 }
 
 export async function reviewRequestRoute(app: FastifyInstance) {
@@ -513,6 +519,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           runId: run.runId,
           runStatus: run.status,
           replayed: run.replayed,
+          // A triage of a closed issue still goes out — the caller may want
+          // exactly that — but the caller is told (issue #1629).
+          ...(target.issueState === "closed" ? { warning: `Issue #${issueNumber} is closed` } : {}),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -649,15 +658,6 @@ type LandedComment =
       } | null;
     }
   | { checked: false };
-
-/**
- * The heading Mullion's built-in triage prompt asks the bot to start its
- * comment with. It is what tells *our* comment apart from another bot's
- * (dependabot, a stale-bot) in the window after the dispatch — the triage
- * path has no commit to pin the comment to, the way the review path pins a
- * review to its head commit.
- */
-const TRIAGE_COMMENT_MARKER = "## Triage";
 
 // Best effort: the newest comment by a bot account on the issue, posted after
 // the triage run was dispatched. A GitHub failure must not hide the Hermes

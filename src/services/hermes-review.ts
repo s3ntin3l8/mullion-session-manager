@@ -122,15 +122,6 @@ export interface RelayTarget {
 // profile layout, so it works for any Hermes review-bot setup. What matters
 // is WHO posts the review — a GitHub App bot identity that can give an
 // official verdict — so that is stated as a requirement.
-export function buildReviewMessage(
-  owner: string,
-  repo: string,
-  prNumber: number,
-  prompt: string,
-): string {
-  return buildRelayMessage("pull_request", owner, repo, prNumber, prompt);
-}
-
 /**
  * The dispatch message for a relay run (issue #1629). The target line names
  * the kind, so a triage run is never mistaken for a review of a pull request
@@ -190,6 +181,18 @@ Verdict:
  * that opens by hunting a skill that does not exist sends every install
  * down a dead end). The procedure below is the whole instruction.
  */
+/**
+ * The heading the built-in triage prompt asks the bot to start its comment
+ * with. It is what tells *our* comment apart from another bot's
+ * (dependabot, a stale-bot) in the window after the dispatch — the triage
+ * path has no commit to pin the comment to, the way the review path pins a
+ * review to its head commit.
+ *
+ * Stated here, next to the prompt that asks for it: the route matches on
+ * this constant, so the two cannot drift apart.
+ */
+export const TRIAGE_COMMENT_MARKER = "## Triage";
+
 export const BUILTIN_TRIAGE_PROMPT = `Triage the issue named above.
 
 Procedure:
@@ -200,7 +203,7 @@ Procedure:
 Constraints:
 - Read-only: never git push, commit, modify files, close the issue, or label it.
 - Post exactly one comment on the issue — the triage itself, not a reply to another comment.
-- Comment body shape: "## Triage", then "**Summary:** ...", then "### Findings", "### Suggested next step" and "### Questions for the reporter" (omit empty ones).
+- Comment body shape: "${TRIAGE_COMMENT_MARKER}", then "**Summary:** ...", then "### Findings", "### Suggested next step" and "### Questions for the reporter" (omit empty ones).
 - Be concrete: name the real files and functions involved, and say what you could not verify.
 - If the issue is unclear or wrong, say so plainly instead of guessing.
 - Reply with a single line: "<N> findings, action=<...>".
