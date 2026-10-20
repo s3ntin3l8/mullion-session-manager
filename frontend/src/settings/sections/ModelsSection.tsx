@@ -4,10 +4,7 @@ import { api } from "../../api/index.js";
 import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
-import {
-  resolveCliModelRoles,
-  resolveOpencodeModelRoles,
-} from "../../modelRoles.js";
+import { resolveCliModelRoles, resolveOpencodeModelRoles } from "../../modelRoles.js";
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
