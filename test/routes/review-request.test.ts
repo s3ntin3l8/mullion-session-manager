@@ -12,7 +12,7 @@ import type * as RemoteHostClient from "../../src/services/remote-host-client.js
 // Only the network/host edges are mocked; the route's own session -> project
 // -> repo -> PR resolution and error mapping run for real.
 const mocks = vi.hoisted(() => ({
-  resolveRepoRef: vi.fn(),
+  resolveRepoRefResult: vi.fn(),
   resolveGitHubToken: vi.fn(),
   findPullRequestByHead: vi.fn(),
   getPullRequestByNumber: vi.fn(),
@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../src/services/host-git.js", async (orig) => ({
   ...(await orig<typeof HostGit>()),
-  resolveRepoRef: mocks.resolveRepoRef,
+  resolveRepoRefResult: mocks.resolveRepoRefResult,
 }));
 vi.mock("../../src/services/github-integration.js", async (orig) => ({
   ...(await orig<typeof GithubIntegration>()),
@@ -113,7 +113,10 @@ describe("review-request routes", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveRepoRef.mockResolvedValue({ owner: "acme", repo: "widgets" });
+    mocks.resolveRepoRefResult.mockResolvedValue({
+      ok: true,
+      value: { owner: "acme", repo: "widgets" },
+    });
     mocks.resolveGitHubToken.mockResolvedValue("ghs_token");
     mocks.getGitStatus.mockResolvedValue({ branch: "feat/thing" });
     mocks.findPullRequestByHead.mockResolvedValue({ number: 42 });
@@ -274,7 +277,7 @@ describe("review-request routes", () => {
   it("derives the repo from the session's project, never the body", async () => {
     const res = await post(sessionId, { prNumber: 99 });
     expect(res.statusCode).toBe(200);
-    expect(mocks.resolveRepoRef).toHaveBeenCalledWith(
+    expect(mocks.resolveRepoRefResult).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ cwd: "/tmp/review-local" }),
     );
@@ -303,7 +306,7 @@ describe("review-request routes", () => {
     const res = await post(sessionId, {});
     expect(res.statusCode).toBe(412);
     expect(res.json().message).toContain("No reviewer is configured");
-    expect(mocks.resolveRepoRef).not.toHaveBeenCalled();
+    expect(mocks.resolveRepoRefResult).not.toHaveBeenCalled();
     expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
   });
 
@@ -463,8 +466,27 @@ describe("review-request routes", () => {
   });
 
   it("412s when the project has no GitHub remote", async () => {
-    mocks.resolveRepoRef.mockResolvedValue(null);
+    mocks.resolveRepoRefResult.mockResolvedValue({ ok: true, value: null });
     expect((await post(sessionId, {})).statusCode).toBe(412);
+  });
+
+  it("503s when the project host is unreachable, rather than blaming the remote (#1628)", async () => {
+    // A downed agent is not "this project has no GitHub remote".
+    mocks.resolveRepoRefResult.mockResolvedValue({
+      ok: false,
+      reason: "unreachable",
+      detail: "host unreachable",
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(503);
+    expect(res.json().message).toContain("unreachable");
+  });
+
+  it("412s when the project host cannot resolve a repo ref at all (#1628)", async () => {
+    mocks.resolveRepoRefResult.mockResolvedValue({ ok: false, reason: "unsupported" });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(412);
+    expect(res.json().message).toContain("host");
   });
 
   it("412s when no GitHub credentials are available", async () => {
@@ -673,9 +695,9 @@ describe("review-request routes", () => {
       mocks.assertReviewerConfigured.mockImplementation(() => {
         throw new HermesNotConfiguredError("No reviewer is configured");
       });
-      mocks.resolveRepoRef.mockClear();
+      mocks.resolveRepoRefResult.mockClear();
       expect((await get(sessionId)).statusCode).toBe(412);
-      expect(mocks.resolveRepoRef).not.toHaveBeenCalled();
+      expect(mocks.resolveRepoRefResult).not.toHaveBeenCalled();
     });
 
     it("404s an unknown session and 400s a malformed id or prNumber", async () => {
