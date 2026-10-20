@@ -44,23 +44,18 @@
   transition: width 0.16s ease;
 }
 
-/* Floating-sidebar redesign — below desktop width (phone AND tablet now,
-   not just phone), the sidebar is a translucent overlay card floating ON
-   TOP of the tiled grid, not an in-flow column that pushes/resizes it.
-   Modeled on UISplitViewController's own overlay display mode (Files/
-   Notes/Mail on iPad): reveal/dismiss via App.tsx's `sidebarOpen` state
-   (`toggleSidebar`'s own comment), content's width never changes while it
-   shows. Was phone-only (`max-width: 699px`, in mobile.css) under the
-   tablet tier plan, which deliberately kept tablet on desktop's docked
-   collapse behavior below — reversed because tablet's sidebar was pushing
-   and resizing the live dockview grid on open, which is both the wrong
-   feel and (independently) a second trigger for the dockview pane-skew
-   bug fixed separately: any grid-width change while a group is maximized
-   replays that clamp. `699.98px`/`1279.98px`, not bare integers — matches
-   lib/layoutTier.ts's own PHONE_BREAKPOINT_QUERY/TABLET_BREAKPOINT_QUERY
-   exactly (that file's own comment explains why: avoids a live gap at
-   fractional/boundary widths a foldable's mid-transition can report). */
-@media (max-width: 1279.98px) {
+/* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
+   width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
+   wide window still floats the sidebar and a forced desktop on a narrow
+   window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
+   which only matched the JS tier in `auto`. `:where()` adds no specificity,
+   so a descendant rule written inside it (`.sidebar-wrapper`) still ties
+   the way that query did, and later files (mobile.css's full-bleed phone
+   drawer, compact.css's tablet width) win where they used to. An `&` rule
+   does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
+   is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
+   else targets those state classes, so the computed result still matches. */
+:where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
   .sidebar-wrapper {
     position: fixed !important;
     /* Matches .toolbar's own inset-aware height (its base rule, near the
@@ -77,10 +72,10 @@
     transition: transform 0.24s ease;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
   }
-  .app.sb-open .sidebar-wrapper {
+  &.sb-open .sidebar-wrapper {
     transform: none;
   }
-  .app.sb-open .cmux-scrim {
+  &.sb-open .cmux-scrim {
     display: block !important;
   }
 
@@ -94,13 +89,13 @@
 
 /* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
    the overlay above: a persisted `sidebarCollapsed` preference from a
-   previous desktop session has no CSS effect below this width at all
-   (`toggleSidebar` itself stops writing to it below desktop width too —
-   see that function's own comment), so this block scoping to desktop only
-   is consistent with what actually drives the class, not just a leftover
-   width query. */
-@media (min-width: 1280px) {
-  .app.sidebar-collapsed .sidebar-wrapper {
+   previous desktop session has no CSS effect on the phone or tablet tier
+   (`toggleSidebar` itself stops writing to it off desktop too — see that
+   function's own comment). The `&` rules below are one class lighter than
+   the old `.app.sidebar-collapsed` selectors (`&` inside `:where()` is
+   `:is(:where(...))`); nothing else competes with them. */
+:where(.app[data-tier="desktop"]) {
+  &.sidebar-collapsed .sidebar-wrapper {
     width: 0;
     border-right: none;
     overflow: hidden;
@@ -109,14 +104,14 @@
   /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
      its three icons; the center divider is removed because there is no
      longer a sidebar edge for it to line up with. */
-  .app.sidebar-collapsed .toolbar-lead {
+  &.sidebar-collapsed .toolbar-lead {
     width: auto;
   }
-  .app.sidebar-collapsed .toolbar-center {
+  &.sidebar-collapsed .toolbar-center {
     border-left: none;
   }
   /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  .app.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
+  &.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
     transform: scaleX(-1);
   }
 }
@@ -2044,6 +2039,34 @@
   background: color-mix(in srgb, var(--r) 12%, transparent);
 }
 
+/* Issue #1638 — the workspace load gave up. Lighter than the red
+   backend-down bar above it: one outage should not read as two alarms,
+   and this one is the only control that actually retries the load. */
+.workspace-load-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: color-mix(in srgb, var(--o) 8%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--o) 18%, transparent);
+}
+.workspace-load-retry {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
+  background: transparent;
+  color: var(--o);
+  border-radius: 7px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.workspace-load-retry:hover {
+  background: color-mix(in srgb, var(--o) 12%, transparent);
+}
+
 /* Update available — orange/warning palette, below the backend-down
    banner if both are showing, before the grid-area-body. Click navigates
    to Settings -> Server info -> Updates subsection. */
@@ -2084,6 +2107,44 @@
   line-height: 1;
 }
 .update-banner-dismiss:hover {
+  background: color-mix(in srgb, var(--o) 18%, transparent);
+  color: var(--fg);
+}
+
+/* Issue #1555 — one-shot, not a persistent alarm. Explicit splits on tablet
+   bypass the pane cap; this says so once, then the timer or the dismiss
+   removes it. */
+.pane-cap-notice {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--o) 13%, var(--chrome));
+  border-bottom: 1px solid color-mix(in srgb, var(--o) 25%, transparent);
+}
+.pane-cap-notice-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.pane-cap-notice-dismiss {
+  margin-left: auto;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+}
+.pane-cap-notice-dismiss:hover {
   background: color-mix(in srgb, var(--o) 18%, transparent);
   color: var(--fg);
 }

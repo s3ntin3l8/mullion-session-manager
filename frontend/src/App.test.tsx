@@ -1,7 +1,31 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { LayoutMode } from "./api/index.js";
+import type { LayoutMode, Session } from "./api/index.js";
+
+// Set by the pane-cap test before render. Null keeps every other test on the
+// old path: DockviewReact never reports an api, and the palette stays empty.
+const { splitHarness } = vi.hoisted(() => ({
+  splitHarness: {
+    api: null as {
+      panels: unknown[];
+      activePanel: null;
+      getPanel: (id: string) => unknown;
+      addPanel: (opts: { id: string; params?: { sessionId?: number } }) => void;
+      onDidActivePanelChange: () => { dispose: () => void };
+      onDidAddPanel: () => { dispose: () => void };
+    } | null,
+    launch: null as {
+      id: number;
+      projectId: number;
+      name: string | null;
+      nameLocked: boolean;
+      lastTitle: string | null;
+      command: string;
+    } | null,
+    announced: false,
+  },
+}));
 
 // App is the integration seam for every layout tier, and nothing mounted it
 // before the tablet-tier carry-over series. This is a deliberately shallow
@@ -11,11 +35,25 @@ import type { LayoutMode } from "./api/index.js";
 // children, which have their own suites. jsdom does no layout, so geometry
 // is out of scope here.
 
-vi.mock("dockview-react", () => ({ DockviewReact: () => <div data-testid="dockview" /> }));
+vi.mock("dockview-react", () => ({
+  DockviewReact: (props: { onReady?: (event: { api: unknown }) => void }) => {
+    if (splitHarness.api && !splitHarness.announced) {
+      splitHarness.announced = true;
+      queueMicrotask(() => props.onReady?.({ api: splitHarness.api }));
+    }
+    return <div data-testid="dockview" />;
+  },
+}));
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
 vi.mock("./Sidebar.js", () => ({ Sidebar: () => <div data-testid="sidebar" /> }));
 vi.mock("./WorkspaceSwitcher.js", () => ({
-  WorkspaceSwitcher: () => <span data-testid="workspace-switcher" />,
+  WorkspaceSwitcher: ({ onSelectWorkspace }: { onSelectWorkspace?: (id: number) => void }) => (
+    <span data-testid="workspace-switcher">
+      {splitHarness.launch ? (
+        <button type="button" data-testid="show-workspace" onClick={() => onSelectWorkspace?.(2)} />
+      ) : null}
+    </span>
+  ),
 }));
 vi.mock("./PhoneNavigator.js", () => ({
   PhoneNavigatorPanel: ({
@@ -57,7 +95,18 @@ vi.mock("./MobileSessionBar.js", () => ({
   ),
 }));
 vi.mock("./PaneHeaderActions.js", () => ({ PaneHeaderActions: () => null }));
-vi.mock("./CommandPalette.js", () => ({ CommandPalette: () => null }));
+vi.mock("./CommandPalette.js", () => ({
+  CommandPalette: (props: {
+    onLaunched?: (session: NonNullable<typeof splitHarness.launch>) => void;
+  }) =>
+    splitHarness.launch ? (
+      <button
+        type="button"
+        data-testid="launch-split"
+        onClick={() => props.onLaunched?.(splitHarness.launch!)}
+      />
+    ) : null,
+}));
 vi.mock("./Dock.js", () => ({ Dock: () => null }));
 vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }));
 vi.mock("./panels/registry.js", () => ({
@@ -407,5 +456,146 @@ describe("App workspace bootstrap", () => {
       "[workspace] failed to create the default workspace",
       expect.any(Error),
     );
+  });
+
+  it("surfaces a given-up workspace load and clears it from Retry", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const refreshWorkspaces = vi.fn().mockRejectedValue(new Error("offline"));
+    const createWorkspace = vi.fn().mockResolvedValue(workspace);
+    useDashboardStore.setState({ refreshWorkspaces, createWorkspace });
+
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't load workspaces");
+    expect(createWorkspace).not.toHaveBeenCalled();
+
+    refreshWorkspaces.mockResolvedValue(undefined);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(refreshWorkspaces).toHaveBeenCalledTimes(6);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(createWorkspace).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App tablet pane-cap notice", () => {
+  function referenceSession(id: number): Session {
+    return {
+      id,
+      projectId: 7,
+      name: null,
+      nameLocked: false,
+      lastTitle: null,
+      command: "bash",
+      status: "active",
+      attention: false,
+    } as Session;
+  }
+
+  function makeApi() {
+    const panels = [
+      {
+        id: "session-1",
+        params: { sessionId: 1 },
+        api: { location: { type: "grid" }, setActive: vi.fn(), close: vi.fn() },
+        group: { id: "g1" },
+      },
+      {
+        id: "session-2",
+        params: { sessionId: 2 },
+        api: { location: { type: "grid" }, setActive: vi.fn(), close: vi.fn() },
+        group: { id: "g2" },
+      },
+    ];
+    return {
+      panels,
+      activePanel: null,
+      getPanel: (id: string) => panels.find((panel) => panel.id === id) ?? null,
+      addPanel: vi.fn((opts: { id: string; params?: { sessionId?: number } }) => {
+        panels.push({
+          id: opts.id,
+          params: { sessionId: opts.params?.sessionId ?? 0 },
+          api: { location: { type: "grid" }, setActive: vi.fn(), close: vi.fn() },
+          group: { id: `g${panels.length + 1}` },
+        });
+      }),
+      onDidActivePanelChange: () => ({ dispose: vi.fn() }),
+      onDidAddPanel: () => ({ dispose: vi.fn() }),
+    };
+  }
+
+  beforeEach(() => {
+    stubWidth("tablet");
+    splitHarness.announced = false;
+    splitHarness.api = makeApi();
+    splitHarness.launch = {
+      id: 9,
+      projectId: 7,
+      name: null,
+      nameLocked: false,
+      lastTitle: null,
+      command: "bash",
+    };
+    useDashboardStore.setState({
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+      showWorkspace: vi.fn(),
+      workspaces: [
+        {
+          id: 1,
+          name: "Default",
+          layout: null,
+          groupId: null,
+          position: 0,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ],
+      activeWorkspaceId: 1,
+      sessions: [referenceSession(1), referenceSession(2)],
+      projects: [],
+      splitRequest: { referencePanelId: "session-1", direction: "right" },
+      settings: {
+        ...useDashboardStore.getState().settings,
+        layoutMode: "tablet",
+        tabletPaneCap: 2,
+      },
+    });
+  });
+
+  afterEach(() => {
+    splitHarness.api = null;
+    splitHarness.launch = null;
+    splitHarness.announced = false;
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("warns once for an explicit split past the cap, and clears on a workspace switch", async () => {
+    render(<App />);
+    const launch = await screen.findByTestId("launch-split");
+    fireEvent.click(launch);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "This split is past the tablet pane cap",
+    );
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByTestId("show-workspace"));
+    expect(screen.queryByRole("status")).toBeNull();
+
+    useDashboardStore.setState({
+      splitRequest: { referencePanelId: "session-1", direction: "right" },
+    });
+    // A second split of the same session only focuses the panel already
+    // added. A new session is what can add another column.
+    splitHarness.launch = { ...splitHarness.launch!, id: 10 };
+    fireEvent.click(await screen.findByTestId("launch-split"));
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
   });
 });

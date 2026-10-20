@@ -108,10 +108,11 @@
   bottom: 0;
   z-index: 45;
 }
-@media (max-width: 1279.98px) {
-  .right-sidebar-scrim {
-    background: rgba(0, 0, 0, 0.3);
-  }
+/* Dim the scrim on the tiers where this drawer is an overlay. Width used to
+   decide that, so a forced desktop on a narrow window dimmed a docked panel
+   and a forced tablet on a wide window did not (issue #1531). */
+:where(.app[data-tier="phone"], .app[data-tier="tablet"]) .right-sidebar-scrim {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .right-sidebar-resize-handle {

@@ -63,9 +63,14 @@ export async function workspacesRoute(app: FastifyInstance) {
   // transaction, which takes the write lock BEFORE re-checking, so the
   // check-then-insert is atomic against a second connection to the same
   // file too (within this process the synchronous better-sqlite3 calls
-  // can't interleave anyway). Note this makes a GET write (at most this one
-  // fixed row) — a documented exception to auth.ts's "a bare GET can't
-  // mutate state" premise; see the note there.
+  // can't interleave anyway). If another connection already holds the write
+  // lock past busy_timeout (src/db/client.ts, `busy_timeout = 5000`), this
+  // `immediate` transaction throws SQLITE_BUSY and the route returns 500.
+  // The dashboard retries that (App.tsx's bounded workspace load). The one
+  // bare client does not: `scripts/demo/seed.mjs` (its fetch wrapper has no
+  // retry; issue #1638). The `mullion` CLI never calls this route. Note this
+  // makes a GET write (at most this one fixed row) — a documented exception
+  // to auth.ts's "a bare GET can't mutate state" premise; see the note there.
   app.get("/api/workspaces", async () => {
     const existing = app.db.select().from(workspaces).all();
     if (existing.length > 0) return existing.map(serialize);

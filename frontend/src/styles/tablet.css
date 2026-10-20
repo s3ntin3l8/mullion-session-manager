@@ -13,11 +13,11 @@
 
    Imported from index.css AFTER mobile.css — deliberate, not incidental:
    mobile.css's own header comment already declares cascade order
-   load-bearing for its eight `!important` declarations, and a phone at
-   <700px matches BOTH mobile.css's `max-width: 699.98px` query and this
-   file's `pointer: coarse` one (a real phone's pointer is coarse), so the
+   load-bearing for its eight `!important` declarations, and a real phone
+   matches BOTH mobile.css's phone `data-tier` and this
+   file's `pointer: coarse` query, so the
    two files' rules for the same element must not conflict. They don't
-   today — mobile.css owns width-driven layout (single-pane, sidebar
+   today — mobile.css owns phone-tier layout (single-pane, sidebar
    drawer, dock hidden), this file owns touch-target sizing, the key bar,
    and (below) the keyboard-inset shrink those two share — but the import
    order is what keeps a future rule collision resolving predictably rather

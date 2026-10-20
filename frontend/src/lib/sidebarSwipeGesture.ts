@@ -1,5 +1,5 @@
 // Floating-sidebar redesign, PR 4 — edge-swipe open/dismiss for the
-// overlay sidebar (sidebar.css's `max-width: 1279.98px` block).
+// overlay sidebar (sidebar.css's phone/tablet `data-tier` block).
 //
 // Deliberately a discrete threshold+commit gesture, not a 1:1 drag-follow:
 // the sidebar's own `transition: transform 0.24s ease` (sidebar.css)
