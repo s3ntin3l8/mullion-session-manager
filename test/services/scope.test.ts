@@ -127,7 +127,7 @@ vi.mock("../../src/services/cgroup-inventory.js", () => ({
 
 const { getScopeBackend } = await import("../../src/services/scope/index.js");
 const { SystemdScopeBackend } = await import("../../src/services/scope/systemd.js");
-const { isUsableCwd } = await import("../../src/services/scope/spawn.js");
+const { isUsableCwd, spawnScopeProcess } = await import("../../src/services/scope/spawn.js");
 const { scopeUnitName, deriveInstanceId } = await import("../../src/services/session-process.js");
 const { listScopeProcesses } = await import("../../src/services/cgroup-inventory.js");
 
@@ -335,6 +335,56 @@ describe("SystemdScopeBackend — tracking operations", () => {
 
   it("returns an empty process list for an unowned scope", async () => {
     await expect(backend().listProcesses("7")).resolves.toEqual([]);
+  });
+});
+
+describe("spawnScopeProcess — the shared spawn orchestration", () => {
+  // The spawn orchestration is shared by every backend, so it is exercised
+  // directly here rather than only through the systemd backend — the
+  // branches a backend without a failure-detail probe takes are otherwise
+  // unreachable.
+  function spawnOpts(overrides: Record<string, unknown> = {}) {
+    return {
+      command: "systemd-run",
+      argv: ["--user", "scope"],
+      cwd: os.tmpdir(),
+      env: { PATH: "/usr/bin" },
+      timeoutMs: 5_000,
+      label: "master bootstrap",
+      scopeName: `crs-session-${INSTANCE_ID}-1`,
+      ...overrides,
+    } as Parameters<typeof spawnScopeProcess>[0];
+  }
+
+  it("reports a non-zero exit with the plain message when there is no failure detail", async () => {
+    systemdRunBehavior = "exit-nonzero";
+    await expect(spawnScopeProcess(spawnOpts())).rejects.toThrow(
+      `master bootstrap exited with code 1 (unit crs-session-${INSTANCE_ID}-1)`,
+    );
+  });
+
+  it("falls back to the plain message when the failure-detail probe itself fails", async () => {
+    systemdRunBehavior = "exit-nonzero";
+    await expect(
+      spawnScopeProcess(
+        spawnOpts({
+          describeFailure: async () => {
+            throw new Error("probe failed");
+          },
+        }),
+      ),
+    ).rejects.toThrow(
+      new RegExp(`^master bootstrap exited with code 1 \\(unit crs-session-${INSTANCE_ID}-1\\)$`),
+    );
+  });
+
+  it("appends the failure detail the backend supplies", async () => {
+    systemdRunBehavior = "exit-nonzero";
+    await expect(
+      spawnScopeProcess(spawnOpts({ describeFailure: async () => "something specific" })),
+    ).rejects.toThrow(
+      `master bootstrap exited with code 1 (unit crs-session-${INSTANCE_ID}-1): something specific`,
+    );
   });
 });
 

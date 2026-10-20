@@ -2335,6 +2335,22 @@ describe("PtyManager", () => {
     });
   });
 
+  // Issue #1715 — the process inventory goes through the scope backend like
+  // every other scope operation. The inventory itself is a best-effort,
+  // Linux-only probe (cgroup v2 + /proc), so on a host that can't answer it
+  // the contract is an empty list — never an error.
+  describe("listSessionProcesses", () => {
+    it("resolves a process list for a scope this instance owns", async () => {
+      listUnitsReply = [ownedLine("1", sessionsDir)];
+      await expect(manager.listSessionProcesses("1")).resolves.toBeInstanceOf(Array);
+    });
+
+    it("resolves an empty list for an id this instance does not own", async () => {
+      listUnitsReply = [];
+      await expect(manager.listSessionProcesses("1")).resolves.toEqual([]);
+    });
+  });
+
   // Issue #1265 — the TOTAL tri-state batch primitive: every requested id
   // always present in the result. isMasterAliveState above and
   // isMasterAliveBatch below (the boolean wire adapter) are both thin reads
