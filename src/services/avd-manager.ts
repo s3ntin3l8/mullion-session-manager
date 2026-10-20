@@ -371,21 +371,44 @@ function readOptionalSize(
   return { ok: true, value: trimmed };
 }
 
-// Directories `avdmanager` will actually write an AVD into, plus the SDK
-// root. A reported path whose basename happens to be `<name>.avd` is not
-// enough — the service user must not overwrite an arbitrary directory of
-// that name. `ANDROID_AVD_HOME` / `ANDROID_SDK_HOME` are the SDK's own
-// overrides (read by avdmanager from the process environment, not Mullion
-// settings), so a relocated AVD home has to stay on the allowlist or the
-// patch would refuse the directory the binary just created.
-export function avdConfigRoots(sdkRoot: string): string[] {
+// Directories `avdmanager` will actually write an AVD into. A reported path
+// whose basename happens to be `<name>.avd` is not enough — the service
+// user must not overwrite an arbitrary directory of that name. AVD homes
+// live under `~/.android/avd`, or under `$ANDROID_USER_HOME/avd` /
+// `$ANDROID_AVD_HOME` / `$ANDROID_SDK_HOME/.android/avd` when those are set.
+// They do not live under the SDK root, so that directory is not a root.
+// These are the SDK's own overrides (read by avdmanager from the process
+// environment, not Mullion settings); a relocated AVD home has to stay on
+// the allowlist or the patch would refuse the directory the binary just
+// created.
+export function avdConfigRoots(): string[] {
   const roots = [path.join(os.homedir(), ".android", "avd")];
-  if (sdkRoot.trim()) roots.push(path.resolve(sdkRoot));
   const avdHome = process.env.ANDROID_AVD_HOME?.trim();
   if (avdHome) roots.push(path.resolve(avdHome));
+  const userHome = process.env.ANDROID_USER_HOME?.trim();
+  if (userHome) roots.push(path.join(path.resolve(userHome), "avd"));
   const sdkHome = process.env.ANDROID_SDK_HOME?.trim();
   if (sdkHome) roots.push(path.join(path.resolve(sdkHome), ".android", "avd"));
   return roots;
+}
+
+// A root may itself be a symlink (`~/.android/avd` → another volume). The
+// candidate is realpath'd before the write, so each root's real path has
+// to be on the list too — otherwise a legitimate AVD home fails the second
+// check and the patch is dropped with a wrong "outside the AVD home".
+function rootsWithRealpaths(roots: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const root of roots) {
+    const resolved = path.resolve(root);
+    if (!out.includes(resolved)) out.push(resolved);
+    try {
+      const real = realpathSync(resolved);
+      if (!out.includes(real)) out.push(real);
+    } catch {
+      // The root isn't there. Keep the lexical path.
+    }
+  }
+  return out;
 }
 
 export function isInsideDirectory(root: string, candidate: string): boolean {
@@ -484,7 +507,7 @@ export async function createAvd(opts: CreateAvdOptions): Promise<void> {
   );
   if (!opts.ramSizeMb && !opts.dataPartitionSize) return;
 
-  const roots = opts.configRoots ?? [];
+  const roots = rootsWithRealpaths(opts.configRoots ?? []);
   let dir: string | null;
   try {
     // The list call has its own budget. `timeoutMs` is the create budget
@@ -521,7 +544,8 @@ export async function createAvd(opts: CreateAvdOptions): Promise<void> {
     );
   }
   // A symlink whose lexical path is inside the AVD home can still point
-  // somewhere else. The real path has to pass the same check.
+  // somewhere else. The real path has to pass the same check, against
+  // roots that have been realpath'd too (rootsWithRealpaths).
   if (!roots.some((root) => isInsideDirectory(root, realDir))) {
     throw new AvdCreatedError(
       `AVD ${opts.name} was created, but its config directory is outside the AVD home`,
@@ -542,7 +566,15 @@ export async function createAvd(opts: CreateAvdOptions): Promise<void> {
   const updates: Partial<Record<AvdConfigIniKey, string>> = {};
   if (opts.ramSizeMb) updates["hw.ramSize"] = opts.ramSizeMb;
   if (opts.dataPartitionSize) updates["disk.dataPartition.size"] = opts.dataPartitionSize;
-  writeFileSync(iniPath, patchAvdConfigIni(current, updates));
+  try {
+    writeFileSync(iniPath, patchAvdConfigIni(current, updates));
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AvdCreatedError(
+      `AVD ${opts.name} was created, but ${iniPath} could not be written: ${detail}`,
+      { cause: err },
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------

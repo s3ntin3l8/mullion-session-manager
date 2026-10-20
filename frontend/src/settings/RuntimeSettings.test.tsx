@@ -175,4 +175,22 @@ describe("runtime settings controls", () => {
     expect(useDashboardStore.getState().settings.devices.emulatorHeadless).toBe("off");
     expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBe("host");
   });
+
+  it("sends null when the GPU override returns to the server default", async () => {
+    const user = userEvent.setup();
+    setSettings({ devices: { ...DEFAULT_SETTINGS.devices, emulatorGpu: "host" } });
+    render(<EmulatorGpuSetting />);
+    await user.selectOptions(await screen.findByLabelText("Emulator GPU"), "inherit");
+    expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBeNull();
+    await waitFor(() => {
+      const patch = vi
+        .mocked(fetch)
+        .mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === "PATCH");
+      expect(patch).toBeTruthy();
+      const body = JSON.parse(String((patch![1] as RequestInit).body)) as {
+        devices: { emulatorGpu: string | null };
+      };
+      expect(body.devices.emulatorGpu).toBeNull();
+    });
+  });
 });

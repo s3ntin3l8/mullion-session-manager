@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { parseEnv } from "node:util";
 import {
   DEFAULT_DEVICE_EMULATOR_GPU,
+  DEVICE_EMULATOR_GPU_PATTERN,
   DEFAULT_DEVICE_VIDEO_BIT_RATE,
   DEFAULT_DEVICE_VIDEO_MAX_FPS,
   DEFAULT_DEVICE_VIDEO_MAX_SIZE,
@@ -756,7 +757,7 @@ export const schema = {
     DEVICE_EMULATOR_GPU: {
       type: "string",
       default: DEFAULT_DEVICE_EMULATOR_GPU,
-      pattern: "^\\S+$",
+      pattern: DEVICE_EMULATOR_GPU_PATTERN,
     },
     // Pass `-no-window` when launching an emulator. Default true: Mullion
     // streams the guest through scrcpy, so a host window is usually useless

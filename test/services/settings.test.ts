@@ -684,6 +684,9 @@ describe("sanitizeSettings: runtime env overrides", () => {
     expect(dropped.devices.emulatorHeadless).toBe("inherit");
     expect(dropped.devices.emulatorGpu).toBeNull();
     expect(mergeSettings({}).devices.emulatorGpu).toBeNull();
+    const stored = mergeSettings({ devices: { emulatorGpu: "host" } });
+    const cleared = deepMerge(stored, { devices: { emulatorGpu: null } }, DEFAULT_SETTINGS);
+    expect(cleared.devices.emulatorGpu).toBeNull();
   });
 
   it("accepts a known log level and rejects anything else", () => {

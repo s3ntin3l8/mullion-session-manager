@@ -7,6 +7,11 @@ export const DEFAULT_DEVICE_VIDEO_MAX_SIZE = 1280;
 export const DEFAULT_DEVICE_VIDEO_MAX_FPS = 60;
 export const DEFAULT_DEVICE_VIDEO_BIT_RATE = 8_000_000;
 export const DEFAULT_DEVICE_EMULATOR_GPU = "swiftshader_indirect";
+// One non-whitespace token, bounded so neither the env var nor a settings
+// override can store an unbounded string that is later passed as `-gpu`.
+// Shared with sanitizeEmulatorGpu: a settings override must be able to
+// reproduce any value this env var accepts.
+export const DEVICE_EMULATOR_GPU_PATTERN = "^\\S{1,64}$";
 
 // scrcpy server's own CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH ((1 << 18) - 14):
 // a longer SET_CLIPBOARD payload makes the server drop the message, and an

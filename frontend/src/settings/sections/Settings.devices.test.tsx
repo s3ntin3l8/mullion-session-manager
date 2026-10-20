@@ -737,6 +737,21 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(avdCreateCalls).toEqual([]);
   });
 
+  it("refuses a RAM size outside 128–16384 before posting", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+
+    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(screen.getByRole("button", { name: "+ New AVD" }));
+    await screen.findByDisplayValue("pixel_6");
+    await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_small");
+    await user.type(screen.getByLabelText("RAM"), "64");
+    await user.click(screen.getByRole("button", { name: "Create AVD" }));
+
+    expect(await screen.findByText(/ramSize must be megabytes/)).toBeInTheDocument();
+    expect(avdCreateCalls).toEqual([]);
+  });
+
   it("selects the new AVD and shows a warning when create succeeded but config.ini was not patched", async () => {
     avdCreateWarning =
       "AVD pixel_9_hw was created, but its config directory is outside the AVD home";

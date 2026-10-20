@@ -1,4 +1,5 @@
 import { sanitizeCacheDirIds, type CacheDirId } from "./cache-storage.js";
+import { DEVICE_EMULATOR_GPU_PATTERN } from "./device-defaults.js";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { settings as settingsTable } from "../db/schema.js";
@@ -894,14 +895,16 @@ function safeSentinelNumber(
   return Math.min(max, Math.max(min, value));
 }
 
-// A `-gpu` mode is one token, the same constraint as env.ts's
-// DEVICE_EMULATOR_GPU pattern. `null` (and anything that isn't) means
-// "inherit the env default" — never forward a blank or a multi-word string
-// to the emulator. Capped so a settings blob can't store an unbounded token.
+// A `-gpu` mode is one token, the same bound as env.ts's
+// DEVICE_EMULATOR_GPU pattern (DEVICE_EMULATOR_GPU_PATTERN). `null` (and
+// anything that isn't) means "inherit the env default" — never forward a
+// blank or a multi-word string to the emulator.
+const EMULATOR_GPU_TOKEN = new RegExp(DEVICE_EMULATOR_GPU_PATTERN);
+
 function sanitizeEmulatorGpu(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
-  return /^\S{1,64}$/.test(trimmed) ? trimmed : null;
+  return EMULATOR_GPU_TOKEN.test(trimmed) ? trimmed : null;
 }
 
 // Clamps/repairs numeric fields to a sane range, falling back to the

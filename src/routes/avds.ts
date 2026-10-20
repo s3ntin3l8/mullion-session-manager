@@ -156,7 +156,7 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
         systemImage,
         deviceProfile,
         ...hardware.value,
-        configRoots: avdConfigRoots(app.config.DEVICE_ANDROID_SDK_ROOT),
+        configRoots: avdConfigRoots(),
       });
     } catch (err) {
       if (err instanceof AvdCreatedError) {

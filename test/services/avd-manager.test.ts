@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ExecFileFn } from "../../src/services/avd-manager.js";
 import {
+  AvdCreatedError,
   avdConfigDirFromListOutput,
   avdConfigRoots,
   createAvd,
@@ -455,12 +456,9 @@ describe("AVD hardware helpers", () => {
     expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "pixel_7", [])).toBeNull();
     expect(avdConfigDirFromListOutput(REAL_LIST_AVD_OUTPUT, "missing", [home])).toBeNull();
     expect(isInsideDirectory(home, "/home/user/.android/avd-evil/pixel_7.avd")).toBe(false);
-    expect(avdConfigRoots("/opt/sdk")).toEqual(
-      expect.arrayContaining([
-        path.join(os.homedir(), ".android", "avd"),
-        path.resolve("/opt/sdk"),
-      ]),
-    );
+    const roots = avdConfigRoots();
+    expect(roots).toContain(path.join(os.homedir(), ".android", "avd"));
+    expect(roots).not.toContain(path.resolve("/opt/sdk"));
   });
 
   it("refuses to patch a config directory that resolves outside the AVD home", async () => {
@@ -497,6 +495,83 @@ describe("AVD hardware helpers", () => {
           execFileFn,
         }),
       ).rejects.toThrow(/outside the AVD home/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("patches an AVD whose home is itself a symlink", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-home-link-"));
+    const realHome = path.join(root, "real");
+    const linkHome = path.join(root, "link");
+    mkdirSync(realHome);
+    symlinkSync(realHome, linkHome);
+    const avdDir = path.join(realHome, "pixel_7.avd");
+    mkdirSync(avdDir);
+    writeFileSync(path.join(avdDir, "config.ini"), "hw.lcd.width=1080\n");
+    const reported = path.join(linkHome, "pixel_7.avd");
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? `    Name: pixel_7\n    Path: ${reported}\n` : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await createAvd({
+        avdmanagerPath: "/opt/sdk/avdmanager",
+        name: "pixel_7",
+        systemImage: "system-images;android-35;google_apis;x86_64",
+        deviceProfile: "pixel_6",
+        ramSizeMb: "2048",
+        configRoots: [linkHome],
+        execFileFn,
+      });
+      expect(readFileSync(path.join(avdDir, "config.ini"), "utf8")).toContain("hw.ramSize=2048");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("says the AVD was created when config.ini cannot be written", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "avd-ini-ro-"));
+    const avdDir = path.join(root, "pixel_7.avd");
+    mkdirSync(avdDir);
+    // A directory where the file should be: the write fails even as root.
+    mkdirSync(path.join(avdDir, "config.ini"));
+    const child = makeFakeChild();
+    const execFileFn = vi.fn((_file: string, args: string[], callback: unknown) => {
+      const stdout = args[0] === "list" ? `    Name: pixel_7\n    Path: ${avdDir}\n` : "";
+      queueMicrotask(() =>
+        (callback as (error: Error | null, stdout: string, stderr: string) => void)(
+          null,
+          stdout,
+          "",
+        ),
+      );
+      return child;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same execFile overload cast as fakeExecFileResolving
+    }) as any;
+
+    try {
+      await expect(
+        createAvd({
+          avdmanagerPath: "/opt/sdk/avdmanager",
+          name: "pixel_7",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_6",
+          ramSizeMb: "2048",
+          configRoots: [root],
+          execFileFn,
+        }),
+      ).rejects.toBeInstanceOf(AvdCreatedError);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
