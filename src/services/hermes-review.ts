@@ -55,9 +55,15 @@ export class HermesAuthError extends Error {
 }
 
 export class ReviewCooldownError extends Error {
-  constructor(readonly retryAfterSeconds: number) {
+  constructor(
+    readonly retryAfterSeconds: number,
+    /** The commit whose review is being throttled (issue #1703). */
+    readonly headSha?: string,
+  ) {
     super(
-      `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
+      headSha
+        ? `A review of this commit (${headSha.slice(0, 7)}) was requested recently — wait ${retryAfterSeconds}s before requesting another, or request a review of the new head commit right away`
+        : `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
     );
     this.name = "ReviewCooldownError";
   }
@@ -137,6 +143,29 @@ Verdict:
 // rate limit.
 const lastRequested = new Map<string, number>();
 
+// The cooldown's key space is every commit ever reviewed (issue #1703), so a
+// long-lived process would grow this map without bound. Entries older than
+// the cooldown window can no longer throttle anything, so they are swept —
+// but only once the map is big enough for the sweep to be worth its O(n) pass,
+// and at most once per window so a busy process does not pay the pass on
+// every request.
+const MAX_COOLDOWN_ENTRIES = 1_000;
+let lastCooldownSweep = 0;
+
+function sweepCooldown(now: number, windowMs: number): void {
+  if (lastRequested.size <= MAX_COOLDOWN_ENTRIES) return;
+  if (now - lastCooldownSweep < windowMs) return;
+  lastCooldownSweep = now;
+  for (const [key, at] of lastRequested) {
+    if (now - at >= windowMs) lastRequested.delete(key);
+  }
+}
+
+/** Test hook — how many cooldown entries are currently held. */
+export function cooldownEntryCount(): number {
+  return lastRequested.size;
+}
+
 export interface ReviewRunRecord {
   runId: string;
   owner: string;
@@ -156,6 +185,24 @@ const latestRunByPr = new Map<string, string>();
 
 function prKey(owner: string, repo: string, prNumber: number): string {
   return `${owner}/${repo}#${prNumber}`.toLowerCase();
+}
+
+/**
+ * The cooldown's key (issue #1703): the thing being throttled is a *commit*,
+ * not a PR. The idempotency key the run is dispatched under is already
+ * SHA-scoped (`mullion-review:owner/repo#pr@headSha:bucket`), so keying the
+ * cooldown by the PR alone made the two disagree — a re-review of a NEW head
+ * commit was refused for up to `cooldownMinutes`, even though it is a
+ * different review of a different commit. Keying both by the commit keeps
+ * "the same commit is throttled" and "a new commit is reviewed right away"
+ * in sync.
+ */
+function commitKey(owner: string, repo: string, prNumber: number, headSha: string): string {
+  // `headSha` is required, and an empty one would collapse every commit of
+  // the PR into one key — silently restoring the PR-wide cooldown this
+  // change removes. Fail loudly instead.
+  if (!headSha) throw new HermesNotConfiguredError("A review target needs its head commit");
+  return `${prKey(owner, repo, prNumber)}@${headSha.toLowerCase()}`;
 }
 
 function trackRun(incoming: ReviewRunRecord): void {
@@ -200,6 +247,7 @@ const promptCache = new Map<string, { text: string; fetchedAt: number }>();
 /** Test hook — clears the cooldown, prompt and run-index caches. */
 export function resetHermesReviewState(): void {
   lastRequested.clear();
+  lastCooldownSweep = 0;
   promptCache.clear();
   runsById.clear();
   latestRunByPr.clear();
@@ -339,15 +387,16 @@ export async function requestHermesReview(
   }
   const root = baseUrl(apiUrl);
 
-  const cooldownKey = prKey(owner, repo, prNumber);
+  const cooldownKey = commitKey(owner, repo, prNumber, headSha);
+  sweepCooldown(Date.now(), cooldownMinutes * 60_000);
   const last = lastRequested.get(cooldownKey);
   if (last !== undefined) {
     const remainingMs = cooldownMinutes * 60_000 - (Date.now() - last);
-    if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000));
+    if (remainingMs > 0) throw new ReviewCooldownError(Math.ceil(remainingMs / 1000), headSha);
   }
   // Reserve the slot BEFORE the awaits below: the check above and a later
-  // set would otherwise let two concurrent requests for one PR both pass and
-  // double-dispatch. A failed dispatch gives the slot back.
+  // set would otherwise let two concurrent requests for one commit both pass
+  // and double-dispatch. A failed dispatch gives the slot back.
   lastRequested.set(cooldownKey, Date.now());
   try {
     // Hermes replays an identical request that reuses a key (same run id, even
@@ -356,6 +405,11 @@ export async function requestHermesReview(
     // Bucketing by the cooldown window keeps a retry of one request (a failure
     // frees the cooldown slot) idempotent while a later request gets a new key.
     // With the cooldown disabled (0) there is no window: every request is fresh.
+    // The bucket window and the cooldown window are the same length on
+    // purpose (issue #1703): the cooldown is keyed by the commit, so "the
+    // cooldown has expired" and "the idempotency bucket has rolled over" stay
+    // in step — a same-commit request is refused by the cooldown until the
+    // bucket rolls, and dispatched fresh after it does.
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
     const idempotencyKey = `mullion-review:${owner}/${repo}#${prNumber}@${headSha}:${bucket}`;

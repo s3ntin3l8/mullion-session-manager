@@ -4,6 +4,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRef } from "../services/host-git.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import {
   findPullRequestByHead,
@@ -93,6 +94,75 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
 }
 
 /**
+ * The branch a session is working on, resolved on the host that owns it
+ * (issue #1628).
+ *
+ * A local session's branch comes from the live PTY first (the hook adapter
+ * reports it, so it survives a commit the agent made between polls) and from
+ * `git status` as the fallback. A remote-hosted session has **no local PTY** —
+ * the PTY lives on the agent host — so its branch is resolved through
+ * `RemoteHostClient.resolveGitStatus`, the same call the project list makes
+ * for a remote **session**'s cwd (routes/projects.ts).
+ *
+ * `resolveGitStatus`, not `resolveGitBranch`: the latter is a bare
+ * `<cwd>/.git/HEAD` read that deliberately does not follow a worktree's
+ * `.git` *file* redirect (a session's cwd is often a worktree), and it
+ * reports a detached HEAD as a short SHA rather than the `"(detached)"`
+ * sentinel the caller checks for. `git status` — which is what
+ * `resolveGitStatus` runs on the agent — follows worktree redirects and
+ * normalizes a detached HEAD the same way the local path does, so the two
+ * hosts behave the same.
+ *
+ * A host that is unreachable degrades to "no branch" (null), which the caller
+ * turns into the same 404 an undeterminable local branch produces.
+ */
+async function resolveSessionBranch(
+  app: FastifyInstance,
+  project: { id: number; cwd: string; hostId: string },
+  session: { id: number; cwd: string | null },
+): Promise<string | null> {
+  const cwd = session.cwd ?? project.cwd;
+  if (project.hostId !== LOCAL_HOST_ID) {
+    try {
+      const client = getRemoteHostClient(app, project.hostId);
+      const result = await client.resolveGitStatus(cwd);
+      // Not a repo (or a repo whose status could not be read) — no branch.
+      if (!result.isRepo) return null;
+      return result.status?.branch ?? null;
+    } catch (err) {
+      // getRemoteHostClient() throws SYNCHRONOUSLY for a missing host row or a
+      // null baseUrl, so it needs its own catch, not just the await's. A
+      // worktree cwd outside the agent's own PROJECTS_ROOTS surfaces here as
+      // a 4xx HostRequestError — same "no branch" outcome.
+      app.log.warn(
+        { hostId: project.hostId, projectId: project.id, err },
+        "review-request: could not resolve the session branch on its host",
+      );
+      return null;
+    }
+  }
+  return app.pty.get(String(session.id))?.liveBranch ?? (await getGitStatus(cwd))?.branch ?? null;
+}
+
+/**
+ * Whether a branch name is really a detached HEAD.
+ *
+ * `git status` reports a detached checkout as its short commit SHA (7 hex
+ * characters — git-status.ts's own `oid.slice(0, 7)`), not as the
+ * `"(detached)"` sentinel the porcelain output starts with: git-status.ts
+ * rewrites the sentinel to that short SHA before returning it. So the
+ * sentinel never reaches this route, on either host, and a short SHA is the
+ * signal that actually arrives.
+ *
+ * A branch genuinely named like a 7-character hex string is misread as
+ * detached — vanishingly rare, and the 404 tells the caller to pass
+ * `prNumber`, which works either way.
+ */
+function isDetachedBranch(branch: string): boolean {
+  return /^[0-9a-f]{7}$/i.test(branch);
+}
+
+/**
  * Session → repo + PR (+ head SHA and a read token). Sends the error reply
  * itself and returns null when the target can't be resolved.
  */
@@ -113,16 +183,12 @@ async function resolveReviewTarget(
     return null;
   }
 
-  // v1: branch detection below reads the local filesystem, so a
-  // remote-host project would silently look at the wrong checkout.
-  if (project.hostId !== LOCAL_HOST_ID) {
-    reply.preconditionFailed("The review relay supports local-host projects only");
-    return null;
-  }
-
   // The project's own cwd, not the session's: parseGitRemote reads
   // `<cwd>/.git/config` directly, which doesn't exist for a worktree
-  // (where `.git` is a file).
+  // (where `.git` is a file). resolveRepoRef already proxies to the agent
+  // for a remote-hosted project (services/host-git.ts), so the repo ref is
+  // host-agnostic — issue #1628 removed the local-only 412 below, and the
+  // branch detection further down now resolves through the same host.
   const repoRef = await resolveRepoRef(app, project);
   if (!repoRef) {
     reply.preconditionFailed("This project has no GitHub remote");
@@ -139,10 +205,8 @@ async function resolveReviewTarget(
   let prNumber = requestedPr;
   try {
     if (prNumber === undefined) {
-      const branch =
-        app.pty.get(String(sessionId))?.liveBranch ??
-        (await getGitStatus(session.cwd ?? project.cwd))?.branch;
-      if (!branch || branch === "(detached)") {
+      const branch = await resolveSessionBranch(app, project, session);
+      if (!branch || branch === "(detached)" || isDetachedBranch(branch)) {
         reply.notFound("Could not determine this session's branch — pass prNumber");
         return null;
       }
@@ -217,6 +281,16 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           runId: run.runId,
           runStatus: run.status,
           replayed: run.replayed,
+          // A bot review for this commit may already exist — the repository
+          // reviews new PRs on its own, so this fires routinely and is NOT an
+          // error (issue #1705). Warn, never refuse.
+          //
+          // Computed AFTER the dispatch, not before: a request the cooldown
+          // refuses would otherwise pay a full `/pulls/{n}/reviews` walk (up
+          // to 10 pages) for a warning it never returns. The wording makes no
+          // promise about a second review — on a replay no new run is
+          // dispatched, so there is no second review to promise.
+          ...(await existingBotReviewWarning(app, target)),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -271,9 +345,27 @@ export async function reviewRequestRoute(app: FastifyInstance) {
 type LandedReview =
   | {
       checked: true;
-      review: { author: string; state: string; commitId: string; submittedAt: string } | null;
+      review: {
+        author: string;
+        state: string;
+        commitId: string;
+        submittedAt: string;
+        /** The review's own text (issue #1704), bounded on the way in. */
+        body?: string;
+        bodyTruncated?: boolean;
+        /** The review's page on GitHub. */
+        htmlUrl?: string;
+      } | null;
     }
   | { checked: false };
+
+/**
+ * The review states that count as "a review landed": the ones a bot actually
+ * submits. A DISMISSED review was retracted, so it did not land. Both the
+ * landed-review check and the duplicate-review warning use this one
+ * definition, so `review status` and the warning never disagree.
+ */
+const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 
 // Best effort: the newest review by a bot account submitted after the run was
 // dispatched and pinned to the commit it was dispatched for. A GitHub failure
@@ -293,6 +385,11 @@ async function findLandedReview(
         (r) =>
           r.authorIsBot &&
           r.commitId === headSha &&
+          // The same "landed" definition the duplicate-review warning uses
+          // (LANDED_REVIEW_STATES) — a DISMISSED review was retracted, so
+          // it did not land, and "posted: <author> DISMISSED" would say
+          // otherwise.
+          LANDED_REVIEW_STATES.has(r.state) &&
           r.submittedAt &&
           Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
       )
@@ -305,11 +402,58 @@ async function findLandedReview(
             state: landed.state,
             commitId: landed.commitId,
             submittedAt: landed.submittedAt as string,
+            // The reviewer's actual words — the one thing an agent that asked
+            // for a review came for (issue #1704).
+            ...(landed.body !== undefined ? { body: landed.body } : {}),
+            ...(landed.bodyTruncated ? { bodyTruncated: true } : {}),
+            ...(landed.htmlUrl !== undefined ? { htmlUrl: landed.htmlUrl } : {}),
           }
         : null,
     };
   } catch (err) {
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
     return { checked: false };
+  }
+}
+
+/**
+ * A warning for a request whose commit already carries a bot review
+ * (issue #1705).
+ *
+ * The repository reviews new PRs on its own, so a relay request for a commit
+ * that already has a bot review is routine — it produces a second review of
+ * the same commit, which the requester may or may not want. This **warns and
+ * dispatches anyway**: refusing would break the legitimate "ask for a
+ * second opinion" case, and the warning is enough for the caller to see it.
+ *
+ * A GitHub failure degrades to "no warning" — it must never block or fail the
+ * dispatch it is attached to.
+ */
+async function existingBotReviewWarning(
+  app: FastifyInstance,
+  t: ReviewTarget,
+): Promise<{ warning?: string }> {
+  try {
+    const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
+    const existing = reviews
+      .filter(
+        (r) =>
+          r.authorIsBot &&
+          r.commitId === t.headSha &&
+          // A DISMISSED review was retracted — it did not land, so warning
+          // about it would assert the opposite of what happened.
+          LANDED_REVIEW_STATES.has(r.state),
+      )
+      .at(-1);
+    if (!existing) return {};
+    return {
+      warning: `A review by ${existing.author} (${existing.state}) already landed on this commit`,
+    };
+  } catch (err) {
+    app.log.warn(
+      { detail: (err as Error).message },
+      "review-request: duplicate-review check failed (continuing without a warning)",
+    );
+    return {};
   }
 }

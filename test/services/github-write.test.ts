@@ -11,6 +11,7 @@ import {
   findMergedPullRequestByHead,
   getPullRequestByNumber,
   listPullRequestReviews,
+  MAX_REVIEW_BODY_CHARS,
   mergePullRequest,
   updatePullRequestBranch,
   deleteRemoteBranch,
@@ -240,6 +241,57 @@ describe("github-write service", () => {
         },
       ]);
       expect(fetchMock.mock.calls[0][0]).toContain("/pulls/9/reviews?per_page=100&page=1");
+    });
+
+    it("carries the review's body and link (#1704)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [
+          review(1, {
+            user: { login: "hermes[bot]", type: "Bot" },
+            state: "CHANGES_REQUESTED",
+            body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+            html_url: "https://github.com/owner/repo/pull/9#pullrequestreview-7",
+          }),
+        ]),
+      );
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result[0]).toMatchObject({
+        body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+        htmlUrl: "https://github.com/owner/repo/pull/9#pullrequestreview-7",
+      });
+      expect(result[0].bodyTruncated).toBeUndefined();
+    });
+
+    it("caps an oversized review body and says so (#1704)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, [review(1, { body: "x".repeat(MAX_REVIEW_BODY_CHARS + 500) })]),
+      );
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      // The cut never splits a surrogate pair, and it is visible in the text.
+      expect(result[0].body).toHaveLength(MAX_REVIEW_BODY_CHARS + 1);
+      expect(result[0].body?.endsWith("…")).toBe(true);
+      expect(result[0].bodyTruncated).toBe(true);
+    });
+
+    it("never leaves a lone surrogate behind when it cuts a body (#1704)", async () => {
+      // A body of emoji: every character is a surrogate pair, so a plain
+      // slice would cut one in half.
+      const emoji = "😀".repeat(MAX_REVIEW_BODY_CHARS + 10);
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [review(1, { body: emoji })]));
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      const body = result[0].body ?? "";
+      expect([...body].every((ch) => ch === "😀" || ch === "…")).toBe(true);
+      expect(result[0].bodyTruncated).toBe(true);
+    });
+
+    it("does not flag a body that is exactly at the cap as truncated (#1704)", async () => {
+      // The cap counts code points, so 4000 emoji (8000 UTF-16 units) is
+      // exactly at the cap — nothing is dropped, and it is not truncated.
+      const emoji = "😀".repeat(MAX_REVIEW_BODY_CHARS);
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [review(1, { body: emoji })]));
+      const result = await listPullRequestReviews("tok", "owner", "repo", 9);
+      expect(result[0].bodyTruncated).toBeUndefined();
+      expect(result[0].body?.endsWith("…")).toBe(false);
     });
 
     it("follows full pages so the newest review (on the last page) is seen", async () => {

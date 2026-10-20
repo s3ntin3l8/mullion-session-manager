@@ -620,11 +620,14 @@ const requestReview = {
     "request. Reachable from inside a normal agent session (session scope). The review is " +
     "dispatched asynchronously and posts to the PR as the review bot within a few minutes — " +
     "wait for it rather than requesting again (the result carries a runId; use review_status " +
-    "only to troubleshoot a review that never shows up); repeat requests for the same PR are refused " +
-    "for a cooldown period. Omit pr_number to use the open PR for the session's current " +
+    "only to troubleshoot a review that never shows up); a repeat request for the same COMMIT " +
+    "is refused for a cooldown period (a request for a new head commit, after pushing fixes, " +
+    "goes through right away). Omit pr_number to use the open PR for the session's current " +
     "branch. Fails with a clear message if the relay isn't configured in Mullion's " +
-    "Settings → Integrations, the project is on a remote host, or no PR exists yet. Use this " +
-    "for a re-review after pushing fixes; a newly opened PR is reviewed automatically.",
+    "Settings → Integrations or no PR exists yet. The result may carry a warning that a bot " +
+    "review for this commit already landed — the request still goes through. Use this " +
+    "for a re-review after pushing fixes; a newly opened PR is " +
+    "reviewed automatically.",
   inputSchema: {
     type: "object",
     properties: {
@@ -646,7 +649,8 @@ const reviewStatus = {
   description:
     "Troubleshoot a review requested with request_review: returns the run's Hermes status " +
     "(queued, running, stopping, completed, failed, cancelled, interrupted, unknown, not_found), the review " +
-    "bot's reply or error, and whether the bot's review actually landed on the PR. Use it " +
+    "bot's reply or error, and whether the bot's review actually landed on the PR — including the " +
+    "review's own text and a link to it. Use it " +
     "when a requested review has not appeared after several minutes — not to poll in a loop. " +
     "Omit pr_number to use the open PR for the session's current branch. not_found means " +
     "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",

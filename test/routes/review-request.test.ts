@@ -7,6 +7,7 @@ import type * as GithubIntegration from "../../src/services/github-integration.j
 import type * as GithubWrite from "../../src/services/github-write.js";
 import type * as GitStatus from "../../src/services/git-status.js";
 import type * as HermesReview from "../../src/services/hermes-review.js";
+import type * as RemoteHostClient from "../../src/services/remote-host-client.js";
 
 // Only the network/host edges are mocked; the route's own session -> project
 // -> repo -> PR resolution and error mapping run for real.
@@ -22,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   getReviewRunForPr: vi.fn(),
   stopHermesReview: vi.fn(),
   listPullRequestReviews: vi.fn(),
+  getRemoteHostClient: vi.fn(),
 }));
 
 vi.mock("../../src/services/host-git.js", async (orig) => ({
@@ -49,6 +51,10 @@ vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   getHermesReviewStatus: mocks.getHermesReviewStatus,
   getReviewRunForPr: mocks.getReviewRunForPr,
   stopHermesReview: mocks.stopHermesReview,
+}));
+vi.mock("../../src/services/remote-host-client.js", async (orig) => ({
+  ...(await orig<typeof RemoteHostClient>()),
+  getRemoteHostClient: mocks.getRemoteHostClient,
 }));
 
 import { buildApp } from "../../src/app.js";
@@ -121,6 +127,9 @@ describe("review-request routes", () => {
       replayed: false,
     });
     mocks.assertReviewerConfigured.mockReturnValue("key");
+    // The duplicate-review check (#1705) reads the PR's reviews on every
+    // dispatch — an empty list is the common case.
+    mocks.listPullRequestReviews.mockResolvedValue([]);
   });
 
   // The route is rate-limited per client IP (10/min); a distinct address per
@@ -164,6 +173,102 @@ describe("review-request routes", () => {
       headSha: "sha42",
       sessionId,
     });
+  });
+
+  describe("duplicate-review warning (#1705)", () => {
+    it("warns, but still dispatches, when a bot review already landed for the commit", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha42",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("dispatched");
+      expect(mocks.requestHermesReview).toHaveBeenCalled();
+      expect(res.json().warning).toContain("hermes[bot]");
+      expect(res.json().warning).toContain("APPROVED");
+      // No promise about a second review: on a replay no new run is
+      // dispatched, so there is none to promise.
+      expect(res.json().warning).not.toContain("second");
+    });
+
+    it("says nothing when the commit has no bot review", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "some-other-sha",
+          submittedAt: new Date().toISOString(),
+        },
+        {
+          author: "alice",
+          authorIsBot: false,
+          state: "COMMENTED",
+          commitId: "sha42",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toBeUndefined();
+    });
+
+    it("says nothing about a dismissed (retracted) review", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "sha42",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toBeUndefined();
+    });
+
+    it("dispatches without a warning when the GitHub lookup fails", async () => {
+      mocks.listPullRequestReviews.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toBeUndefined();
+      expect(mocks.requestHermesReview).toHaveBeenCalled();
+    });
+
+    it("does not walk the PR's reviews for a request the relay refuses", async () => {
+      // The cooldown refuses inside requestHermesReview — the duplicate check
+      // runs after the dispatch is admitted, so it must not run at all.
+      mocks.requestHermesReview.mockRejectedValue(new ReviewCooldownError(240));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+  });
+
+  it("404s a detached session's branch, on either host", async () => {
+    // `git status` reports a detached checkout as its short commit SHA, not
+    // as the "(detached)" sentinel — that is the signal that arrives.
+    mocks.getGitStatus.mockResolvedValue({ branch: "abc1234" });
+    const res = await post(sessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("pass prNumber");
+
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({
+        isRepo: true,
+        status: { branch: "abc1234" },
+      })),
+    });
+    const remote = await post(remoteSessionId, {});
+    expect(remote.statusCode).toBe(404);
+    expect(remote.json().message).toContain("pass prNumber");
   });
 
   it("derives the repo from the session's project, never the body", async () => {
@@ -292,11 +397,69 @@ describe("review-request routes", () => {
     );
   });
 
-  it("412s for a remote-host project (v1 is local-host only)", async () => {
+  it("resolves a remote-host session's branch on its host and dispatches (#1628)", async () => {
+    const resolveGitStatus = vi.fn(async () => ({
+      isRepo: true,
+      status: { branch: "feat/remote" },
+    }));
+    mocks.getRemoteHostClient.mockReturnValue({ resolveGitStatus });
     const res = await post(remoteSessionId, {});
-    expect(res.statusCode).toBe(412);
-    expect(res.json().message).toContain("local");
-    expect(mocks.resolveRepoRef).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: "dispatched", repo: "acme/widgets", prNumber: 42 });
+    expect(mocks.getRemoteHostClient).toHaveBeenCalledWith(expect.anything(), "some-agent-host");
+    // resolveGitStatus, NOT resolveGitBranch: the latter is a bare .git/HEAD
+    // read that does not follow a worktree's .git file redirect, and reports
+    // a detached HEAD as a short SHA instead of the "(detached)" sentinel.
+    expect(resolveGitStatus).toHaveBeenCalledWith("/srv/remote");
+    expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+      "ghs_token",
+      "acme",
+      "widgets",
+      "acme:feat/remote",
+    );
+    // A local session never asks a host.
+    mocks.getRemoteHostClient.mockClear();
+    expect((await post(sessionId, {})).statusCode).toBe(200);
+    expect(mocks.getRemoteHostClient).not.toHaveBeenCalled();
+  });
+
+  it("404s a remote-host session whose cwd is not a repo (#1628)", async () => {
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({ isRepo: false, status: null })),
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
+  });
+
+  it("404s a remote-host session whose status has no branch (#1628)", async () => {
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => ({ isRepo: true, status: null })),
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
+  });
+
+  it("404s a remote-host session whose host cannot resolve a branch (#1628)", async () => {
+    mocks.getRemoteHostClient.mockReturnValue({
+      resolveGitStatus: vi.fn(async () => {
+        throw new Error("host unreachable");
+      }),
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
+  });
+
+  it("404s a remote-host session whose host row is gone (#1628)", async () => {
+    // getRemoteHostClient() throws SYNCHRONOUSLY for a missing host row.
+    mocks.getRemoteHostClient.mockImplementation(() => {
+      throw new Error("Host some-agent-host has no baseUrl");
+    });
+    const res = await post(remoteSessionId, {});
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("branch");
   });
 
   it("412s when the project has no GitHub remote", async () => {
@@ -425,6 +588,23 @@ describe("review-request routes", () => {
       });
     });
 
+    it("reports a dismissed (retracted) review as not landed", async () => {
+      // The same "landed" definition the duplicate-review warning uses: a
+      // retracted review did not land, so `review status` must not say it
+      // posted.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "ccccccc3",
+          submittedAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await get(sessionId);
+      expect(res.json().github).toEqual({ checked: true, review: null });
+    });
+
     it("reports that nothing landed when no bot review follows the dispatch", async () => {
       const res = await get(sessionId, "?prNumber=99");
       expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(
@@ -432,6 +612,45 @@ describe("review-request routes", () => {
         expect.objectContaining({ prNumber: 99 }),
       );
       expect(res.json().github).toEqual({ checked: true, review: null });
+    });
+
+    it("carries the review's own text and link (#1704)", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "CHANGES_REQUESTED",
+          commitId: "ccccccc3",
+          submittedAt: new Date(1_000_900).toISOString(),
+          body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+          htmlUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
+        },
+      ]);
+      const res = await get(sessionId);
+      expect(res.json().github.review).toEqual({
+        author: "hermes[bot]",
+        state: "CHANGES_REQUESTED",
+        commitId: "ccccccc3",
+        submittedAt: new Date(1_000_900).toISOString(),
+        body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+        htmlUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-1",
+      });
+    });
+
+    it("marks a truncated review body (#1704)", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "COMMENTED",
+          commitId: "ccccccc3",
+          submittedAt: new Date(1_000_900).toISOString(),
+          body: "cut short",
+          bodyTruncated: true,
+        },
+      ]);
+      const res = await get(sessionId);
+      expect(res.json().github.review.bodyTruncated).toBe(true);
     });
 
     it("skips the GitHub check when no run is tracked here", async () => {

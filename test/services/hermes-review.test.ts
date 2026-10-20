@@ -28,6 +28,7 @@ import {
   isValidPromptLocation,
   requestHermesReview,
   resetHermesReviewState,
+  cooldownEntryCount,
   ReviewCooldownError,
   testHermesConnection,
 } from "../../src/services/hermes-review.js";
@@ -358,7 +359,7 @@ describe("hermes review relay", () => {
     });
 
     describe("cooldown", () => {
-      it("refuses a repeat request for the same PR with a retry-after", async () => {
+      it("refuses a repeat request for the same commit with a retry-after", async () => {
         await requestHermesReview(app, PR);
         const err = await requestHermesReview(app, PR).catch((e: unknown) => e);
         expect(err).toBeInstanceOf(ReviewCooldownError);
@@ -367,13 +368,69 @@ describe("hermes review relay", () => {
         expect(calls("/v1/runs")).toHaveLength(1);
       });
 
-      it("is per PR and case-insensitive on the repo", async () => {
+      it("names the commit it is throttling", async () => {
+        await requestHermesReview(app, PR);
+        const err = await requestHermesReview(app, PR).catch((e: unknown) => e);
+        expect((err as Error).message).toContain("abc123");
+      });
+
+      it("is per commit: a new head SHA is reviewed right away (#1703)", async () => {
+        await requestHermesReview(app, PR);
+        // A new commit on the same PR is a different review — the cooldown
+        // must not hold it back.
+        await expect(
+          requestHermesReview(app, { ...PR, headSha: "def5678" }),
+        ).resolves.toMatchObject({ runId: "run_1" });
+        expect(calls("/v1/runs")).toHaveLength(2);
+      });
+
+      it("refuses a target without a head commit rather than collapsing every commit into one key", async () => {
+        // An empty sha would make the cooldown key PR-wide again — silently
+        // restoring the behavior this change removes.
+        await expect(requestHermesReview(app, { ...PR, headSha: "" })).rejects.toBeInstanceOf(
+          HermesNotConfiguredError,
+        );
+        expect(calls("/v1/runs")).toHaveLength(0);
+      });
+
+      it("sweeps expired cooldown entries so the map cannot grow without bound", async () => {
+        // The cooldown is keyed by commit now, so its key space is every
+        // commit ever reviewed. A swept entry and an expired-but-still-present
+        // one behave the same, so the only observable difference is the map's
+        // size — the test has to look at it.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const base = Date.now();
+          for (let i = 0; i < 1_100; i += 1) {
+            vi.setSystemTime(base + i);
+            await requestHermesReview(app, { ...PR, headSha: `sha${i}` });
+          }
+          expect(cooldownEntryCount()).toBeGreaterThan(1_000);
+
+          // Well past the cooldown window: the next request sweeps.
+          vi.setSystemTime(base + 11 * 60_000);
+          await requestHermesReview(app, { ...PR, headSha: "fresh" });
+          // Every entry older than the window is gone; only the fresh one
+          // remains.
+          expect(cooldownEntryCount()).toBeLessThanOrEqual(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("is per commit and case-insensitive on the repo", async () => {
         await requestHermesReview(app, PR);
         await expect(requestHermesReview(app, { ...PR, prNumber: 8 })).resolves.toMatchObject({
           runId: "run_1",
         });
+        // The same commit on the same PR, whatever the repo's casing.
         await expect(
-          requestHermesReview(app, { owner: "ACME", repo: "Widgets", prNumber: 7 }),
+          requestHermesReview(app, {
+            owner: "ACME",
+            repo: "Widgets",
+            prNumber: 7,
+            headSha: PR.headSha.toUpperCase(),
+          }),
         ).rejects.toBeInstanceOf(ReviewCooldownError);
       });
 
