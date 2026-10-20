@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Issue #941 — defaults to "not synced" everywhere, matching this file's
 // existing expectations that the shipped bundle's skills dir is always
@@ -880,6 +881,72 @@ describe("OPENCODE_EMITS (issue #321)", () => {
   it("advertises the derived session_diff and the failure-sourced notification (issue #1592)", () => {
     expect(OPENCODE_EMITS).toContain("session_diff");
     expect(OPENCODE_EMITS).toContain("notification");
+  });
+
+  // Issue #1700 — a failed TURN is a `stop_failure` (the same kind Claude
+  // Code's StopFailure and Codex's Stop failure produce), which is what makes
+  // the `api_error` status reachable for opencode sessions and what the
+  // rate-limit grace keys off.
+  it("advertises stop_failure for a failed turn (session.execution.failed)", () => {
+    expect(OPENCODE_EMITS).toContain("stop_failure");
+  });
+
+  // The companion: a failed TOOL call (session.tool.failed) is a
+  // `tool_failure`, a different kind from the failed turn above.
+  it("advertises tool_failure for a failed tool call (session.tool.failed)", () => {
+    expect(OPENCODE_EMITS).toContain("tool_failure");
+  });
+});
+
+// Issue #1700 — the frontend keeps its own hand-mirrored copy of the
+// per-agent `emits` lists (it can't import this module — separate npm
+// workspace, no backend module access), and that mirror is what decides
+// which session statuses the UI shows as reachable for an agent. A kind
+// added to one side but not the other fails CI here instead of silently
+// drifting — the drift this PR hit: the frontend's opencode mirror was
+// missing `stop_failure`, so `api_error` read as unreachable for opencode
+// sessions.
+//
+// The comparison is scoped to the kinds the frontend's reachability table
+// actually consults (sessionStatus.ts's `EMITS_REQUIREMENTS`): a kind no
+// status depends on (e.g. `review_gate`, `agent_session`) cannot change
+// what the UI shows, so a mirror that omits it is not a drift worth
+// failing CI over. Same textual-read approach as background-tasks.test.ts's
+// TERMINAL_STATUSES parity test: a live import is impossible across the
+// workspace boundary, and would not fail CI when the frontend is not part
+// of the backend's test run.
+describe("OPENCODE_EMITS parity with frontend/src/sessionStatus.test.ts", () => {
+  function frontendMirror(): string[] {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      path.join(dir, "../../../frontend/src/sessionStatus.test.ts"),
+      "utf8",
+    );
+    const match = source.match(/const OPENCODE_EMITS = \[([\s\S]*?)\] as const/);
+    expect(match, "could not find the frontend's OPENCODE_EMITS mirror").not.toBeNull();
+    return [...(match?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  }
+
+  /** The kinds the frontend's `isStatusReachable` consults — the ones a
+   * mirror's membership of actually decides anything about. */
+  function consultedKinds(): string[] {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(path.join(dir, "../../../frontend/src/sessionStatus.ts"), "utf8");
+    const match = source.match(
+      /const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string\[\]> = \{([\s\S]*?)\n\};/,
+    );
+    expect(match, "could not find the frontend's EMITS_REQUIREMENTS table").not.toBeNull();
+    return [...new Set([...(match?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]))];
+  }
+
+  it("agrees with the frontend's mirror on every kind the reachability table consults", () => {
+    const mirror = frontendMirror();
+    for (const kind of consultedKinds()) {
+      expect(
+        mirror.includes(kind),
+        `the frontend's opencode mirror disagrees with the backend about "${kind}"`,
+      ).toBe(OPENCODE_EMITS.includes(kind));
+    }
   });
 });
 

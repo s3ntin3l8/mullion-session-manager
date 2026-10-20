@@ -87,31 +87,120 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
       ]);
     });
 
-    it("maps session.execution.failed to tool_failure with the structured error's type and message", () => {
+    // Issue #1700 — a failed TURN is a `stop_failure` (the same kind Claude
+    // Code's StopFailure and Codex's Stop failure produce), not a
+    // `tool_failure`: that is what puts an opencode session into the
+    // `api_error` status and what the rate-limit grace keys off.
+    it("maps session.execution.failed to stop_failure with the error's type and message", () => {
       expect(
         mapOpenCodeEvent(
           ev("session.execution.failed", {
             sessionID: "ses_1",
-            error: { type: "ProviderAuthError", message: "bad key" },
+            error: { type: "provider.auth", message: "bad key" },
           }),
         ),
       ).toEqual([
         {
-          kind: "tool_failure",
-          tool: "opencode",
-          error: "ProviderAuthError",
-          summary: "bad key",
+          kind: "stop_failure",
+          error: "bad key",
+          errorDetails: "bad key",
+          errorType: "provider.auth",
         },
       ]);
     });
 
-    it("falls back to the error type as summary when the message is empty, and to 'error' without a type", () => {
+    // opencode's own "unknown" is its catch-all for an error it cannot
+    // classify — carrying it as the errorType would show "API error: unknown"
+    // instead of the error's own message, so it is dropped.
+    it("drops an uninformative 'unknown' error type so the message is the detail", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.execution.failed", { error: { type: "unknown", message: "boom" } }),
+        ),
+      ).toEqual([{ kind: "stop_failure", error: "boom", errorDetails: "boom" }]);
+    });
+
+    it("falls back to the error type when the message is empty, and to 'error' without a type", () => {
       expect(
         mapOpenCodeEvent(ev("session.execution.failed", { error: { type: "Boom", message: "" } })),
-      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "Boom" }]);
+      ).toEqual([{ kind: "stop_failure", error: "Boom", errorDetails: "Boom", errorType: "Boom" }]);
       expect(mapOpenCodeEvent(ev("session.execution.failed", { error: {} }))).toEqual([
-        { kind: "tool_failure", tool: "opencode", error: "error", summary: "error" },
+        { kind: "stop_failure", error: "error", errorDetails: "error" },
       ]);
+    });
+
+    // Issue #1700 — the rate-limit classification is what makes Task Master's
+    // rate-limit grace (task-rate-limit-grace.ts) work for opencode workers:
+    // it matches the EXACT label "rate_limit" off a stop_failure's errorType.
+    it.each([
+      ["429 Too Many Requests", "429 Too Many Requests"],
+      ["rate limit exceeded", "rate limit exceeded"],
+      ["rate_limit", "rate_limit"],
+      ["Too Many Requests", "Too Many Requests"],
+      ["insufficient_quota", "insufficient_quota"],
+    ])("classifies %j as a rate_limit failure", (message) => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.execution.failed", { error: { type: "provider.error", message } }),
+        ),
+      ).toEqual([
+        {
+          kind: "stop_failure",
+          error: message,
+          errorDetails: message,
+          errorType: "rate_limit",
+        },
+      ]);
+    });
+
+    it.each([
+      ["quota exceeded", "a disk/storage quota is not a provider rate limit"],
+      ["the model exceeded its output limit", "an output-limit error is not a rate limit"],
+      ["4290 tokens left", "4290 is not the HTTP status 429"],
+      ["connection reset by peer", "a network blip is not a rate limit"],
+    ])("does not classify %j as a rate_limit failure (%s)", (message) => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.execution.failed", { error: { type: "provider.error", message } }),
+        ),
+      ).toEqual([
+        {
+          kind: "stop_failure",
+          error: message,
+          errorDetails: message,
+          errorType: "provider.error",
+        },
+      ]);
+    });
+
+    // v2's StructuredError schema carries an optional `status` (and a
+    // `response.body`) — the least ambiguous rate-limit signal there is, so
+    // it is honored whenever the failure path happens to populate it.
+    it.each([
+      [{ type: "provider.error", message: "slow down", status: 429 }],
+      [{ type: "provider.error", message: "slow down", response: { status: 429 } }],
+    ])("classifies a %j carrying the HTTP status 429 as a rate_limit", (error) => {
+      expect(mapOpenCodeEvent(ev("session.execution.failed", { error }))).toEqual([
+        {
+          kind: "stop_failure",
+          error: "slow down",
+          errorDetails: "slow down",
+          errorType: "rate_limit",
+        },
+      ]);
+    });
+
+    // A user abort is not an API error — v2 reports it as its own
+    // `session.execution.interrupted` event (deliberately unmapped), and its
+    // own "aborted" classification must not raise an API-error bell either.
+    it("does not map an aborted failure to a stop_failure", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.execution.failed", {
+            error: { type: "aborted", message: "aborted by user" },
+          }),
+        ),
+      ).toBeNull();
     });
 
     it("returns null for session.execution.failed without an error object", () => {
@@ -163,6 +252,204 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
       expect(
         mapOpenCodeEvent(ev("session.retry.scheduled", { sessionID: "s", attempt: 1 })),
       ).toEqual([{ kind: "progress", phase: "generating", detail: "retry attempt 1" }]);
+    });
+  });
+
+  // Issue #1700 — a failed TOOL call is a `tool_failure` (the turn carries on;
+  // the agent sees the error and can recover), distinct from a failed TURN
+  // (`stop_failure`, above).
+  describe("session.tool.failed (tool_failure)", () => {
+    it("maps a failed tool call to a tool_failure", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "unknown", message: "Cannot read binary file" },
+          }),
+        ),
+      ).toEqual([
+        {
+          kind: "tool_failure",
+          tool: "opencode",
+          error: "Cannot read binary file",
+          summary: "Cannot read binary file",
+        },
+      ]);
+    });
+
+    // v2's `session.tool.failed` carries the call's id but NOT its name or
+    // input — both come from the call's own `session.tool.input.*` events.
+    // The field convention is the wire's: `error` is the error TEXT and
+    // `summary` is the call description (Claude Code's mapper does the same,
+    // and the frontend renders `Tool failed: <tool> — <error>`).
+    it("names the tool and describes the call from the call's own input events", () => {
+      const state = createMapState();
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toBeNull();
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.input.ended", {
+            sessionID: "s",
+            id: "call_1",
+            text: '{"command": "ls /nope"}',
+          }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toBeNull();
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "unknown", message: "boom" },
+          }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toEqual([
+        { kind: "tool_failure", tool: "shell", error: "boom", summary: "shell: ls /nope" },
+      ]);
+    });
+
+    it("falls back to the tool's name when the call's input is unusable", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+        undefined,
+        null,
+        state,
+      );
+      mapOpenCodeEvent(
+        ev("session.tool.input.ended", { sessionID: "s", id: "call_1", text: "not json" }),
+        undefined,
+        null,
+        state,
+      );
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "E", message: "m" },
+          }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toEqual([{ kind: "tool_failure", tool: "shell", error: "m", summary: "shell" }]);
+    });
+
+    it("falls back to the error type as the error text when the message is empty", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "Boom", message: "" },
+          }),
+        ),
+      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "Boom" }]);
+    });
+
+    // When the call's own `input.started` was missed (the plugin loaded
+    // mid-turn, or the event was dropped) there is no call description to
+    // give — and the backend's status detail would read "Tool failure:
+    // opencode", which says nothing about what failed. The error text
+    // stands in for the description.
+    it("falls back to the error text as the summary when the tool's name is unknown", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "unknown", message: "Cannot read binary file" },
+          }),
+        ),
+      ).toEqual([
+        {
+          kind: "tool_failure",
+          tool: "opencode",
+          error: "Cannot read binary file",
+          summary: "Cannot read binary file",
+        },
+      ]);
+    });
+
+    it("returns null without an error object", () => {
+      expect(
+        mapOpenCodeEvent(ev("session.tool.failed", { sessionID: "s", id: "call_1" })),
+      ).toBeNull();
+    });
+
+    // A non-zero shell exit is NOT a failure — opencode reports it as
+    // `session.tool.success` with an `exit` code, which must stay unmapped.
+    it("does not map session.tool.success (a non-zero exit is not a failure)", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.success", { sessionID: "s", id: "call_1", metadata: { exit: 3 } }),
+        ),
+      ).toBeNull();
+    });
+
+    it("ignores a child (subagent) session's tool failure", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.created", { sessionID: "child", parentID: "parent" }),
+        undefined,
+        null,
+        state,
+      );
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "child",
+            id: "call_1",
+            error: { type: "unknown", message: "boom" },
+          }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toBeNull();
+    });
+
+    // Issue #1700 — a turn that ends with a call still in flight (an
+    // interrupt, or a failure mid-tool) never reaches the call's own
+    // terminal event, so the remembered call must be dropped at the turn
+    // boundary instead of lingering for the plugin's lifetime.
+    it("forgets a tool call still in flight when the turn ends", () => {
+      for (const terminal of [
+        "session.execution.interrupted",
+        "session.execution.failed",
+        "session.execution.succeeded",
+      ]) {
+        const state = createMapState();
+        mapOpenCodeEvent(
+          ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+          undefined,
+          null,
+          state,
+        );
+        mapOpenCodeEvent(
+          ev(terminal, { sessionID: "s", reason: "user", error: { type: "E", message: "m" } }),
+          undefined,
+          null,
+          state,
+        );
+        expect(state.toolCalls.size, `${terminal} should have cleared the remembered calls`).toBe(
+          0,
+        );
+      }
     });
   });
 
@@ -1377,6 +1664,15 @@ describe("mapOpenCodeEvent emits capability parity (issue: extend surfaced sessi
       ev("session.execution.started", { sessionID: "m" }),
       ev("session.execution.succeeded", { sessionID: "m" }),
       ev("session.execution.failed", { sessionID: "m", error: { type: "E", message: "m" } }),
+      // Issue #1700 — a failed tool call is its own kind (`tool_failure`),
+      // distinct from the failed turn above (`stop_failure`). The name comes
+      // from the call's own input.started event.
+      ev("session.tool.input.started", { sessionID: "m", id: "call_1", name: "shell" }),
+      ev("session.tool.failed", {
+        sessionID: "m",
+        id: "call_1",
+        error: { type: "E", message: "m" },
+      }),
       ev("session.retry.scheduled", { sessionID: "m", attempt: 1, error: { message: "x" } }),
       ev("session.step.ended", { sessionID: "m", files: ["a.ts"] }, "/repo"),
       ev("permission.asked", { action: "shell", resources: ["ls"] }),

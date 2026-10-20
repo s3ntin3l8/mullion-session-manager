@@ -334,10 +334,12 @@ export interface QuestionHookMessage {
   tool?: { messageID: string; callID: string };
 }
 
-/** OpenCode v2 todo events — opencode fires `todo.updated` when the model's
- *  structured task list changes (the todowrite tool). Each event carries one
- *  todo item's new state. Forwarded for the timeline feed; no session-status
- *  impact. */
+/** Claude Code's `TodoWrite` — one message per TodoWrite call. Forwarded for
+ *  the timeline feed; no session-status impact.
+ *
+ *  NOT an opencode kind: opencode v2 has no todo tool and no `todo.updated`
+ *  event (issue #1592 — verified against the v2 binary), so `todo` is
+ *  unreachable for opencode sessions. */
 export interface TodoHookMessage {
   kind: "todo";
   content: string;
@@ -345,9 +347,12 @@ export interface TodoHookMessage {
   priority: "high" | "medium" | "low";
 }
 
-/** OpenCode v2 session diff events — opencode fires `session.diff` at turn end
- *  with per-file change summaries (file path, additions, deletions, patch).
- *  Forwarded for the timeline feed; no session-status impact. */
+/** OpenCode v2 session diff — per-file change summaries at turn end (file
+ *  path, additions, deletions, patch).
+ *
+ *  DERIVED, not forwarded: v2 publishes no `session.diff` event (issue
+ *  #1592), so opencode's plugin reconstructs it from the turn's changed files
+ *  plus `ctx.vcs.diff` — see opencode-plugin.js's createSessionDiffTracker. */
 export interface SessionDiffHookMessage {
   kind: "session_diff";
   files: Array<{

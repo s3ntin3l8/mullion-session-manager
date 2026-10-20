@@ -31,6 +31,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gitEnv } from "../../src/services/git-env.js";
+import { opencodeVersionWarning } from "../../src/services/hook-adapters/opencode.js";
 
 const PINNED_OPENCODE_VERSION = "2.0.29";
 const PLUGIN_SOURCE = path.resolve(import.meta.dirname, "../../src/hooks/opencode-plugin.js");
@@ -130,8 +131,23 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("asserts the pinned opencode version matches what these behaviours were verified against", () => {
-    expect(version).toContain(PINNED_OPENCODE_VERSION);
+  it("runs against an opencode at least as new as the pinned version", () => {
+    // The PINNED version is what these behaviors were verified against, but
+    // the assertions below are about behavior, not an exact build: a
+    // developer running `make test-e2e` with a NEWER opencode on PATH (the
+    // pinned one is only installed by CI) must not be locked out by an exact
+    // string match. A version OLDER than the pin is a different story — it
+    // predates the v2 plugin API entirely, and the adapter refuses to launch
+    // it.
+    //
+    // The comparison itself lives in ONE place — the adapter's own
+    // minimum-version gate (`opencodeVersionWarning`, the same 2.0.29 tuple
+    // compare `GET /api/agents` reports a warning from) — so this e2e gate
+    // cannot drift away from the version the adapter actually supports.
+    expect(
+      opencodeVersionWarning(version),
+      `opencode ${version} is older than the pinned ${PINNED_OPENCODE_VERSION}`,
+    ).toBeNull();
   });
 
   it("offers --standalone on the default command, and session export/import subcommands", () => {
