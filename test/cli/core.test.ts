@@ -1313,6 +1313,36 @@ describe("runCommand", () => {
         expect(out).toContain("https://github.com/acme/widgets/pull/42#pullrequestreview-1");
       });
 
+      it("cuts a long review text by code point, never splitting a surrogate pair", async () => {
+        // A body long enough to be cut, with an emoji right at the cut
+        // boundary: a plain slice would leave half a surrogate behind.
+        const body = `${"a".repeat(1_500)}\u{1F600}${"b".repeat(100)}`;
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_1",
+            repo: "acme/widgets",
+            prNumber: 42,
+            status: "completed",
+            github: {
+              checked: true,
+              review: {
+                author: "hermes[bot]",
+                state: "COMMENTED",
+                commitId: "abc1234",
+                body,
+              },
+            },
+          })),
+        });
+        const io = fakeIo();
+        await runCommand(["review", "status"], { client, io });
+        const out = io.written.join("");
+        const printed = out.slice(out.indexOf("review text: ") + "review text: ".length);
+        // No lone surrogate: every character is a whole code point.
+        expect([...printed].every((ch) => ch !== "\uFFFD")).toBe(true);
+        expect(printed).toContain("\u2026");
+      });
+
       it("status says the review text was cut short (#1704)", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({

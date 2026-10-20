@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { getGitStatus } from "../services/git-status.js";
-import { resolveRepoRef } from "../services/host-git.js";
+import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import {
@@ -189,7 +189,26 @@ async function resolveReviewTarget(
   // for a remote-hosted project (services/host-git.ts), so the repo ref is
   // host-agnostic — issue #1628 removed the local-only 412 below, and the
   // branch detection further down now resolves through the same host.
-  const repoRef = await resolveRepoRef(app, project);
+  //
+  // resolveRepoRefResult, not resolveRepoRef: the collapsing variant
+  // answers "no GitHub remote" for a remote host that is DOWN or too old
+  // for this route, which is a wrong (and unlogged) cause for a project
+  // this route now admits. The host cases answer 503 instead.
+  const repoResult = await resolveRepoRefResult(app, project);
+  if (!repoResult.ok) {
+    if (repoResult.reason === "unreachable") {
+      app.log.warn(
+        { hostId: project.hostId, projectId: project.id, detail: repoResult.detail },
+        "review-request: could not resolve the repo ref on its host",
+      );
+      reply.serviceUnavailable("The project host is unreachable — try again shortly");
+      return null;
+    }
+    // "unsupported": the agent build predates the repo-ref route.
+    reply.preconditionFailed("This project's host cannot resolve its GitHub remote");
+    return null;
+  }
+  const repoRef = repoResult.value;
   if (!repoRef) {
     reply.preconditionFailed("This project has no GitHub remote");
     return null;
