@@ -30,10 +30,15 @@ describe("getAdapterDelegationHint", () => {
     expect(hint).toMatch(/precedence over/i);
   });
 
-  it("names Codex's spawn_agent and its per-child model", () => {
+  it("names Codex's spawn_agent without assuming the model override is exposed", () => {
     const hint = getAdapterDelegationHint("codex");
     expect(hint).toBeTruthy();
     expect(hint).toContain("spawn_agent");
+    // Codex's per-child model override sits behind
+    // `multi_agent_v2.expose_spawn_agent_model_overrides`, so the clause
+    // must not tell the worker to pass a field the tool may not expose —
+    // "if the tool offers" keeps it true either way.
+    expect(hint).toMatch(/if the tool offers/i);
     expect(hint).toContain("reasoning effort");
   });
 
@@ -65,7 +70,20 @@ describe("getAdapterDelegationHint", () => {
     for (const command of ["claude", "codex", "opencode", "agy"]) {
       const hint = getAdapterDelegationHint(command)!;
       expect(hint).toContain("responsible for the final commit");
-      expect(hint).toContain("committed here");
+    }
+  });
+
+  it("requires the delegated work to land on this branch, in every CLI's clause", () => {
+    // The mechanism that breaks the invariant above: a child can work in
+    // its own workspace or fork (Claude Code's Task tool has
+    // `isolation: "worktree"`; codex's spawn_agent forks the workspace).
+    // Its edits then land elsewhere and are never merged back — so the
+    // clause has to name the landing requirement, not just restate the
+    // worker's general responsibility for committing.
+    for (const command of ["claude", "codex", "opencode", "agy"]) {
+      const hint = getAdapterDelegationHint(command)!;
+      expect(hint).toContain("land on this branch");
+      expect(hint).toContain("workspace or fork");
     }
   });
 

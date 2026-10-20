@@ -334,9 +334,14 @@ export interface HookAgentAdapter {
    * Pure string, no I/O. Absent for an agent whose CLI exposes no
    * subagent primitive at all; the caller then emits nothing rather than
    * naming a tool the CLI lacks. Every sentence must end by keeping the
-   * worker responsible for the final commit — a delegated implementation
-   * must not be able to satisfy Task Master's "commits past base" gate on
-   * its own, or the reviewer would judge a diff the worker never read.
+   * worker responsible for the final commit ON THIS BRANCH — that is
+   * load-bearing, not boilerplate: a delegated implementation must not be
+   * able to satisfy Task Master's "commits ahead of base" gate on its own,
+   * or the reviewer would judge a diff the worker never read. The clause
+   * has to name the LANDING requirement, because a child can work in its
+   * own workspace or fork (Claude Code's Task tool has
+   * `isolation: "worktree"`; codex's `spawn_agent` forks the workspace) —
+   * edits made there never reach this branch unless the worker lands them.
    */
   delegationHint?: string;
 }

@@ -541,8 +541,9 @@ export const openCodeAdapter: HookAgentAdapter = {
     "its own `model`, and `explore` and `general` ship built in — so " +
     "prefer a subagent configured with a cheaper model for the mechanical " +
     "parts, and keep the parts that need your own judgement for yourself. " +
-    "You remain responsible for the final commit on this branch: whatever " +
-    "you delegate still has to end up committed here.",
+    "A delegated part may run in its own workspace or fork, so whatever you " +
+    "delegate has to land on this branch — you remain responsible for the " +
+    "final commit here.",
   // `--prompt <text>` is a top-level option on the DEFAULT `opencode
   // [directory]` command (the TUI, which is what Mullion always spawns — there
   // is no `run`/`exec` subcommand involved), and in v2 it SUBMITS that text

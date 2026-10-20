@@ -300,9 +300,10 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   // The delegation clause — advisory, and CLI-specific: each adapter's own
   // `delegationHint` names that CLI's delegation primitive AND that CLI's own
   // way of choosing the child's model (Claude Code's Task tool takes a
-  // `subagent_type` and the child's model comes from that subagent's own
-  // definition; Codex's `spawn_agent` takes a per-child model and reasoning
-  // effort; opencode's subagents are `agents.<name>` entries each carrying a
+  // `subagent_type` and an optional per-call `model` that overrides the
+  // subagent definition's own `model:` frontmatter; Codex's `spawn_agent`
+  // takes a per-child model and reasoning effort where the install exposes
+  // them; opencode's subagents are `agents.<name>` entries each carrying a
   // model; agy's `invoke_subagent` takes a spec with a model and a
   // modelTier). One generic sentence would be wrong for three of the four.
   //
@@ -312,6 +313,14 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   // It deliberately sits BEFORE the "When you are done:" checklist — it is
   // advice about how to approach the work, not a completion obligation, and
   // the checklist below is a list of individually checkable things.
+  //
+  // The clause's closing requirement — the delegated work has to LAND on
+  // this branch, and the worker stays responsible for the final commit — is
+  // load-bearing, not boilerplate: a child can work in its own workspace or
+  // fork, and edits made there never reach this branch unless the worker
+  // lands them. Without that, a delegated implementation could satisfy
+  // Task Master's "no commits ahead of base" gate while the work itself
+  // silently disappeared, and the reviewer would judge an empty diff.
   const delegationHint = agentCommand ? getAdapterDelegationHint(agentCommand) : null;
   if (delegationHint) {
     lines.push("", ...wrapPromptText(delegationHint));
