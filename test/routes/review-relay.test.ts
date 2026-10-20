@@ -823,7 +823,7 @@ describe("review-request routes", () => {
       expect(mocks.requestRelay).not.toHaveBeenCalled();
     });
 
-    it("503s an unreachable GitHub", async () => {
+    it("502s an unreachable GitHub", async () => {
       mocks.getIssueState.mockRejectedValue(new GitHubApiError("down", 0));
       const res = await triagePost(sessionId, { issueNumber: 12 });
       expect(res.statusCode).toBe(502);
