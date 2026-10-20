@@ -1459,10 +1459,10 @@ async function runStatus(client, args, opts, io) {
 // PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
 // client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
 const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
-// How much of a review's own text the CLI prints (issue #1704). The server
-// already bounds it (MAX_REVIEW_BODY_CHARS in services/github-write.ts); this
-// is the shorter excerpt a terminal can show without wrapping into a wall of
-// text.
+// How much of a review's or a triage's own text the CLI prints (issue #1704).
+// The server already bounds it (MAX_REVIEW_BODY_CHARS in
+// services/github-write.ts); this is the shorter excerpt a terminal can show
+// without wrapping into a wall of text.
 const MAX_CLI_REVIEW_BODY = 1_500;
 
 /**
