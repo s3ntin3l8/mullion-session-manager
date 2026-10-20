@@ -174,6 +174,12 @@ function pendingLabel(status: string | undefined): string {
     case "stopping":
     case "stopped":
       return "the review is being stopped";
+    case "not_found":
+      // Hermes no longer knows the run (it expired, or the server restarted
+      // and lost it) — nothing is coming.
+      return "the review run is no longer known to the relay";
+    case "unknown":
+      return "the relay could not read the review run";
     default:
       return "waiting for the review bot";
   }

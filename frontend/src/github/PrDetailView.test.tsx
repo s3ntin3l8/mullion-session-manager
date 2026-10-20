@@ -83,11 +83,18 @@ function stub(pr: GitHubPrDetail, extra?: (url: string, init?: RequestInit) => R
 }
 
 // The review relay's state for the PR (issue #1630) — its own endpoint, so
-// it needs its own stub.
+// it needs its own stub. `states` may hold one state for every PR, or one
+// per PR number (so a test can tell two PRs apart).
 function stubReview(state: unknown) {
+  const byPr =
+    typeof state === "object" && state !== null && !("state" in state)
+      ? (state as Record<string, unknown>)
+      : null;
   return vi.fn((url: string, _init?: RequestInit) => {
-    if (String(url).includes("/github/prs/12/review")) {
-      return Promise.resolve(jsonResponse(200, state));
+    const match = /\/github\/prs\/(\d+)\/review/.exec(String(url));
+    if (match) {
+      const per = byPr ? byPr[match[1]] : state;
+      return Promise.resolve(jsonResponse(200, per));
     }
     return Promise.resolve(jsonResponse(200, PR));
   });
@@ -130,17 +137,19 @@ describe("PrDetailView", () => {
   it("does not show one PR's review under another PR's header", async () => {
     vi.stubGlobal(
       "fetch",
+      // PR 12 has a landed review; PR 13 has one of its own — so the
+      // assertion below is about the wrong state lingering, not about a
+      // payload that never arrives.
       stubReview({
-        state: "landed",
-        verdict: "APPROVED",
-        author: "hermes[bot]",
-        body: "## Review",
+        "12": { state: "landed", verdict: "APPROVED", author: "hermes[bot]", body: "## Review" },
+        "13": { state: "landed", verdict: "CHANGES_REQUESTED", author: "hermes[bot]" },
       }),
     );
     const { rerender } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText(/Approved by hermes\[bot\]/)).toBeInTheDocument();
     // Another PR: the previous PR's verdict must not linger.
     rerender(<PrDetailView projectId={1} number={13} onBack={vi.fn()} />);
+    expect(await screen.findByText(/Changes requested by hermes\[bot\]/)).toBeInTheDocument();
     expect(screen.queryByText(/Approved by hermes\[bot\]/)).toBeNull();
   });
 
