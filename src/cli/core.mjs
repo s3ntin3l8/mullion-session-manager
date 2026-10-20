@@ -1629,11 +1629,17 @@ async function runTriage(client, args, opts, io) {
   };
 }
 
+// The status payload carries the target's number as `number` (issue #1629);
+// `prNumber` is the same number under its review-era name.
+function triageNumber(r) {
+  return r.number ?? r.prNumber;
+}
+
 function formatTriageStatus(r) {
   if (r.status === "not_found") {
-    return `no triage run known for ${r.repo}#${r.prNumber} — none requested from this Mullion, or the server restarted`;
+    return `no triage run known for ${r.repo}#${triageNumber(r)} — none requested from this Mullion, or the server restarted`;
   }
-  const lines = [`triage run ${r.runId} for ${r.repo}#${r.prNumber}: ${r.status}`];
+  const lines = [`triage run ${r.runId} for ${r.repo}#${triageNumber(r)}: ${r.status}`];
   if (r.shuttingDown) lines.push("the triage gateway is shutting down");
   if (r.error) lines.push(`error: ${r.error}`);
   if (r.output) lines.push(`reply: ${r.output}`);

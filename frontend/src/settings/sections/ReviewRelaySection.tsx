@@ -27,7 +27,6 @@ function TextSettingRow({
   value,
   placeholder,
   width = 260,
-  ariaLabel,
   onCommit,
 }: {
   label: string;
@@ -35,9 +34,6 @@ function TextSettingRow({
   value: string;
   placeholder?: string;
   width?: number;
-  /** Names the input for assistive tech (and for a test that must not rely
-   * on the field's position among its siblings). */
-  ariaLabel?: string;
   onCommit: (v: string) => void;
 }) {
   // Call sites pass `key={value}`, so a value changed from outside (e.g. the
@@ -57,7 +53,7 @@ function TextSettingRow({
           style={{ flex: 1, textAlign: "left", width: "auto" }}
           placeholder={placeholder}
           value={draft}
-          aria-label={ariaLabel ?? label}
+          aria-label={label}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {
@@ -147,7 +143,9 @@ function RecentReviews() {
                     ? "warn"
                     : "off"
               }
-              title={`${run.repo}#${run.prNumber}${run.kind === "issue" ? " (issue)" : ""}`}
+              title={`${run.repo}#${run.number ?? run.prNumber}${
+                run.kind === "issue" ? " (issue)" : ""
+              }`}
               subtitle={`${run.status} · ${new Date(run.dispatchedAt).toLocaleTimeString()}${
                 run.error ? ` · ${run.error}` : ""
               }`}
@@ -156,7 +154,7 @@ function RecentReviews() {
                   <ConfirmButton
                     title={`Stop the ${run.kind === "issue" ? "triage" : "review"} of ${
                       run.repo
-                    }#${run.prNumber}`}
+                    }#${run.number ?? run.prNumber}`}
                     armedLabel="Confirm stop"
                     onConfirm={() => void stop(run.runId)}
                   >
@@ -305,7 +303,6 @@ export function ReviewRelaySection() {
             key={relay.promptRepo}
             value={relay.promptRepo}
             placeholder="owner/repo"
-            ariaLabel="Prompt repository"
             width={220}
             onCommit={(v) => updateSettings({ reviewRelay: { promptRepo: v } })}
           />
@@ -322,7 +319,6 @@ export function ReviewRelaySection() {
             key={relay.triagePromptRepo}
             value={relay.triagePromptRepo}
             placeholder="owner/repo"
-            ariaLabel="Triage prompt repository"
             width={220}
             onCommit={(v) => updateSettings({ reviewRelay: { triagePromptRepo: v } })}
           />
