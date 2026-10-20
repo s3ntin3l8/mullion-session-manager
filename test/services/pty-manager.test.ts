@@ -13,6 +13,9 @@ import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencod
 import { buildCodexMcpFlags, buildCodexTrustFlag } from "../../src/services/hook-adapters/codex.js";
 import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
 import { deriveInstanceId } from "../../src/services/session-process.js";
+// Issue #1715 — a Session's process runs under a scope backend; tests that
+// construct one directly supply the same backend production does.
+import { getScopeBackend } from "../../src/services/scope/index.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -8511,7 +8514,10 @@ describe("Session state file persistence (issue #323)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
-      instanceId: deriveInstanceId(sessionsDir),
+      scope: getScopeBackend({
+        sessionsDir,
+        instanceId: deriveInstanceId(sessionsDir),
+      }),
     });
   }
 
@@ -9235,7 +9241,10 @@ describe("Session.hookEmits (issue #351)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
-      instanceId: deriveInstanceId(sessionsDir),
+      scope: getScopeBackend({
+        sessionsDir,
+        instanceId: deriveInstanceId(sessionsDir),
+      }),
     });
   }
 

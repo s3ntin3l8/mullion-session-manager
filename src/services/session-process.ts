@@ -32,15 +32,18 @@
 // module-level functions (not PtyManager methods) before this extraction, so
 // pty-manager.ts now just imports and calls them directly, same as before.
 //
-// Deliberately NOT included here: the `systemd-run --user --scope --collect
-// -u <unit> -- dtach -n ...` spawn itself (Session.bootstrapMaster() in
-// pty-manager.ts) that actually CREATES a scope. That's the other half of
-// process control, but it's entangled with env/hook-adapter/launch-command
-// composition that is its own, larger, separately-planned extraction (the
-// roadmap's PR 32, buildLaunchPlan) — pulling it in here would mix a
-// stateless id->unit-name/liveness module with Session's per-instance launch
-// state. bootstrapMaster() still calls this module's
-// scopeUnitName(instanceId, id) for the unit name it passes to systemd-run.
+// Issue #1715 — the `systemd-run --user --scope --collect -u <unit> --
+// dtach -n ...` spawn that CREATES a scope is NOT here either. It moved
+// into the scope backend (src/services/scope/systemd.ts), which wraps this
+// module and owns the creation half as well as the read/stop half; this
+// module remains the systemd implementation's home for everything that
+// talks to `systemctl --user` keyed off a bare session id string. The
+// "same intent-vs-live-state seam, now host-aware" framing is unchanged —
+// see src/services/scope/types.ts for the seam's contract.
+//
+// (The scope NAME is computed by the backend, not here: `scopeUnitName`
+// below still produces it, and the backend calls it with this instance's
+// own id and the scope prefix.)
 //
 // Issue #1140 — `scopeUnitName` names a scope in a Unix-user-global systemd
 // namespace while `sessions.id` is per-database, so two Mullion backends on
@@ -76,6 +79,11 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { listScopeProcesses } from "./cgroup-inventory.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
+// Issue #1715 — the liveness tri-state now has ONE definition, owned by the
+// platform-neutral scope seam (scope/types.ts); this module's own
+// `SessionLiveness` is an alias for it, so every existing importer of either
+// name keeps working unchanged and the two can never drift apart.
+import type { ScopeLiveness } from "./scope/types.js";
 import {
   armKillEscalation,
   KILL_ESCALATION_MS,
@@ -99,8 +107,8 @@ import {
 // SESSION_ID_PATTERN (routes/internal-schemas.ts) allows `-` in `id`
 // itself, so `crs-session-<instanceId>-<id>` is not unambiguously
 // re-splittable — nothing needs to re-split it.
-export function scopeUnitName(instanceId: string, id: string): string {
-  return `crs-session-${instanceId}-${id}`;
+export function scopeUnitName(instanceId: string, id: string, prefix = "crs-session"): string {
+  return `${prefix}-${instanceId}-${id}`;
 }
 
 /**
@@ -175,14 +183,18 @@ export function isSystemctlUserAvailable(): boolean {
  */
 const DESCRIBE_SCOPE_TIMEOUT_MS = 2_000;
 
-export async function describeScope(instanceId: string, id: string): Promise<string | null> {
+export async function describeScope(
+  instanceId: string,
+  id: string,
+  prefix = "crs-session",
+): Promise<string | null> {
   // #1232 — this probe never rejects/hangs (see this function's own doc
   // comment); bounded by DESCRIBE_SCOPE_TIMEOUT_MS like every other spawn.
   const res = await runSystemctl(
     [
       "--user",
       "show",
-      `${scopeUnitName(instanceId, id)}.scope`,
+      `${scopeUnitName(instanceId, id, prefix)}.scope`,
       "-p",
       "Description",
       "-p",
@@ -314,12 +326,22 @@ export function deriveInstanceId(sessionsDir: string): string {
 // the socket basename), and still true now that PR 2 mints real namespaced
 // units: this split must stay a guess feeding `unverifiable`, never
 // authoritative.
-function candidateIdForUnit(unit: string, instanceId: string): string | null {
-  const match = /^crs-session-(.+)\.scope$/.exec(unit);
+function candidateIdForUnit(unit: string, instanceId: string, scopePrefix: string): string | null {
+  const match = new RegExp(`^${escapeRegExp(scopePrefix)}-(.+)\\.scope$`).exec(unit);
   if (!match) return null;
   const rest = match[1];
-  const prefix = `${instanceId}-`;
-  return rest.startsWith(prefix) ? rest.slice(prefix.length) : rest;
+  const instancePrefix = `${instanceId}-`;
+  return rest.startsWith(instancePrefix) ? rest.slice(instancePrefix.length) : rest;
+}
+
+/**
+ * Escapes a literal for safe use inside a RegExp. The scope-name prefix is a
+ * fixed internal token ("crs-session", "crs-device"), never user input — but
+ * it is interpolated into a pattern here, so it is escaped rather than
+ * trusted to stay alphanumeric.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -390,16 +412,25 @@ export function invalidateOwnedScopesCache(): void {
   listingCache.clear();
 }
 
+export interface ScopeListingOptions {
+  states?: string;
+  all?: boolean;
+  /** Scope-name prefix — defaults to "crs-session". */
+  prefix?: string;
+}
+
 export function listOwnedScopes(
   sessionsDir: string,
   instanceId: string,
-  opts: { states?: string; all?: boolean } = {},
+  opts: ScopeListingOptions = {},
 ): Promise<ScopeOwnershipListing> {
+  const prefix = opts.prefix ?? "crs-session";
   const key = JSON.stringify([
     path.resolve(sessionsDir),
     instanceId,
     opts.states ?? "",
     !!opts.all,
+    prefix,
   ]);
   const now = performance.now();
   const cached = listingCache.get(key);
@@ -430,12 +461,13 @@ export function listOwnedScopes(
 async function fetchOwnedScopes(
   sessionsDir: string,
   instanceId: string,
-  opts: { states?: string; all?: boolean },
+  opts: ScopeListingOptions,
 ): Promise<ScopeOwnershipListing> {
+  const prefix = opts.prefix ?? "crs-session";
   const args = ["--user", "list-units", "--type=scope"];
   if (opts.all) args.push("--all");
   if (opts.states) args.push(`--state=${opts.states}`);
-  args.push("--no-legend", "--plain", "crs-session-*.scope");
+  args.push("--no-legend", "--plain", `${prefix}-*.scope`);
 
   // Issue #1232 — bounded: a wedged `--user` D-Bus bus used to leave this
   // pending forever, and every isMasterAliveStateBatch/isMasterAliveBatch
@@ -454,18 +486,18 @@ async function fetchOwnedScopes(
   for (const { unit, description } of parseScopeUnitsListing(res.stdout)) {
     const socketPath = extractDtachSocketPath(description);
     if (socketPath === null) {
-      const candidateId = candidateIdForUnit(unit, instanceId);
+      const candidateId = candidateIdForUnit(unit, instanceId, prefix);
       if (candidateId !== null) unverifiable.add(candidateId);
       continue;
     }
     if (path.dirname(socketPath) === resolvedSessionsDir) {
       owned.set(path.basename(socketPath, ".sock"), unit);
-    } else if (unit.startsWith(`crs-session-${instanceId}-`)) {
+    } else if (unit.startsWith(`${prefix}-${instanceId}-`)) {
       // A unit carrying THIS instance's own id whose socket lives
       // elsewhere (e.g. sessionsDir moved/symlinked) cannot be called
       // "dead": callers now delete files on a dead verdict (reconciler
       // -> terminate), so a mismatch here must read as unknown.
-      const candidateId = candidateIdForUnit(unit, instanceId);
+      const candidateId = candidateIdForUnit(unit, instanceId, prefix);
       if (candidateId !== null) unverifiable.add(candidateId);
     }
   }
@@ -519,11 +551,14 @@ async function resolveOwningUnit(
   sessionsDir: string,
   instanceId: string,
   id: string,
-  opts: { fallbackOnListingFailure: boolean },
+  opts: { fallbackOnListingFailure: boolean; prefix?: string },
 ): Promise<string | undefined> {
-  const listing = await fetchOwnedScopes(sessionsDir, instanceId, { all: true });
+  const prefix = opts.prefix ?? "crs-session";
+  const listing = await fetchOwnedScopes(sessionsDir, instanceId, { all: true, prefix });
   if (listing.failed) {
-    return opts.fallbackOnListingFailure ? `${scopeUnitName(instanceId, id)}.scope` : undefined;
+    return opts.fallbackOnListingFailure
+      ? `${scopeUnitName(instanceId, id, prefix)}.scope`
+      : undefined;
   }
   return listing.owned.get(id);
 }
@@ -570,9 +605,11 @@ export async function stopScope(
   sessionsDir: string,
   instanceId: string,
   id: string,
+  prefix = "crs-session",
 ): Promise<void> {
   const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
     fallbackOnListingFailure: true,
+    prefix,
   });
   if (unit === undefined) return;
   // Issue #1232 — bounded. Unlike the read-only listing, this MUTATES:
@@ -599,7 +636,7 @@ export async function stopScope(
  *  type exists to make un-ignorable: a caller that takes a DESTRUCTIVE
  *  action (mark-exited, kill, recreate) on "not alive" must treat "unknown"
  *  as "don't know," never silently fold it into "dead." */
-export type SessionLiveness = "alive" | "dead" | "unknown";
+export type SessionLiveness = ScopeLiveness;
 
 /**
  * Perf audit finding B8(2) — the batched liveness check for MANY sessions in
@@ -652,10 +689,12 @@ export async function isMasterAliveStateBatch(
   sessionsDir: string,
   instanceId: string,
   ids: string[],
+  prefix = "crs-session",
 ): Promise<Record<string, SessionLiveness>> {
   if (ids.length === 0) return Object.create(null);
   const listing = await listOwnedScopes(sessionsDir, instanceId, {
     states: "active,deactivating",
+    prefix,
   });
   const result: Record<string, SessionLiveness> = Object.create(null);
   for (const id of ids) {
@@ -683,8 +722,9 @@ export async function isMasterAliveState(
   sessionsDir: string,
   instanceId: string,
   id: string,
+  prefix = "crs-session",
 ): Promise<SessionLiveness> {
-  const result = await isMasterAliveStateBatch(sessionsDir, instanceId, [id]);
+  const result = await isMasterAliveStateBatch(sessionsDir, instanceId, [id], prefix);
   return result[id];
 }
 
@@ -703,8 +743,9 @@ export async function isMasterAliveBatch(
   sessionsDir: string,
   instanceId: string,
   ids: string[],
+  prefix = "crs-session",
 ): Promise<Record<string, boolean>> {
-  const state = await isMasterAliveStateBatch(sessionsDir, instanceId, ids);
+  const state = await isMasterAliveStateBatch(sessionsDir, instanceId, ids, prefix);
   const result: Record<string, boolean> = Object.create(null);
   for (const id of ids) {
     if (state[id] === "alive") {
@@ -745,9 +786,11 @@ export async function listSessionProcesses(
   sessionsDir: string,
   instanceId: string,
   id: string,
+  prefix = "crs-session",
 ): Promise<CgroupProcess[]> {
   const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
     fallbackOnListingFailure: true,
+    prefix,
   });
   if (unit === undefined) return [];
   return listScopeProcesses(unit);

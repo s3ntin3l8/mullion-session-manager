@@ -570,7 +570,68 @@ reason given above (Iceboxed throughout the phase, shipped separately afterward)
 
 ---
 
-## Long-Term: Post-Phase 6
+## Phase 8: Cross-Platform Agents & Workload Placement
+
+**Goal:** Make an agent host — and a primary — runnable on macOS, and let Mullion
+_choose_ where work runs instead of making the user choose once per project. Phase 7
+hardened multi-host for scale; this phase removes the two remaining limits: every agent
+host must be Linux, and placement is a static, manual, per-project decision.
+
+The trigger is mundane: a single 8-core/16-thread machine saturating under session load,
+with idle compute available on other machines that cannot run an agent at all.
+
+### Features
+
+| #    | Feature                                                                                                                                | Effort | Depends On |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------- |
+| 8.1  | `ScopeBackend` seam — the platform-neutral "run a detached process and track it" interface; the systemd implementation moves behind it | L      | —          |
+| 8.2  | macOS detached scope backend — `dtach -n` with `ps`-based PID discovery and a durable start-time-fingerprinted state file              | M      | 8.1        |
+| 8.3  | Darwin path/limit corrections — the `sun_path` limit (104 on darwin, not 108), an `os.tmpdir()`-derived fallback                       | S      | 8.1        |
+| 8.4  | launchd deployment for both roles + a `launchctl` self-update path                                                                     | M      | 8.2, 8.3   |
+| 8.5  | Sleep/wake resilience for macOS agents — `launchd` `KeepAlive`, `caffeinate`, reconnect hardening                                      | M      | 8.2, 8.4   |
+| 8.6  | macOS **primary** support — the delta on top of the agent role                                                                         | M      | 8.2–8.4    |
+| 8.7  | `hosts.platform` + an agent capacity endpoint (`GET /internal/capacity`), polled on the existing heartbeat tick                        | S      | 8.1        |
+| 8.8  | `sessions.hostId` + `resolveSessionHostId` — per-session host, nullable, replacing the project-derived one                             | M      | 8.1        |
+| 8.9  | Placement policy & scoring — a project-level `placement` column (`pinned` \| `auto`), opt-in, explainable, never fails a spawn         | M      | 8.7, 8.8   |
+| 8.10 | Wire placement into session spawn + Task Master claim                                                                                  | M      | 8.9        |
+| 8.11 | Host drain / park — stop placing new work on a host without killing what is already running on it                                      | S      | 8.9        |
+| 8.12 | Fleet UI — per-host capacity, drain toggle, and the project placement control                                                          | M      | 8.7, 8.11  |
+| 8.13 | Session host badge + suspend-vs-dead semantics                                                                                         | S      | 8.7, 8.10  |
+
+**Status:** 8.1 in progress — the `ScopeBackend` seam lands first, because everything
+else in the phase depends on it and because it is the change that makes a second
+implementation possible at all. The macOS backend (8.2) is the first consumer of the
+seam; the placement half (8.7–8.13) is independent of the platform work and can proceed
+against a Linux-only fleet in the meantime.
+
+### Design Notes
+
+- **The `systemd --user` scope does two jobs**: it lets a session survive an agent
+  restart/redeploy, and it provides liveness + teardown. On macOS the first comes for
+  free — `dtach -n` already detaches the session from the agent process, and there is
+  no `KillMode=control-group` teardown to escape. So macOS is a **scope-backend swap,
+  not a rewrite**: the seam in 8.1 keeps the systemd implementation untouched behind
+  the interface and adds a second one.
+- **The backend is selected on the host that owns the scope**, from that host's own
+  `process.platform` — never negotiated between hosts. A primary and its remote agents
+  are separate processes, so each picks its own; no wire format carries the question.
+- **Placement must never fail or block a spawn.** It is an optimization, never a gate:
+  if no host is eligible, the session falls back to the project's pinned host.
+- **Placement is opt-in per project** (`pinned` stays the default), and unattended
+  (Task Master) sessions get no local bonus — draining a saturated primary onto an
+  idle host is the phase's primary use case, and it already works end-to-end on remote
+  hosts.
+- **Windows is out of scope for this phase** and tracked separately
+  ([#1728](https://github.com/s3ntin3l8/mullion-session-manager/issues/1728)). There is
+  no `dtach` equivalent, so "a session survives the agent" needs a native PTY
+  supervisor there — a redesign of the persistence model, not a port.
+- The target hardware is **laptops that sleep**. macOS suspends processes rather than
+  killing them, so a session on a sleeping Mac survives and resumes on wake — but makes
+  no progress while asleep, and the host reads offline. "Offload when idle" therefore
+  realistically means "offload to a machine that is open", and the UI must say so
+  rather than showing a sleeping laptop as broken.
+
+---
 
 Once the Task Master is operational, the remaining frontier is **team-scale orchestration**:
 
@@ -622,6 +683,14 @@ Phase 6 benefits from but does NOT require: Phase 3 (Browser), Phase 5 (Subagent
 Phase 7 (Secure Multi-Host) — structurally independent, no arrows in from Phases 1–6; hardens
   a mechanism (#26/#27) that already works today. Prerequisite framing for Long-Term's
   team-scale/multi-host orchestration bullets, not for any numbered phase above.
+
+Phase 8 (Cross-Platform Agents & Workload Placement) — also structurally independent of
+  Phases 1–6, and builds on Phase 7's shipped multi-host mechanism rather than on any
+  numbered phase above it:
+  ├── 8.1 (Scope seam) → 8.2 (macOS backend) → 8.4 (launchd) → 8.5 (sleep/wake)
+  │                            └→ 8.6 (macOS primary)
+  ├── 8.1 → 8.7 (capacity) → 8.9 (placement policy) → 8.10 (wiring) → 8.13 (UI)
+  └── 8.1 → 8.8 (per-session host) → 8.9
 ```
 
 Each phase is independently shippable. Later phases consume events produced by earlier ones but don't block them.
@@ -762,6 +831,26 @@ _(6.1, 6.3, 6.6 — see #214/#216/#219, retargeted into Phase 2.5 above. See #16
 | [#521](https://github.com/s3ntin3l8/mullion-session-manager/issues/521) — 7.7: Agent deployment automation                                 | `deploy/install.sh --role agent`, agent systemd unit template, documented env contract, example Ansible role. Filed later than 7.1–7.6 ("Added during Phase 7 planning" per its own body).                                                                                           | Closed — completed (#529) |
 | [#250](https://github.com/s3ntin3l8/mullion-session-manager/issues/250) — 7.6: Connection-time SSRF pinning for agent connections          | Named in #157's original motivation. Iceboxed for the whole phase as orthogonal complexity, then shipped on its own afterwards — covering every `url-guard`-gated outbound path, not only agent connections.                                                                         | Closed — completed        |
 | [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647) — 7.8: Agent auto-update                                           | Agent-side self-update under `/internal/updates/*` (not a literal reuse of the primary's `/api/updates/*`, since the agent role never registers `authPlugin`), triggered per-host from Settings → Hosts, targeting the primary's own running version. Built on 7.7's install layout. | Closed — completed        |
+
+### Phase 8
+
+| Issue                                                                                                                                   | How it fits                                                                                                                                                                                                                                                                 | Status                         |
+| --------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| [#1714](https://github.com/s3ntin3l8/mullion-session-manager/issues/1714) — Phase 8: Cross-Platform Agents & Workload Placement         | Parent tracking issue. Carries the phase's full design; 8.1–8.13 below are registered as native GitHub sub-issues, sequenced with the `blocked_by` dependency (which is what actually gates auto-claim — nesting is board display only).                                    | Open — in progress             |
+| [#1715](https://github.com/s3ntin3l8/mullion-session-manager/issues/1715) — 8.1: `ScopeBackend` seam                                    | The hinge issue — the platform-neutral "run a detached process and track it" interface. The systemd implementation moves behind it _unchanged_, so Linux behavior stays provably identical; the macOS backend (8.2) is the first new consumer.                              | Open — in progress             |
+| [#1716](https://github.com/s3ntin3l8/mullion-session-manager/issues/1716) — 8.2: macOS detached scope backend                           | `dtach -n` with `ps`-based PID discovery (never a socket connect — that would steal the browser's attach) and a durable, start-time-fingerprinted state file so a restarted agent can re-adopt its sessions. Blocked by #1715.                                              | Open                           |
+| [#1717](https://github.com/s3ntin3l8/mullion-session-manager/issues/1717) — 8.3: Darwin path/limit corrections                          | The `sun_path` limit is 104 on darwin, not the 108 the code hardcodes, plus an `os.tmpdir()`-derived fallback path. Small, but each is a hard failure on macOS today. Blocked by #1715.                                                                                     | Open                           |
+| [#1718](https://github.com/s3ntin3l8/mullion-session-manager/issues/1718) — 8.4: launchd deployment + launchctl self-update             | A launchd plist per role replaces the systemd user unit; `launchctl kickstart -k` replaces `systemctl --user restart`. Shared by the agent and primary roles, since agents are updated through the primary's proxied `/internal/updates/apply`.                             | Open                           |
+| [#1719](https://github.com/s3ntin3l8/mullion-session-manager/issues/1719) — 8.5: Sleep/wake resilience for macOS agents                 | The fleet is laptops that sleep: `launchd` `KeepAlive`, `caffeinate` so an open Mac doesn't idle-sleep mid-build, and reconnect hardening after a wake.                                                                                                                     | Open                           |
+| [#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720) — 8.6: macOS primary support                                  | The delta on top of the agent role — a primary's extra Linux surface is small (SQLite, `@fastify/static`, `git`, Playwright, Docker detection and the POSIX `sh` hook shims are all fine on macOS); the remainder is the device panel's fate and the launchd primary plist. | Open                           |
+| [#1721](https://github.com/s3ntin3l8/mullion-session-manager/issues/1721) — 8.7: `hosts.platform` + agent capacity endpoint             | The fleet has a health signal today but no capacity signal. An authenticated `/internal/capacity` on the agent, polled on the existing heartbeat tick — no new timer.                                                                                                       | Open                           |
+| [#1722](https://github.com/s3ntin3l8/mullion-session-manager/issues/1722) — 8.8: `sessions.hostId` + `resolveSessionHostId` migration   | The highest-risk issue in the placement half: host is currently _derived from the project_ (`src/db/schema.ts` says so explicitly), and per-session placement needs it on the session. Nullable, so every pre-existing row backfills unambiguously.                         | Open                           |
+| [#1723](https://github.com/s3ntin3l8/mullion-session-manager/issues/1723) — 8.9: Placement policy & scoring                             | A project-level `placement` column (`pinned` \| `auto`), opt-in, explainable, and — the one rule that matters — never fails or blocks a spawn.                                                                                                                              | Open                           |
+| [#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724) — 8.10: Wire placement into session spawn + Task Master claim | The two session-creation paths consult the policy once, at creation. The subtle part: Task Master's project-scoped git/worktree operations must keep resolving through the _project's_ host, not the placed session's.                                                      | Open                           |
+| [#1725](https://github.com/s3ntin3l8/mullion-session-manager/issues/1725) — 8.11: Host drain / park                                     | Stop placing new work on a host without killing what is already running on it — essential for laptops, where picking the machine up means reclaiming it.                                                                                                                    | Open                           |
+| [#1726](https://github.com/s3ntin3l8/mullion-session-manager/issues/1726) — 8.12: Fleet UI — capacity, drain, placement controls        | Per-host capacity next to the existing health dot, the drain toggle, and the project's placement control.                                                                                                                                                                   | Open                           |
+| [#1727](https://github.com/s3ntin3l8/mullion-session-manager/issues/1727) — 8.13: Session host badge + suspend-vs-dead semantics        | The backend already reports an unreachable remote as `unknown`, never `dead`; the UI just needs to stop showing a sleeping laptop as broken, and to show which host a session is on.                                                                                        | Open                           |
+| [#1728](https://github.com/s3ntin3l8/mullion-session-manager/issues/1728) — Windows agent host support                                  | Deliberately **not** a Phase 8 sub-issue. There is no `dtach` equivalent, so "a session survives the agent" needs a native PTY supervisor — a redesign of the persistence model, not a port. Also needs named pipes, PowerShell hook shims and `cmd.exe` quoting.           | Open — deferred out of Phase 8 |
 
 ### Cross-Cutting / Standalone
 
