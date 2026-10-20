@@ -14,6 +14,7 @@ import { usePolling } from "../../hooks/usePolling.js";
 import { useSystemImageInstall } from "../../hooks/useSystemImageInstall.js";
 import { useSdkLicenses } from "../../hooks/useSdkLicenses.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
+import { normalizeAvdHardware } from "../../../../src/shared/avd-hardware.js";
 import {
   AddButton,
   Dropdown,
@@ -51,55 +52,13 @@ function isAvdNameValid(name: string): boolean {
   return AVD_NAME_PATTERN.test(name) && AVD_NAME_HAS_ALPHANUMERIC.test(name);
 }
 
-// Mirrors normalizeAvdHardware in src/services/avd-manager.ts, including the
-// byte bounds the messages quote. The server check is authoritative; this
-// only fails fast in the form. Empty is unset.
-const AVD_SIZE_TOKEN = /^(\d{1,6})([KMG])?$/i;
-const SDCARD_MIN_BYTES = 16 * 1024 * 1024;
-const SDCARD_MAX_BYTES = 128 * 1024 * 1024 * 1024;
-const RAM_MIN_MB = 128;
-const RAM_MAX_MB = 16 * 1024;
-const DATA_MIN_BYTES = 64 * 1024 * 1024;
-const DATA_MAX_BYTES = 512 * 1024 * 1024 * 1024;
-
-function sizeToBytes(amount: number, unit: string): number | null {
-  const mult = unit === "K" ? 1024 : unit === "M" ? 1024 * 1024 : 1024 * 1024 * 1024;
-  const bytes = amount * mult;
-  return Number.isSafeInteger(bytes) ? bytes : null;
-}
-
 function avdHardwareError(sdcard: string, ram: string, data: string): string | null {
-  const sd = sdcard.trim();
-  if (sd) {
-    const match = /^(\d{1,6})([KMG])$/i.exec(sd);
-    const bytes = match ? sizeToBytes(Number(match[1]), match[2].toUpperCase()) : null;
-    if (bytes === null || bytes < SDCARD_MIN_BYTES || bytes > SDCARD_MAX_BYTES) {
-      return "sdcardSize must be a size like 512M or 2G (16M–128G)";
-    }
-  }
-  const ramTrimmed = ram.trim();
-  if (ramTrimmed) {
-    const match = AVD_SIZE_TOKEN.exec(ramTrimmed);
-    const unit = match?.[2]?.toUpperCase() ?? null;
-    const mb =
-      match === null || unit === "K"
-        ? null
-        : unit === null || unit === "M"
-          ? Number(match[1])
-          : Number(match[1]) * 1024;
-    if (mb === null || !Number.isSafeInteger(mb) || mb < RAM_MIN_MB || mb > RAM_MAX_MB) {
-      return "ramSize must be megabytes (128–16384), or a size like 2048M or 2G";
-    }
-  }
-  const dataTrimmed = data.trim();
-  if (dataTrimmed) {
-    const match = /^(\d{1,6})([KMG])$/i.exec(dataTrimmed);
-    const bytes = match ? sizeToBytes(Number(match[1]), match[2].toUpperCase()) : null;
-    if (bytes === null || bytes < DATA_MIN_BYTES || bytes > DATA_MAX_BYTES) {
-      return "dataPartitionSize must be a size like 6G or 800M (64M–512G)";
-    }
-  }
-  return null;
+  const result = normalizeAvdHardware({
+    sdcardSize: sdcard,
+    ramSize: ram,
+    dataPartitionSize: data,
+  });
+  return result.ok ? null : result.message;
 }
 
 function optionalSize(value: string): string | undefined {

@@ -22,6 +22,11 @@ import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 // escalation helper below rather than hand-copying them and risking drift.
 export const SYSTEMCTL_TIMEOUT_MS = 5_000;
 export const KILL_ESCALATION_MS = 2_000;
+// setTimeout's delay is a resource-exhaustion sink. Every caller of
+// armKillEscalation is at or under sdkmanager's 10-minute install budget;
+// anything outside (0, this cap] uses the short systemctl budget instead
+// of arming an unbounded timer.
+const KILL_ESCALATION_MAX_MS = 600_000;
 
 /**
  * Arms the SIGTERM-then-SIGKILL escalation every timed spawn below needs —
@@ -42,7 +47,8 @@ export const KILL_ESCALATION_MS = 2_000;
  * the still-pending escalation timer, if any, actually gets cancelled.
  */
 // Exported for device-process.ts's reuse — see the SYSTEMCTL_TIMEOUT_MS
-// comment above. No behavior change; this function is otherwise unmodified.
+// comment above. The duration passed to setTimeout is capped; see
+// KILL_ESCALATION_MAX_MS.
 export function armKillEscalation(
   child: Pick<ChildProcess, "kill" | "exitCode" | "signalCode">,
   timeoutMs: number,
@@ -56,6 +62,10 @@ export function armKillEscalation(
     }
   };
 
+  let duration = SYSTEMCTL_TIMEOUT_MS;
+  if (timeoutMs <= KILL_ESCALATION_MAX_MS && timeoutMs > 0) {
+    duration = timeoutMs;
+  }
   const timer = setTimeout(() => {
     try {
       child.kill(); // SIGTERM
@@ -80,7 +90,7 @@ export function armKillEscalation(
     }, KILL_ESCALATION_MS);
     killTimer.unref();
     onTimeout();
-  }, timeoutMs);
+  }, duration);
   timer.unref();
 
   return {

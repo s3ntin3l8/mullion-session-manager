@@ -904,6 +904,10 @@ const EMULATOR_GPU_TOKEN = new RegExp(DEVICE_EMULATOR_GPU_PATTERN);
 function sanitizeEmulatorGpu(value: string | null): string | null {
   if (value === null) return null;
   const trimmed = value.trim();
+  // "inherit" is the UI sentinel for null, not a -gpu mode. A client that
+  // PATCHes the dropdown's value literally would otherwise pass the token
+  // check and launch with `-gpu inherit`.
+  if (trimmed.toLowerCase() === "inherit") return null;
   return EMULATOR_GPU_TOKEN.test(trimmed) ? trimmed : null;
 }
 
