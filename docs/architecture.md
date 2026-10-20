@@ -52,6 +52,22 @@ launch itself is unchanged: `launch-plan.ts` composes the _program_ (a
 `dtach` master) and the resource _constraints_, and the backend decides
 how to supervise them.
 
+**The macOS backend (`scope/detached.ts`, issue #1716).** A second
+implementation of the same seam, selected on `darwin`. macOS has no
+`systemd --user`, so there is no supervisor to wrap the program in: the
+`dtach -n` master daemonizes itself and is reparented to launchd, which is
+what makes the session survive the agent exactly as the systemd scope makes
+it survive on Linux. The scope's identity is the session's **dtach socket
+path** — the same anchor the systemd backend recovers from a unit's
+`Description` — recovered from a live process's command line via
+`ps -ax -o pid=,ppid=,command=` (the one form BSD and procps `ps` both
+spell the same way). The socket is never _connected to_: dtach serves one
+client at a time, so a probe would displace the browser's live attach.
+`scope/dtach.ts` holds the conventions both backends share (the dtach argv
+pattern, the session-socket-path convention) so the two cannot drift apart
+on what a session's socket path is. `dtach` is not preinstalled on macOS —
+it comes from Homebrew (`brew install dtach`), with an identical CLI.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).

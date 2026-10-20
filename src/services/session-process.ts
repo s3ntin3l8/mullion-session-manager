@@ -86,6 +86,7 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 // `SessionLiveness` is an alias for it, so every existing importer of either
 // name keeps working unchanged and the two can never drift apart.
 import type { ScopeLiveness } from "./scope/types.js";
+import { extractDtachSocketPath } from "./scope/dtach.js";
 import {
   armKillEscalation,
   KILL_ESCALATION_MS,
@@ -244,33 +245,12 @@ export function parseScopeUnitsListing(
   return rows;
 }
 
-// Every `crs-session-*` scope's Description is systemd's own rendering of
-// the exact argv bootstrapMaster() (pty-manager.ts) passed it: `dtach -n
-// <socketPath> <shell> -lc <command>` — see launch-plan.ts's own argv
-// comment. The socket path is always the first `-n` argument and is always
-// itself an absolute path (PtyManager derives it from sessionsDir), so a
-// small anchored regex is enough; this deliberately does not try to parse
-// the rest of the command line. Three alternatives, tried in order —
-// verified empirically against a real systemd --user: an argument
-// containing a space is rendered double-quoted (`-n "/path with
-// space/x.sock"`), so a bare `\S+` alone would silently truncate at the
-// first space and recover the wrong (truncated) path. Single-quoted is
-// handled the same way for symmetry, though not observed in practice.
-const DTACH_SOCKET_PATTERN = /dtach\s+-n\s+(?:"([^"]+)"|'([^']+)'|(\S+))/;
-
-/**
- * Recovers the dtach socket path a `crs-session-*` scope's Description
- * names, or `null` if the description doesn't match the expected shape at
- * all (a scope this app didn't create, or a systemd rendering quirk this
- * hasn't seen). Used by scripts/check-scope-leaks.ts, and by
- * listOwnedScopes() below, to decide whether a given scope's backing
- * session still plausibly exists / which instance it belongs to.
- */
-export function extractDtachSocketPath(description: string): string | null {
-  const match = DTACH_SOCKET_PATTERN.exec(description);
-  if (!match) return null;
-  return match[1] ?? match[2] ?? match[3] ?? null;
-}
+// The dtach-socket-path extractor now lives in scope/dtach.ts, shared with
+// the detached (macOS) backend — the same argv shape, recovered from a
+// different source (a scope's Description here, a live process's command
+// line there). Re-exported here because scripts/check-scope-leaks.ts and
+// this module's own callers already import it from this path.
+export { extractDtachSocketPath };
 
 /**
  * A short, deterministic id for `sessionsDir`, folded into `crs-session-*`
