@@ -4,7 +4,7 @@ import type { GitBranchInfo } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { PHASE_LABEL, phaseTone } from "../github/prPhase.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
-import { FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
+import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
 
 /** Local branches with ahead/behind, last commit age, merged tag, PR phase chip, and delete. */
 export function GitBranchesSection({ projectId }: { projectId: number }) {
@@ -52,9 +52,6 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
   const branches = detailed?.projectId === projectId ? detailed.branches : storeBranches;
   const rawDefaultBranch =
     detailed?.projectId === projectId ? detailed.defaultBranch : storeDefaultBranch;
-  const resolvedDefaultBranch = rawDefaultBranch
-    ?.replace(/^refs\/remotes\//, "")
-    .replace(/^origin\//, "");
   const prs = useDashboardStore((s) => s.prsByProject[projectId]);
 
   const handleDeleteBranch = useCallback(
@@ -96,9 +93,7 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
         const deleteDisabled = b.isCurrent || Boolean(checkedOutElsewhere);
         const tooltip = b.upstream ? `${b.name}\nTracks: ${b.upstream}` : b.name;
         const rowError = rowErrors[`${projectId}:branch:${b.name}`];
-        const isDefaultBranch = resolvedDefaultBranch
-          ? b.name === resolvedDefaultBranch
-          : b.name === "main" || b.name === "master";
+        const isDefaultBranch = isDefaultBranchName(b.name, rawDefaultBranch);
 
         return (
           <div key={b.name} className="git-branch-card">
@@ -110,9 +105,7 @@ export function GitBranchesSection({ projectId }: { projectId: number }) {
               {b.isCurrent && <span className="github-panel-row-number">current</span>}
               {(b.ahead ?? 0) > 0 && <span className="gh-add">↑{b.ahead}</span>}
               {(b.behind ?? 0) > 0 && <span className="gh-del">↓{b.behind}</span>}
-              {!isDefaultBranch && !b.isCurrent && b.isMerged && (
-                <span className="gh-task-chip">merged</span>
-              )}
+              {!isDefaultBranch && b.isMerged && <span className="gh-task-chip">merged</span>}
               {pr && (
                 <span
                   className={`gh-phase-pill ${pr.prPhase ? phaseTone(pr.prPhase) : "dim"}`}

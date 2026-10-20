@@ -96,13 +96,16 @@ function classifyFailure(stderr: string): GitStatusFailure {
   return { reason: "failed", message: line ? `git status failed: ${line}` : "git status failed" };
 }
 
-/** Runs `git -C <cwd> status --porcelain=v2 --branch`, capturing stdout on
- * `'close'` (not `'exit'`) — the same stdout-delivery race documented in
- * session-process.ts's isMasterAliveStateBatch and agent-detect.ts's
- * probe(): `'exit'` only guarantees the process ended, not that every
- * stdout chunk has been delivered. Resolves `null` on any non-zero exit,
- * spawn error, or timeout
- * — "git failed" and "not a git repo" are both just "nothing to show" here.
+/** Runs `git -C <cwd> -c core.quotepath=false status --porcelain=v2 --branch -uall`,
+ * capturing stdout on `'close'` (not `'exit'`) — the same stdout-delivery race
+ * documented in session-process.ts's isMasterAliveStateBatch and
+ * agent-detect.ts's probe(): `'exit'` only guarantees the process ended, not
+ * that every stdout chunk has been delivered. `-uall` expands untracked
+ * directories into individual file paths and `-c core.quotepath=false` keeps
+ * non-ASCII filenames unquoted so paths round-trip cleanly into `getFileDiff`
+ * (`git diff` and `git ls-files -z`). Resolves `null` on any non-zero exit,
+ * spawn error, or timeout — "git failed" and "not a git repo" are both just
+ * "nothing to show" here.
  *
  * Captures stderr (unlike the original version of this function, which
  * discarded it) purely for the `console.debug` below — a repo whose `.git`

@@ -11,6 +11,20 @@ export const FORCEABLE_REASONS = new Set([
   "sessions-active",
 ]);
 
+/**
+ * Strips `refs/remotes/` and `origin/` from the backend's resolved default
+ * branch ref (`origin/main`, `origin/trunk`, etc.) and returns whether
+ * `branchName` is the repository's default branch. Falls back to `main` /
+ * `master` when `defaultBranch` is absent.
+ */
+export function isDefaultBranchName(
+  branchName: string,
+  defaultBranch: string | null | undefined,
+): boolean {
+  const resolved = defaultBranch?.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
+  return resolved ? branchName === resolved : branchName === "main" || branchName === "master";
+}
+
 export function reasonMessage(reason: string | undefined, detail: string | undefined): string {
   switch (reason) {
     case "current-branch":

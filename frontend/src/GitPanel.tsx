@@ -15,7 +15,7 @@ export interface GitPanelParams {
   projectId: number;
 }
 
-import { FORCEABLE_REASONS, reasonMessage } from "./git/gitReasons.js";
+import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./git/gitReasons.js";
 
 // Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
 // convention (same technique as Dock.tsx's own isDockPreviewPath) — a
@@ -423,10 +423,6 @@ export function GitPanel({
     return <EmptyStateNote>Not a git repository.</EmptyStateNote>;
   }
 
-  const resolvedDefaultBranch = branchesResult?.defaultBranch
-    ?.replace(/^refs\/remotes\//, "")
-    .replace(/^origin\//, "");
-
   return (
     <div className="github-panel cmux-scroll">
       <div className="github-panel-repo">
@@ -560,11 +556,9 @@ export function GitPanel({
             );
             const deleteDisabled = branch.isCurrent || Boolean(checkedOutElsewhere);
             const pr = prs?.prs?.find((p) => p.headBranch === branch.name);
-            const isDefaultBranch = resolvedDefaultBranch
-              ? branch.name === resolvedDefaultBranch
-              : branch.name === "main" || branch.name === "master";
+            const isDefaultBranch = isDefaultBranchName(branch.name, branchesResult.defaultBranch);
             const hints: string[] = [];
-            if (!isDefaultBranch && !branch.isCurrent && branch.isMerged) hints.push("merged");
+            if (!isDefaultBranch && branch.isMerged) hints.push("merged");
             if (branch.ahead || branch.behind) {
               hints.push(
                 `${branch.ahead ? `↑${branch.ahead}` : ""}${
