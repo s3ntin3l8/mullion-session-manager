@@ -170,7 +170,12 @@ function pendingLabel(status: string | undefined, landedChecked: boolean | undef
     case "cancelled":
       return "the review did not finish";
     case "completed":
-      return "the review finished without posting";
+      // The run finished — but the landed-review lookup is what says whether
+      // it posted anything. If that lookup failed, the review may well be on
+      // the PR, so this must not claim the bot posted nothing.
+      return landedChecked === false
+        ? "the review could not be confirmed on the pull request"
+        : "the review finished without posting";
     case "stopping":
     case "stopped":
       return "the review is being stopped";
@@ -179,7 +184,6 @@ function pendingLabel(status: string | undefined, landedChecked: boolean | undef
       // and lost it) — nothing is coming.
       return "the review run is no longer known to the relay";
     case "unknown":
-      return "the relay could not read the review run";
     case undefined:
       // No status at all — the run-status read failed, so this says nothing
       // about the review. Claiming it is "waiting" would be an assertion
