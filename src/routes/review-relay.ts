@@ -357,7 +357,27 @@ async function resolveTriageTarget(
     return null;
   }
 
-  const repoRef = await resolveRepoRef(app, project);
+  // The same host-aware resolution the review path uses: a remote host that
+  // is down is not "this project has no GitHub remote" (issue #1628).
+  const repoResult = await resolveRepoRefResult(app, project);
+  if (!repoResult.ok) {
+    app.log.warn(
+      {
+        hostId: project.hostId,
+        projectId: project.id,
+        reason: repoResult.reason,
+        detail: repoResult.reason === "unreachable" ? repoResult.detail : undefined,
+      },
+      "triage-request: could not resolve the project host's GitHub remote",
+    );
+    if (repoResult.reason === "unreachable") {
+      reply.serviceUnavailable("The project host is unreachable — try again shortly");
+      return null;
+    }
+    reply.preconditionFailed("This project's host cannot resolve its GitHub remote");
+    return null;
+  }
+  const repoRef = repoResult.value;
   if (!repoRef) {
     reply.preconditionFailed("This project has no GitHub remote");
     return null;

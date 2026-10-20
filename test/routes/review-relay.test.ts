@@ -765,7 +765,7 @@ describe("review-request routes", () => {
         replayed: false,
       });
       // The repo comes from the session's project, never from the body.
-      expect(mocks.resolveRepoRef).toHaveBeenCalledWith(
+      expect(mocks.resolveRepoRefResult).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ cwd: "/tmp/review-local" }),
       );
