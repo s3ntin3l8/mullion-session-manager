@@ -54,10 +54,19 @@ export interface ScopeSpawnOptions {
    * and is running Y" diagnostic for the name-collision case.
    *
    * Returns the DETAIL to append after the standard message, or null for
-   * "nothing more to add". Never rejects: a probe that fails must not turn an
-   * already-failed launch into a different (or worse) failure.
+   * "nothing more to add". Must not REJECT: a probe that fails must not turn
+   * an already-failed launch into a different (or worse) failure. It is also
+   * raced against a cap, so a probe that never SETTLES cannot wedge the
+   * launch either — "never rejects" is not a promise of termination.
    */
   describeFailure?: (code: number | null) => Promise<string | null>;
+  /**
+   * Overrides the cap on how long `describeFailure` may run before the
+   * diagnostic falls back to the plain message. Defaults to
+   * DESCRIBE_FAILURE_TIMEOUT_MS; a backend with a slower probe of its own
+   * can raise it.
+   */
+  describeFailureTimeoutMs?: number;
   /**
    * Called after the child settles, whatever the outcome — the backend's hook
    * for dropping any cached listing that a just-created-or-just-stopped scope
@@ -65,6 +74,23 @@ export interface ScopeSpawnOptions {
    */
   onSettled?: () => void;
 }
+
+/**
+ * The default cap on how long a backend's failure-detail probe may run
+ * before the launch's diagnostic falls back to the plain message.
+ *
+ * The probe is a best-effort ENRICHMENT of an already-failed launch, so it
+ * must never be able to wedge the launch itself: a backend whose probe hangs
+ * (a `systemctl show` against a wedged `--user` bus) would otherwise leave
+ * the launch pending forever — the exact failure the launch timeout above
+ * exists to prevent.
+ *
+ * The systemd backend's own probe has the same 2s budget and settles first
+ * in practice; this is the BACKSTOP for a backend whose probe has none. It
+ * is deliberately short: the launch has already failed, and the user is
+ * waiting on the error message, not on the enrichment.
+ */
+const DESCRIBE_FAILURE_TIMEOUT_MS = 2_000;
 
 /**
  * Runs a supervisor, waits for it to report success, and turns anything else
@@ -128,11 +154,27 @@ export function spawnScopeProcess(opts: ScopeSpawnOptions): Promise<void> {
         const base = `${opts.label} exited with code ${code} (unit ${opts.scopeName})`;
         reject(new Error(detail ? `${base}: ${detail}` : base));
       };
-      if (!opts.describeFailure) {
+      const describeFailure = opts.describeFailure;
+      if (!describeFailure) {
         rejectWith(null);
         return;
       }
-      opts.describeFailure(code).then(rejectWith, () => rejectWith(null));
+      // The probe is raced against a cap, so a probe that never SETTLES (not
+      // merely one that rejects) can't wedge the launch — see
+      // DESCRIBE_FAILURE_TIMEOUT_MS's own comment.
+      let capTimer: ReturnType<typeof setTimeout> | undefined;
+      const cap = new Promise<null>((resolve) => {
+        capTimer = setTimeout(
+          () => resolve(null),
+          opts.describeFailureTimeoutMs ?? DESCRIBE_FAILURE_TIMEOUT_MS,
+        );
+        capTimer.unref();
+      });
+      Promise.race([describeFailure(code), cap])
+        .then(rejectWith, () => rejectWith(null))
+        .finally(() => {
+          if (capTimer) clearTimeout(capTimer);
+        });
     });
   });
 }

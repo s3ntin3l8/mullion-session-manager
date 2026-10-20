@@ -174,8 +174,18 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Issue #1715 — the per-session process inventory is read through
+// cgroup-inventory's listScopeProcesses(). Mocked here so the test can
+// assert WHICH scope unit the backend resolved — a bare "an array came
+// back" assertion cannot tell "read the owned scope's inventory" apart
+// from "ownership failed, so nothing was read".
+vi.mock("../../src/services/cgroup-inventory.js", () => ({
+  listScopeProcesses: vi.fn(async () => []),
+}));
+
 const { PtyManager, Session, getSkipPermissionFlag, MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } =
   await import("../../src/services/pty-manager.js");
+const { listScopeProcesses } = await import("../../src/services/cgroup-inventory.js");
 const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
 describe("getSkipPermissionFlag", () => {
@@ -229,6 +239,7 @@ describe("PtyManager", () => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(showReplies)) delete showReplies[key];
     listUnitsReply = [];
+    vi.mocked(listScopeProcesses).mockClear();
     // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
     // exclusive directory creation is what CodeQL's js/insecure-temporary-
     // file query treats as safe — a hand-templated path under os.tmpdir()
@@ -2340,14 +2351,19 @@ describe("PtyManager", () => {
   // Linux-only probe (cgroup v2 + /proc), so on a host that can't answer it
   // the contract is an empty list — never an error.
   describe("listSessionProcesses", () => {
-    it("resolves a process list for a scope this instance owns", async () => {
-      listUnitsReply = [ownedLine("1", sessionsDir)];
-      await expect(manager.listSessionProcesses("1")).resolves.toBeInstanceOf(Array);
+    it("reads the inventory from the OWNING scope's unit, not from a guess", async () => {
+      const unit = `crs-session-${deriveInstanceId(sessionsDir)}-1.scope`;
+      listUnitsReply = [
+        scopeLine(unit, `/usr/bin/dtach -n ${sessionsDir}/1.sock /usr/bin/zsh -lc bash`),
+      ];
+      await manager.listSessionProcesses("1");
+      expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith(unit);
     });
 
-    it("resolves an empty list for an id this instance does not own", async () => {
+    it("resolves an empty list for an id this instance does not own, reading no cgroup at all", async () => {
       listUnitsReply = [];
       await expect(manager.listSessionProcesses("1")).resolves.toEqual([]);
+      expect(vi.mocked(listScopeProcesses)).not.toHaveBeenCalled();
     });
   });
 

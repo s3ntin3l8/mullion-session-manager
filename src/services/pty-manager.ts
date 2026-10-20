@@ -4166,7 +4166,21 @@ export class PtyManager {
    * startStackSession/findActiveStackSession and their tests use.
    */
   isMasterAliveState(id: string): Promise<SessionLiveness> {
-    return this.scope.isAliveBatch([id]).then((state) => state[id]);
+    // Issue #1715 — the backend's batch answer is contractually TOTAL (every
+    // requested id is always present), but this is now a TRUST BOUNDARY: the
+    // answer comes from a `ScopeBackend` implementation, and a future one
+    // need not be the implementation that wrote the contract.
+    //
+    // An omitted id must read as "unknown", NEVER as "dead" — the callers
+    // above are destructive on a confident negative. `routes/projects.ts`'s
+    // startStackSession conflict check, for one, treats "alive" as reuse,
+    // "unknown" as a clean refusal, and anything ELSE as a confirmed dead
+    // session it may mark exited — so an omitted id must land in the
+    // "unknown" branch, not fall through it. That branch's own comment
+    // spells out the cost of getting this backwards: the still-running scope
+    // is orphaned permanently, because session-reconciler.ts never revisits a
+    // row once it leaves `status: "active"`.
+    return this.scope.isAliveBatch([id]).then((state) => state[id] ?? "unknown");
   }
 
   /**

@@ -296,7 +296,12 @@ describe("SystemdScopeBackend.start — failure diagnostics", () => {
 });
 
 describe("SystemdScopeBackend — tracking operations", () => {
-  it("reports liveness as a TOTAL map, with 'unknown' for an unlisted id", async () => {
+  // A listing that completed successfully and simply does not name the id is
+  // a CONFIDENT negative — "dead", not "unknown". "unknown" is reserved for
+  // the cases where the answer genuinely could not be established (an
+  // unverifiable id, or a listing that failed/timed out). A completed
+  // listing is neither.
+  it("reports liveness as a TOTAL map, with a confident 'dead' for an unlisted id", async () => {
     listUnitsReply = [
       `crs-session-${INSTANCE_ID}-1.scope loaded active active dtach -n ${SESSIONS_DIR}/1.sock /bin/bash -lc claude`,
     ];
@@ -385,6 +390,23 @@ describe("spawnScopeProcess — the shared spawn orchestration", () => {
     ).rejects.toThrow(
       `master bootstrap exited with code 1 (unit crs-session-${INSTANCE_ID}-1): something specific`,
     );
+  });
+
+  // A probe that never SETTLES (not merely one that rejects) must not be
+  // able to wedge the launch — the failure the launch's own timeout exists
+  // to prevent. The probe is raced against a cap, so the launch fails with
+  // the plain message instead.
+  it("falls back to the plain message when the failure-detail probe never settles", async () => {
+    systemdRunBehavior = "exit-nonzero";
+    // A short cap so the test doesn't have to wait out the default.
+    await expect(
+      spawnScopeProcess(
+        spawnOpts({
+          describeFailure: () => new Promise<string | null>(() => {}),
+          describeFailureTimeoutMs: 50,
+        }),
+      ),
+    ).rejects.toThrow(`master bootstrap exited with code 1 (unit crs-session-${INSTANCE_ID}-1)`);
   });
 });
 
