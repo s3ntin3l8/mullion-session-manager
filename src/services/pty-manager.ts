@@ -50,6 +50,7 @@ import { deriveInstanceId, type SessionLiveness } from "./session-process.js";
 // no longer knows or cares that a Linux scope happens to be a systemd
 // transient scope. See src/services/scope/types.ts for the seam's contract.
 import { getScopeBackend } from "./scope/index.js";
+import { sessionSocketPath } from "./scope/dtach.js";
 import type { ScopeBackend } from "./scope/types.js";
 import { buildLaunchPlan } from "./launch-plan.js";
 import {
@@ -3666,7 +3667,10 @@ export class PtyManager {
   }
 
   private socketPathFor(id: string): string {
-    return path.join(this.sessionsDir, `${id}.sock`);
+    // One definition of the convention, shared with the scope backends — the
+    // backend that looks for a session's master and the code that creates
+    // the session cannot disagree about where that session's socket lives.
+    return sessionSocketPath(this.sessionsDir, id);
   }
 
   /** Resolve a hook-socket handshake token to the session id it belongs to,

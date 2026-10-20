@@ -52,6 +52,35 @@ launch itself is unchanged: `launch-plan.ts` composes the _program_ (a
 `dtach` master) and the resource _constraints_, and the backend decides
 how to supervise them.
 
+**The macOS backend (`scope/detached.ts`, issue #1716).** A second
+implementation of the same seam, selected on `darwin`. macOS has no
+`systemd --user`, so there is no supervisor to wrap the program in: the
+`dtach -n` master daemonizes itself and is reparented to launchd, which is
+what makes the session survive the agent exactly as the systemd scope makes
+it survive on Linux.
+
+_Liveness_ is decided by asking the session's **dtach socket** whether
+anything is serving it — the repo's own `probeSocket()`, which the session
+reattach path already uses for that question, and whose tri-state maps
+one-to-one onto this backend's (`live` → `alive`, `dead` → `dead`,
+`unknown` → `unknown`). Connecting is safe here, which was measured rather
+than assumed: dtach's master serves any number of attached terminals, so a
+probe is one more client; it does not displace a live attach, does not kill
+the session, and closed probe connections do not pile up in the accept
+queue. The socket file itself proves nothing either way — dtach does not
+remove it — so it is not used as a liveness signal.
+
+The _process table_ is used for the two things it is actually good for:
+finding the master's pid (to terminate it) and building the process
+inventory. The scope's identity is the session's **dtach socket path** — the
+same anchor the systemd backend recovers from a unit's `Description` —
+matched against `ps -ax -o pid=,ppid=,pgid=,command=` output (the one form BSD and
+procps `ps` both spell the same way). `scope/dtach.ts` holds the conventions
+both backends share (the dtach argv pattern, the session-socket-path
+convention) so the two cannot drift apart on what a session's socket path
+is. `dtach` is not preinstalled on macOS — it comes from Homebrew
+(`brew install dtach`), with an identical CLI.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).
