@@ -255,19 +255,34 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
         {
           kind: "tool_failure",
           tool: "opencode",
-          error: "unknown",
-          summary: "Cannot read binary file",
+          error: "Cannot read binary file",
+          summary: "opencode",
         },
       ]);
     });
 
-    // v2's `session.tool.failed` carries the call's id but NOT its name — the
-    // name comes from the call's own `session.tool.input.started` event.
-    it("names the tool from the call's own input.started event", () => {
+    // v2's `session.tool.failed` carries the call's id but NOT its name or
+    // input — both come from the call's own `session.tool.input.*` events.
+    // The field convention is the wire's: `error` is the error TEXT and
+    // `summary` is the call description (Claude Code's mapper does the same,
+    // and the frontend renders `Tool failed: <tool> — <error>`).
+    it("names the tool and describes the call from the call's own input events", () => {
       const state = createMapState();
       expect(
         mapOpenCodeEvent(
           ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toBeNull();
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.input.ended", {
+            sessionID: "s",
+            id: "call_1",
+            text: '{"command": "ls /nope"}',
+          }),
           undefined,
           null,
           state,
@@ -284,10 +299,40 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
           null,
           state,
         ),
-      ).toEqual([{ kind: "tool_failure", tool: "shell", error: "unknown", summary: "boom" }]);
+      ).toEqual([
+        { kind: "tool_failure", tool: "shell", error: "boom", summary: "shell: ls /nope" },
+      ]);
     });
 
-    it("falls back to the error type as summary when the message is empty", () => {
+    it("falls back to the tool's name when the call's input is unusable", () => {
+      const state = createMapState();
+      mapOpenCodeEvent(
+        ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+        undefined,
+        null,
+        state,
+      );
+      mapOpenCodeEvent(
+        ev("session.tool.input.ended", { sessionID: "s", id: "call_1", text: "not json" }),
+        undefined,
+        null,
+        state,
+      );
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "E", message: "m" },
+          }),
+          undefined,
+          null,
+          state,
+        ),
+      ).toEqual([{ kind: "tool_failure", tool: "shell", error: "m", summary: "shell" }]);
+    });
+
+    it("falls back to the error type as the error text when the message is empty", () => {
       expect(
         mapOpenCodeEvent(
           ev("session.tool.failed", {
@@ -296,7 +341,7 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
             error: { type: "Boom", message: "" },
           }),
         ),
-      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "Boom" }]);
+      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "opencode" }]);
     });
 
     it("returns null without an error object", () => {
@@ -335,6 +380,35 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
           state,
         ),
       ).toBeNull();
+    });
+
+    // Issue #1700 — a turn that ends with a call still in flight (an
+    // interrupt, or a failure mid-tool) never reaches the call's own
+    // terminal event, so the remembered call must be dropped at the turn
+    // boundary instead of lingering for the plugin's lifetime.
+    it("forgets a tool call still in flight when the turn ends", () => {
+      for (const terminal of [
+        "session.execution.interrupted",
+        "session.execution.failed",
+        "session.execution.succeeded",
+      ]) {
+        const state = createMapState();
+        mapOpenCodeEvent(
+          ev("session.tool.input.started", { sessionID: "s", id: "call_1", name: "shell" }),
+          undefined,
+          null,
+          state,
+        );
+        mapOpenCodeEvent(
+          ev(terminal, { sessionID: "s", reason: "user", error: { type: "E", message: "m" } }),
+          undefined,
+          null,
+          state,
+        );
+        expect(state.toolCalls.size, `${terminal} should have cleared the remembered calls`).toBe(
+          0,
+        );
+      }
     });
   });
 

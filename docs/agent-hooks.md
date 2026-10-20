@@ -443,9 +443,11 @@ classification as `errorType` and `"rate_limit"` for a rate limit; a user
 abort is the separate `session.execution.interrupted` and is deliberately not
 mapped, and so is opencode's own `"aborted"` classification),
 `session.tool.failed` (→ `tool_failure`, one tool call failed while the turn
-carries on; the tool's name comes from the call's own
-`session.tool.input.started` event — a non-zero shell exit is NOT a failure
-there, it is a `session.tool.success` with an `exit` code),
+carries on — `error` is the error text and `summary` the call description, the
+same convention Claude Code's mapper uses; the tool's name and input come
+from the call's own `session.tool.input.*` events, since v2's failure event
+carries neither — and a non-zero shell exit is NOT a failure there, it is a
+`session.tool.success` with an `exit` code),
 `session.retry.scheduled` (→ `progress: generating`), `session.step.ended`
 (→ `file_change`, from its `files`), `permission.asked` (→
 `permission_request`, plus the review gate below) and `permission.replied` (→ `permission_resolved`, not

@@ -37,7 +37,9 @@
 //    Mullion's 1.x plugin mapped it to `tool_failure` — which is why an
 //    opencode session could never reach the `api_error` status, and why Task
 //    Master's rate-limit grace (keyed off a `stop_failure`'s `errorType`)
-//    could never fire for an opencode worker.
+//    could never fire for an opencode worker. v2's tool-failure event carries
+//    neither the tool's name nor its input, so both are collected from the
+//    call's own `session.tool.input.*` events.
 //
 // Remote approval (issues #264 / #1594): the plugin never blocks opencode.
 // `ctx.permission.hook("evaluate")` is NOT wired — a blocking hook would hang
@@ -60,13 +62,18 @@ import { readFileSync } from "node:fs";
  * `form.replied`/`form.cancelled` carry only a `sessionID`, so a pending
  * question must be remembered to know the reply resolves one.
  *
- * `toolNames` (issue #1700) maps a tool call's id to the tool's name:
- * `session.tool.failed` carries only the call id (no name), so the name is
- * remembered from the call's own `session.tool.input.started` event. Entries
- * are removed on the call's terminal event, so the map stays bounded by the
- * number of in-flight tool calls. */
+ * `toolCalls` (issue #1700) remembers each in-flight tool call's id → its
+ * name and input: v2's `session.tool.failed` carries only the call id (no
+ * name, no input), so both are collected from the call's own
+ * `session.tool.input.started`/`session.tool.input.ended` events. Entries
+ * are dropped on the call's terminal event AND on the turn's terminal
+ * events, so the map stays bounded by the calls actually in flight. */
 function createMapState() {
-  return { childSessions: new Set(), questionSessions: new Set(), toolNames: new Map() };
+  return {
+    childSessions: new Set(),
+    questionSessions: new Set(),
+    toolCalls: new Map(),
+  };
 }
 
 /** Issue #1230 — opencode has no Stop-analogue field carrying the agent's
@@ -167,6 +174,37 @@ function classifyProviderError(error) {
   return { message: message || type || "error" };
 }
 
+/** The call description a `tool_failure`'s `summary` carries — the same
+ * shape Claude Code's `summarizeToolCall` produces (forwarder-core.mjs):
+ * "<tool>: <the call's own argument>", truncated. v2 hands the tool's input
+ * over as a JSON string (`session.tool.input.ended`'s `text`), so the one
+ * argument worth showing is read out of it. A malformed input is not worth
+ * failing over — the tool's name alone is a fine description. */
+const TOOL_SUMMARY_MAX_CHARS = 200;
+
+function summarizeToolCall(name, inputText) {
+  let detail = null;
+  if (nonEmptyString(inputText)) {
+    try {
+      const input = JSON.parse(inputText);
+      if (input && typeof input === "object") {
+        for (const key of ["command", "filePath", "file_path", "path"]) {
+          if (typeof input[key] === "string" && input[key].length > 0) {
+            detail = input[key];
+            break;
+          }
+        }
+      }
+    } catch {
+      // not JSON (or not an object) — the tool's name is the description
+    }
+  }
+  if (detail === null) return name;
+  const truncated =
+    detail.length > TOOL_SUMMARY_MAX_CHARS ? `${detail.slice(0, TOOL_SUMMARY_MAX_CHARS)}…` : detail;
+  return `${name}: ${truncated}`;
+}
+
 /** Maps one OpenCode v2 event (`{ type, data, location? }`) to an array of
  * hook-protocol messages, or `null` if this event type isn't forwarded.
  * Pure apart from mutating `state` (see createMapState) — no I/O — so it's
@@ -204,8 +242,16 @@ function mapOpenCodeEvent(
 
   // A turn started/ended/failed/was interrupted. Replaces 1.x's
   // `session.idle`/`session.status`/`session.error`.
+  //
+  // Issue #1700 — every turn boundary clears the remembered tool calls: a
+  // turn that ends with a call still in flight (an interrupt, or a failure
+  // mid-tool) would otherwise leave its entry behind for the plugin's
+  // lifetime, since the call never reaches its own terminal event. Only the
+  // MAIN session's boundaries do this — a child session's terminal event is
+  // intercepted above (it must not clear the parent's in-flight calls).
   if (type === "session.execution.started") {
     if (isChild) return null;
+    state.toolCalls.clear();
     return [{ kind: "turn_start" }, { kind: "progress", phase: "generating" }];
   }
   if (
@@ -218,6 +264,8 @@ function mapOpenCodeEvent(
     return [{ kind: "subagent", state: "finished" }];
   }
   if (type === "session.execution.succeeded") {
+    // Issue #1700 — turn boundary: drop any tool call still remembered.
+    state.toolCalls.clear();
     // Issue #271 follow-up — the session id is reported on every finished
     // turn (a LIVE fact, not an announcement; PtyManager just overwrites its
     // stored value) so a later promote can export/import this session's real
@@ -248,6 +296,8 @@ function mapOpenCodeEvent(
   // with no paired `notification` — adding one would double up the attention
   // badge for the same failure.
   if (type === "session.execution.failed") {
+    // Issue #1700 — turn boundary: drop any tool call still remembered.
+    state.toolCalls.clear();
     const error = data.error;
     if (!error || typeof error !== "object") return null;
     const errorType = nonEmptyString(error.type) ? error.type : "error";
@@ -269,42 +319,65 @@ function mapOpenCodeEvent(
     return messages.length > 0 ? messages : null;
   }
   // Issue #1700 — a tool call that failed. v2's `session.tool.failed` carries
-  // the call's id and the error, but NOT the tool's name, so the name is
-  // remembered from the call's own `session.tool.input.started` event (see
-  // createMapState's `toolNames`). A non-zero shell exit is NOT a failure —
-  // opencode reports that as `session.tool.success` with an `exit` code.
+  // the call's id and the error, but NOT the tool's name or its input, so
+  // both are remembered from the call's own `session.tool.input.*` events
+  // (see createMapState's `toolCalls`). A non-zero shell exit is NOT a
+  // failure — opencode reports that as `session.tool.success` with an `exit`
+  // code.
+  //
+  // Field convention, the same one Claude Code's mapper uses
+  // (forwarder-core.mjs's mapClaudeCodePostToolUseFailure): `error` is the
+  // error TEXT and `summary` is the call description. The frontend renders
+  // `Tool failed: <tool> — <error>` and never reads `summary`, so putting
+  // the classification in `error` would show "shell — unknown" and hide the
+  // real reason; and the backend's status detail is the `summary` (the call
+  // that failed), not the error text.
   if (type === "session.tool.input.started") {
-    if (nonEmptyString(data.id) && nonEmptyString(data.name)) {
-      state.toolNames.set(data.id, data.name);
+    if (nonEmptyString(data.id)) {
+      const call = state.toolCalls.get(data.id) ?? { name: "opencode", input: null };
+      if (nonEmptyString(data.name)) call.name = data.name;
+      state.toolCalls.set(data.id, call);
+    }
+    return null;
+  }
+  if (type === "session.tool.input.ended") {
+    // The tool's own input, as a JSON string ("{"command": "ls -la"}").
+    if (nonEmptyString(data.id) && nonEmptyString(data.text)) {
+      const call = state.toolCalls.get(data.id) ?? { name: "opencode", input: null };
+      call.input = data.text;
+      state.toolCalls.set(data.id, call);
     }
     return null;
   }
   if (type === "session.tool.failed") {
     const callId = nonEmptyString(data.id) ? data.id : null;
-    const tool = (callId ? state.toolNames.get(callId) : null) ?? "opencode";
-    // Drop the remembered name even for a child session's failure — the
+    const call = callId ? state.toolCalls.get(callId) : undefined;
+    // Drop the remembered call even for a child session's failure — the
     // child is ignored below, but its entry must not linger.
-    if (callId) state.toolNames.delete(callId);
+    if (callId) state.toolCalls.delete(callId);
     if (isChild) return null;
     const error = data.error;
     if (!error || typeof error !== "object") return null;
     const errorType = nonEmptyString(error.type) ? error.type : "error";
+    const tool = call?.name ?? "opencode";
     return [
       {
         kind: "tool_failure",
         tool,
-        error: errorType,
-        summary: nonEmptyString(error.message) ? error.message : errorType,
+        error: nonEmptyString(error.message) ? error.message : errorType,
+        summary: summarizeToolCall(tool, call?.input ?? null),
       },
     ];
   }
   if (type === "session.tool.success") {
-    // The call is over — drop its remembered name (the failure branch does
+    // The call is over — drop its remembered entry (the failure branch does
     // the same) so the map stays bounded by the in-flight calls.
-    if (nonEmptyString(data.id)) state.toolNames.delete(data.id);
+    if (nonEmptyString(data.id)) state.toolCalls.delete(data.id);
     return null;
   }
   if (type === "session.execution.interrupted") {
+    // Issue #1700 — turn boundary: drop any tool call still remembered.
+    state.toolCalls.clear();
     // Same pending-question cleanup (e.g. Esc while a question form is open).
     if (nonEmptyString(sessionID) && state.questionSessions.delete(sessionID)) {
       return [{ kind: "question", state: "finished" }];
