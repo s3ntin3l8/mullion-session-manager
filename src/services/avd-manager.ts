@@ -229,7 +229,7 @@ export interface CreateAvdOptions {
   name: string;
   systemImage: string;
   deviceProfile: string;
-  /** `avdmanager create avd -c`, e.g. `2048M`. Already validated. */
+  /** `avdmanager create avd --sdcard`, e.g. `2048M`. Already validated. */
   sdcardSize?: string;
   /** config.ini `hw.ramSize`, integer megabytes, e.g. `2048`. */
   ramSizeMb?: string;
@@ -258,8 +258,8 @@ export class AvdCreatedError extends Error {
 
 // The only config.ini keys Mullion will write. RAM and the data partition
 // are not `avdmanager create` flags — they live in the AVD's generated
-// config.ini and have to be patched after create. An SD card is the `-c`
-// flag instead, so it is not in this set.
+// config.ini and have to be patched after create. An SD card is the
+// `--sdcard` flag instead, so it is not in this set.
 const AVD_CONFIG_INI_KEYS = ["hw.ramSize", "disk.dataPartition.size"] as const;
 type AvdConfigIniKey = (typeof AVD_CONFIG_INI_KEYS)[number];
 
@@ -384,18 +384,18 @@ export function patchAvdConfigIni(
 // without `--force` asks one) fails fast on EOF instead of hanging until
 // timeoutMs. Deliberately does NOT pass `--force` — a duplicate name should
 // surface as a clear "already exists" error, not silently overwrite an
-// existing AVD. Optional `-c` sets the SD-card size at create time. RAM and
+// existing AVD. Optional `--sdcard` sets the SD-card size at create time. RAM and
 // the data partition are patched into config.ini afterwards because
 // avdmanager has no flag for them.
 export async function createAvd(opts: CreateAvdOptions): Promise<void> {
   const args = ["create", "avd", "-n", opts.name, "-k", opts.systemImage, "-d", opts.deviceProfile];
-  // The size was already checked in normalizeAvdHardware. Match again at
-  // this execFile sink: CodeQL's command-line query only treats a
-  // dominating allowlist match() as a barrier, not a helper in another file.
+  // `--sdcard`, not `-c`: same avdmanager option, but a variable executable
+  // plus a literal `-c` and the following argument is what CodeQL reports as
+  // `sh -c <user string>` (js/command-line-injection).
   const sdcard = opts.sdcardSize;
   if (sdcard !== undefined) {
     if (sdcard.match(/^[0-9]{1,6}[KMG]$/)) {
-      args.push("-c", sdcard);
+      args.push("--sdcard", sdcard);
     } else {
       throw new Error("sdcardSize is not a size token");
     }

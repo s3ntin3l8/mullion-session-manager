@@ -573,7 +573,7 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   `null` — never dropping the image — if that file is missing or corrupt.
 - **`POST /api/avds`** — `{name, systemImage, deviceProfile, sdcardSize?, ramSize?, dataPartitionSize?}` →
   `avdmanager create avd -n <name> -k <systemImage> -d <deviceProfile>`
-  and, when `sdcardSize` is set, `-c <size>`.
+  and, when `sdcardSize` is set, `--sdcard <size>` (`-c` is the same flag; the long form is what we pass).
   `name` is allowlisted against avdmanager's own accepted charset
   (alphanumerics, `.`, `_`, `-`); `systemImage`/`deviceProfile` are
   allowlisted against what `GET /api/system-images`/`GET /api/device-profiles`

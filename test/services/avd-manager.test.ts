@@ -289,7 +289,7 @@ describe("createAvd", () => {
     expect(child.stdin.end).toHaveBeenCalled();
   });
 
-  it("appends -c and does not list AVDs when only an SD card size is set", async () => {
+  it("appends --sdcard and does not list AVDs when only an SD card size is set", async () => {
     const child = makeFakeChild();
     const execFileFn = fakeExecFileResolving(child);
 
@@ -314,7 +314,7 @@ describe("createAvd", () => {
         "system-images;android-35;google_apis;x86_64",
         "-d",
         "pixel_6",
-        "-c",
+        "--sdcard",
         "2048M",
       ],
       expect.any(Function),
