@@ -61,7 +61,6 @@ vi.mock("../../src/services/hook-adapters/index.js", () => ({
 }));
 
 const { buildLaunchPlan } = await import("../../src/services/launch-plan.js");
-const { scopeUnitName, deriveInstanceId } = await import("../../src/services/session-process.js");
 const { SERVER_ENV_KEYS } = await import("../../src/services/session-env.js");
 
 const tmpDirs: string[] = [];
@@ -651,7 +650,7 @@ describe("buildLaunchPlan — initial-prompt composition", () => {
   });
 });
 
-describe("buildLaunchPlan — shell/unitName/argv shape", () => {
+describe("buildLaunchPlan — shell/argv/constraints shape", () => {
   let ambientQuota: string | undefined;
 
   beforeEach(() => {
@@ -675,57 +674,31 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
     expect(buildLaunchPlan(baseSession()).shell).toBe("/bin/bash");
   });
 
-  it("unitName matches scopeUnitName(instanceId, session.id), instanceId derived from session.sessionsDir", () => {
-    const session = baseSession({ id: "123" });
-    const plan = buildLaunchPlan(session);
-    expect(plan.unitName).toBe(scopeUnitName(deriveInstanceId(session.sessionsDir), "123"));
-  });
-
-  // Issue #1140 — two sessions with the same id but different sessionsDir
-  // (i.e. different Mullion instances) must never collide on a unit name.
-  it("differs for the same id across two different sessionsDir values", () => {
-    const planA = buildLaunchPlan(baseSession({ id: "1", sessionsDir: "/tmp/sessions-a" }));
-    const planB = buildLaunchPlan(baseSession({ id: "1", sessionsDir: "/tmp/sessions-b" }));
-    expect(planA.unitName).not.toBe(planB.unitName);
-  });
-
-  it("argv includes systemd-run cgroup properties and dtach invocation", () => {
+  // Issue #1715 — the plan now describes the PROGRAM to run and the
+  // constraints to apply to it. The supervisor around it (a systemd transient
+  // scope on Linux) is the scope backend's business, so the `systemd-run`
+  // wrapper is no longer part of the plan's argv — see
+  // src/services/scope/types.ts.
+  it("argv is the bare program, with no supervisor wrapper", () => {
     const plan = buildLaunchPlan(
       baseSession({ id: "55", socketPath: "/tmp/sessions/55.sock", command: "bash" }),
     );
 
-    expect(plan.argv).toEqual([
-      "--user",
-      "--scope",
-      "--collect",
-      "-u",
-      plan.unitName,
-      "-p",
-      "CPUWeight=100",
-      "-p",
-      "IOWeight=100",
-      "--",
-      "dtach",
-      "-n",
-      "/tmp/sessions/55.sock",
-      plan.shell,
-      "-lc",
-      "bash",
-    ]);
+    expect(plan.argv).toEqual(["dtach", "-n", "/tmp/sessions/55.sock", plan.shell, "-lc", "bash"]);
   });
 
   it("manual sessions have full burst capacity (CPUWeight=100 and no CPUQuota)", () => {
     const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
-    expect(plan.argv).toContain("CPUWeight=100");
-    expect(plan.argv).toContain("IOWeight=100");
-    expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(false);
+    expect(plan.constraints?.cpuWeight).toBe(100);
+    expect(plan.constraints?.ioWeight).toBe(100);
+    expect(plan.constraints?.cpuQuotaPercent).toBeUndefined();
   });
 
   it("Task Master sessions have lower CPUWeight (25) and dynamic CPUQuota ceiling", () => {
     const plan = buildLaunchPlan(baseSession({ taskId: 123 }));
-    expect(plan.argv).toContain("CPUWeight=25");
-    expect(plan.argv).toContain("IOWeight=25");
-    expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(true);
+    expect(plan.constraints?.cpuWeight).toBe(25);
+    expect(plan.constraints?.ioWeight).toBe(25);
+    expect(plan.constraints?.cpuQuotaPercent).toBeGreaterThan(0);
   });
 
   it("applies MULLION_SESSION_CPU_QUOTA override to manual sessions when configured", () => {
@@ -733,7 +706,7 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
     process.env.MULLION_SESSION_CPU_QUOTA = "350%";
     try {
       const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
-      expect(plan.argv).toContain("CPUQuota=350%");
+      expect(plan.constraints?.cpuQuotaPercent).toBe(350);
     } finally {
       if (prior === undefined) {
         delete process.env.MULLION_SESSION_CPU_QUOTA;
@@ -749,7 +722,7 @@ describe("buildLaunchPlan — shell/unitName/argv shape", () => {
       for (const invalid of ["0%", "00%", "350", "400cores", "invalid", "%", " 350% "]) {
         process.env.MULLION_SESSION_CPU_QUOTA = invalid;
         const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
-        expect(plan.argv.some((arg) => arg.startsWith("CPUQuota="))).toBe(false);
+        expect(plan.constraints?.cpuQuotaPercent).toBeUndefined();
       }
     } finally {
       if (prior === undefined) {

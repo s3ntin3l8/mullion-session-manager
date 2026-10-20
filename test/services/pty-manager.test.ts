@@ -13,6 +13,9 @@ import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencod
 import { buildCodexMcpFlags, buildCodexTrustFlag } from "../../src/services/hook-adapters/codex.js";
 import { resolveMcpServerPath } from "../../src/services/hook-adapters/shared.js";
 import { deriveInstanceId } from "../../src/services/session-process.js";
+// Issue #1715 — a Session's process runs under a scope backend; tests that
+// construct one directly supply the same backend production does.
+import { getScopeBackend } from "../../src/services/scope/index.js";
 
 // PtyManager spawns real OS processes (systemd-run, dtach) — see
 // src/services/pty-manager.ts. Milestone 1 already proved the real
@@ -171,8 +174,18 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Issue #1715 — the per-session process inventory is read through
+// cgroup-inventory's listScopeProcesses(). Mocked here so the test can
+// assert WHICH scope unit the backend resolved — a bare "an array came
+// back" assertion cannot tell "read the owned scope's inventory" apart
+// from "ownership failed, so nothing was read".
+vi.mock("../../src/services/cgroup-inventory.js", () => ({
+  listScopeProcesses: vi.fn(async () => []),
+}));
+
 const { PtyManager, Session, getSkipPermissionFlag, MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } =
   await import("../../src/services/pty-manager.js");
+const { listScopeProcesses } = await import("../../src/services/cgroup-inventory.js");
 const { getAdapterEmits } = await import("../../src/services/hook-adapters/index.js");
 
 describe("getSkipPermissionFlag", () => {
@@ -226,6 +239,7 @@ describe("PtyManager", () => {
     fakePtyChildren.length = 0;
     for (const key of Object.keys(showReplies)) delete showReplies[key];
     listUnitsReply = [];
+    vi.mocked(listScopeProcesses).mockClear();
     // mkdtempSync, not a hand-rolled random suffix: the OS's own atomic,
     // exclusive directory creation is what CodeQL's js/insecure-temporary-
     // file query treats as safe — a hand-templated path under os.tmpdir()
@@ -2329,6 +2343,54 @@ describe("PtyManager", () => {
         return ee as unknown as ReturnType<typeof spawnChildProcess>;
       });
       await expect(manager.isMasterAliveState("1")).resolves.toBe("unknown");
+    });
+
+    // Issue #1715 — a backend's batch answer is contractually TOTAL (every
+    // requested id is always present), but that is now a TRUST BOUNDARY: the
+    // answer comes from a ScopeBackend implementation, not from the function
+    // this module used to call directly. The systemd backend is total by
+    // construction, so only a stub can produce the omission — and the guard
+    // has to be pinned by one, because an omitted id that read as anything
+    // other than "unknown" would fall through BOTH guards in
+    // routes/projects.ts's startStackSession conflict check and land in its
+    // "confirmed dead" branch, which marks a live session exited and
+    // orphans its scope for good.
+    it('resolves "unknown" for an id the backend\'s answer omits', async () => {
+      const stubScope = {
+        kind: "stub",
+        start: vi.fn(async () => undefined),
+        // Omits every id — the contract violation this guard exists for.
+        isAliveBatch: vi.fn(async () => Object.create(null)),
+        stop: vi.fn(async () => undefined),
+        listProcesses: vi.fn(async () => []),
+      };
+      const stubManager = new PtyManager({ sessionsDir, scope: stubScope });
+      try {
+        await expect(stubManager.isMasterAliveState("1")).resolves.toBe("unknown");
+      } finally {
+        stubManager.killAll();
+      }
+    });
+  });
+
+  // Issue #1715 — the process inventory goes through the scope backend like
+  // every other scope operation. The inventory itself is a best-effort,
+  // Linux-only probe (cgroup v2 + /proc), so on a host that can't answer it
+  // the contract is an empty list — never an error.
+  describe("listSessionProcesses", () => {
+    it("reads the inventory from the OWNING scope's unit, not from a guess", async () => {
+      const unit = `crs-session-${deriveInstanceId(sessionsDir)}-1.scope`;
+      listUnitsReply = [
+        scopeLine(unit, `/usr/bin/dtach -n ${sessionsDir}/1.sock /usr/bin/zsh -lc bash`),
+      ];
+      await manager.listSessionProcesses("1");
+      expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith(unit);
+    });
+
+    it("resolves an empty list for an id this instance does not own, reading no cgroup at all", async () => {
+      listUnitsReply = [];
+      await expect(manager.listSessionProcesses("1")).resolves.toEqual([]);
+      expect(vi.mocked(listScopeProcesses)).not.toHaveBeenCalled();
     });
   });
 
@@ -8511,7 +8573,10 @@ describe("Session state file persistence (issue #323)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
-      instanceId: deriveInstanceId(sessionsDir),
+      scope: getScopeBackend({
+        sessionsDir,
+        instanceId: deriveInstanceId(sessionsDir),
+      }),
     });
   }
 
@@ -9235,7 +9300,10 @@ describe("Session.hookEmits (issue #351)", () => {
       hookSocketPath: path.join(sessionsDir, "hooks.sock"),
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       sessionsDir,
-      instanceId: deriveInstanceId(sessionsDir),
+      scope: getScopeBackend({
+        sessionsDir,
+        instanceId: deriveInstanceId(sessionsDir),
+      }),
     });
   }
 

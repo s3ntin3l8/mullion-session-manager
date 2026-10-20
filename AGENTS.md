@@ -91,6 +91,18 @@ context if you're running inside a Mullion-hosted session.
   `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not just
   `node-pty` — issue #1137), and a teardown must never call
   `terminate()`/`stopScope()` on an id it didn't itself create.
+- **Scope operations go through the `ScopeBackend` seam
+  (`src/services/scope/`), not through systemd directly.** The systemd scope
+  above is one _implementation_ of a platform-neutral seam ("run a detached
+  long-lived process and track it"), added in issue #1715 so a non-Linux
+  agent host becomes possible. `pty-manager.ts` launches, probes liveness,
+  stops and inventories every scope through `getScopeBackend()`; it must not
+  call `systemd-run`/`systemctl` itself. The backend is chosen **on the host
+  that owns the scope**, from that host's own `process.platform` — never
+  negotiated between hosts. `src/services/session-process.ts` remains the
+  systemd implementation's home, and `src/services/device-process.ts` (the
+  Android device scopes) is a second consumer of the same shape that has
+  **not** been migrated yet.
 - **`sessions.command` and `workspaces.layout` are opaque blobs.** The
   backend never parses a shell command line or a dockview layout — it just
   stores and replays what it's given. **The exception** is

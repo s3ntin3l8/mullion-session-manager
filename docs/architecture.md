@@ -36,6 +36,22 @@ always resolved from the scope's dtach socket path
 construction and handles a pre-rename session's legacy unit name the same
 way as a namespaced one.
 
+**The scope seam (`src/services/scope/`, issue #1715).** Everything above
+about `systemd --user` is one _implementation_ of a platform-neutral seam:
+"run a detached long-lived process and track it". `src/services/scope/types.ts`
+defines the `ScopeBackend` interface; `scope/systemd.ts` is the systemd
+implementation (a thin wrapper — the systemd-specific logic still lives
+unchanged in `src/services/session-process.ts`); `scope/spawn.ts` holds the
+shared spawn orchestration; `scope/index.ts`'s `getScopeBackend()` picks the
+implementation **on the host that owns the scope**, from that host's own
+`process.platform` — a primary and its remote agents each pick their own
+and never negotiate. `pty-manager.ts` goes through the seam for every scope
+operation (launch, liveness, teardown, process inventory) and no longer
+knows that a Linux scope happens to be a systemd transient scope. The
+launch itself is unchanged: `launch-plan.ts` composes the _program_ (a
+`dtach` master) and the resource _constraints_, and the backend decides
+how to supervise them.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).
@@ -224,8 +240,12 @@ way as a namespaced one.
 - `src/services/` — ~140 files; grouped here by subsystem rather than
   listed flat (see each subsystem's own doc for the full detail):
   - **Sessions & hosting**: `pty-manager` (dtach/node-pty session
-    lifecycle), `project-config` (layered `.crs/actions.json`/`dock.json` +
-    `package.json`/`tasks.json` resolution), `agent-detect`,
+    lifecycle), `scope/` (the platform-neutral scope seam — `types`
+    (the `ScopeBackend` interface), `systemd` (the Linux implementation),
+    `spawn` (shared spawn orchestration), `index` (platform selection) —
+    see the "scope seam" note above), `project-config` (layered
+    `.crs/actions.json`/`dock.json` + `package.json`/`tasks.json` resolution),
+    `agent-detect`,
     `attention-detect` (BEL/OSC parsing), `session-reconciler`,
     `cgroup-inventory` (per-session process inventory via each dtach
     master's own transient systemd scope), `event-history` (query/insert/

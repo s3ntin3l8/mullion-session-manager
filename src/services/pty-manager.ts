@@ -1,7 +1,6 @@
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
-import { mkdirSync, existsSync, statSync, unlinkSync, readFileSync } from "node:fs";
-import { spawn as spawnChild } from "node:child_process";
+import { mkdirSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { URL } from "node:url";
@@ -43,18 +42,15 @@ import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
 import { RedrawNudge } from "./redraw-nudge.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
-import {
-  armKillEscalation,
-  stopScope,
-  invalidateOwnedScopesCache,
-  describeScope,
-  deriveInstanceId,
-  isMasterAliveState as isMasterAliveStateProcess,
-  isMasterAliveStateBatch as isMasterAliveStateBatchProcess,
-  isMasterAliveBatch as isMasterAliveBatchProcess,
-  listSessionProcesses as listSessionProcessesProcess,
-  type SessionLiveness,
-} from "./session-process.js";
+import { deriveInstanceId, type SessionLiveness } from "./session-process.js";
+// Issue #1715 — the platform-neutral scope seam. Everything this module used
+// to do by talking to `systemd-run`/`systemctl` directly (spawn the master in
+// a transient scope, read liveness, stop it, list its processes) now goes
+// through a backend, chosen on the host that OWNS the scope — so this module
+// no longer knows or cares that a Linux scope happens to be a systemd
+// transient scope. See src/services/scope/types.ts for the seam's contract.
+import { getScopeBackend } from "./scope/index.js";
+import type { ScopeBackend } from "./scope/types.js";
 import { buildLaunchPlan } from "./launch-plan.js";
 import {
   cleanupSessionFiles,
@@ -180,20 +176,13 @@ function clampTerminalSize(cols: number, rows: number): { cols: number; rows: nu
   };
 }
 
-/** Issue #988 / Hermes review, PR #1001 — bootstrapMaster()'s own ENOENT
- * classification needs "is this cwd actually spawnable" rather than a bare
- * existsSync: a path that exists but is a plain file (not a directory)
- * spawns systemd-run with the identical ENOENT and would otherwise still
- * surface the misleading raw error. statSync throwing (ENOENT, or anything
- * else — a permissions error mid-stat is just as "not usable" here) and a
- * successful stat that isn't a directory both collapse to `false`. */
-function isUsableCwd(cwd: string): boolean {
-  try {
-    return statSync(cwd).isDirectory();
-  } catch {
-    return false;
-  }
-}
+// Issue #1715 — `isUsableCwd` used to live here, for bootstrapMaster()'s own
+// ENOENT classification: a path that exists but is a plain file (not a
+// directory) spawns with the identical ENOENT and would otherwise still
+// surface the misleading raw error. It moved to src/services/scope/spawn.ts,
+// next to the spawn orchestration that actually uses it — the classification
+// is a property of "spawn something under a scope", not of this one caller,
+// and every backend needs it.
 
 // Phase 5 (Track A) — cap on each session's subagent registry, same
 // bounded-not-unbounded posture as EVENTS_MAX above. A runaway parent
@@ -435,15 +424,19 @@ export class Session {
   // re-derived, since PtyManager already resolved it once at its own
   // construction.
   private readonly sessionsDir: string;
-  // Issue #1140 (PR 2) — PtyManager's own `deriveInstanceId(sessionsDir)`
-  // result, passed down rather than re-derived here for the same reason
-  // sessionsDir itself is: PtyManager already computed it once at its own
-  // construction, and describeScope()'s bootstrap-collision diagnostic
-  // below needs the identical value bootstrapMaster's own buildLaunchPlan()
-  // call derives (inline, from this same sessionsDir) for `plan.unitName` —
-  // two independent derivations of the same input can't disagree, but
-  // computing it twice per session would still be pure waste.
-  private readonly instanceId: string;
+  // Issue #1715 — the scope backend that owns this session's process: it
+  // launches the dtach master, answers "is it still alive?", stops it, and
+  // lists the processes inside it. Chosen on the host that OWNS the session
+  // (see scope/index.ts's getScopeBackend) and passed down from PtyManager,
+  // which already resolved the sessions dir and instance id it needs.
+  //
+  // This REPLACES the `instanceId` field that used to live here: how a scope
+  // is named (and which systemd unit it maps to) is the backend's business
+  // now, so this class has no reason to know. Two independent derivations of
+  // the same input can't disagree, but computing it once per session would
+  // still be pure waste — and the backend computes it exactly once, at
+  // PtyManager's own construction.
+  private readonly scope: ScopeBackend;
   // Mirrors app.config.MULLION_SSH_AUTH_SOCK, passed down from PtyManager —
   // bootstrapMaster() below puts this into the LaunchPlanSession.sshAuthSock
   // field it hands to buildLaunchPlan(), which reads it back out and injects
@@ -911,7 +904,8 @@ export class Session {
     controlSocketPath: string;
     controlUnavailable?: boolean;
     sessionsDir: string;
-    instanceId: string;
+    // Issue #1715 — the scope backend this session's process runs under.
+    scope: ScopeBackend;
     sshAuthSock?: string;
     authEnabled?: boolean;
     injectAgentGuide?: boolean;
@@ -951,7 +945,7 @@ export class Session {
     this.controlSocketPath = opts.controlSocketPath;
     this.controlUnavailable = opts.controlUnavailable === true;
     this.sessionsDir = opts.sessionsDir;
-    this.instanceId = opts.instanceId;
+    this.scope = opts.scope;
     this.sshAuthSock = opts.sshAuthSock ?? "";
     this.authEnabled = opts.authEnabled ?? true;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
@@ -1448,11 +1442,18 @@ export class Session {
    * SSH_AUTH_SOCK injection, agent-guide injection, hook-adapter wiring,
    * skip-permissions handling, and initial-prompt composition — and this
    * method now does only the actual
-   * process launch: wrapping that plan's argv/env in the transient
-   * `systemd --user` scope below. See launch-plan.ts's own doc comments for
+   * process launch: handing that plan to the scope backend, which decides
+   * how to keep it alive. See launch-plan.ts's own doc comments for
    * the full step-by-step reasoning that used to live inline here.
+   *
+   * Issue #1715 — the launch used to be a `spawnChild("systemd-run", ...)`
+   * right here, with the transient-scope argv assembled by buildLaunchPlan()
+   * and the failure classification inline below it. All of that now lives in
+   * the scope backend (src/services/scope/), which is what makes the spawn
+   * path platform-neutral: the PROGRAM (a dtach master) is the same on every
+   * platform, and only the supervisor around it differs.
    */
-  private bootstrapMaster(): Promise<void> {
+  private async bootstrapMaster(): Promise<void> {
     const plan = buildLaunchPlan({
       id: this.id,
       cwd: this.cwd,
@@ -1484,114 +1485,18 @@ export class Session {
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
 
-    return new Promise((resolve, reject) => {
-      // Wrapped in a transient `systemd --user` scope so the master lands
-      // in its OWN cgroup — never this Node process's service cgroup. Under
-      // the deploy plan's systemd unit, `systemctl --user restart` uses the
-      // default KillMode=control-group, which SIGTERMs every process in the
-      // *service's* cgroup on every redeploy. A master spawned as a plain
-      // child would die right along with it — silently defeating the whole
-      // "sessions survive redeploys" premise. Verified in Milestone 1 by
-      // restarting the dev server's own transient scope and confirming a
-      // master started this way survives. Requires `systemd-run --user` to
-      // be available, i.e. a real host with a systemd user session — not a
-      // plain container, which is one more reason this runs on the host
-      // (see the plan's pivotal architecture decision).
-      const child = spawnChild("systemd-run", plan.argv, {
-        cwd: this.cwd,
-        env: plan.env,
-        stdio: "ignore",
-      });
-      // M3 — a wedged `--user` D-Bus bus left this promise pending forever
-      // (and, with it, spawnOutcome()/terminate()). Same SIGTERM-then-SIGKILL
-      // escalation every other timed spawn in session-process.ts uses.
-      const armed = armKillEscalation(child, BOOTSTRAP_MASTER_TIMEOUT_MS, () => {
-        reject(
-          new Error(
-            `master bootstrap timed out after ${BOOTSTRAP_MASTER_TIMEOUT_MS}ms (unit ${plan.unitName})`,
-          ),
-        );
-      });
-      child.on("error", (err) => {
-        armed.clearOnSettle();
-        // Issue #1541 — a scope may have been created; never let a cached
-        // pre-spawn listing mask it.
-        invalidateOwnedScopesCache();
-        // Issue #988's investigation: Node's own spawn ENOENT blames
-        // whichever binary it was trying to exec ("spawn systemd-run
-        // ENOENT") even when the REAL cause is `cwd` itself having vanished
-        // (a worktree deleted out from under an in-flight re-seed) — the
-        // process manager can't tell those apart from the raw error alone,
-        // and the misleading message sent a prior incident's investigation
-        // looking at the wrong binary. Classify it here, where `this.cwd`
-        // is in scope, instead of leaving every caller to re-derive it.
-        //
-        // Hermes review, PR #1001 — a plain `existsSync` check alone would
-        // miss a `cwd` that exists but isn't a directory (e.g. a file left
-        // behind at that path): that also spawns with an identical ENOENT
-        // yet would still surface the misleading raw message. isUsableCwd()
-        // below covers both "doesn't exist" and "exists but isn't a
-        // directory" as the same "not usable" case.
-        const nodeErr = err as NodeJS.ErrnoException;
-        if (nodeErr.code === "ENOENT" && !isUsableCwd(this.cwd)) {
-          reject(new Error(`master bootstrap failed: cwd does not exist: ${this.cwd}`));
-          return;
-        }
-        reject(err);
-      });
-      child.on("exit", (code) => {
-        armed.clearOnSettle();
-        // Issue #1541 — the new scope now exists (or the attempt failed in a
-        // way that may have left one): drop any cached/in-flight owned-scope
-        // listing BEFORE liveness is next read, so a cached "dead"/"absent"
-        // verdict can't make the reconciler mark this live session exited.
-        invalidateOwnedScopesCache();
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        // Issue #1137's investigation: a plain "exited with code N (unit
-        // crs-session-<instanceId>-<id>)" gives no hint that `systemd-run
-        // --collect` rejects a scope name that already exists — the far
-        // more likely cause on a non-zero exit here than a genuine
-        // `systemd-run`/`dtach` problem, since a fresh master's OWN scope
-        // name has never existed before. describeScope() below checks
-        // whether that name is currently squatted and, if so, names the
-        // squatter in the error instead of leaving the next investigation
-        // to rediscover this by hand. Best-effort: on any probe
-        // failure/timeout it resolves `null`, and the message below falls
-        // back to today's plain text verbatim, unchanged from before this
-        // diagnostic existed.
-        //
-        // Issue #1140 (PR 2) — the unit name is now namespaced by this
-        // instance's own instanceId (derived from sessionsDir), so a
-        // squatter here can only be a scope THIS SAME instance already
-        // created (a stale process from before a restart, still running
-        // under a session id this fresh boot happens to reuse) — never a
-        // different Mullion instance, which the pre-PR-2 message's
-        // "another Mullion instance" wording used to allow for. NOT "a
-        // leaked test run" — a test run's own throwaway sessionsDir
-        // derives a DIFFERENT instanceId, so it could never squat on this
-        // instance's namespaced name in the first place; that was the
-        // pre-PR-2 example, made stale by this same namespacing. The prose
-        // below reflects that.
-        describeScope(this.instanceId, this.id).then((squatter) => {
-          if (squatter) {
-            reject(
-              new Error(
-                `master bootstrap exited with code ${code} (unit ${plan.unitName}): ` +
-                  `a scope named ${plan.unitName}.scope already exists and is running "${squatter}". ` +
-                  `Scope names are namespaced per Mullion instance but not per session restart, so a ` +
-                  `leftover scope from this same instance (a stale process from before a restart) ` +
-                  `with this same id blocks this one. Run ` +
-                  `\`systemctl --user stop ${plan.unitName}.scope\` if it's not a session you still need.`,
-              ),
-            );
-            return;
-          }
-          reject(new Error(`master bootstrap exited with code ${code} (unit ${plan.unitName})`));
-        });
-      });
+    return this.scope.start({
+      id: this.id,
+      argv: plan.argv,
+      cwd: this.cwd,
+      env: plan.env,
+      timeoutMs: BOOTSTRAP_MASTER_TIMEOUT_MS,
+      // The wording of the backend's own diagnostics — "master bootstrap
+      // timed out after ...ms (unit ...)", "master bootstrap failed: cwd
+      // does not exist: ...", "master bootstrap exited with code N (unit
+      // ...)" — is what this label produces, unchanged from before the seam.
+      label: "master bootstrap",
+      constraints: plan.constraints,
     });
   }
 
@@ -3547,6 +3452,54 @@ export class PtyManager {
   // instance's own `crs-session-*` scopes apart from another Mullion
   // instance's on the same host by dtach socket path, not by unit name.
   private readonly instanceId: string;
+  // Issue #1715 — the scope backend for THIS host: it launches each
+  // session's dtach master, answers "is it still alive?", stops it, and
+  // lists the processes inside it. Chosen once, here, from this host's own
+  // platform (scope/index.ts's getScopeBackend) — never negotiated with
+  // another host: a primary and its remote agents are separate processes,
+  // each running its own backend, and the primary only ever speaks HTTP/WS
+  // to a remote host anyway.
+  //
+  // Resolved LAZILY, on first use: a host with no backend for its platform
+  // (macOS today) must still be able to BOOT and serve a fleet of remote
+  // agents, and only fail when a LOCAL scope is genuinely needed. See the
+  // `scope` getter below.
+  private scopeBackend: ScopeBackend | null = null;
+  // A caller-supplied backend, bypassing platform selection. Tests use it to
+  // inject a stub; production never sets it.
+  private readonly scopeOverride: ScopeBackend | undefined;
+
+  /**
+   * The scope backend for this host — resolved on first use.
+   *
+   * Issue #1715 — the resolution is deliberately lazy, and it can THROW (a
+   * platform with no backend). Every method that reaches it through this
+   * getter is therefore `async`, so a synchronous throw becomes a REJECTED
+   * promise — which is what a `Promise<T>` return type promises. A plain
+   * method returning `Promise<T>` that throws synchronously breaks any
+   * caller doing `.catch()` on the result rather than awaiting it inside
+   * an async function.
+   *
+   * Issue #1715 — the resolution is deliberately lazy. `getScopeBackend()`
+   * throws on a platform with no backend, and that throw must not gate the
+   * app's BOOT: a macOS primary whose sessions all run on remote Linux
+   * agents never needs a local scope backend, and refusing to start would
+   * make that topology impossible. The failure surfaces the first time a
+   * local scope is actually needed — a local session spawning, a local
+   * session's liveness being read, a local session being stopped — with a
+   * message that says exactly which platform is unsupported.
+   */
+  private get scope(): ScopeBackend {
+    if (this.scopeBackend === null) {
+      this.scopeBackend =
+        this.scopeOverride ??
+        getScopeBackend({
+          sessionsDir: this.sessionsDir,
+          instanceId: this.instanceId,
+        });
+    }
+    return this.scopeBackend;
+  }
   // Issue #1427 — a fresh, random id generated once per PROCESS INCARNATION
   // (unlike instanceId above, which is deterministic and stays the same
   // across restarts of this same sessionsDir). eventSeq/lastSeenSeq are
@@ -3648,6 +3601,13 @@ export class PtyManager {
     getInjectAgentGuide?: () => boolean;
     getInjectProjectBriefing?: () => boolean;
     getInjectMullionBundle?: () => boolean;
+    /**
+     * Issue #1715 — overrides the scope backend, bypassing platform
+     * selection. Tests use it to inject a stub; production never sets it
+     * (the backend is chosen from the host's own platform, and only when a
+     * local scope is actually needed).
+     */
+    scope?: ScopeBackend;
   }) {
     // Must be absolute: dtach is spawned with cwd set to the *session's*
     // project directory (e.g. a user's repo), not the server's cwd, so a
@@ -3656,6 +3616,15 @@ export class PtyManager {
     this.sessionsDir = path.resolve(opts.sessionsDir);
     mkdirSync(this.sessionsDir, { recursive: true });
     this.instanceId = deriveInstanceId(this.sessionsDir);
+    // Issue #1715 — the scope backend is resolved LAZILY, on first use (see
+    // the `scope` getter), not here. A platform with no backend (macOS
+    // today — issue #1716 adds it) must not stop the whole app from BOOTING:
+    // a macOS primary whose sessions all run on remote Linux agents never
+    // needs a local scope backend, and refusing to start would make that
+    // (perfectly reasonable) topology impossible. The failure surfaces the
+    // first time a LOCAL scope is actually needed, with a message that says
+    // so plainly rather than a confusing "spawn systemd-run ENOENT".
+    this.scopeOverride = opts.scope;
     // Lives alongside the per-session dtach sockets in the same directory —
     // SESSIONS_DIR is already host-local, per-install storage with no other
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to
@@ -3744,7 +3713,9 @@ export class PtyManager {
         controlSocketPath: this.controlSocketPath,
         controlUnavailable: this.controlUnavailable,
         sessionsDir: this.sessionsDir,
-        instanceId: this.instanceId,
+        // Issue #1715 — the session's process runs under this host's scope
+        // backend; passed down rather than re-resolved per session.
+        scope: this.scope,
         sshAuthSock: this.sshAuthSock,
         authEnabled: this.authEnabled,
         // Called now, at this session's own creation — see getInjectAgentGuide's
@@ -4210,7 +4181,11 @@ export class PtyManager {
       ]);
       clearTimeout(timer);
     }
-    await stopScope(this.sessionsDir, this.instanceId, id);
+    // Issue #1715 — through the scope backend, which owns the "stop the
+    // scope this id owns" rule (including the ownership check that keeps
+    // one instance from stopping another's scope — see session-process.ts's
+    // stopScope() for the full reasoning).
+    await this.scope.stop(id);
     await cleanupSessionFiles(this.sessionsDir, id);
   }
 
@@ -4237,8 +4212,22 @@ export class PtyManager {
    * stays the one call surface routes/projects.ts's
    * startStackSession/findActiveStackSession and their tests use.
    */
-  isMasterAliveState(id: string): Promise<SessionLiveness> {
-    return isMasterAliveStateProcess(this.sessionsDir, this.instanceId, id);
+  async isMasterAliveState(id: string): Promise<SessionLiveness> {
+    // Issue #1715 — the backend's batch answer is contractually TOTAL (every
+    // requested id is always present), but this is now a TRUST BOUNDARY: the
+    // answer comes from a `ScopeBackend` implementation, and a future one
+    // need not be the implementation that wrote the contract.
+    //
+    // An omitted id must read as "unknown", NEVER as "dead" — the callers
+    // above are destructive on a confident negative. `routes/projects.ts`'s
+    // startStackSession conflict check, for one, treats "alive" as reuse,
+    // "unknown" as a clean refusal, and anything ELSE as a confirmed dead
+    // session it may mark exited — so an omitted id must land in the
+    // "unknown" branch, not fall through it. That branch's own comment
+    // spells out the cost of getting this backwards: the still-running scope
+    // is orphaned permanently, because session-reconciler.ts never revisits a
+    // row once it leaves `status: "active"`.
+    return this.scope.isAliveBatch([id]).then((state) => state[id] ?? "unknown");
   }
 
   /**
@@ -4248,8 +4237,8 @@ export class PtyManager {
    * isMasterAliveState() above — session-backend.ts calls
    * `app.pty.listSessionProcesses(id)`.
    */
-  listSessionProcesses(id: string): Promise<CgroupProcess[]> {
-    return listSessionProcessesProcess(this.sessionsDir, this.instanceId, id);
+  async listSessionProcesses(id: string): Promise<CgroupProcess[]> {
+    return this.scope.listProcesses(id);
   }
 
   /**
@@ -4261,20 +4250,43 @@ export class PtyManager {
    * `session-reconciler.ts` (via that seam) consume — kept as a real method
    * for the same reason as isMasterAliveState() above.
    */
-  isMasterAliveStateBatch(ids: string[]): Promise<Record<string, SessionLiveness>> {
-    return isMasterAliveStateBatchProcess(this.sessionsDir, this.instanceId, ids);
+  async isMasterAliveStateBatch(ids: string[]): Promise<Record<string, SessionLiveness>> {
+    return this.scope.isAliveBatch(ids);
   }
 
   /**
-   * Perf audit finding B8(2) — wire-format adapter ONLY. See
-   * isMasterAliveBatch() in session-process.ts for why this
-   * boolean-with-omitted-keys shape is preserved byte-for-byte (the
-   * `/internal/sessions/liveness` route this backs must keep working across
-   * a version-skewed primary/agent pair). Every other caller should use
-   * isMasterAliveStateBatch() above instead.
+   * Perf audit finding B8(2) — wire-format adapter ONLY, for
+   * `/internal/sessions/liveness`.
+   *
+   * This boolean-with-omitted-keys shape is preserved byte-for-byte (issue
+   * #1265) purely so an already-deployed remote agent's response stays
+   * parseable by an already-deployed primary and vice versa (remote agents
+   * run different builds than the primary by design — see docs/multi-host.md's
+   * "Agent updates"). Every OTHER caller in this codebase should use
+   * isMasterAliveStateBatch() above instead — the omitted-key convention
+   * this function preserves is exactly the footgun #1265 exists to stop new
+   * callers from reaching for.
+   *
+   * Issue #1715 — this used to live in session-process.ts, as the systemd
+   * implementation's own adapter over isMasterAliveStateBatch(). It lives
+   * HERE now because the tri-state it adapts comes from the scope BACKEND,
+   * not from any one implementation of it — so the adapter belongs above the
+   * seam, not inside one implementation of it. The systemd-level copy is
+   * gone; there is exactly one adapter, and it is the one the route calls.
    */
-  isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
-    return isMasterAliveBatchProcess(this.sessionsDir, this.instanceId, ids);
+  async isMasterAliveBatch(ids: string[]): Promise<Record<string, boolean>> {
+    return this.scope.isAliveBatch(ids).then((state) => {
+      const result: Record<string, boolean> = Object.create(null);
+      for (const id of ids) {
+        if (state[id] === "alive") {
+          result[id] = true;
+        } else if (state[id] === "dead") {
+          result[id] = false;
+        }
+        // "unknown" -> omitted, matching this route's existing wire contract.
+      }
+      return result;
+    });
   }
 
   /**
