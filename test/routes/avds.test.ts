@@ -49,6 +49,7 @@ vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
 // failure test/routes/devices.test.ts's own use of buildTestApp avoids.
 import { buildTestApp } from "../helpers/app.js";
 import {
+  AvdCreatedError,
   createAvd,
   listAvds,
   listDeviceProfiles,
@@ -426,6 +427,28 @@ describe("avds routes", () => {
         expect(res.statusCode).toBe(400);
         expect(res.json().message).toContain(message);
         expect(vi.mocked(createAvd)).not.toHaveBeenCalled();
+      });
+
+      it("POST /api/avds returns 201 with a warning when the AVD exists but config.ini was not patched", async () => {
+        vi.mocked(createAvd).mockRejectedValueOnce(
+          new AvdCreatedError(
+            "AVD pixel_7 was created, but its config directory is outside the AVD home",
+          ),
+        );
+        const app = await buildTestApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            name: "pixel_7",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_6",
+            ramSize: "2048",
+          },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(res.json().name).toBe("pixel_7");
+        expect(res.json().warning).toContain("was created");
       });
     });
   });

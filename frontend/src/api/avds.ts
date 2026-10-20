@@ -21,5 +21,9 @@ export const avdsApi = {
     sdcardSize?: string;
     ramSize?: string;
     dataPartitionSize?: string;
-  }) => request<{ name: string }>("/api/avds", { method: "POST", body: JSON.stringify(body) }),
+  }) =>
+    request<{ name: string; warning?: string }>("/api/avds", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

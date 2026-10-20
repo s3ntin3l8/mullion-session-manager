@@ -147,7 +147,7 @@ describe("runtime settings controls", () => {
   });
 
   it("hints for device discovery when the saved choice differs from what booted", async () => {
-    setSettings({ devices: { discoveryEnabled: "off" } });
+    setSettings({ devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" } });
     render(<DeviceDiscoverySetting />);
     expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
   });

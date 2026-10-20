@@ -11,6 +11,8 @@ import {
   acceptLicenses,
   licensesMayBePending,
   normalizeAvdHardware,
+  avdConfigRoots,
+  AvdCreatedError,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
 
@@ -154,8 +156,13 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
         systemImage,
         deviceProfile,
         ...hardware.value,
+        configRoots: avdConfigRoots(app.config.DEVICE_ANDROID_SDK_ROOT),
       });
     } catch (err) {
+      if (err instanceof AvdCreatedError) {
+        reply.code(201);
+        return { name, warning: err.message };
+      }
       return reply.badRequest(err instanceof Error ? err.message : String(err));
     }
 

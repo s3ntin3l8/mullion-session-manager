@@ -593,9 +593,10 @@ afterward via `POST /api/devices {avdName}` (§3 above), the same way
   `800M`; 64M–512G) is written to `disk.dataPartition.size`. Those two keys
   are the only ini keys Mullion will write, and only into the `.avd`
   directory `avdmanager list avd` reports for this name. A bad size is
-  rejected before `create` runs. If create succeeds but the ini path cannot
-  be found, the error says the AVD was created so a retry is not a silent
-  second create.
+  rejected before `create` runs. If create succeeds but the ini cannot be
+  patched, the response is still 201, with a `warning`: the AVD exists
+  (with avdmanager's defaults for whatever was not written), so the UI
+  selects it instead of inviting a retry that would hit "already exists".
 
 ### System image management (issue #1348)
 

@@ -605,14 +605,18 @@ export function DevicesSection() {
         ...(ram ? { ramSize: ram } : {}),
         ...(data ? { dataPartitionSize: data } : {}),
       })
-      .then(() => {
+      .then((created) => {
         // Creation itself succeeded — close the sub-form and select the new
         // AVD unconditionally from here on. A failure to refresh the
         // picker's own list past this point is a separate, lesser problem
         // (surfaced via avdsError, the same channel the picker's own load
         // effect uses) and must NOT be reported as "could not create this
         // AVD" (Hermes review) — the AVD was created; the picker is just
-        // stale until the next refresh.
+        // stale until the next refresh. A `warning` means the same thing
+        // for a config.ini patch that did not land: the AVD exists, so
+        // select it instead of leaving the form open for a retry that
+        // would hit "already exists".
+        const warning = created.warning ?? null;
         setNewAvdOpen(false);
         setNewAvdName("");
         setSdcardSize("");
@@ -624,10 +628,12 @@ export function DevicesSection() {
           .then(({ avds: list }) => {
             setAvds(list);
             setAvdsLoaded(true);
-            setAvdsError(null);
+            setAvdsError(warning);
           })
           .catch((err: unknown) => {
-            setAvdsError(err instanceof ApiError ? err.message : "Could not refresh the AVD list");
+            const refresh =
+              err instanceof ApiError ? err.message : "Could not refresh the AVD list";
+            setAvdsError(warning ? `${warning} ${refresh}` : refresh);
           });
       })
       .catch((err: unknown) => {
