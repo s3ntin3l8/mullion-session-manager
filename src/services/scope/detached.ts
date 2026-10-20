@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import type { CgroupProcess } from "../cgroup-inventory.js";
-import { probeSocket } from "../unix-socket.js";
+import { probeSocket, type SocketProbeResult } from "../unix-socket.js";
 import { isDtachCreateFor, sessionSocketPath } from "./dtach.js";
 import { spawnScopeProcess } from "./spawn.js";
 import type { ScopeBackend, ScopeLaunchSpec, ScopeLiveness } from "./types.js";
@@ -316,8 +316,16 @@ export class DetachedScopeBackend implements ScopeBackend {
       // No master we can see. If nothing is serving the socket either, the
       // session is definitively gone and the socket file is stale — remove
       // it, so the session reads "dead" instead of lingering on a socket
-      // that will never answer again.
-      if ((await probeSocket(socketPath)) === "dead") removeSocket(socketPath);
+      // that will never answer again. A probe that could not answer is not
+      // evidence of anything, so the file stays (fail-closed: unlinking the
+      // socket of a live session would break its attach).
+      let probe: SocketProbeResult = "unknown";
+      try {
+        probe = await probeSocket(socketPath);
+      } catch {
+        // A probe that threw tells us nothing.
+      }
+      if (probe === "dead") removeSocket(socketPath);
       return;
     }
     const tree = [masterPid, ...descendantsOf(table, masterPid).map((entry) => entry.pid)];
