@@ -176,6 +176,9 @@ function splitRandomly(data: Buffer, rand: () => number, maxPiece: number): Buff
   return pieces;
 }
 
+// How often (in bytes pushed) the eviction test re-verifies the replay.
+const CHECK_EVERY_BYTES = 256 * 1024;
+
 describe("ScrollbackBuffer slab coalescing equivalence (issue #1523)", () => {
   it("random chunk splits of the same stream replay byte-identically (no eviction)", () => {
     const rand = mulberry32(1523);
@@ -204,12 +207,17 @@ describe("ScrollbackBuffer slab coalescing equivalence (issue #1523)", () => {
     for (const maxPiece of [7, 300, 5_000, 40_000, 200_000]) {
       const buf = new ScrollbackBuffer();
       let pushed = 0;
-      let pieceNo = 0;
+      let nextCheckAt = CHECK_EVERY_BYTES;
       for (const piece of splitRandomly(stream, rand, maxPiece)) {
         buf.push(Buffer.from(piece));
         pushed += piece.length;
-        // Invariants hold after every push, not only at the end.
-        if (++pieceNo % 97 === 0 || pushed === stream.length) {
+        // Invariants hold at regular byte intervals through the stream, not
+        // only at the end. The cadence is by bytes pushed, not by piece
+        // count: each check is an O(ring) concat + compare, so a per-piece
+        // cadence made the 7-byte-piece pass (~800k pieces) do thousands of
+        // 1 MiB copies and take 13-16s under host load.
+        if (pushed >= nextCheckAt || pushed === stream.length) {
+          nextCheckAt = pushed + CHECK_EVERY_BYTES;
           const replay = buf.toBuffer(Buffer.alloc(0));
           expect(replay.length).toBe(buf.totalBufferedBytes());
           expect(replay.equals(stream.subarray(pushed - replay.length, pushed))).toBe(true);
