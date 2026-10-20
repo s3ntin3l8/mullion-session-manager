@@ -129,11 +129,11 @@ export function getAdapterResumeSessionArgs(
  * Why a per-CLI sentence rather than one generic one: the four CLIs expose
  * delegation differently, and a sentence that named the wrong tool (or the
  * wrong way of choosing the child's model) would be actively misleading.
- * Claude Code's Task tool takes a `subagent_type` and the child's model
- * comes from that subagent's own definition; Codex's `spawn_agent` takes a
- * per-child model and reasoning effort; opencode's subagents are
- * `agents.<name>` config entries each carrying a model; agy's
- * `invoke_subagent` takes a spec with a model and a modelTier.
+ * Claude Code's Task tool takes a `subagent_type` and an optional per-call
+ * `model` that overrides the subagent definition's own `model:` frontmatter;
+ * Codex's `spawn_agent` takes a per-child model and reasoning effort;
+ * opencode's subagents are `agents.<name>` config entries each carrying a
+ * model; agy's `invoke_subagent` takes a spec with a model and a modelTier.
  */
 export function getAdapterDelegationHint(command: string): string | null {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));

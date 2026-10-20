@@ -538,11 +538,11 @@ export const openCodeAdapter: HookAgentAdapter = {
   delegationHint:
     "If this task has parts that could be done independently, delegate them: " +
     "opencode's subagents are `agents.<name>` config entries, each with " +
-    "its own `model`, and `explore` and `general` ship built in — so route " +
-    "the mechanical parts to a subagent configured with a cheaper model, " +
-    "and keep the parts that need your own judgement for yourself. You " +
-    "remain responsible for the final commit on this branch: whatever you " +
-    "delegate still has to end up committed here.",
+    "its own `model`, and `explore` and `general` ship built in — so " +
+    "prefer a subagent configured with a cheaper model for the mechanical " +
+    "parts, and keep the parts that need your own judgement for yourself. " +
+    "You remain responsible for the final commit on this branch: whatever " +
+    "you delegate still has to end up committed here.",
   // `--prompt <text>` is a top-level option on the DEFAULT `opencode
   // [directory]` command (the TUI, which is what Mullion always spawns — there
   // is no `run`/`exec` subcommand involved), and in v2 it SUBMITS that text

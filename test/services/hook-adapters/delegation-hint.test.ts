@@ -16,16 +16,18 @@ import { getAdapterDelegationHint } from "../../../src/services/hook-adapters/in
 // "pass a cheaper model" (it can't — the model comes from the subagent's
 // definition), would both be actively misleading.
 describe("getAdapterDelegationHint", () => {
-  it("names Claude Code's Task tool and its subagent-definition model", () => {
+  it("names Claude Code's Task tool and its per-call model override", () => {
     const hint = getAdapterDelegationHint("claude");
     expect(hint).toBeTruthy();
     expect(hint).toContain("Task tool");
     expect(hint).toContain("subagent");
-    expect(hint).toContain("model:");
-    // The load-bearing detail: Claude Code's model comes from the
-    // subagent's own definition, so the clause must NOT tell the worker to
-    // pass a model at the call site.
-    expect(hint).toContain("definition");
+    // The load-bearing detail: Claude Code's Task tool takes an optional
+    // `model` for the call ("sonnet"/"opus"/"haiku"/"fable") which takes
+    // precedence over the subagent definition's own `model:` frontmatter.
+    // Verified against the installed claude-code's Task-tool input schema.
+    expect(hint).toContain("model");
+    expect(hint).toContain("haiku");
+    expect(hint).toMatch(/precedence over/i);
   });
 
   it("names Codex's spawn_agent and its per-child model", () => {
