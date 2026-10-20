@@ -129,6 +129,35 @@ describe("taskmaster-issues skill — SKILL.md's own prose never doubles as a di
   }
 });
 
+describe("taskmaster-issues skill — `Manual: true` is documented as the exception", () => {
+  // The failure this guards against is quiet and expensive: an issue marked
+  // `Manual: true` is ingested to `backlog` instead of `ready`, so it is
+  // never auto-claimed. An install whose agents mark everything manual
+  // sees a queue that looks like "Task Master isn't picking anything up"
+  // when in fact it was told not to. The skill is where that default is
+  // set, so its framing is worth pinning.
+  it("frames `Manual: true` as the exception rather than the default", () => {
+    expect(skillBody).toMatch(/`Manual: true`\s+is the exception/i);
+  });
+
+  it("says to leave it off by default", () => {
+    expect(skillBody).toMatch(/leave\s+`Manual: true`\s+off/i);
+  });
+
+  it("still names the narrow case where it belongs — a human weighing in first", () => {
+    expect(skillBody).toMatch(/genuinely needs a human\s+to\s+weigh in/i);
+  });
+
+  it("warns against marking deferred work as manual", () => {
+    // "This is a follow-up" and "this was deferred" are not reasons: a
+    // deferral is work someone has to do, and a well-specified one is
+    // exactly what Task Master picks up.
+    expect(skillBody).toMatch(
+      /Adding\s+`Manual: true`\s+to an issue that is simply deferred work/i,
+    );
+  });
+});
+
 describe("taskmaster-issues skill — worked-example.md carries exactly its two directives", () => {
   // Hermes review on #1031: the resolver-driven assertions above only ever
   // read the FIRST Agent:/ReviewAgent: line (exec with no /g — "first match
