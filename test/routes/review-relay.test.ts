@@ -18,11 +18,16 @@ const mocks = vi.hoisted(() => ({
   getPullRequestByNumber: vi.fn(),
   getGitStatus: vi.fn(),
   requestHermesReview: vi.fn(),
+  requestRelay: vi.fn(),
+  getRelayStatus: vi.fn(),
+  getRunForTarget: vi.fn(),
   assertReviewerConfigured: vi.fn(),
   getHermesReviewStatus: vi.fn(),
   getReviewRunForPr: vi.fn(),
   stopHermesReview: vi.fn(),
   listPullRequestReviews: vi.fn(),
+  listIssueComments: vi.fn(),
+  getIssueState: vi.fn(),
   getRemoteHostClient: vi.fn(),
 }));
 
@@ -39,6 +44,8 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
   findPullRequestByHead: mocks.findPullRequestByHead,
   getPullRequestByNumber: mocks.getPullRequestByNumber,
   listPullRequestReviews: mocks.listPullRequestReviews,
+  listIssueComments: mocks.listIssueComments,
+  getIssueState: mocks.getIssueState,
 }));
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
@@ -47,6 +54,9 @@ vi.mock("../../src/services/git-status.js", async (orig) => ({
 vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   ...(await orig<typeof HermesReview>()),
   requestHermesReview: mocks.requestHermesReview,
+  requestRelay: mocks.requestRelay,
+  getRelayStatus: mocks.getRelayStatus,
+  getRunForTarget: mocks.getRunForTarget,
   assertReviewerConfigured: mocks.assertReviewerConfigured,
   getHermesReviewStatus: mocks.getHermesReviewStatus,
   getReviewRunForPr: mocks.getReviewRunForPr,
@@ -129,10 +139,24 @@ describe("review-request routes", () => {
       status: "queued",
       replayed: false,
     });
+    mocks.requestRelay.mockResolvedValue({
+      runId: "run_triage",
+      status: "queued",
+      replayed: false,
+    });
+    mocks.getRelayStatus.mockResolvedValue({
+      provider: "hermes",
+      runId: "run_triage",
+      kind: "issue",
+      status: "completed",
+    });
+    mocks.getRunForTarget.mockReturnValue(null);
     mocks.assertReviewerConfigured.mockReturnValue("key");
     // The duplicate-review check (#1705) reads the PR's reviews on every
     // dispatch — an empty list is the common case.
     mocks.listPullRequestReviews.mockResolvedValue([]);
+    mocks.listIssueComments.mockResolvedValue([]);
+    mocks.getIssueState.mockResolvedValue({ state: "open", labels: [], isPullRequest: false });
   });
 
   // The route is rate-limited per client IP (10/min); a distinct address per
@@ -148,6 +172,26 @@ describe("review-request routes", () => {
       method: "POST",
       url: `/api/sessions/${id}/review-request`,
       payload,
+      remoteAddress,
+    });
+
+  // The triage half of the relay (issue #1629) — its own routes, its own
+  // target kind, the same scoping rules.
+  const triagePost = (
+    id: number | string,
+    payload?: Record<string, unknown>,
+    remoteAddress = `10.4.0.${nextAddr++}`,
+  ) =>
+    app.inject({
+      method: "POST",
+      url: `/api/sessions/${id}/triage-request`,
+      payload,
+      remoteAddress,
+    });
+  const triageGet = (id: number | string, query: string, remoteAddress = `10.5.0.${nextAddr++}`) =>
+    app.inject({
+      method: "GET",
+      url: `/api/sessions/${id}/triage-request${query}`,
       remoteAddress,
     });
 
@@ -707,6 +751,280 @@ describe("review-request routes", () => {
     });
   });
 
+  describe("issue triage (#1629)", () => {
+    it("dispatches a triage for the given issue in the session's repo", async () => {
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({
+        status: "dispatched",
+        kind: "issue",
+        repo: "acme/widgets",
+        issueNumber: 12,
+        runId: "run_triage",
+        runStatus: "queued",
+        replayed: false,
+      });
+      // The repo comes from the session's project, never from the body.
+      expect(mocks.resolveRepoRefResult).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ cwd: "/tmp/review-local" }),
+      );
+      expect(mocks.requestRelay).toHaveBeenCalledWith(expect.anything(), {
+        kind: "issue",
+        owner: "acme",
+        repo: "widgets",
+        number: 12,
+        sessionId,
+      });
+    });
+
+    it("requires an issue number", async () => {
+      expect((await triagePost(sessionId, {})).statusCode).toBe(400);
+      expect((await triagePost(sessionId, { issueNumber: 0 })).statusCode).toBe(400);
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("warns when the issue is closed, but still dispatches", async () => {
+      mocks.getIssueState.mockResolvedValue({
+        state: "closed",
+        labels: [],
+        isPullRequest: false,
+      });
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("dispatched");
+      expect(res.json().warning).toContain("closed");
+    });
+
+    it("404s an issue that does not exist", async () => {
+      mocks.getIssueState.mockRejectedValue(new GitHubApiError("not found", 404));
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("Issue #12");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("404s a number that is a pull request, not an issue", async () => {
+      // GitHub answers /issues/{n} for a pull request too — only the
+      // `pull_request` key tells the two apart.
+      mocks.getIssueState.mockResolvedValue({
+        state: "open",
+        labels: [],
+        isPullRequest: true,
+      });
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().message).toContain("pull request");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("404s an unknown session", async () => {
+      expect((await triagePost(999_999, { issueNumber: 12 })).statusCode).toBe(404);
+    });
+
+    it("503s when the project host is unreachable, rather than blaming the remote (#1628)", async () => {
+      // A downed agent is not "this project has no GitHub remote".
+      mocks.resolveRepoRefResult.mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "host unreachable",
+      });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("412s when the project host cannot resolve a repo ref at all (#1628)", async () => {
+      mocks.resolveRepoRefResult.mockResolvedValue({ ok: false, reason: "unsupported" });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(412);
+      expect(res.json().message).toContain("host");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("503s a triage when the project host is unreachable, rather than blaming the remote", async () => {
+      // The triage path resolves its repo ref the host-aware way too.
+      mocks.resolveRepoRefResult.mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "host unreachable",
+      });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("412s a triage when the project host cannot resolve a repo ref at all", async () => {
+      mocks.resolveRepoRefResult.mockResolvedValue({ ok: false, reason: "unsupported" });
+      const res = await triagePost(remoteSessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(412);
+      expect(res.json().message).toContain("host");
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("412s when no GitHub credentials are available", async () => {
+      mocks.resolveGitHubToken.mockResolvedValue(null);
+      expect((await triagePost(sessionId, { issueNumber: 12 })).statusCode).toBe(412);
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("502s a GitHub failure that is not a 404", async () => {
+      mocks.getIssueState.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(502);
+      expect(mocks.requestRelay).not.toHaveBeenCalled();
+    });
+
+    it("502s an unreachable GitHub", async () => {
+      mocks.getIssueState.mockRejectedValue(new GitHubApiError("down", 0));
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().message).toContain("unreachable");
+    });
+
+    it("maps a relay error (e.g. the cooldown) the same way a review does", async () => {
+      mocks.requestRelay.mockRejectedValue(new ReviewCooldownError(240));
+      const res = await triagePost(sessionId, { issueNumber: 12 });
+      expect(res.statusCode).toBe(409);
+      expect(res.headers["retry-after"]).toBe("240");
+    });
+
+    it("maps an unreachable Hermes", async () => {
+      mocks.requestRelay.mockRejectedValue(new HermesUnavailableError("down"));
+      expect((await triagePost(sessionId, { issueNumber: 12 })).statusCode).toBe(503);
+    });
+
+    it("412s an unconfigured reviewer before touching GitHub", async () => {
+      mocks.assertReviewerConfigured.mockImplementation(() => {
+        throw new HermesNotConfiguredError("No reviewer is configured");
+      });
+      expect((await triagePost(sessionId, { issueNumber: 12 })).statusCode).toBe(412);
+      expect(mocks.getIssueState).not.toHaveBeenCalled();
+    });
+
+    it("returns the triage status and whether the comment landed", async () => {
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockResolvedValue([
+        {
+          author: "alice",
+          authorIsBot: false,
+          body: "hi",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_500).toISOString(),
+        },
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          body: "## Triage\n\n**Summary:** a duplicate",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_900).toISOString(),
+          htmlUrl: "https://github.com/acme/widgets/issues/12#issuecomment-1",
+        },
+      ]);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        runId: "run_triage",
+        kind: "issue",
+        status: "completed",
+        github: {
+          checked: true,
+          comment: {
+            author: "hermes[bot]",
+            body: "## Triage\n\n**Summary:** a duplicate",
+          },
+        },
+      });
+      expect(mocks.getRelayStatus).toHaveBeenCalledWith(expect.anything(), {
+        kind: "issue",
+        owner: "acme",
+        repo: "widgets",
+        number: 12,
+      });
+    });
+
+    it("prefers the comment carrying the triage marker over another bot's", async () => {
+      // The triage path has no commit to pin the comment to, so the marker
+      // (the heading Mullion's own prompt asks for) is what tells our
+      // comment apart from dependabot's.
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          body: "## Triage\n\n**Summary:** ours",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_700).toISOString(),
+        },
+        {
+          author: "dependabot[bot]",
+          authorIsBot: true,
+          body: "Bump lodash from 1.0 to 2.0",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github.comment).toMatchObject({
+        author: "hermes[bot]",
+        attribution: "marked",
+        body: "## Triage\n\n**Summary:** ours",
+      });
+    });
+
+    it("falls back to the newest bot comment, and says so", async () => {
+      // A custom triage prompt may not use the marker — the attribution is
+      // then a guess, and the payload says which it is.
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockResolvedValue([
+        {
+          author: "dependabot[bot]",
+          authorIsBot: true,
+          body: "Bump lodash from 1.0 to 2.0",
+          bodyTruncated: false,
+          createdAt: new Date(1_000_900).toISOString(),
+        },
+      ]);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github.comment).toMatchObject({
+        author: "dependabot[bot]",
+        attribution: "fallback",
+      });
+    });
+
+    it("reports that no triage comment landed yet", async () => {
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github).toEqual({ checked: true, comment: null });
+    });
+
+    it("skips the GitHub check when no run is tracked here", async () => {
+      mocks.getRunForTarget.mockReturnValue(null);
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.json().github).toEqual({ checked: false });
+      expect(mocks.listIssueComments).not.toHaveBeenCalled();
+    });
+
+    it("keeps the Hermes status when the comment lookup fails", async () => {
+      mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      mocks.listIssueComments.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await triageGet(sessionId, "?issueNumber=12");
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "completed", github: { checked: false } });
+    });
+
+    it("requires an issue number on the status route too", async () => {
+      expect((await triageGet(sessionId, "")).statusCode).toBe(400);
+    });
+
+    it("maps a relay error on the status route", async () => {
+      mocks.getRelayStatus.mockRejectedValue(new HermesUnavailableError("down"));
+      expect((await triageGet(sessionId, "?issueNumber=12")).statusCode).toBe(503);
+    });
+  });
+
   describe("POST review-stop", () => {
     const stop = (id: number | string, payload: Record<string, unknown>) =>
       app.inject({
@@ -715,7 +1033,6 @@ describe("review-request routes", () => {
         payload,
         remoteAddress: `10.4.0.${nextAddr++}`,
       });
-
     it("stops the named run on behalf of the session", async () => {
       mocks.stopHermesReview.mockResolvedValue({ runId: "run_1", status: "stopping" });
       const res = await stop(sessionId, { runId: "run_1" });

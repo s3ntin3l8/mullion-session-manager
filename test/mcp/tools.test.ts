@@ -36,6 +36,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "request_review",
       "review_status",
       "stop_review",
+      "request_triage",
+      "triage_status",
       "list_projects",
       "list_actions",
       "create_preview",
@@ -438,6 +440,29 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(stopReview).toHaveBeenCalledWith("run_1");
     expect(JSON.parse(text)).toEqual({ runId: "run_1", status: "stopping" });
     expect(tool.inputSchema).toMatchObject({ required: ["run_id"] });
+  });
+
+  it("request_triage passes issue_number to client.requestTriage and requires it", async () => {
+    const tool = TOOLS.find((t) => t.name === "request_triage")!;
+    const requestTriage = vi
+      .fn()
+      .mockResolvedValue({ status: "dispatched", repo: "a/b", issueNumber: 12 });
+    const text = await tool.handler({ issue_number: 12 }, { requestTriage });
+    expect(requestTriage).toHaveBeenCalledWith(12);
+    expect(JSON.parse(text)).toEqual({ status: "dispatched", repo: "a/b", issueNumber: 12 });
+    expect(tool.inputSchema).toMatchObject({
+      required: ["issue_number"],
+      properties: { issue_number: { type: "integer", minimum: 1 } },
+    });
+  });
+
+  it("triage_status passes issue_number to client.triageStatus and requires it", async () => {
+    const tool = TOOLS.find((t) => t.name === "triage_status")!;
+    const triageStatus = vi.fn().mockResolvedValue({ status: "running", runId: "run_triage" });
+    const text = await tool.handler({ issue_number: 12 }, { triageStatus });
+    expect(triageStatus).toHaveBeenCalledWith(12);
+    expect(JSON.parse(text)).toEqual({ status: "running", runId: "run_triage" });
+    expect(tool.inputSchema).toMatchObject({ required: ["issue_number"] });
   });
 
   it("get_project_tooling calls client.getProjectTooling with the projectId", async () => {

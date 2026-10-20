@@ -53,6 +53,7 @@ function TextSettingRow({
           style={{ flex: 1, textAlign: "left", width: "auto" }}
           placeholder={placeholder}
           value={draft}
+          aria-label={label}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {
@@ -142,14 +143,18 @@ function RecentReviews() {
                     ? "warn"
                     : "off"
               }
-              title={`${run.repo}#${run.prNumber}`}
+              title={`${run.repo}#${run.number ?? run.prNumber}${
+                run.kind === "issue" ? " (issue)" : ""
+              }`}
               subtitle={`${run.status} · ${new Date(run.dispatchedAt).toLocaleTimeString()}${
                 run.error ? ` · ${run.error}` : ""
               }`}
               trailing={
                 ACTIVE_RUN_STATUSES.has(run.status) ? (
                   <ConfirmButton
-                    title={`Stop the review of ${run.repo}#${run.prNumber}`}
+                    title={`Stop the ${run.kind === "issue" ? "triage" : "review"} of ${
+                      run.repo
+                    }#${run.number ?? run.prNumber}`}
                     armedLabel="Confirm stop"
                     onConfirm={() => void stop(run.runId)}
                   >
@@ -308,9 +313,25 @@ export function ReviewRelaySection() {
             value={relay.promptPath}
             onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
           />
+          <TextSettingRow
+            label="Triage prompt repository"
+            desc="Optional. Public owner/repo holding a custom issue-triage prompt; leave empty for Mullion's built-in triage prompt."
+            key={relay.triagePromptRepo}
+            value={relay.triagePromptRepo}
+            placeholder="owner/repo"
+            width={220}
+            onCommit={(v) => updateSettings({ reviewRelay: { triagePromptRepo: v } })}
+          />
+          <TextSettingRow
+            label="Triage prompt path"
+            desc="Path of the issue-triage prompt inside that repository."
+            key={relay.triagePromptPath}
+            value={relay.triagePromptPath}
+            onCommit={(v) => updateSettings({ reviewRelay: { triagePromptPath: v } })}
+          />
           <Row
             label="Cooldown"
-            desc="Minimum time between two review requests for the same pull request."
+            desc="Minimum time between two requests for the same target — the same commit for a review, the same issue for a triage."
           >
             <CooldownField
               key={relay.cooldownMinutes}

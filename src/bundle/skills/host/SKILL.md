@@ -60,7 +60,8 @@ the same way `--mcp-config` is for Claude Code.
 
 - **MCP tool** — lower overhead for a tool-calling model, no subprocess
   spawn. Prefer for `get_scrollback`, `list_actions`, `request_review`,
-  `review_status`, `stop_review`, `browser_action`, `use_browser`, `promote_to_worktree`, `report_status`, `spawn_child_session`,
+  `review_status`, `stop_review`, `request_triage`, `triage_status`,
+  `browser_action`, `use_browser`, `promote_to_worktree`, `report_status`, `spawn_child_session`,
   `list_devices`, `use_device`/`device_action`, and `start_device`/
   `stop_device` — the ops actually reachable at session scope.
 - **`mullion` CLI** — better for `--json` in a shell pipeline, an

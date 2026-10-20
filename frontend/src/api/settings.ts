@@ -233,6 +233,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     model: "hermes-agent",
     promptRepo: "",
     promptPath: "hermes-review-prompt.md",
+    triagePromptRepo: "",
+    triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
   },
   browser: {
