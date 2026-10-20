@@ -37,6 +37,14 @@ const CLAUDE_CODE_EMITS = [
   // `permission_request`, so claude-code can reach awaiting_question.
   "question",
 ] as const satisfies readonly string[];
+// A hand-maintained mirror of the backend's `OPENCODE_EMITS`
+// (src/services/hook-adapters/opencode.ts) — the frontend can't import it
+// (separate npm workspace, no backend module access). It does NOT need the
+// full list: only the kinds `sessionStatus.ts`'s `EMITS_REQUIREMENTS` table
+// consults change what the UI shows, and a parity test in
+// test/services/hook-adapters/opencode.test.ts fails CI when this mirror and
+// the backend disagree about one of those kinds. So do not hand-sync the
+// whole array — add the kind you need, and let the guard do the rest.
 const OPENCODE_EMITS = [
   "progress",
   "file_change",

@@ -371,12 +371,19 @@ function mapOpenCodeEvent(
     if (!error || typeof error !== "object") return null;
     const errorType = nonEmptyString(error.type) ? error.type : "error";
     const tool = call?.name ?? "opencode";
+    const errorText = nonEmptyString(error.message) ? error.message : errorType;
     return [
       {
         kind: "tool_failure",
         tool,
-        error: nonEmptyString(error.message) ? error.message : errorType,
-        summary: summarizeToolCall(tool, call?.input ?? null),
+        error: errorText,
+        // The call description — "<tool>: <the call's own argument>". When
+        // the tool's name is unknown (the call's `input.started` was missed —
+        // the plugin loaded mid-turn, or the event was dropped), there is no
+        // description to give, and the backend's status detail would read
+        // "Tool failure: opencode", which says nothing about what failed —
+        // so the error text stands in for it.
+        summary: call ? summarizeToolCall(tool, call.input ?? null) : errorText,
       },
     ];
   }

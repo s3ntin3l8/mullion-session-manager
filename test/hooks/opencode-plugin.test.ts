@@ -273,7 +273,7 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
           kind: "tool_failure",
           tool: "opencode",
           error: "Cannot read binary file",
-          summary: "opencode",
+          summary: "Cannot read binary file",
         },
       ]);
     });
@@ -358,7 +358,31 @@ describe("mapOpenCodeEvent (opencode v2 events)", () => {
             error: { type: "Boom", message: "" },
           }),
         ),
-      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "opencode" }]);
+      ).toEqual([{ kind: "tool_failure", tool: "opencode", error: "Boom", summary: "Boom" }]);
+    });
+
+    // When the call's own `input.started` was missed (the plugin loaded
+    // mid-turn, or the event was dropped) there is no call description to
+    // give — and the backend's status detail would read "Tool failure:
+    // opencode", which says nothing about what failed. The error text
+    // stands in for the description.
+    it("falls back to the error text as the summary when the tool's name is unknown", () => {
+      expect(
+        mapOpenCodeEvent(
+          ev("session.tool.failed", {
+            sessionID: "s",
+            id: "call_1",
+            error: { type: "unknown", message: "Cannot read binary file" },
+          }),
+        ),
+      ).toEqual([
+        {
+          kind: "tool_failure",
+          tool: "opencode",
+          error: "Cannot read binary file",
+          summary: "Cannot read binary file",
+        },
+      ]);
     });
 
     it("returns null without an error object", () => {
