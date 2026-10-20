@@ -45,9 +45,16 @@ export interface ScopeSpawnOptions {
   label: string;
   /**
    * The scope's name, used in the diagnostics below. On the systemd backend
-   * this is the transient unit's name.
+   * this is the transient unit's name; on the detached (macOS) backend it is
+   * the session's socket path.
    */
   scopeName: string;
+  /**
+   * The noun the diagnostics use for `scopeName` — "unit" on the systemd
+   * backend, "socket" on the detached one. Defaults to "unit", so the
+   * systemd backend's messages are unchanged.
+   */
+  scopeKind?: string;
   /**
    * Optional hook to enrich a failed launch with a backend-specific
    * explanation — e.g. the systemd backend's "a scope named X already exists
@@ -130,7 +137,9 @@ export function spawnScopeProcess(opts: ScopeSpawnOptions): Promise<void> {
     // escalation every other timed spawn in this repo uses.
     const armed = armKillEscalation(child, opts.timeoutMs, () => {
       reject(
-        new Error(`${opts.label} timed out after ${opts.timeoutMs}ms (unit ${opts.scopeName})`),
+        new Error(
+          `${opts.label} timed out after ${opts.timeoutMs}ms (${opts.scopeKind ?? "unit"} ${opts.scopeName})`,
+        ),
       );
     });
     child.on("error", (err) => {
@@ -151,7 +160,7 @@ export function spawnScopeProcess(opts: ScopeSpawnOptions): Promise<void> {
         return;
       }
       const rejectWith = (detail: string | null) => {
-        const base = `${opts.label} exited with code ${code} (unit ${opts.scopeName})`;
+        const base = `${opts.label} exited with code ${code} (${opts.scopeKind ?? "unit"} ${opts.scopeName})`;
         reject(new Error(detail ? `${base}: ${detail}` : base));
       };
       const describeFailure = opts.describeFailure;

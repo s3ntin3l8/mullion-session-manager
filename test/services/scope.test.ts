@@ -176,12 +176,24 @@ describe("getScopeBackend — platform selection", () => {
   // never negotiate. A platform with no backend has no way to run a session
   // at all, so this says so plainly rather than letting every session fail
   // later with a confusing "spawn systemd-run ENOENT".
-  it("throws a plain, actionable error on a platform with no backend", () => {
+  it("returns the detached backend on darwin", () => {
     const original = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     try {
+      expect(getScopeBackend({ sessionsDir: SESSIONS_DIR, instanceId: INSTANCE_ID }).kind).toBe(
+        "detached",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+
+  it("throws a plain, actionable error on a platform with no backend", () => {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
       expect(() => getScopeBackend({ sessionsDir: SESSIONS_DIR, instanceId: INSTANCE_ID })).toThrow(
-        /no scope backend for platform "darwin"/,
+        /no scope backend for platform "win32"/,
       );
     } finally {
       Object.defineProperty(process, "platform", { value: original, configurable: true });
