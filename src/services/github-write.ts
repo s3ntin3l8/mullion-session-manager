@@ -814,6 +814,102 @@ export function truncateText(text: string, max: number): string {
  * land" needs. The endpoint is ascending, so every page is read (up to 1000
  * reviews): the newest review is on the last one. Read-only.
  */
+/**
+ * A check run on a commit — the "a review of this pull request is in flight"
+ * marker the Hermes review protocol uses (issue #1749).
+ *
+ * The marker is a check run named "Hermes review" on the reviewed head, whose
+ * `external_id` is the Hermes run id. The shared workflow reads and writes the
+ * same marker, so both entry points see one another's in-flight review.
+ */
+export interface CommitCheckRunSummary {
+  id: number;
+  name: string;
+  /** The Hermes run id — empty when the check run is not one of ours. */
+  externalId: string;
+  status: string;
+  conclusion: string | null;
+  /** The marker records the session the round ran in: "session: <id>". */
+  summary: string;
+}
+
+/**
+ * The check runs on a commit. Used to find the in-flight marker (and the
+ * session it remembers) on the previous round's commit.
+ */
+export async function listCommitCheckRuns(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<CommitCheckRunSummary[]> {
+  const data = await githubRequest<{
+    check_runs?: Array<{
+      id: number;
+      name: string;
+      external_id?: string | null;
+      status?: string;
+      conclusion?: string | null;
+      output?: { summary?: string | null } | null;
+    }>;
+  }>(token, owner, repo, "GET", `/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`);
+  return (data.check_runs ?? []).map((r) => ({
+    id: r.id,
+    name: r.name,
+    externalId: r.external_id ?? "",
+    status: r.status ?? "",
+    conclusion: r.conclusion ?? null,
+    summary: r.output?.summary ?? "",
+  }));
+}
+
+/**
+ * Writes the in-flight marker: a check run on the reviewed head whose
+ * external_id is the Hermes run id, and whose summary records the session the
+ * round runs in (so the next round — from either entry point — can continue
+ * in it).
+ *
+ * The shared workflow writes the same marker with the same shape; a marker
+ * written by one is found by the other.
+ */
+export async function createReviewMarkerCheckRun(
+  token: string,
+  owner: string,
+  repo: string,
+  m: {
+    name: string;
+    headSha: string;
+    externalId: string;
+    sessionId: string;
+    detailsUrl?: string;
+  },
+): Promise<number> {
+  const data = await githubRequest<{ id: number }>(token, owner, repo, "POST", "/check-runs", {
+    name: m.name,
+    head_sha: m.headSha,
+    external_id: m.externalId,
+    status: "in_progress",
+    details_url: m.detailsUrl,
+    output: { title: m.name, summary: `session: ${m.sessionId}` },
+  });
+  return data.id;
+}
+
+/** Closes the in-flight marker when the review it names has finished. */
+export async function completeReviewMarkerCheckRun(
+  token: string,
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  conclusion: "success" | "failure" | "neutral",
+): Promise<void> {
+  await githubRequest(token, owner, repo, "PATCH", `/check-runs/${checkRunId}`, {
+    status: "completed",
+    conclusion,
+    completed_at: new Date().toISOString(),
+  });
+}
+
 export async function listPullRequestReviews(
   token: string,
   owner: string,

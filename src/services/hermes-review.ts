@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getHermesKey } from "./hermes-integration.js";
+import { createReviewMarkerCheckRun, listCommitCheckRuns } from "./github-write.js";
 import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
 import { getStoredSettings } from "./settings.js";
 import type { UrlGuardPolicy } from "./url-guard.js";
@@ -237,6 +238,12 @@ export interface RelayTarget {
   resolveBase?: () => Promise<string>;
   /** Dispatching Mullion session, when the request came from an agent. */
   sessionId?: number;
+  /**
+   * The GitHub token used to read and write the in-flight marker (issue
+   * #1751, #1757). Without it the relay cannot see the session the previous
+   * round ran in, and cannot write one of its own.
+   */
+  githubToken?: string;
 }
 
 /**
@@ -413,6 +420,16 @@ export interface ReviewRunRecord {
   /** Dispatching Mullion session, when the request came from an agent. */
   sessionId?: number;
   dispatchedAt: number;
+  /**
+   * The in-flight marker's check-run id, when the relay wrote one.
+   *
+   * The marker is closed when the run reaches a terminal status, so the next
+   * request does not mistake a finished review for a live one. The shared
+   * workflow closes its own marker the same way.
+   */
+  markerCheckRunId?: number;
+  /** The Hermes session the round runs in — the marker remembers it. */
+  hermesSessionId?: string;
 }
 
 // Run index, also in-memory: Hermes keeps run status for 24h (durable, keyed by
@@ -603,6 +620,12 @@ export interface HermesReviewRequest {
   resolveBase?: () => Promise<string>;
   /** Dispatching Mullion session, so only it can stop the run. */
   sessionId?: number;
+  /**
+   * The GitHub token used to read and write the in-flight marker (issues
+   * #1751, #1757). Without it the relay cannot see the session the previous
+   * round ran in, and cannot write one of its own.
+   */
+  githubToken?: string;
 }
 
 /**
@@ -635,7 +658,7 @@ export function assertReviewerConfigured(app: FastifyInstance): string {
  */
 export async function requestHermesReview(
   app: FastifyInstance,
-  { owner, repo, prNumber, headSha, resolveBase, sessionId }: HermesReviewRequest,
+  { owner, repo, prNumber, headSha, resolveBase, sessionId, githubToken }: HermesReviewRequest,
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
   return requestRelay(app, {
     kind: "pull_request",
@@ -645,6 +668,7 @@ export async function requestHermesReview(
     headSha,
     resolveBase,
     sessionId,
+    githubToken,
   });
 }
 
@@ -770,6 +794,24 @@ export async function requestRelay(
     // The attempt that owns the current session id: 1 is the pull request's
     // own session, 2 and 3 are the retries that follow a stuck one.
     let sessionAttempt = 1;
+    // The previous round may have had to move to a fresh session (its own was
+    // stuck, and a stuck session never recovers). The in-flight marker it
+    // wrote records the session it used, so the next round continues in it
+    // instead of starting from the stuck base id and paying a refused POST
+    // every round. The shared workflow reads the same marker (issue #1757).
+    if (target.kind === "pull_request" && baseSha && baseSessionId && target.githubToken) {
+      const remembered = await readRememberedSession(
+        target.githubToken,
+        owner,
+        repo,
+        baseSha,
+        baseSessionId,
+      );
+      if (remembered) {
+        sessionId = remembered.id;
+        sessionAttempt = remembered.attempt;
+      }
+    }
     let run: { runId: string; status: string; replayed: boolean } | undefined;
     let lastError: Error | undefined;
     for (let attempt = 0; attempt < MAX_REVIEW_ATTEMPTS; attempt++) {
@@ -824,6 +866,36 @@ export async function requestRelay(
         `gave up after ${MAX_REVIEW_ATTEMPTS} attempts${lastError ? `: ${lastError.message}` : ""}`,
       );
     }
+    // The in-flight marker: a check run on the reviewed head whose external_id
+    // is the Hermes run id and whose summary records the session the round
+    // runs in. The shared workflow reads and writes the same marker, so a
+    // request through either entry point sees the other's in-flight review
+    // (issue #1751) and continues in its session (issue #1757).
+    let markerCheckRunId: number | undefined;
+    if (
+      target.kind === "pull_request" &&
+      target.headSha &&
+      sessionId &&
+      target.githubToken &&
+      !run.replayed
+    ) {
+      try {
+        markerCheckRunId = await createReviewMarkerCheckRun(target.githubToken, owner, repo, {
+          name: REVIEW_MARKER_NAME,
+          headSha: target.headSha,
+          externalId: run.runId,
+          sessionId,
+          detailsUrl: `https://github.com/${owner}/${repo}/pull/${number}`,
+        });
+      } catch (err) {
+        // A marker that cannot be written is not a failed review: the run is
+        // already on its way, and the next request simply cannot see it.
+        app.log.warn(
+          { err, owner, repo, prNumber: number },
+          "could not write the in-flight marker for the review run",
+        );
+      }
+    }
     trackRun({
       ...run,
       kind: target.kind,
@@ -833,6 +905,8 @@ export async function requestRelay(
       headSha: target.headSha ?? "",
       sessionId: target.sessionId,
       dispatchedAt: Date.now(),
+      markerCheckRunId,
+      hermesSessionId: sessionId,
     });
     return { runId: run.runId, status: run.status, replayed: run.replayed };
   } catch (err) {
@@ -842,6 +916,55 @@ export async function requestRelay(
       app.log.warn({ detail: err.detail }, "Hermes review relay failed");
     }
     throw err;
+  }
+}
+
+/**
+ * The in-flight marker's check-run name.
+ *
+ * The shared workflow writes the same marker under the same name (its
+ * `hermes-review-ledger-name` input, default "Hermes review"), so a marker
+ * written by one entry point is found by the other — that is what lets a
+ * request through the relay see a review the workflow started, and the other
+ * way round.
+ */
+const REVIEW_MARKER_NAME = "Hermes review";
+
+/**
+ * The session the previous round ran in, read off the in-flight marker it
+ * wrote (issue #1757).
+ *
+ * A round whose own session was stuck moves to a fresh one
+ * (`<base id>-<n>`) and records it on the marker. The next round continues
+ * in that session instead of starting from the stuck base id — which would be
+ * refused at the door, every round, forever.
+ *
+ * Only an id of the exact shape this code generates is honoured (the base id,
+ * or the base id with a numeric suffix): a malformed id, or one belonging to
+ * another pull request, is ignored rather than used.
+ */
+async function readRememberedSession(
+  token: string,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  baseSessionId: string,
+): Promise<{ id: string; attempt: number } | null> {
+  try {
+    const runs = await listCommitCheckRuns(token, owner, repo, baseSha);
+    const marker = runs.filter((r) => r.name === REVIEW_MARKER_NAME).at(-1);
+    const match = /^session: (\S+)$/.exec((marker?.summary ?? "").trim());
+    if (!match) return null;
+    const id = match[1];
+    const escaped = baseSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const shape = new RegExp(`^${escaped}(-[0-9]+)?$`).exec(id);
+    if (!shape) return null;
+    return { id, attempt: shape[1] ? Number(shape[1].slice(1)) : 1 };
+  } catch {
+    // The marker is an optimisation, not a requirement: a request that cannot
+    // read it simply starts from the base id (and moves to a fresh one if
+    // that session refuses the turn).
+    return null;
   }
 }
 

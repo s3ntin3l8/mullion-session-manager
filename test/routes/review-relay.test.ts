@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   listPullRequestReviews: vi.fn(),
   listIssueComments: vi.fn(),
   getIssueState: vi.fn(),
+  completeReviewMarkerCheckRun: vi.fn(),
   getRemoteHostClient: vi.fn(),
 }));
 
@@ -46,6 +47,7 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
   listPullRequestReviews: mocks.listPullRequestReviews,
   listIssueComments: mocks.listIssueComments,
   getIssueState: mocks.getIssueState,
+  completeReviewMarkerCheckRun: mocks.completeReviewMarkerCheckRun,
 }));
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
@@ -261,6 +263,8 @@ describe("review-request routes", () => {
       // refuses does not pay for the PR's reviews.
       resolveBase: expect.any(Function),
       sessionId,
+      // The token lets the relay read and write the in-flight marker.
+      githubToken: expect.any(String),
     });
   });
 
@@ -513,6 +517,8 @@ describe("review-request routes", () => {
       headSha: "sha99",
       resolveBase: expect.any(Function),
       sessionId,
+      // The token lets the relay read and write the in-flight marker.
+      githubToken: expect.any(String),
     });
   });
 
@@ -777,6 +783,28 @@ describe("review-request routes", () => {
         headSha: "ccccccc3",
       });
       mocks.listPullRequestReviews.mockResolvedValue([]);
+    });
+
+    it("closes the in-flight marker once the review it names has finished", async () => {
+      // The marker says "a review of this pull request is in flight". Once
+      // the run is terminal it must be closed, or the next request would
+      // mistake a finished review for a live one. The shared workflow closes
+      // its own marker the same way.
+      mocks.getReviewRunForPr.mockReturnValue({
+        runId: "run_1",
+        dispatchedAt: 1_000_000,
+        headSha: "ccccccc3",
+        markerCheckRunId: 4242,
+      });
+      const res = await get(sessionId, "");
+      expect(res.statusCode).toBe(200);
+      expect(mocks.completeReviewMarkerCheckRun).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "widgets",
+        4242,
+        "success",
+      );
     });
 
     it("returns the run status for the branch's PR plus the landed review", async () => {

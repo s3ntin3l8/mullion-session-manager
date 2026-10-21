@@ -9,6 +9,7 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { getStoredSettings } from "../services/settings.js";
 import {
+  completeReviewMarkerCheckRun,
   findPullRequestByHead,
   getIssueState,
   getPullRequestByNumber,
@@ -469,6 +470,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           headSha,
           resolveBase: reader.base,
           sessionId,
+          // The token lets the relay read and write the in-flight marker: the
+          // session the previous round ran in, and one for this round.
+          githubToken: target.token,
         });
         // The PR's reviews are read once per request: the delta base and the
         // duplicate-review warning need the same list, and it is a walk of up
@@ -515,6 +519,34 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       try {
         const status = await getHermesReviewStatus(app, { owner, repo, prNumber });
         const record = getReviewRunForPr(owner, repo, prNumber);
+        // Close the in-flight marker once the run it names has finished, so a
+        // later request does not mistake a finished review for a live one.
+        // The shared workflow closes its own marker the same way.
+        if (record?.markerCheckRunId) {
+          const conclusion =
+            status.status === "completed"
+              ? "success"
+              : status.status === "failed" ||
+                  status.status === "cancelled" ||
+                  status.status === "interrupted"
+                ? "failure"
+                : null;
+          if (conclusion) {
+            try {
+              await completeReviewMarkerCheckRun(
+                token,
+                owner,
+                repo,
+                record.markerCheckRunId,
+                conclusion,
+              );
+              record.markerCheckRunId = undefined;
+            } catch {
+              // A marker that cannot be closed is not a failed status read: the
+              // ledger step treats a marker whose run is terminal as stale.
+            }
+          }
+        }
         return {
           ...status,
           github: await findLandedReview(app, token, target, record),

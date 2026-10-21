@@ -2231,13 +2231,20 @@ export async function projectsRoute(app: FastifyInstance) {
         // second click replayed that run instead of reviewing anything (and
         // once the agent's own round had used the same key, the two bodies
         // differed and Hermes answered a conflict).
-        const reader = reviewReader(ctx.token, ctx.repoRef.owner, ctx.repoRef.repo, number);
+        const reader = reviewReader(
+          ctx.token,
+          ctx.repoRef.owner,
+          ctx.repoRef.repo,
+          number,
+          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+        );
         const run = await requestHermesReview(app, {
           owner: ctx.repoRef.owner,
           repo: ctx.repoRef.repo,
           prNumber: number,
           headSha: detail.headSha,
           resolveBase: reader.base,
+          githubToken: ctx.token,
         });
         return { status: "dispatched", runId: run.runId, replayed: run.replayed };
       } catch (err) {

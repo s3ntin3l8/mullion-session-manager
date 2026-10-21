@@ -62,6 +62,9 @@ describe("hermes review relay", () => {
   // GET/POST /v1/runs/<id>[/stop] — the status and stop endpoints.
   let runEndpoint: (url: string, init: RequestInit) => Promise<Response>;
   let promptResponse: () => Promise<Response>;
+  // The check runs on a commit — the in-flight marker (issue #1751, #1757).
+  let checkRuns: () => Promise<Response>;
+  let createCheckRun: (init: RequestInit) => Promise<Response>;
 
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
@@ -93,12 +96,18 @@ describe("hermes review relay", () => {
     dispatch = async () => accepted();
     runEndpoint = async () => new Response("{}", { status: 404 });
     promptResponse = async () => new Response("REVIEW PROMPT BODY", { status: 200 });
+    checkRuns = async () => new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+    createCheckRun = async () => new Response(JSON.stringify({ id: 4242 }), { status: 201 });
     fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === PROMPT_URL) return promptResponse();
       if (url === TRIAGE_PROMPT_URL) return promptResponse();
       if (url === `${API}/health`) return health();
       if (url === `${API}/v1/runs`) return dispatch(init ?? {});
       if (url.startsWith(`${API}/v1/runs/`)) return runEndpoint(url, init ?? {});
+      if (url.includes("/commits/") && url.includes("/check-runs")) return checkRuns();
+      if (url === "https://api.github.com/repos/acme/widgets/check-runs") {
+        return createCheckRun(init ?? {});
+      }
       return Promise.reject(new Error(`unexpected fetch ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -520,6 +529,84 @@ describe("hermes review relay", () => {
         new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
       expect(calls("/v1/runs")).toHaveLength(3);
+    });
+
+    it("continues in the session the previous round moved to", async () => {
+      // A round whose own session was stuck moves to a fresh one and records
+      // it on its in-flight marker. The next round continues THERE, instead
+      // of starting from the stuck base id (which would be refused at the
+      // door, every round). The shared workflow reads the same marker.
+      checkRuns = async () =>
+        new Response(
+          JSON.stringify({
+            check_runs: [
+              {
+                id: 1,
+                name: "Hermes review",
+                external_id: "run_prev",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7-2" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        resolveBase: async () => "base123",
+      });
+      const [post] = calls("/v1/runs");
+      const body = JSON.parse((post[1] as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7-2");
+    });
+
+    it("ignores a remembered session that is not this pull request's", async () => {
+      // Only an id of the exact shape this code generates is honoured: a
+      // malformed id, or one belonging to another pull request, must not be
+      // used — it would put this pull request's rounds in another one's
+      // conversation.
+      for (const summary of [
+        "session: hermes-review-acme-widgets-9-2",
+        "session: not-a-session-id",
+        "session: hermes-review-acme-widgets-7-2-3",
+        "no session here",
+      ]) {
+        resetHermesReviewState();
+        checkRuns = async () =>
+          new Response(
+            JSON.stringify({
+              check_runs: [{ id: 1, name: "Hermes review", output: { summary } }],
+            }),
+            { status: 200 },
+          );
+        await requestHermesReview(app, {
+          ...PR,
+          githubToken: "gh-token",
+          resolveBase: async () => "base123",
+        });
+        const [post] = calls("/v1/runs");
+        const body = JSON.parse((post[1] as RequestInit).body as string);
+        expect(body.session_id).toBe("hermes-review-acme-widgets-7");
+      }
+    });
+
+    it("writes the in-flight marker, with the session the round runs in", async () => {
+      // The marker is what the shared workflow reads to see that a review of
+      // this pull request is already running — and which session it runs in.
+      let written: Record<string, unknown> = {};
+      createCheckRun = async (init: RequestInit) => {
+        written = JSON.parse(init.body as string) as Record<string, unknown>;
+        return new Response(JSON.stringify({ id: 4242 }), { status: 201 });
+      };
+      await requestHermesReview(app, { ...PR, githubToken: "gh-token" });
+      expect(written.name).toBe("Hermes review");
+      expect(written.head_sha).toBe("abc1234");
+      expect(written.external_id).toBe("run_1");
+      expect(written.status).toBe("in_progress");
+      expect((written.output as { summary: string }).summary).toBe(
+        "session: hermes-review-acme-widgets-7",
+      );
     });
 
     it("refuses a replayed run whose range was already reviewed", async () => {
