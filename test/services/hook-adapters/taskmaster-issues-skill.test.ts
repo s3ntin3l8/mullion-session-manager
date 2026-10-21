@@ -137,7 +137,12 @@ describe("taskmaster-issues skill — `Manual: true` is documented as the except
   // when in fact it was told not to. The skill is where that default is
   // set, so its framing is worth pinning.
   it("frames `Manual: true` as the exception rather than the default", () => {
-    expect(skillBody).toMatch(/`Manual: true`\s+is the exception/i);
+    // Anchored to the SECTION HEADING, not to the phrase. The "Common
+    // mistakes" bullet cross-references this section by name ("See
+    // "`Manual: true` is the exception, not the default" above"), so a
+    // looser pattern matches that bullet too — and stays green with the
+    // section itself deleted.
+    expect(skillBody).toMatch(/^###\s+`Manual: true` is the exception, not the default$/m);
   });
 
   it("says to leave it off by default", () => {

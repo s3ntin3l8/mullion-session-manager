@@ -120,32 +120,6 @@ claude`") is deliberately not picked up, only a line matching exactly
 | `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                   |
 | `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.     |
 
-### `Manual: true` is the exception, not the default
-
-**Leave `Manual: true` off unless a human genuinely has to weigh in
-BEFORE work starts.** Without it, the issue is auto-claimable: Task Master
-picks it up, a worker implements it, and a reviewer judges the diff. That
-is the point of filing the issue.
-
-Add it only for an issue where starting work would be wrong or wasteful
-without a human's answer — an unsettled design decision, a spec whose
-scope is genuinely ambiguous, a change that needs sign-off on direction.
-Those are rare. "This is a follow-up" and "this was deferred" are **not**
-reasons: a deferral is work someone has to do, and if it is specified
-well enough to be worth filing, it is specified well enough to be
-implemented.
-
-Getting this backwards is expensive and quiet. An issue marked
-`Manual: true` is ingested to `backlog` instead of `ready`, so it is never
-auto-claimed; it sits there until a human claims it by hand. An issue
-marked `Manual: true` that a human then closes after doing the work
-by hand looks, from Task Master's side, like a failure — which is why a
-backlog full of `Manual: true` issues reads as "Task Master isn't picking
-anything up" when in fact it was told not to.
-
-If you are filing an issue because your plan deferred part of the work,
-file it **without** `Manual: true` and let it be picked up.
-
 Matching rules, all six:
 
 - **The key is always case-insensitive. For `Agent:`/`ReviewAgent:`/the
@@ -175,6 +149,32 @@ Matching rules, all six:
 - An unrecognized or malformed value at any tier is logged and falls
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.
+
+### `Manual: true` is the exception, not the default
+
+**Leave `Manual: true` off unless a human genuinely has to weigh in
+BEFORE work starts.** Without it, the issue is auto-claimable: Task Master
+picks it up, a worker implements it, and a reviewer judges the diff. That
+is the point of filing the issue.
+
+Add it only for an issue where starting work would be wrong or wasteful
+without a human's answer — an unsettled design decision, a spec whose
+scope is genuinely ambiguous, a change that needs sign-off on direction.
+Those are rare. "This is a follow-up" and "this was deferred" are **not**
+reasons: a deferral is work someone has to do, and if it is specified
+well enough to be worth filing, it is specified well enough to be
+implemented.
+
+Getting this backwards is expensive and quiet. An issue marked
+`Manual: true` is ingested to `backlog` instead of `ready`, so it is never
+auto-claimed; it sits there until a human claims it by hand. An issue
+marked `Manual: true` that a human then closes after doing the work
+by hand looks, from Task Master's side, like a failure — which is why a
+backlog full of `Manual: true` issues reads as "Task Master isn't picking
+anything up" when in fact it was told not to.
+
+If you are filing an issue because your plan deferred part of the work,
+file it **without** `Manual: true` and let it be picked up.
 
 ## Worked example
 
