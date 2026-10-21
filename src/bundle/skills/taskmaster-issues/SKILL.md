@@ -153,9 +153,9 @@ Matching rules, all six:
 ### `Manual: true` is the exception, not the default
 
 **Leave `Manual: true` off unless a human genuinely has to weigh in
-BEFORE work starts.** Without it, the issue is auto-claimable: Task Master
-picks it up, a worker implements it, and a reviewer judges the diff. That
-is the point of filing the issue.
+BEFORE work starts.** Without it, the issue is claimable: Task Master picks
+it up, a worker implements it, and a reviewer judges the diff, if one is
+configured. That is the point of filing the issue.
 
 Add it only for an issue where starting work would be wrong or wasteful
 without a human's answer — an unsettled design decision, a spec whose
@@ -174,7 +174,8 @@ backlog full of `Manual: true` issues reads as "Task Master isn't picking
 anything up" when in fact it was told not to.
 
 If you are filing an issue because your plan deferred part of the work,
-file it **without** `Manual: true` and let it be picked up.
+file it **without** `Manual: true` — unless a human has to weigh in on it
+first, in which case that is exactly what the directive is for.
 
 ## Worked example
 

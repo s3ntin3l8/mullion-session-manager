@@ -47,15 +47,19 @@ describe("buildWorkflowConventionsText", () => {
     expect(buildWorkflowConventionsText(answers)).toBe(buildWorkflowConventionsText(answers));
   });
 
-  it("the deferredWork fragment asks for a spec Task Master can implement, not a note", () => {
+  it("the deferredWork fragment asks for a spec an agent can implement, not a note", () => {
     // The convention that sends agents to file an issue for every deferral
     // is what fills the queue in the first place. Read as "file a note", it
-    // produces issues that are filed but never implemented — and, when the
-    // agent adds `Manual: true` to mark them as not-for-now, they are
-    // ingested to `backlog` and never auto-claimed at all.
+    // produces issues that are filed but never implemented.
+    //
+    // The wording is deliberately portable: this text is injected into
+    // EVERY project's sessions and committed into scaffolded repos, so it
+    // must not name a Mullion-only feature — on a repo without Task Master
+    // it would read as broken advice.
     const text = buildWorkflowConventionsText({ deferredWork: "tracked-issue" });
-    expect(text).toContain("spec Task Master can implement");
-    expect(text).toContain("no `Manual: true`");
+    expect(text).toContain("spec an agent can implement on its own");
+    expect(text).not.toContain("Manual: true");
+    expect(text).not.toContain("Task Master");
   });
 
   it("silently skips a question with no answer, rather than defaulting it", () => {
