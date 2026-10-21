@@ -24,6 +24,7 @@ import {
   ReviewConflictError,
   ReviewCooldownError,
   ReviewInFlightError,
+  ReviewSessionRefusedError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   assertReviewerConfigured,
@@ -139,6 +140,10 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
   }
   if (err instanceof ReviewRunNotFoundError) return reply.notFound(err.message);
   if (err instanceof ReviewRunForbiddenError) return reply.forbidden(err.message);
+  // The pull request's review session is stuck: Hermes refuses every turn
+  // into it. The relay retries in a fresh session — this is the case where
+  // that did not get through either.
+  if (err instanceof ReviewSessionRefusedError) return reply.serviceUnavailable(err.message);
   if (err instanceof HermesAuthError) return reply.badGateway(err.message);
   if (err instanceof HermesUnavailableError) {
     if (err.retryAfterSeconds !== undefined) {

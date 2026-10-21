@@ -153,6 +153,54 @@ const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "inte
  */
 const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
 
+/**
+ * The statuses that mean a run is still working. Used where the status
+ * comes from Hermes itself (a replayed run's own record), where "finished"
+ * is the complement.
+ */
+const LIVE_RUN_STATUSES = new Set([
+  "queued",
+  "running",
+  "stopping",
+  "pending",
+  "started",
+  "waiting_for_approval",
+]);
+
+/**
+ * How many times one request may start a fresh attempt for a range whose
+ * previous run failed. Each attempt is a full review, so this is a
+ * backstop, not a budget.
+ */
+const MAX_REVIEW_ATTEMPTS = 3;
+
+/**
+ * The statuses that mean a run is over and the range may be tried again.
+ * Only these: a range whose run ended badly is retried under a deeper key.
+ */
+const DEAD_RUN_STATUSES = new Set(["failed", "cancelled", "interrupted"]);
+
+/**
+ * Hermes' session authority refused the turn (HTTP 409 `admission_conflict`).
+ *
+ * The session a pull request's reviews run in is stuck: the gateway paused it
+ * on an earlier conflict and never recovers
+ * (NousResearch/hermes-agent#142731), so every later round for that pull
+ * request is refused at the door. The way out is a fresh session — the caller
+ * retries the attempt there.
+ */
+export class ReviewSessionRefusedError extends Error {
+  constructor(
+    /** The session that refused the turn. */
+    readonly sessionId: string,
+  ) {
+    super(
+      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round`,
+    );
+    this.name = "ReviewSessionRefusedError";
+  }
+}
+
 /** A session tried to stop a run another session dispatched. */
 export class ReviewRunForbiddenError extends Error {
   constructor() {
@@ -701,24 +749,81 @@ export async function requestRelay(
     if (target.kind === "pull_request" && baseSha && baseSha === target.headSha) {
       throw new ReviewAlreadyLandedError(baseSha);
     }
-    const idempotencyKey =
+    const rangeKey =
       target.kind === "issue"
         ? `mullion-triage:${owner}/${repo}#${number}:${bucket}`
         : reviewIdempotencyKey(owner, repo, number, baseSha, target.headSha ?? "");
-    const run = await dispatchReview(root, key, {
-      idempotencyKey,
-      model,
-      kind: target.kind,
-      owner,
-      repo,
-      number,
-      promptRepo,
-      promptPath,
-      // One Hermes session per pull request, so the review rounds of a PR
-      // continue the same conversation (the reviewer remembers the earlier
-      // rounds) while different PRs stay independent.
-      sessionId: target.kind === "pull_request" ? reviewSessionId(owner, repo, number) : undefined,
-    });
+    // The attempt chain (issue #1750): Hermes replays the run a key names, so
+    // a range whose run FAILED would be stuck — the retry would replay the
+    // failed run instead of starting a new attempt, and "ask again" would do
+    // nothing. A retry therefore goes under a deeper key, derived from the
+    // run that failed: the key is a function of what failed, not of the
+    // clock, so a repeat of the retry computes the same key and replays it
+    // rather than dispatching a second attempt.
+    let idempotencyKey = rangeKey;
+    // One Hermes session per pull request, so the review rounds of a PR
+    // continue the same conversation (the reviewer remembers the earlier
+    // rounds) while different PRs stay independent.
+    const baseSessionId =
+      target.kind === "pull_request" ? reviewSessionId(owner, repo, number) : undefined;
+    let sessionId = baseSessionId;
+    // The attempt that owns the current session id: 1 is the pull request's
+    // own session, 2 and 3 are the retries that follow a stuck one.
+    let sessionAttempt = 1;
+    let run: { runId: string; status: string; replayed: boolean } | undefined;
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < MAX_REVIEW_ATTEMPTS; attempt++) {
+      let dispatched: { runId: string; status: string; replayed: boolean };
+      try {
+        dispatched = await dispatchReview(root, key, {
+          idempotencyKey,
+          model,
+          kind: target.kind,
+          owner,
+          repo,
+          number,
+          promptRepo,
+          promptPath,
+          sessionId,
+        });
+      } catch (err) {
+        if (!(err instanceof ReviewSessionRefusedError) || !sessionId) throw err;
+        // The session refused the turn: it is stuck, and it will refuse every
+        // later round of this pull request too. Start over in a fresh session.
+        // The body carries the session id, so the idempotency key moves with
+        // it — a key that stayed would conflict with the body it holds.
+        sessionAttempt += 1;
+        sessionId = `${baseSessionId}-${sessionAttempt}`;
+        idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
+        lastError = err;
+        continue;
+      }
+      if (!dispatched.replayed) {
+        run = dispatched;
+        break;
+      }
+      // A replay: this range already has a run. Is it still working?
+      if (LIVE_RUN_STATUSES.has(dispatched.status)) {
+        throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
+      }
+      if (dispatched.status === "completed") {
+        throw new ReviewAlreadyLandedError(target.headSha ?? "");
+      }
+      if (!DEAD_RUN_STATUSES.has(dispatched.status)) {
+        // A status we cannot vouch for (Hermes could not read the run's own
+        // record): treat it as in flight rather than starting a second review
+        // of the same range. A stuck range is the cheaper mistake.
+        throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
+      }
+      // It failed (or was stopped): start a fresh attempt under a deeper key.
+      idempotencyKey = `${idempotencyKey}#${dispatched.runId}`;
+    }
+    if (!run) {
+      throw new HermesUnavailableError(
+        "The review could not be started — every attempt for this range failed",
+        `gave up after ${MAX_REVIEW_ATTEMPTS} attempts${lastError ? `: ${lastError.message}` : ""}`,
+      );
+    }
     trackRun({
       ...run,
       kind: target.kind,
@@ -836,13 +941,22 @@ async function dispatchReview(
     const refusal = await readJson<{ error?: { code?: unknown }; code?: unknown }>(res);
     const code = refusal?.error?.code ?? refusal?.code;
     if (code === "idempotency_key_conflict") throw new ReviewConflictError();
+    if (code === "admission_conflict" && r.sessionId) {
+      // Hermes' session authority refused the turn. The session this pull
+      // request's reviews run in is stuck — the gateway paused it on an
+      // earlier conflict and never recovers
+      // (NousResearch/hermes-agent#142731) — so every later round of this
+      // pull request is refused at the door. The caller retries in a fresh
+      // session.
+      throw new ReviewSessionRefusedError(r.sessionId);
+    }
     throw new HermesUnavailableError(
       "Hermes refused the review request (HTTP 409) — review not dispatched",
       `HTTP 409: ${JSON.stringify(refusal)?.slice(0, 300)}`,
     );
   }
   if (!res.ok) throw await unavailableFromResponse(res, "review not dispatched");
-  const parsed = await readJson<{ run_id?: unknown; status?: unknown }>(res);
+  const parsed = await readJson<{ run_id?: unknown; status?: unknown; replayed?: unknown }>(res);
   if (typeof parsed?.run_id !== "string" || parsed.run_id === "") {
     throw new HermesUnavailableError(
       "Hermes accepted the request but returned no run id",
@@ -853,8 +967,9 @@ async function dispatchReview(
     runId: parsed.run_id,
     status: typeof parsed.status === "string" ? parsed.status : "queued",
     // Hermes answers a repeat of an earlier request with the ORIGINAL run
-    // (possibly already finished) and this header, instead of starting one.
-    replayed: res.headers.get("idempotency-replayed") === "true",
+    // (possibly already finished) instead of starting one: the header says
+    // so, and so does the body.
+    replayed: res.headers.get("idempotency-replayed") === "true" || parsed.replayed === true,
   };
 }
 
