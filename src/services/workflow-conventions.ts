@@ -183,6 +183,18 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         fragment: "Request an automated/bot review.",
       },
       {
+        // The "once, then wait" variant (issue #1749). Offered as its own
+        // OPTION rather than folded into the plain bot-review fragment: a
+        // request that is repeated while a review is still running is refused
+        // (or, on the GitHub Actions path, queues a second review behind the
+        // first), so an install that does not use a review relay has no use
+        // for the rule — and an install that does should say so explicitly.
+        id: "bot-review-once",
+        label: "Request an automated/bot review — once per head commit, then wait for it",
+        fragment:
+          "Request an automated/bot review before merging — request it once per head commit and then wait for it: a review takes 10-30 minutes, so check its status instead of asking again.",
+      },
+      {
         id: "both",
         label: "Both self-review and an automated/bot review",
         fragment:

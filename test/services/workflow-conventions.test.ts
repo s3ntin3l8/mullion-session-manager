@@ -93,6 +93,26 @@ describe("buildWorkflowConventionsText", () => {
     ]);
   });
 
+  // Issue #1749 — the "once per head commit, then wait for it" option for
+  // the code-review axis. It is an OPTION, not a change to the plain
+  // bot-review fragment: an install without a review relay has no use for the
+  // rule, and an install that already answered "bot-review" must keep the
+  // text it has.
+  it("offers a 'once per head commit, then wait' option for the code-review axis", () => {
+    const question = WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === "codeReview");
+    expect(question).toBeDefined();
+    const option = question?.options.find((o) => o.id === "bot-review-once");
+    expect(option).toBeDefined();
+    expect(option?.fragment).toContain("once per head commit");
+    expect(option?.fragment).toContain("10-30 minutes");
+    expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(option?.fragment);
+    // The plain option is untouched: an install that already picked it keeps
+    // the text it has.
+    expect(buildWorkflowConventionsText({ codeReview: "bot-review" })).toBe(
+      "Request an automated/bot review.",
+    );
+  });
+
   it("answering the full question set produces a longer, all-fragments-present text (a full 'regenerate' run)", () => {
     const answers: Record<string, string> = {};
     for (const question of WORKFLOW_CONVENTION_QUESTIONS) {
