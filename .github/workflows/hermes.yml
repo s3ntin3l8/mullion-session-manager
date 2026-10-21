@@ -85,8 +85,10 @@ jobs:
       # Dispatch through Hermes' Runs API and poll the run to a terminal
       # status: the check goes red when the review fails, instead of turning
       # green the moment the request is accepted (which is how a saturated
-      # gateway used to read as "relayed"). This repo has two runners, so the
-      # polling job does not queue the other self-hosted jobs behind it.
+      # gateway used to read as "relayed"). The polling job holds its runner
+      # for the length of the review (minutes), so this repo needs a second
+      # runner: two review jobs (the auto-review and an on-demand one) would
+      # otherwise queue behind each other's poll.
       hermes-use-runs: true
     secrets: inherit # pragma: allowlist secret
 
