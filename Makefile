@@ -77,14 +77,15 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	cd .wt/$(name) && npm ci && npm --prefix frontend ci
 
 # The fallback comment is only for "the relay is not there" — a relay that REFUSED
-# (a review is already in flight, the commit was reviewed recently, the gateway is
-# saturated) must not be answered with an @mention: that dispatches ANOTHER review,
-# queued behind the one that is already running, which is how reviews used to pile
-# up. The excluded phrases are the relay's own refusals.
+# (a review is already in flight, the commit was reviewed recently, the commit was
+# already reviewed, the gateway is saturated) must not be answered with an @mention:
+# that dispatches ANOTHER review, queued behind the one that is already running,
+# which is how reviews used to pile up. The excluded phrases are the relay's own
+# refusals — keep them in step with src/services/hermes-review.ts.
 review: ## Request a Hermes review on the current branch's PR (via the Mullion relay when run inside a session)
 	@if [ -n "$$MULLION_SOCKET_PATH" ] && command -v mullion >/dev/null 2>&1; then \
 		out=$$(mullion review 2>&1); rc=$$?; echo "$$out"; \
-		if [ $$rc -ne 0 ] && ! echo "$$out" | grep -qiE "requested recently|already in flight|already under way|no new review started|not dispatched"; then \
+		if [ $$rc -ne 0 ] && ! echo "$$out" | grep -qiE "requested recently|already in flight|already under way|already requested|already landed|no new review started|not dispatched"; then \
 			echo "relay unavailable - falling back to an @mention comment"; \
 			gh pr comment --body "@s3ntin3l8-hermes Review"; \
 		fi; \
