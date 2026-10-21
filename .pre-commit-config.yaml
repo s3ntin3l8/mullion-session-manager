@@ -108,6 +108,19 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # The review protocol's wording is stated in several places (the MCP tool
+      # description, the CLI output, the agent guide, AGENTS.md) because an
+      # agent reads a different one depending on where it stands. This check
+      # fails when they stop agreeing — a stale copy of the rule is how the
+      # duplicate-review queue came back.
+      - id: review-protocol-sync
+        name: the review protocol's rule is stated consistently
+        entry: node scripts/check-review-protocol-sync.mjs
+        language: system
+        files: '^(AGENTS\.md|docs/agent-guide\.md|src/(cli|mcp)/.*\.mjs|scripts/check-review-protocol-sync\.mjs)$'
+        pass_filenames: false
+        stages: [pre-commit]
+
       - id: npm-test
         name: vitest (unit tests, backend)
         entry: npm run test

@@ -78,6 +78,7 @@ import {
   HermesUnavailableError,
   ReviewConflictError,
   ReviewCooldownError,
+  ReviewInFlightError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
 } from "../../src/services/hermes-review.js";
@@ -255,7 +256,74 @@ describe("review-request routes", () => {
       repo: "widgets",
       prNumber: 42,
       headSha: "sha42",
+      // The base is resolved lazily, by the relay, so a request the relay
+      // refuses does not pay for the PR's reviews.
+      resolveBase: expect.any(Function),
       sessionId,
+    });
+  });
+
+  describe("the review range (issue #1750)", () => {
+    // The base is a resolver the relay calls when it dispatches, so the test
+    // calls it the same way.
+    const resolvedBase = async () => {
+      const call = mocks.requestHermesReview.mock.calls[0];
+      const resolveBase = (call?.[1] as { resolveBase?: () => Promise<string> }).resolveBase;
+      return resolveBase ? resolveBase() : undefined;
+    };
+
+    it("bases the range on the last bot review that landed", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("does not treat a dismissed (retracted) review as the base", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("still dispatches when the PR's reviews cannot be read", async () => {
+      // The base is the previous round's commit; not being able to read it
+      // only means the round reviews the whole diff (what the first round
+      // does anyway) — it must not fail the request.
+      mocks.listPullRequestReviews.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("does not walk the PR's reviews when the relay refuses the request", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewCooldownError(60, "sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+
+    it("409s when a review of the PR is already in flight, naming its run", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewInFlightError("run_live", "sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("run_live");
+      expect(res.headers["retry-after"]).toBe("60");
     });
   });
 
@@ -376,6 +444,7 @@ describe("review-request routes", () => {
       repo: "widgets",
       prNumber: 99,
       headSha: "sha99",
+      resolveBase: expect.any(Function),
       sessionId,
     });
   });

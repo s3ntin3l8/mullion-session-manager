@@ -35,6 +35,9 @@ import {
   resetHermesReviewState,
   cooldownEntryCount,
   ReviewCooldownError,
+  ReviewInFlightError,
+  reviewIdempotencyKey,
+  reviewSessionId,
   testHermesConnection,
 } from "../../src/services/hermes-review.js";
 
@@ -244,6 +247,73 @@ describe("hermes review relay", () => {
     });
   });
 
+  describe("the review protocol (issue #1750)", () => {
+    it("names a session per pull request, with only safe characters in it", () => {
+      expect(reviewSessionId("acme", "widgets", 7)).toBe("hermes-review-acme-widgets-7");
+      // A session id becomes a file name on Hermes' side: a "/" or a ".." in it
+      // would be rejected as an unsafe session id.
+      expect(reviewSessionId("acme", "group/widgets", 7)).toBe(
+        "hermes-review-acme-group-widgets-7",
+      );
+      expect(reviewSessionId("acme", "wid..gets", 7)).toBe("hermes-review-acme-wid--gets-7");
+    });
+
+    it("names the idempotency key after the review range", () => {
+      expect(reviewIdempotencyKey("acme", "widgets", 7, "base123", "head456")).toBe(
+        "hermes-review:acme/widgets#7@base123..head456",
+      );
+      // The first round of a PR has no base: the range is empty on the left.
+      expect(reviewIdempotencyKey("acme", "widgets", 7, undefined, "head456")).toBe(
+        "hermes-review:acme/widgets#7@..head456",
+      );
+    });
+
+    it("dispatches in that session, so the rounds of a PR keep their history", async () => {
+      await requestHermesReview(app, PR);
+      const [, init] = calls("/v1/runs")[0];
+      const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7");
+    });
+
+    it("refuses a second request while a review of the PR is still running", async () => {
+      dispatch = async () => accepted("run_live");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_live", status: "running" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      const posts = calls("/v1/runs").length;
+
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
+      // No second dispatch: the refusal IS the answer (wait for the run).
+      expect(calls("/v1/runs")).toHaveLength(posts);
+    });
+
+    it("says which run is already working, so the caller can wait for it", async () => {
+      dispatch = async () => accepted("run_live");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_live", status: "running" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/run_live/);
+    });
+
+    it("does not treat a finished review as in flight", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_done");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_done", status: "completed" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      await requestHermesReview(app, PR);
+      expect(calls("/v1/runs")).toHaveLength(2);
+    });
+
+    it("does not treat an unreadable run status as in flight", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_x");
+      runEndpoint = async () => new Response("nope", { status: 500 });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_x" });
+    });
+  });
+
   describe("requestHermesReview", () => {
     it("dispatches: health check, then an authenticated POST carrying the prompt", async () => {
       await requestHermesReview(app, PR);
@@ -255,7 +325,9 @@ describe("hermes review relay", () => {
       expect(init.method).toBe("POST");
       const headers = init.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer sekret-key");
-      expect(headers["Idempotency-Key"]).toMatch(/^mullion-review:acme\/widgets#7@abc1234:\d+$/);
+      // The key names the review RANGE, not the request: a repeat request for
+      // the same range must not dispatch a second review of the same diff.
+      expect(headers["Idempotency-Key"]).toBe("hermes-review:acme/widgets#7@..abc1234");
       expect(init.redirect).toBe("manual");
       const body = JSON.parse(init.body as string);
       expect(body.model).toBe("hermes-agent");
@@ -263,7 +335,7 @@ describe("hermes review relay", () => {
       expect(body.input).toContain("REVIEW PROMPT BODY");
     });
 
-    it("retries within the cooldown window reuse the key; a later request gets a new one", async () => {
+    it("a retry of the same range reuses the key, and so does a later request for it", async () => {
       const keyOf = (i: number) =>
         (fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/v1/runs"))[i][1] as RequestInit)
           .headers as Record<string, string>;
@@ -276,7 +348,10 @@ describe("hermes review relay", () => {
         expect(keyOf(1)["Idempotency-Key"]).toBe(keyOf(0)["Idempotency-Key"]);
         vi.setSystemTime(Date.now() + 11 * 60_000); // past the 10-minute window
         await requestHermesReview(app, PR);
-        expect(keyOf(2)["Idempotency-Key"]).not.toBe(keyOf(1)["Idempotency-Key"]);
+        // The key does NOT roll with the cooldown any more: it names the range,
+        // so a later request for the same range replays the existing run
+        // instead of dispatching a second review of the same diff.
+        expect(keyOf(2)["Idempotency-Key"]).toBe(keyOf(1)["Idempotency-Key"]);
       } finally {
         vi.useRealTimers();
       }
@@ -344,7 +419,7 @@ describe("hermes review relay", () => {
       await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ replayed: false });
     });
 
-    it("gives every request a fresh key when the cooldown is disabled", async () => {
+    it("keys a request by its range, not by the clock, even with the cooldown off", async () => {
       applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
       await requestHermesReview(app, PR);
       await requestHermesReview(app, PR);
@@ -355,7 +430,10 @@ describe("hermes review relay", () => {
             (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
         );
       expect(keys).toHaveLength(2);
-      expect(keys[0]).not.toBe(keys[1]);
+      // The key used to carry a time bucket, so a request after the cooldown
+      // window dispatched a SECOND review of the same diff — the pile-up. It
+      // names the range now, so the second request replays the first run.
+      expect(keys[0]).toBe(keys[1]);
     });
 
     it("passes Retry-After through on 429/503 from Hermes", async () => {

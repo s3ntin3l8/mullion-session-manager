@@ -22,6 +22,7 @@ import {
   HermesUnavailableError,
   ReviewConflictError,
   ReviewCooldownError,
+  ReviewInFlightError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   assertReviewerConfigured,
@@ -127,6 +128,12 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
     return reply.conflict(err.message);
   }
   if (err instanceof ReviewConflictError) return reply.conflict(err.message);
+  // A review of this PR is already running: the answer is the run id, not a
+  // second review queued behind it.
+  if (err instanceof ReviewInFlightError) {
+    reply.header("Retry-After", "60");
+    return reply.conflict(err.message);
+  }
   if (err instanceof ReviewRunNotFoundError) return reply.notFound(err.message);
   if (err instanceof ReviewRunForbiddenError) return reply.forbidden(err.message);
   if (err instanceof HermesAuthError) return reply.badGateway(err.message);
@@ -439,7 +446,15 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, headSha } = target;
 
       try {
-        const run = await requestHermesReview(app, { owner, repo, prNumber, headSha, sessionId });
+        const reader = reviewReader(target.token, owner, repo, prNumber);
+        const run = await requestHermesReview(app, {
+          owner,
+          repo,
+          prNumber,
+          headSha,
+          resolveBase: reader.base,
+          sessionId,
+        });
         return {
           status: "dispatched",
           repo: `${owner}/${repo}`,
@@ -850,6 +865,58 @@ async function findLandedComment(
     app.log.warn({ detail: (err as Error).message }, "triage-status: GitHub comment lookup failed");
     return { checked: false };
   }
+}
+
+/**
+ * The PR's reviews, read at most once per request.
+ *
+ * Two things need them: the delta base (the commit the previous round
+ * covered) and the duplicate-review warning. The first is only needed once a
+ * dispatch is actually going to happen — reading them is a GitHub call (up to
+ * ten pages), and a request the relay refuses must not pay for it — so the
+ * walk is memoized and the base is resolved lazily, by the relay itself.
+ */
+function reviewReader(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): {
+  reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
+  base: () => Promise<string>;
+} {
+  let cached: Awaited<ReturnType<typeof listPullRequestReviews>> | undefined;
+  const reviews = async () => {
+    cached ??= await listPullRequestReviews(token, owner, repo, prNumber);
+    return cached;
+  };
+  return {
+    reviews,
+    /**
+     * The commit the previous review round covered — the base of this round's
+     * delta.
+     *
+     * It is the most recent bot review that actually landed (a DISMISSED
+     * review was retracted, so it did not land). The shared workflow computes
+     * the same value for the same PR, and both put it in the idempotency key:
+     * a request for a range that is already being reviewed therefore names
+     * the same range on both paths, and cannot dispatch it twice.
+     *
+     * A failure to read the reviews is not fatal: the round simply reviews
+     * the whole diff (an empty base), which is what the first round does
+     * anyway.
+     */
+    base: async () => {
+      try {
+        const landed = (await reviews()).filter(
+          (r) => r.authorIsBot && r.state !== "DISMISSED" && r.commitId !== "",
+        );
+        return landed.at(-1)?.commitId ?? "";
+      } catch {
+        return "";
+      }
+    },
+  };
 }
 
 /**
