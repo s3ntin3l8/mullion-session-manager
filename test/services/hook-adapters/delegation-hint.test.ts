@@ -31,6 +31,12 @@ describe("getAdapterDelegationHint", () => {
     expect(hint).toContain("model");
     expect(hint).toContain("haiku");
     expect(hint).toMatch(/precedence over/i);
+    // The one load-bearing fact with no assertion behind it until now: the
+    // override is IGNORED for `subagent_type: "fork"` — a fork always
+    // inherits the parent model. A worker delegating with a fork (the
+    // natural choice when it wants the child to keep its context) would
+    // otherwise be told to expect a cheaper model and get none.
+    expect(hint).toMatch(/unless the child is a fork/i);
   });
 
   it("names Codex's spawn_agent without assuming the model override is exposed", () => {
