@@ -37,6 +37,12 @@ describe("getAdapterDelegationHint", () => {
     // natural choice when it wants the child to keep its context) would
     // otherwise be told to expect a cheaper model and get none.
     expect(hint).toMatch(/unless the child is a fork/i);
+    // Same for a session that pins the subagent model:
+    // CLAUDE_CODE_SUBAGENT_MODEL_FORCE drops the per-call `model`
+    // entirely ("The model parameter is ignored on this session"), and
+    // Mullion does not scrub it, so a host that sets it in the server env
+    // would otherwise hand every worker advice that cannot take effect.
+    expect(hint).toMatch(/pins the\s+subagent model/i);
   });
 
   it("names Codex's spawn_agent without assuming the model override is exposed", () => {
