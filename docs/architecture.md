@@ -81,6 +81,12 @@ convention) so the two cannot drift apart on what a session's socket path
 is. `dtach` is not preinstalled on macOS — it comes from Homebrew
 (`brew install dtach`), with an identical CLI.
 
+The dtach and `ps` behaviours above were measured on Linux, not macOS. Run
+`scripts/macos-scope-check.sh` once on a Mac (needs only `dtach`) to confirm
+the Homebrew build and BSD `ps` match: the socket path visible in `ps`, the
+four-field `pid ppid pgid command` shape, harmless probe connections, and the
+stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).
