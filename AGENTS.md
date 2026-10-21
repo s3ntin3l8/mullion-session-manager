@@ -200,6 +200,13 @@ pre-commit/CI against `.secrets.baseline`; regenerate it with
 comment must stay on the **same line** as the flagged string — Prettier can
 silently move it to its own line, which breaks the allowlist match.
 
+In CI the scan covers the files the push touched plus the files the
+previous baseline listed, not the whole tree (see `docs/ci-cd.md`). A known
+secret is matched by filename, hash and type — not by line number — but the
+baseline carries the line number as metadata and the hook refreshes it when
+it rescans, so **a change to a baselined file needs the baseline refreshed in
+the same change** or the build fails with "the baseline file was updated".
+
 `scripts/check-security-antipatterns.mjs` enforces CORS security (e.g. no
 `Access-Control-Allow-Credentials: true` with wildcard or reflected origins).
 In the rare event intentional credentials reflection is needed, add
