@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildCliModelPairs,
   resolveCliModelRoles,
   resolveInstalledRoleModels,
   resolveOpencodeModelRoles,
 } from "./modelRoles.js";
+import { AGENT_OPTIONS } from "./settings/agentOptions.js";
 
 // The DOM-free mirror of the backend's install-wide model-role fallback
 // (src/services/task-model-resolve.ts). The two families genuinely differ
@@ -21,32 +23,30 @@ import {
 //     back.
 
 describe("resolveCliModelRoles", () => {
-  it("reports the roles as shared when the reviewer model is unset", () => {
+  it("resolves the reviewer onto the implementer when the reviewer model is unset", () => {
     // The case that motivated the warning: an unset reviewer model means the
     // reviewer runs on exactly the implementer's model.
     const roles = resolveCliModelRoles("opusplan", null);
     expect(roles.implementer).toBe("opusplan");
     expect(roles.reviewer).toBe("opusplan");
-    expect(roles.shared).toBe(true);
   });
 
-  it("reports the roles as shared when both are unset", () => {
+  it("resolves both roles to nothing when both are unset", () => {
     const roles = resolveCliModelRoles(null, null);
     expect(roles.implementer).toBeNull();
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(true);
   });
 
   it("reports the roles as distinct when the reviewer names a different model", () => {
     const roles = resolveCliModelRoles("opusplan", "haiku");
     expect(roles.implementer).toBe("opusplan");
     expect(roles.reviewer).toBe("haiku");
-    expect(roles.shared).toBe(false);
   });
 
-  it("reports the roles as shared when both name the same model", () => {
+  it("resolves both roles to the same model when both name it", () => {
     const roles = resolveCliModelRoles("opusplan", "opusplan");
-    expect(roles.shared).toBe(true);
+    expect(roles.implementer).toBe("opusplan");
+    expect(roles.reviewer).toBe("opusplan");
   });
 
   it("treats undefined and null the same", () => {
@@ -61,7 +61,6 @@ describe("resolveCliModelRoles", () => {
     const roles = resolveCliModelRoles("opusplan", "");
     expect(roles.implementer).toBe("opusplan");
     expect(roles.reviewer).toBe("opusplan");
-    expect(roles.shared).toBe(true);
   });
 
   it("treats a stored-but-invalid reviewer model as unset, like the backend", () => {
@@ -72,7 +71,6 @@ describe("resolveCliModelRoles", () => {
     const roles = resolveCliModelRoles("opusplan", "not a valid model!");
     expect(roles.implementer).toBe("opusplan");
     expect(roles.reviewer).toBe("opusplan");
-    expect(roles.shared).toBe(true);
   });
 
   it("treats a stored-but-invalid implementer model as no model at all", () => {
@@ -83,7 +81,6 @@ describe("resolveCliModelRoles", () => {
     const roles = resolveCliModelRoles("not a valid model!", null);
     expect(roles.implementer).toBeNull();
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(true);
   });
 });
 
@@ -96,21 +93,22 @@ describe("resolveOpencodeModelRoles", () => {
     const roles = resolveOpencodeModelRoles("opencode-go/minimax-m3.1-flash-free", null);
     expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(false);
   });
 
-  it("reports the roles as shared when both name the same model", () => {
+  it("resolves both roles to the same model when both name it", () => {
     const roles = resolveOpencodeModelRoles(
       "opencode-go/minimax-m3.1-flash-free",
       "opencode-go/minimax-m3.1-flash-free",
     );
-    expect(roles.shared).toBe(true);
+    expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
+    expect(roles.reviewer).toBe("opencode-go/minimax-m3.1-flash-free");
   });
 
-  it("reports the roles as shared when both are unset", () => {
+  it("resolves both roles to nothing when both are unset", () => {
     // Both unset → both fall to opencode's own default → the same model.
     const roles = resolveOpencodeModelRoles(null, null);
-    expect(roles.shared).toBe(true);
+    expect(roles.implementer).toBeNull();
+    expect(roles.reviewer).toBeNull();
   });
 
   it("reports the roles as distinct when the reviewer names a different model", () => {
@@ -118,7 +116,8 @@ describe("resolveOpencodeModelRoles", () => {
       "opencode-go/minimax-m3.1-flash-free",
       "opencode-go/claude-haiku-5-5",
     );
-    expect(roles.shared).toBe(false);
+    expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
+    expect(roles.reviewer).toBe("opencode-go/claude-haiku-5-5");
   });
 
   it("treats a stored-but-invalid opencode model as unset, like the backend", () => {
@@ -127,7 +126,6 @@ describe("resolveOpencodeModelRoles", () => {
     const roles = resolveOpencodeModelRoles("opencode-go/minimax-m3.1-flash-free", "haiku");
     expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(false);
   });
 });
 
@@ -154,9 +152,7 @@ describe("resolveInstalledRoleModels", () => {
     });
     expect(roles.worker).toBe("opusplan");
     expect(roles.reviewer).toBe("gpt-5");
-    expect(roles.shared).toBe(false);
     expect(roles.reviewCli).toBe("codex");
-    expect(roles.workerCli).toBe("claude");
   });
 
   it("reports a collapse when the two roles land on the same model", () => {
@@ -167,7 +163,6 @@ describe("resolveInstalledRoleModels", () => {
     });
     expect(roles.worker).toBe("opusplan");
     expect(roles.reviewer).toBe("opusplan");
-    expect(roles.shared).toBe(true);
   });
 
   it("reports a collapse across different CLIs that name the same model", () => {
@@ -193,7 +188,6 @@ describe("resolveInstalledRoleModels", () => {
       pairs,
     });
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(false);
   });
 
   it("does not compare when there is no review agent at all", () => {
@@ -203,6 +197,39 @@ describe("resolveInstalledRoleModels", () => {
       pairs,
     });
     expect(roles.reviewer).toBeNull();
-    expect(roles.shared).toBe(false);
+  });
+});
+
+describe("buildCliModelPairs", () => {
+  it("covers every model-capable agent option", () => {
+    // The keys have to stay equal to the agent-option values the
+    // install-wide agent settings use. A model-injecting CLI added to
+    // AGENT_OPTIONS but not here would be missing from the comparison, and
+    // the comparison would quietly report null for it and skip — a silent
+    // gap. This turns that into a CI failure.
+    const pairs = buildCliModelPairs({});
+    for (const option of AGENT_OPTIONS) {
+      expect(pairs).toHaveProperty(option.value);
+    }
+  });
+
+  it("resolves each CLI's own two roles", () => {
+    const pairs = buildCliModelPairs({
+      claudeCode: { defaultModel: "opusplan", reviewerModel: null },
+      codex: { defaultModel: "gpt-5", reviewerModel: "gpt-6" },
+      agy: { defaultModel: "gemini-3.8-flash-medium", reviewerModel: null },
+      opencode: {
+        implementerModel: "opencode-go/minimax-m3.1-flash-free",
+        reviewerModel: null,
+      },
+    });
+    expect(pairs.claude.implementer).toBe("opusplan");
+    expect(pairs.claude.reviewer).toBe("opusplan");
+    expect(pairs.codex.implementer).toBe("gpt-5");
+    expect(pairs.codex.reviewer).toBe("gpt-6");
+    expect(pairs.agy.implementer).toBe("gemini-3.8-flash-medium");
+    expect(pairs.agy.reviewer).toBe("gemini-3.8-flash-medium");
+    expect(pairs.opencode.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
+    expect(pairs.opencode.reviewer).toBeNull();
   });
 });

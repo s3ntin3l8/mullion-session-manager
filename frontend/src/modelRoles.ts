@@ -43,17 +43,6 @@ export interface ModelRoleResolution {
   implementer: string | null;
   /** The model the reviewer role resolves to, install-wide. */
   reviewer: string | null;
-  /**
-   * True when the two roles resolve to the SAME model — i.e. the reviewer
-   * sees no second opinion, because it IS the same model with the same
-   * weights. The Settings panel warns about this.
-   *
-   * "Same weights", not "same prompt": the reviewer session is given a
-   * DIFFERENT prompt (buildReviewPrompt opens with "Review this task's
-   * diff. You are not expected to make changes."), so what the roles share
-   * is the model, not the instructions.
-   */
-  shared: boolean;
 }
 
 /**
@@ -76,8 +65,6 @@ export interface ModelRoleResolution {
 export interface InstalledRoleModels {
   /** The CLI the reviewer role runs under, install-wide. */
   reviewCli: string | null;
-  /** The CLI the worker role runs under, install-wide. */
-  workerCli: string | null;
   /** The model the reviewer runs, install-wide. */
   reviewer: string | null;
   /** The model the worker runs, install-wide. */
@@ -106,11 +93,47 @@ export function resolveInstalledRoleModels(opts: {
   const worker = workerCli ? (opts.pairs[workerCli]?.implementer ?? null) : null;
   const reviewer = reviewCli ? (opts.pairs[reviewCli]?.reviewer ?? null) : null;
   return {
-    workerCli,
     reviewCli,
     worker,
     reviewer,
     shared: worker !== null && reviewer !== null && worker === reviewer,
+  };
+}
+
+/** The per-CLI model settings the panel reads, in the shape it needs them. */
+export interface CliModelSettings {
+  claudeCode?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
+  codex?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
+  agy?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
+  opencode?: { implementerModel?: string | null; reviewerModel?: string | null } | null;
+}
+
+/**
+ * Each model-capable CLI's two roles, keyed by the agent-option value the
+ * install-wide agent settings use — "claude", "codex", "agy", "opencode"
+ * (see frontend/src/settings/agentOptions.ts's AGENT_OPTIONS, and the
+ * backend's own KNOWN_AGENTS in agent-detect.ts).
+ *
+ * The keys have to stay equal to those option values: a model-injecting
+ * CLI added to either list would otherwise be missing here, and the
+ * comparison would quietly report `null` for it and skip. The
+ * "every model-capable agent has an entry" test below is what turns that
+ * silent gap into a CI failure.
+ */
+export function buildCliModelPairs(
+  settings: CliModelSettings,
+): Record<string, ModelRoleResolution> {
+  return {
+    claude: resolveCliModelRoles(
+      settings.claudeCode?.defaultModel,
+      settings.claudeCode?.reviewerModel,
+    ),
+    codex: resolveCliModelRoles(settings.codex?.defaultModel, settings.codex?.reviewerModel),
+    agy: resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel),
+    opencode: resolveOpencodeModelRoles(
+      settings.opencode?.implementerModel,
+      settings.opencode?.reviewerModel,
+    ),
   };
 }
 
@@ -130,7 +153,7 @@ export function resolveCliModelRoles(
   // implementer's model — which is a real collapse the backend performs.
   const implementer = isValidCliModelName(defaultModel) ? defaultModel : null;
   const reviewer = isValidCliModelName(reviewerModel) ? reviewerModel : implementer;
-  return { implementer, reviewer, shared: reviewer === implementer };
+  return { implementer, reviewer };
 }
 
 /**
@@ -147,5 +170,5 @@ export function resolveOpencodeModelRoles(
 ): ModelRoleResolution {
   const implementer = isValidOpenCodeModel(implementerModel) ? implementerModel : null;
   const reviewer = isValidOpenCodeModel(reviewerModel) ? reviewerModel : null;
-  return { implementer, reviewer, shared: reviewer === implementer };
+  return { implementer, reviewer };
 }

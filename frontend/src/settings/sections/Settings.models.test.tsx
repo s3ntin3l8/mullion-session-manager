@@ -392,6 +392,22 @@ describe("Settings -> Models", () => {
       expect(screen.getByText(warning)).toBeInTheDocument();
     });
 
+    it("keeps the per-task `Reviewer-Model:` escape clause in the note", () => {
+      // A task's `Reviewer-Model:` line outranks the install-wide tier, so
+      // an unqualified "no second opinion" would be false for exactly the
+      // users who pinned one — and reads as their directive being ignored,
+      // which is the opposite of what the backend does. The clause was
+      // dropped once already; this pins it.
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(/unless a task sets its own/i)).toBeInTheDocument();
+    });
+
     it("does NOT warn when the review agent is a different CLI with a different model", () => {
       // The case that matters most: a reviewer on a different CLI is the
       // cheapest way to get a genuinely different model. Codee's own two
@@ -438,6 +454,42 @@ describe("Settings -> Models", () => {
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("warns for opencode when both roles name the same model", () => {
+      // opencode is the one family with divergent fallback semantics — its
+      // roles never cross-fall-back — so it is the case most worth pinning
+      // at the component level too.
+      useDashboardStore.setState({
+        settings: withAgents("opencode", "opencode", {
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: "opencode-go/minimax-m3.1-flash-free",
+            defaultSmallModel: null,
+          },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    });
+
+    it("does not warn for opencode when the reviewer model is unset", () => {
+      // opencode's roles never cross-fall-back: an unset reviewer model
+      // means "no override" (opencode's own default), so it is not the
+      // implementer's model and there is no install-wide collapse to report.
+      useDashboardStore.setState({
+        settings: withAgents("opencode", "opencode", {
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: null,
+            defaultSmallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });

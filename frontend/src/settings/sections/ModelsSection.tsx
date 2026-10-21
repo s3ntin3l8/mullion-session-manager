@@ -5,11 +5,9 @@ import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
 import {
-  resolveCliModelRoles,
+  buildCliModelPairs,
   resolveInstalledRoleModels,
-  resolveOpencodeModelRoles,
   type InstalledRoleModels,
-  type ModelRoleResolution,
 } from "../../modelRoles.js";
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
@@ -56,7 +54,8 @@ function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): React
   if (roles.reviewCli !== cliKey) return null;
   return (
     <p style={warningStyle}>
-      Your reviewer runs on the same model as your worker ({roles.reviewer}) — no second opinion.
+      Your reviewer runs on the same model as your worker ({roles.reviewer}) — no second opinion,
+      unless a task sets its own <code>Reviewer-Model:</code>.
     </p>
   );
 }
@@ -76,18 +75,7 @@ export function ModelsSection() {
 
   // Each CLI's own two roles, keyed by the agent-option value the
   // install-wide agent settings use ("claude", "codex", "agy", "opencode").
-  const cliPairs: Record<string, ModelRoleResolution> = {
-    claude: resolveCliModelRoles(
-      settings.claudeCode?.defaultModel,
-      settings.claudeCode?.reviewerModel,
-    ),
-    codex: resolveCliModelRoles(settings.codex?.defaultModel, settings.codex?.reviewerModel),
-    agy: resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel),
-    opencode: resolveOpencodeModelRoles(
-      settings.opencode?.implementerModel,
-      settings.opencode?.reviewerModel,
-    ),
-  };
+  const cliPairs = buildCliModelPairs(settings);
 
   // The models the two roles ACTUALLY run — the worker agent and the
   // review agent are chosen independently, so they can be different CLIs,
