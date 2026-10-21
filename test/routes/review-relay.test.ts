@@ -71,6 +71,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions } from "../../src/db/schema.js";
+import { pruneLandedMemo } from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
   HermesNotConfiguredError,
@@ -194,6 +195,42 @@ describe("review-request routes", () => {
       url: `/api/sessions/${id}/triage-request${query}`,
       remoteAddress,
     });
+
+  // The landed-review memo's own bookkeeping: it must not grow without
+  // bound, and an entry past its TTL is worthless anyway.
+  describe("the landed-review memo's cap", () => {
+    it("drops the entries past their TTL first", () => {
+      const memo = new Map<string, { at: number }>([
+        ["old", { at: 0 }],
+        ["fresh", { at: 9_000 }],
+      ]);
+      pruneLandedMemo(memo, 10_000, 1);
+      expect(memo.has("old")).toBe(false);
+      expect(memo.has("fresh")).toBe(true);
+    });
+
+    it("evicts the oldest entries when nothing has expired yet", () => {
+      // A burst of fresh entries (the key is per (PR, runId), so a burst of
+      // re-reviews is exactly that) is not caught by the age sweep — the map
+      // would otherwise grow past its cap.
+      const memo = new Map<string, { at: number }>([
+        ["a", { at: 1 }],
+        ["b", { at: 2 }],
+        ["c", { at: 3 }],
+      ]);
+      pruneLandedMemo(memo, 3, 2);
+      expect(memo.size).toBe(2);
+      expect(memo.has("a")).toBe(false);
+      expect(memo.has("b")).toBe(true);
+      expect(memo.has("c")).toBe(true);
+    });
+
+    it("leaves a memo within its cap alone", () => {
+      const memo = new Map<string, { at: number }>([["a", { at: 1 }]]);
+      pruneLandedMemo(memo, 2, 5);
+      expect(memo.size).toBe(1);
+    });
+  });
 
   it("detects the PR from the session's branch and dispatches", async () => {
     const res = await post(sessionId, {});

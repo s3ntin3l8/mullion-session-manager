@@ -12,6 +12,7 @@ import type {
   GitHubPROrWithChecks,
   GitHubStatus,
   ProjectReleaseStatus,
+  RelayReviewState,
   ReleaseRunReason,
   ReleaseMergeReason,
 } from "./api/index.js";
@@ -211,6 +212,23 @@ function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs
   return `${pr.actionsRuns.length} run${pr.actionsRuns.length === 1 ? "" : "s"}`;
 }
 
+/**
+ * The relay's marker on a PR row, in words (issue #1630).
+ *
+ * A review that was requested but could not be confirmed — the landed-review
+ * lookup failed — is not the same as one that is simply on its way, and the
+ * title says so instead of implying the bot is still working.
+ */
+function relayPillTitle(relay: RelayReviewState): string {
+  if (relay.state === "landed") {
+    return `Review posted: ${relay.verdict ?? "review"}${relay.author ? ` by ${relay.author}` : ""}`;
+  }
+  if (relay.landedChecked === false) {
+    return "A review was requested for this pull request — it could not be confirmed on the pull request";
+  }
+  return "A review was requested for this pull request";
+}
+
 function PRCard({
   pr,
   projectId,
@@ -269,6 +287,16 @@ function PRCard({
         )}
         {pr.author && <span className="github-panel-pr-author">{pr.author}</span>}
         {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
+        {pr.relayReview && pr.relayReview.state !== "none" && (
+          <span
+            className={`github-panel-pr-relay-pill ${pr.relayReview.state}${
+              pr.relayReview.verdict === "CHANGES_REQUESTED" ? " changes-requested" : ""
+            }`}
+            title={relayPillTitle(pr.relayReview)}
+          >
+            {pr.relayReview.state === "landed" ? "Review posted" : "Review requested"}
+          </span>
+        )}
         <ChevronDownIcon
           size={12}
           style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}

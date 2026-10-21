@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
+import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
@@ -657,6 +658,131 @@ async function findLandedReview(
     app.log.warn({ detail: (err as Error).message }, "review-status: GitHub review lookup failed");
     return { checked: false };
   }
+}
+
+/**
+ * The relay's state for one pull request (issue #1630) — the state the
+ * operator needs to see: was a review requested, is it still in flight, did
+ * the bot's review land, and what did it say.
+ *
+ * The shape lives in src/shared/types.ts so the frontend cannot drift from
+ * it; the doc there says what `"none"` does and does not mean.
+ */
+export type { RelayReviewState } from "../shared/types.js";
+
+// The landed check costs a GitHub call, and the UI polls while a review is
+// pending — so the answer is memoized per run for a short while. The window
+// is well under the PR drill-in's own poll interval (30s), so a review that
+// lands now is never hidden for more than one poll cycle.
+//
+// The memo lives on the app (a WeakMap keyed by it), not in a module-level
+// map: a second buildApp() in the same process must not inherit the first
+// one's answers.
+const LANDED_MEMO_TTL_MS = 10_000;
+const MAX_LANDED_MEMO_ENTRIES = 500;
+const landedMemos = new WeakMap<
+  FastifyInstance,
+  Map<string, { landed: LandedReview; at: number }>
+>();
+
+function landedMemoFor(app: FastifyInstance): Map<string, { landed: LandedReview; at: number }> {
+  let memo = landedMemos.get(app);
+  if (!memo) {
+    memo = new Map();
+    landedMemos.set(app, memo);
+  }
+  return memo;
+}
+
+/**
+ * Keeps the landed-review memo within its cap.
+ *
+ * The age sweep first: an entry past its TTL is worthless anyway. When that
+ * frees nothing — a burst of *fresh* entries, which is exactly what a burst
+ * of re-reviews is, since the key is per (PR, runId) — the oldest entries
+ * are evicted instead, so the map cannot grow past the cap.
+ */
+export function pruneLandedMemo(
+  memo: Map<string, { at: number }>,
+  now: number,
+  max: number = MAX_LANDED_MEMO_ENTRIES,
+): void {
+  if (memo.size <= max) return;
+  for (const [key, entry] of memo) {
+    if (now - entry.at >= LANDED_MEMO_TTL_MS) memo.delete(key);
+  }
+  if (memo.size <= max) return;
+  const oldest = [...memo.entries()].sort((a, b) => a[1].at - b[1].at);
+  for (const [key] of oldest) {
+    memo.delete(key);
+    if (memo.size <= max) break;
+  }
+}
+
+/**
+ * The relay's state for a pull request, as the operator's UI sees it
+ * (issue #1630). Needs a GitHub token to look for the landed review; without
+ * one it still reports the request itself.
+ */
+export async function getRelayReviewState(
+  app: FastifyInstance,
+  opts: { owner: string; repo: string; prNumber: number; token?: string | null },
+): Promise<RelayReviewState> {
+  const { owner, repo, prNumber } = opts;
+  const record = getReviewRunForPr(owner, repo, prNumber);
+  if (!record) return { state: "none" };
+
+  const base: RelayReviewState = {
+    state: "requested",
+    runId: record.runId,
+    dispatchedAt: new Date(record.dispatchedAt).toISOString(),
+  };
+  if (!opts.token) {
+    // No token means the landed-review lookup cannot run at all — so the
+    // review is *unconfirmed*, not "not landed".
+    return { ...base, landedChecked: false };
+  }
+
+  // The memo is keyed by the run, so a new dispatch re-checks immediately.
+  const memo = landedMemoFor(app);
+  const memoKey = `${owner}/${repo}#${prNumber}@${record.runId}`;
+  const cached = memo.get(memoKey);
+  const now = Date.now();
+  let landed: LandedReview;
+  if (cached && now - cached.at < LANDED_MEMO_TTL_MS) {
+    // A HIT does NOT re-stamp the entry: a sliding window would let any
+    // reader faster than the TTL pin the cached answer indefinitely — and
+    // the PR list is refreshed on every webhook event, so a CI-active PR
+    // would never see a review land.
+    landed = cached.landed;
+  } else {
+    landed = await findLandedReview(
+      app,
+      opts.token,
+      { owner, repo, prNumber, headSha: record.headSha, token: opts.token },
+      record,
+    );
+    memo.set(memoKey, { landed, at: now });
+    // The memo holds a review body per PR; drop the entries that can no
+    // longer be hit, so it cannot grow with the process.
+    pruneLandedMemo(memo, now);
+  }
+
+  if (landed.checked && landed.review) {
+    return {
+      ...base,
+      state: "landed",
+      landedChecked: true,
+      author: landed.review.author,
+      verdict: landed.review.state,
+      ...(landed.review.body !== undefined ? { body: landed.review.body } : {}),
+      ...(landed.review.bodyTruncated ? { bodyTruncated: true } : {}),
+      ...(landed.review.htmlUrl !== undefined ? { htmlUrl: landed.review.htmlUrl } : {}),
+    };
+  }
+  // `landedChecked: false` means the lookup itself failed — the UI can say
+  // "could not confirm" instead of claiming the review is simply not there.
+  return { ...base, landedChecked: landed.checked };
 }
 
 type LandedComment =

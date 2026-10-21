@@ -448,3 +448,42 @@ export type LayoutMode = "auto" | "phone" | "tablet" | "desktop";
 // depends on the device's actual unfolded/tablet width, which this backend
 // has no way to know.
 export type TabletPaneCap = 2 | 3;
+
+// ---------------------------------------------------------------------------
+// review-relay.ts — RelayReviewState
+// ---------------------------------------------------------------------------
+
+/**
+ * The Hermes review relay's state for one pull request (issue #1630).
+ *
+ * `"none"` means *no relay run is known for this PR* — never requested here,
+ * or the server restarted. It does NOT mean "no review is pending": the run
+ * index is in-memory, so a restart loses it. A UI must render "none" as
+ * "nothing to show", never as "no review pending".
+ */
+export interface RelayReviewState {
+  state: "none" | "requested" | "landed";
+  /** The relay run's id, when a run is known. */
+  runId?: string;
+  /** When the run was dispatched (ISO 8601). */
+  dispatchedAt?: string;
+  /** The Hermes run's own status: queued, running, completed, failed, … */
+  status?: string;
+  /**
+   * Whether the landed-review lookup actually ran (`false` when the lookup
+   * itself failed). Without it, a failed lookup and a review that simply has
+   * not landed are the same answer — "requested" — and the UI cannot say
+   * "could not confirm" instead.
+   */
+  landedChecked?: boolean;
+  /** Who posted the landed review. */
+  author?: string;
+  /** The review's state: APPROVED, CHANGES_REQUESTED, … */
+  verdict?: string;
+  /** The review's own text (bounded on the way in). */
+  body?: string;
+  /** True when `body` was cut short by the server's cap. */
+  bodyTruncated?: boolean;
+  /** A link to the landed review on GitHub. */
+  htmlUrl?: string;
+}
