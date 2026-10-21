@@ -47,6 +47,21 @@ describe("buildWorkflowConventionsText", () => {
     expect(buildWorkflowConventionsText(answers)).toBe(buildWorkflowConventionsText(answers));
   });
 
+  it("this repo's own AGENTS.md carries the same deferred-work wording", () => {
+    // The fragment is the CROSS-PROJECT surface — injected into every
+    // project's sessions and committed into scaffolded repos. This repo's
+    // AGENTS.md carries a hand-copied equivalent that reaches only the
+    // agents working in this repo. Nothing else ties the two, so a drift
+    // guard is the only thing that will: a future edit to one copy would
+    // otherwise leave the other saying something different.
+    const agents = fs.readFileSync(path.resolve(__dirname, "..", "..", "AGENTS.md"), "utf8");
+    const fragment = buildWorkflowConventionsText({ deferredWork: "tracked-issue" });
+    // The shared sentence both copies carry.
+    const shared = "as a spec an agent can implement on its own";
+    expect(fragment).toContain(shared);
+    expect(agents).toContain(shared);
+  });
+
   it("the deferredWork fragment asks for a spec an agent can implement, not a note", () => {
     // The convention that sends agents to file an issue for every deferral
     // is what fills the queue in the first place. Read as "file a note", it

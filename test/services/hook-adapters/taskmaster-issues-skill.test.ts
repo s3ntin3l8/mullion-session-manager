@@ -158,6 +158,14 @@ describe("taskmaster-issues skill — `Manual: true` is documented as the except
     expect(skillBody).toMatch(/a human\s+genuinely has to\s+weigh in/i);
   });
 
+  it("says a deferral is filed as a spec, not a note", () => {
+    // The "Defer instead of footnoting" paragraph tells the author to file
+    // a deferred item AS A SPEC. The portable half of that sentence is
+    // pinned by workflow-conventions.test.ts, but this half had no
+    // assertion: deleting it left every test in this file green.
+    expect(skillBody).toMatch(/File it as a spec, not a note/);
+  });
+
   it("warns against marking deferred work as manual", () => {
     // "This is a follow-up" and "this was deferred" are not reasons: a
     // deferral is work someone has to do, and a well-specified one is

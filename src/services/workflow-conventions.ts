@@ -265,6 +265,15 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
       {
         id: "tracked-issue",
         label: "File a tracked issue for every deferred item, linked from the PR",
+        // THIS is the cross-project surface for the deferred-work rule: the
+        // fragment is injected into every project's sessions
+        // (session-lifecycle.ts) and committed into scaffolded repos
+        // (mullion-scaffold.ts's workflowConventionsSection). A project's
+        // own AGENTS.md may carry a hand-copied equivalent — this repo's
+        // does — but that copy reaches only the agents working in THAT repo;
+        // it is not what the scaffold upserts elsewhere. Keep the wording
+        // here and in that copy in step; nothing enforces it, so say which
+        // one is canonical so a future editor knows.
         fragment:
           "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record. Write each one as a spec an agent can implement on its own (scope, acceptance criteria), not as a note.",
       },

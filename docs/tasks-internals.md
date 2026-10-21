@@ -312,7 +312,7 @@ path is gated on `canTransition(status, "done")` and so never fires for a
 
 ### The parent-context flow
 
-Note on the parent-context flow: a worker's prompt **does** receive the
+A worker's prompt **does** receive the
 parent epic's body, framed explicitly as "context only, not your task" via
 `renderParent` (`task-prompt.ts`) and routed through `TaskPromptTask.parent`
 / `TaskPromptSibling[]` (`task-prompt.ts`, resolved by
