@@ -115,7 +115,12 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
     `vitest.config.ts` and `frontend/vitest.config.ts` import, not
     duplicated per workspace — to merge shard results.
 - **Secrets detection**: `ci-node.yml`'s `detect-secrets` step is
-  pip-cache-warmed to avoid uncached overhead.
+  pip-cache-warmed to avoid uncached overhead. It scans the files the push
+  touched rather than the whole tree (`detect-secrets-scope: changed`), plus
+  the files the previous baseline listed -- so a change that only edits
+  `.secrets.baseline` and drops another file's entry is still caught. The
+  `test-frontend` job skips the scan entirely: the `test-node` job above
+  already scanned the same tree.
 
 ## Branch protection
 
