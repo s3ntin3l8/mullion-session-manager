@@ -248,6 +248,10 @@ describe("hermes review relay", () => {
   });
 
   describe("the review protocol (issue #1749)", () => {
+    // The shared workflow (s3ntin3l8/.github) derives the session id and the
+    // key with the same rules, from the same inputs — the literals below are
+    // what both sides must agree on, or the two entry points stop
+    // deduplicating against each other.
     it("names a session per pull request, with only safe characters in it", () => {
       expect(reviewSessionId("acme", "widgets", 7)).toBe("hermes-review-acme-widgets-7");
       // A session id becomes a file name on Hermes' side: a "/" or a ".." in it
