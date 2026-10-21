@@ -56,8 +56,13 @@ export function resolveCliModelRoles(
   defaultModel: string | null | undefined,
   reviewerModel: string | null | undefined,
 ): ModelRoleResolution {
-  const implementer = defaultModel ?? null;
-  const reviewer = reviewerModel ?? implementer;
+  // `||`, not `??`: the backend's own candidate loop skips any FALSY value
+  // (`if (!value) continue`), so an empty string is "unset" there — and a
+  // `reviewerModel: ""` persisted by a direct PATCH (the UI maps "" to
+  // null) collapses onto the implementer's model on the backend while
+  // `??` would report the two as distinct here.
+  const implementer = defaultModel || null;
+  const reviewer = reviewerModel || implementer;
   return { implementer, reviewer, shared: reviewer === implementer };
 }
 
@@ -73,7 +78,9 @@ export function resolveOpencodeModelRoles(
   implementerModel: string | null | undefined,
   reviewerModel: string | null | undefined,
 ): ModelRoleResolution {
-  const implementer = implementerModel ?? null;
-  const reviewer = reviewerModel ?? null;
+  // `||` for the same reason as above: opencode's `validateModel("")`
+  // fails, so an empty string resolves to null on the backend too.
+  const implementer = implementerModel || null;
+  const reviewer = reviewerModel || null;
   return { implementer, reviewer, shared: reviewer === implementer };
 }

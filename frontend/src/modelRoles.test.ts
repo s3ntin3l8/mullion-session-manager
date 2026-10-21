@@ -48,6 +48,17 @@ describe("resolveCliModelRoles", () => {
   it("treats undefined and null the same", () => {
     expect(resolveCliModelRoles(undefined, undefined)).toEqual(resolveCliModelRoles(null, null));
   });
+
+  it("treats an empty string as unset, like the backend's own candidate loop", () => {
+    // resolveCliModel skips any FALSY value (`if (!value) continue`), so
+    // an empty string is "unset" on the backend. `??` would report the two
+    // roles as distinct where the backend collapses them onto the
+    // implementer's model.
+    const roles = resolveCliModelRoles("opusplan", "");
+    expect(roles.implementer).toBe("opusplan");
+    expect(roles.reviewer).toBe("opusplan");
+    expect(roles.shared).toBe(true);
+  });
 });
 
 describe("resolveOpencodeModelRoles", () => {

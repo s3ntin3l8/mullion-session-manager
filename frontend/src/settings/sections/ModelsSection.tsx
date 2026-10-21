@@ -14,7 +14,10 @@ const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", padd
 
 const warningStyle = {
   fontSize: 11.5,
-  color: "var(--r)",
+  // Amber, not the error red: this is an advisory note, and the codebase
+  // colours advisory prose amber throughout (PromoteDialog, HostsSection,
+  // IntegrationsSection). Red reads as a failure in a neutral settings row.
+  color: "var(--y)",
   margin: 0,
   paddingLeft: 6,
   maxWidth: 280,
