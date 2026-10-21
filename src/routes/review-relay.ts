@@ -7,6 +7,7 @@ import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
+import { getStoredSettings } from "../services/settings.js";
 import {
   findPullRequestByHead,
   getIssueState,
@@ -454,7 +455,13 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, headSha } = target;
 
       try {
-        const reader = reviewReader(target.token, owner, repo, prNumber);
+        const reader = reviewReader(
+          target.token,
+          owner,
+          repo,
+          prNumber,
+          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+        );
         const run = await requestHermesReview(app, {
           owner,
           repo,
@@ -896,6 +903,12 @@ export function reviewReader(
   owner: string,
   repo: string,
   prNumber: number,
+  /**
+   * The login of the bot that posts the review (e.g. "s3ntin3l8-hermes[bot]").
+   * Only its landed reviews set the delta base — see the setting's comment.
+   * Empty = any bot's review counts.
+   */
+  reviewerBotLogin = "",
 ): {
   reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
   base: () => Promise<string>;
@@ -911,11 +924,12 @@ export function reviewReader(
      * The commit the previous review round covered — the base of this round's
      * delta.
      *
-     * It is the most recent bot review that actually landed (a DISMISSED
-     * review was retracted, so it did not land). The shared workflow computes
-     * the same value for the same PR, and both put it in the idempotency key:
-     * a request for a range that is already being reviewed therefore names
-     * the same range on both paths, and cannot dispatch it twice.
+     * It is the most recent LANDED review by the reviewer bot itself (a
+     * DISMISSED review was retracted, so it did not land). The shared workflow
+     * computes the same value for the same PR, and both put it in the
+     * idempotency key: a request for a range that is already being reviewed
+     * therefore names the same range on both paths, and cannot dispatch it
+     * twice.
      *
      * A failure to read the reviews is not fatal: the round simply reviews
      * the whole diff (an empty base), which is what the first round does
@@ -926,6 +940,15 @@ export function reviewReader(
         const landed = (await reviews()).filter(
           (r) =>
             r.authorIsBot &&
+            // Only the reviewer's OWN reviews count. Another bot's review
+            // (claude[bot], Copilot, a Task Master reviewer) landing on the
+            // head must neither make this request a no-op nor become the base
+            // of the next round — that round would then skip everything the
+            // reviewer itself has not looked at yet. The shared workflow
+            // applies the same rule (its `mention-trigger` input plus
+            // "[bot]"), and the two must agree or their idempotency keys
+            // diverge and the same range can be dispatched twice.
+            (reviewerBotLogin === "" || r.author === reviewerBotLogin) &&
             // A landed review, not merely a non-dismissed one: a PENDING
             // (draft) review never landed, and using it as the base would
             // skip part of the diff.

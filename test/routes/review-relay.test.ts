@@ -276,7 +276,7 @@ describe("review-request routes", () => {
     it("bases the range on the last bot review that landed", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "sha40",
@@ -302,14 +302,41 @@ describe("review-request routes", () => {
           submittedAt: new Date().toISOString(),
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "PENDING",
           commitId: "sha-draft",
           submittedAt: null,
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("does not take the base from another bot's review", async () => {
+      // Only the reviewer's OWN landed reviews set the base. Another bot's
+      // review (claude[bot], Copilot, a Task Master reviewer) on the head
+      // must neither make this request a no-op nor become the base of the
+      // next round — that round would then skip everything the reviewer
+      // itself has not looked at. The shared workflow applies the same rule,
+      // and the two must agree or their idempotency keys diverge.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "claude[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha-claude",
+          submittedAt: new Date().toISOString(),
+        },
+        {
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "sha40",
@@ -323,7 +350,7 @@ describe("review-request routes", () => {
     it("does not treat a dismissed (retracted) review as the base", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "DISMISSED",
           commitId: "sha40",
@@ -371,7 +398,7 @@ describe("review-request routes", () => {
     it("warns, but still dispatches, when a bot review already landed for the commit", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "sha42",
@@ -392,7 +419,7 @@ describe("review-request routes", () => {
     it("says nothing when the commit has no bot review", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "some-other-sha",
@@ -414,7 +441,7 @@ describe("review-request routes", () => {
     it("says nothing about a dismissed (retracted) review", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "DISMISSED",
           commitId: "sha42",
@@ -776,7 +803,7 @@ describe("review-request routes", () => {
           submittedAt: new Date(1_000_950).toISOString(),
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "ccccccc3",
@@ -795,7 +822,7 @@ describe("review-request routes", () => {
         status: "completed",
         github: {
           checked: true,
-          review: { author: "hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
+          review: { author: "s3ntin3l8-hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
         },
       });
     });
@@ -806,7 +833,7 @@ describe("review-request routes", () => {
       // posted.
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "DISMISSED",
           commitId: "ccccccc3",
@@ -829,7 +856,7 @@ describe("review-request routes", () => {
     it("carries the review's own text and link (#1704)", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "CHANGES_REQUESTED",
           commitId: "ccccccc3",
@@ -840,7 +867,7 @@ describe("review-request routes", () => {
       ]);
       const res = await get(sessionId);
       expect(res.json().github.review).toEqual({
-        author: "hermes[bot]",
+        author: "s3ntin3l8-hermes[bot]",
         state: "CHANGES_REQUESTED",
         commitId: "ccccccc3",
         submittedAt: new Date(1_000_900).toISOString(),
@@ -852,7 +879,7 @@ describe("review-request routes", () => {
     it("marks a truncated review body (#1704)", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "COMMENTED",
           commitId: "ccccccc3",
@@ -1061,7 +1088,7 @@ describe("review-request routes", () => {
           createdAt: new Date(1_000_500).toISOString(),
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           body: "## Triage\n\n**Summary:** a duplicate",
           bodyTruncated: false,
@@ -1078,7 +1105,7 @@ describe("review-request routes", () => {
         github: {
           checked: true,
           comment: {
-            author: "hermes[bot]",
+            author: "s3ntin3l8-hermes[bot]",
             body: "## Triage\n\n**Summary:** a duplicate",
           },
         },
@@ -1098,7 +1125,7 @@ describe("review-request routes", () => {
       mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
       mocks.listIssueComments.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           body: "## Triage\n\n**Summary:** ours",
           bodyTruncated: false,
@@ -1114,7 +1141,7 @@ describe("review-request routes", () => {
       ]);
       const res = await triageGet(sessionId, "?issueNumber=12");
       expect(res.json().github.comment).toMatchObject({
-        author: "hermes[bot]",
+        author: "s3ntin3l8-hermes[bot]",
         attribution: "marked",
         body: "## Triage\n\n**Summary:** ours",
       });

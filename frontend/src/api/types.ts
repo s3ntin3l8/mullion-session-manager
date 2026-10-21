@@ -2005,6 +2005,13 @@ export interface AppSettings {
     triagePromptRepo: string;
     triagePromptPath: string;
     cooldownMinutes: number;
+    /**
+     * The GitHub login of the bot that posts the review. Only its landed
+     * reviews set the delta base of the next round — the shared workflow
+     * applies the same rule, and the two must agree or their idempotency
+     * keys diverge. Empty = any bot's review counts.
+     */
+    reviewerBotLogin: string;
   };
   browser: {
     framerate: number;

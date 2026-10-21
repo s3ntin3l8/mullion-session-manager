@@ -134,6 +134,7 @@ describe("Hermes review relay integration routes", () => {
         triagePromptRepo: "",
         triagePromptPath: "hermes-triage-prompt.md",
         cooldownMinutes: 10,
+        reviewerBotLogin: "s3ntin3l8-hermes[bot]",
       });
     });
 
