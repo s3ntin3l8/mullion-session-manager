@@ -35,6 +35,10 @@ jobs:
       # once sharded and would report green regardless.
       test-shards: "2"
       strict-checks: true
+      # Only the files this push touched can have introduced a secret. The
+      # baseline is keyed by filename and line number, so an unchanged file
+      # keeps its entry and the scan stays consistent.
+      detect-secrets-scope: "changed"
     secrets: inherit # pragma: allowlist secret
 
   test-frontend:
@@ -57,6 +61,8 @@ jobs:
       # test-shards/test-merge.
       coverage-fail-under: "70"
       strict-checks: true
+      # The tree was already scanned by the test-node job above.
+      detect-secrets: false
     secrets: inherit # pragma: allowlist secret
 
   # Issue #407 (B3 of the audit remediation plan) — runs the opt-in e2e
