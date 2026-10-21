@@ -289,9 +289,10 @@ progress. The labeling buys the chip without the auto-claim risk, and
 open sub-issues is an additive safety net (catches the case where the human
 forgot `Manual: true`), not the only path.
 
-**`Manual: true` is the exception, not the default.** The directive's
-mechanics are unchanged — a body carrying it is parked in `backlog` by
-`isManualOnly` and never auto-claimed — but the shipped
+### `Manual: true` is the exception, not the default
+
+The directive's mechanics are unchanged — a body carrying it is parked in
+`backlog` by `isManualOnly` and never auto-claimed — but the shipped
 `taskmaster-issues` skill now steers authors AWAY from it unless a human
 genuinely has to weigh in before work starts. It used to document
 `Manual: true` as one of six ordinary options and list "forgetting it" as
@@ -305,7 +306,11 @@ The failure is quiet in both directions, which is why it is worth stating
 plainly: a backlog full of `Manual: true` issues reads as "Task Master
 isn't picking anything up" when in fact it was told not to, and an issue
 that a human later closes after doing the work by hand is recorded as a
-task failure.
+task failure — through the poll's read-back, since the `closed` webhook
+path is gated on `canTransition(status, "done")` and so never fires for a
+`backlog` task.
+
+### The parent-context flow
 
 Note on the parent-context flow: a worker's prompt **does** receive the
 parent epic's body, framed explicitly as "context only, not your task" via
