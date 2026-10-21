@@ -46,7 +46,12 @@ export interface ModelRoleResolution {
   /**
    * True when the two roles resolve to the SAME model — i.e. the reviewer
    * sees no second opinion, because it IS the same model with the same
-   * prompt. The Settings panel warns about this.
+   * weights. The Settings panel warns about this.
+   *
+   * "Same weights", not "same prompt": the reviewer session is given a
+   * DIFFERENT prompt (buildReviewPrompt opens with "Review this task's
+   * diff. You are not expected to make changes."), so what the roles share
+   * is the model, not the instructions.
    */
   shared: boolean;
 }
