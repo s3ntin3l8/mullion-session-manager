@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   listPullRequestReviews: vi.fn(),
   listIssueComments: vi.fn(),
   getIssueState: vi.fn(),
+  completeReviewMarkerCheckRun: vi.fn(),
   getRemoteHostClient: vi.fn(),
 }));
 
@@ -46,6 +47,7 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
   listPullRequestReviews: mocks.listPullRequestReviews,
   listIssueComments: mocks.listIssueComments,
   getIssueState: mocks.getIssueState,
+  completeReviewMarkerCheckRun: mocks.completeReviewMarkerCheckRun,
 }));
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
@@ -77,7 +79,9 @@ import {
   HermesNotConfiguredError,
   HermesUnavailableError,
   ReviewConflictError,
+  ReviewAlreadyLandedError,
   ReviewCooldownError,
+  ReviewInFlightError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
 } from "../../src/services/hermes-review.js";
@@ -255,7 +259,149 @@ describe("review-request routes", () => {
       repo: "widgets",
       prNumber: 42,
       headSha: "sha42",
+      // The base is resolved lazily, by the relay, so a request the relay
+      // refuses does not pay for the PR's reviews.
+      resolveBase: expect.any(Function),
       sessionId,
+      // The token lets the relay read and write the in-flight marker.
+      githubToken: expect.any(String),
+    });
+    // The marker is a check run: writing one needs `checks: write`, which
+    // the read token does not have. So the marker gets its own token.
+    expect(mocks.resolveGitHubToken).toHaveBeenCalledWith(
+      expect.anything(),
+      { owner: "acme", repo: "widgets" },
+      "checks",
+    );
+  });
+
+  describe("the review range (issue #1749)", () => {
+    // The base is a resolver the relay calls when it dispatches, so the test
+    // calls it the same way.
+    const resolvedBase = async () => {
+      const call = mocks.requestHermesReview.mock.calls[0];
+      const resolveBase = (call?.[1] as { resolveBase?: () => Promise<string> }).resolveBase;
+      return resolveBase ? resolveBase() : undefined;
+    };
+
+    it("bases the range on the last bot review that landed", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("takes the base from the last review that actually landed, by a bot", async () => {
+      // The rule the shared workflow uses too: both put it in the idempotency
+      // key, so a difference here means the two entry points stop
+      // deduplicating against each other. A PENDING (draft) review never
+      // landed, and a human's review is not a bot's.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "s3ntin3l8",
+          authorIsBot: false,
+          state: "APPROVED",
+          commitId: "sha-human",
+          submittedAt: new Date().toISOString(),
+        },
+        {
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "PENDING",
+          commitId: "sha-draft",
+          submittedAt: null,
+        },
+        {
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("does not take the base from another bot's review", async () => {
+      // Only the reviewer's OWN landed reviews set the base. Another bot's
+      // review (claude[bot], Copilot, a Task Master reviewer) on the head
+      // must neither make this request a no-op nor become the base of the
+      // next round — that round would then skip everything the reviewer
+      // itself has not looked at. The shared workflow applies the same rule,
+      // and the two must agree or their idempotency keys diverge.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "claude[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha-claude",
+          submittedAt: new Date().toISOString(),
+        },
+        {
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("does not treat a dismissed (retracted) review as the base", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "s3ntin3l8-hermes[bot]",
+          authorIsBot: true,
+          state: "DISMISSED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("still dispatches when the PR's reviews cannot be read", async () => {
+      // The base is the previous round's commit; not being able to read it
+      // only means the round reviews the whole diff (what the first round
+      // does anyway) — it must not fail the request.
+      mocks.listPullRequestReviews.mockRejectedValue(new GitHubApiError("boom", 500));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("does not walk the PR's reviews when the relay refuses the request", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewCooldownError(60, "sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+
+    it("409s when the commit has already been reviewed", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewAlreadyLandedError("sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("already landed");
+    });
+
+    it("409s when a review of the PR is already in flight, naming its run", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewInFlightError("run_live", "sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("run_live");
+      expect(res.headers["retry-after"]).toBe("60");
     });
   });
 
@@ -263,7 +409,7 @@ describe("review-request routes", () => {
     it("warns, but still dispatches, when a bot review already landed for the commit", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "sha42",
@@ -284,7 +430,7 @@ describe("review-request routes", () => {
     it("says nothing when the commit has no bot review", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "some-other-sha",
@@ -306,7 +452,7 @@ describe("review-request routes", () => {
     it("says nothing about a dismissed (retracted) review", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "DISMISSED",
           commitId: "sha42",
@@ -376,7 +522,10 @@ describe("review-request routes", () => {
       repo: "widgets",
       prNumber: 99,
       headSha: "sha99",
+      resolveBase: expect.any(Function),
       sessionId,
+      // The token lets the relay read and write the in-flight marker.
+      githubToken: expect.any(String),
     });
   });
 
@@ -643,6 +792,28 @@ describe("review-request routes", () => {
       mocks.listPullRequestReviews.mockResolvedValue([]);
     });
 
+    it("closes the in-flight marker once the review it names has finished", async () => {
+      // The marker says "a review of this pull request is in flight". Once
+      // the run is terminal it must be closed, or the next request would
+      // mistake a finished review for a live one. The shared workflow closes
+      // its own marker the same way.
+      mocks.getReviewRunForPr.mockReturnValue({
+        runId: "run_1",
+        dispatchedAt: 1_000_000,
+        headSha: "ccccccc3",
+        markerCheckRunId: 4242,
+      });
+      const res = await get(sessionId, "");
+      expect(res.statusCode).toBe(200);
+      expect(mocks.completeReviewMarkerCheckRun).toHaveBeenCalledWith(
+        expect.anything(),
+        "acme",
+        "widgets",
+        4242,
+        "success",
+      );
+    });
+
     it("returns the run status for the branch's PR plus the landed review", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
@@ -667,7 +838,7 @@ describe("review-request routes", () => {
           submittedAt: new Date(1_000_950).toISOString(),
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "APPROVED",
           commitId: "ccccccc3",
@@ -686,7 +857,7 @@ describe("review-request routes", () => {
         status: "completed",
         github: {
           checked: true,
-          review: { author: "hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
+          review: { author: "s3ntin3l8-hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
         },
       });
     });
@@ -697,7 +868,7 @@ describe("review-request routes", () => {
       // posted.
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "DISMISSED",
           commitId: "ccccccc3",
@@ -720,7 +891,7 @@ describe("review-request routes", () => {
     it("carries the review's own text and link (#1704)", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "CHANGES_REQUESTED",
           commitId: "ccccccc3",
@@ -731,7 +902,7 @@ describe("review-request routes", () => {
       ]);
       const res = await get(sessionId);
       expect(res.json().github.review).toEqual({
-        author: "hermes[bot]",
+        author: "s3ntin3l8-hermes[bot]",
         state: "CHANGES_REQUESTED",
         commitId: "ccccccc3",
         submittedAt: new Date(1_000_900).toISOString(),
@@ -743,7 +914,7 @@ describe("review-request routes", () => {
     it("marks a truncated review body (#1704)", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           state: "COMMENTED",
           commitId: "ccccccc3",
@@ -952,7 +1123,7 @@ describe("review-request routes", () => {
           createdAt: new Date(1_000_500).toISOString(),
         },
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           body: "## Triage\n\n**Summary:** a duplicate",
           bodyTruncated: false,
@@ -969,7 +1140,7 @@ describe("review-request routes", () => {
         github: {
           checked: true,
           comment: {
-            author: "hermes[bot]",
+            author: "s3ntin3l8-hermes[bot]",
             body: "## Triage\n\n**Summary:** a duplicate",
           },
         },
@@ -989,7 +1160,7 @@ describe("review-request routes", () => {
       mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
       mocks.listIssueComments.mockResolvedValue([
         {
-          author: "hermes[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
           body: "## Triage\n\n**Summary:** ours",
           bodyTruncated: false,
@@ -1005,7 +1176,7 @@ describe("review-request routes", () => {
       ]);
       const res = await triageGet(sessionId, "?issueNumber=12");
       expect(res.json().github.comment).toMatchObject({
-        author: "hermes[bot]",
+        author: "s3ntin3l8-hermes[bot]",
         attribution: "marked",
         body: "## Triage\n\n**Summary:** ours",
       });

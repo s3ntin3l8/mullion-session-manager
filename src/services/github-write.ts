@@ -789,6 +789,10 @@ export interface PullRequestReviewSummary {
 
 const REVIEWS_PAGE_SIZE = 100;
 const REVIEWS_MAX_PAGES = 10;
+// The check runs of a commit: a busy commit has hundreds of them, so the
+// marker can be off the first page.
+const CHECK_RUNS_PAGE_SIZE = 100;
+const CHECK_RUNS_MAX_PAGES = 10;
 /**
  * How much of a review body is kept (issue #1704). A review body is prose
  * written by a bot (or by whoever the bot quotes) — long, but not unbounded:
@@ -814,6 +818,123 @@ export function truncateText(text: string, max: number): string {
  * land" needs. The endpoint is ascending, so every page is read (up to 1000
  * reviews): the newest review is on the last one. Read-only.
  */
+/**
+ * A check run on a commit — the "a review of this pull request is in flight"
+ * marker the Hermes review protocol uses (issue #1749).
+ *
+ * The marker is a check run named "Hermes review" on the reviewed head, whose
+ * `external_id` is the Hermes run id. The shared workflow reads and writes the
+ * same marker, so both entry points see one another's in-flight review.
+ */
+export interface CommitCheckRunSummary {
+  id: number;
+  name: string;
+  /** The Hermes run id — empty when the check run is not one of ours. */
+  externalId: string;
+  status: string;
+  conclusion: string | null;
+  /** The marker records the session the round ran in: "session: <id>". */
+  summary: string;
+}
+
+/**
+ * The check runs on a commit. Used to find the in-flight marker (and the
+ * session it remembers) on the previous round's commit.
+ *
+ * Every page is read (the newest marker can be off the first page — a busy
+ * commit has hundreds of check runs), and the list is returned NEWEST FIRST:
+ * the endpoint answers in descending id order, but the ids are what the
+ * order is decided by here, so a caller that takes the first marker gets the
+ * newest one whatever the endpoint does.
+ */
+export async function listCommitCheckRuns(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<CommitCheckRunSummary[]> {
+  const out: CommitCheckRunSummary[] = [];
+  for (let page = 1; page <= CHECK_RUNS_MAX_PAGES; page++) {
+    const data = await githubRequest<{
+      check_runs?: Array<{
+        id: number;
+        name: string;
+        external_id?: string | null;
+        status?: string;
+        conclusion?: string | null;
+        output?: { summary?: string | null } | null;
+      }>;
+    }>(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/commits/${encodeURIComponent(sha)}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&page=${page}`,
+    );
+    const runs = data.check_runs ?? [];
+    for (const r of runs) {
+      out.push({
+        id: r.id,
+        name: r.name,
+        externalId: r.external_id ?? "",
+        status: r.status ?? "",
+        conclusion: r.conclusion ?? null,
+        summary: r.output?.summary ?? "",
+      });
+    }
+    if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
+  }
+  // Newest first, by id — the endpoint's own order is not the contract.
+  return out.sort((a, b) => b.id - a.id);
+}
+
+/**
+ * Writes the in-flight marker: a check run on the reviewed head whose
+ * external_id is the Hermes run id, and whose summary records the session the
+ * round runs in (so the next round — from either entry point — can continue
+ * in it).
+ *
+ * The shared workflow writes the same marker with the same shape; a marker
+ * written by one is found by the other.
+ */
+export async function createReviewMarkerCheckRun(
+  token: string,
+  owner: string,
+  repo: string,
+  m: {
+    name: string;
+    headSha: string;
+    externalId: string;
+    sessionId: string;
+    detailsUrl?: string;
+  },
+): Promise<number> {
+  const data = await githubRequest<{ id: number }>(token, owner, repo, "POST", "/check-runs", {
+    name: m.name,
+    head_sha: m.headSha,
+    external_id: m.externalId,
+    status: "in_progress",
+    details_url: m.detailsUrl,
+    output: { title: m.name, summary: `session: ${m.sessionId}` },
+  });
+  return data.id;
+}
+
+/** Closes the in-flight marker when the review it names has finished. */
+export async function completeReviewMarkerCheckRun(
+  token: string,
+  owner: string,
+  repo: string,
+  checkRunId: number,
+  conclusion: "success" | "failure" | "neutral",
+): Promise<void> {
+  await githubRequest(token, owner, repo, "PATCH", `/check-runs/${checkRunId}`, {
+    status: "completed",
+    conclusion,
+    completed_at: new Date().toISOString(),
+  });
+}
+
 export async function listPullRequestReviews(
   token: string,
   owner: string,

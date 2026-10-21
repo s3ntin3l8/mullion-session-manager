@@ -191,7 +191,7 @@ Configuring one:
    never the private key itself, which no endpoint echoes back.
 
 Once configured, a call for `owner/repo` mints a short-lived (~1h)
-installation token scoped to exactly that repository and one of four
+installation token scoped to exactly that repository and one of the
 permission sets — never the App's full installation grant, and never bound
 to a single issue (a GitHub App installation token can't scope to an
 individual issue, only a repository):
@@ -230,12 +230,23 @@ individual issue, only a repository):
   installation.
 - **dispatch** (#744) — Actions: write, Metadata — used only for the
   release-please "Run" trigger (`POST .../actions/workflows/:id/dispatches`),
-  which needs `actions: write`, a permission none of the other three sets
+  which needs `actions: write`, a permission none of the other sets
   grants. Deliberately its own set rather than folded into `write`: Task
   Master's ordinary issue/PR/push writes have no business holding an
   Actions-write scope.
+- **checks** — Checks: write, Metadata — used only for the Hermes review
+  protocol's in-flight marker, which is a check run on the reviewed commit
+  (`POST /repos/{owner}/{repo}/check-runs`). Writing one needs `checks:
+write`, a permission none of the other sets grants, so it is its own set
+  rather than a widening of `write`. Until the App registration is
+  re-approved with Checks: Read & write, this scope's mint fails and
+  `resolveGitHubToken` falls back to the PAT/OAuth token — a `repo`-scoped
+  user token covers check runs, so the marker still works. To fix it on the
+  App itself: Settings → Developer settings → GitHub Apps → Permissions &
+  events → Repository permissions → Checks: Read & write, then accept the
+  update on the installation.
 
-The four are minted and cached independently, so an installation that only
+The sets are minted and cached independently, so an installation that only
 granted the write set (e.g. one approved before Actions/Metadata were added
 to the App definition) still gets Task Master's writes covered while the
 read- and dispatch-scoped calls fall back to the PAT. If the App isn't

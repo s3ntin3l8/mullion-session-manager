@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getHermesKey } from "./hermes-integration.js";
+import { createReviewMarkerCheckRun, listCommitCheckRuns } from "./github-write.js";
 import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
 import { getStoredSettings } from "./settings.js";
 import type { UrlGuardPolicy } from "./url-guard.js";
@@ -83,11 +84,116 @@ export class ReviewConflictError extends Error {
   }
 }
 
+/**
+ * The commit has already been reviewed (issue #1749).
+ *
+ * The review's range is empty: the bot's last landed review is on this very
+ * commit, so there is nothing new to review. Dispatching a run for an empty
+ * range is how the same diff got reviewed twice — the key would be
+ * `<head>..<head>`, a key the previous round never used, so it looked like
+ * a fresh request.
+ */
+export class ReviewAlreadyLandedError extends Error {
+  constructor(readonly headSha: string) {
+    super(
+      `A review of this commit already landed (at ${headSha.slice(0, 7)}) — there is nothing new to review. ` +
+        `Push a new commit to ask for another round, or dismiss that review first`,
+    );
+    this.name = "ReviewAlreadyLandedError";
+  }
+}
+
 /** The run id is unknown to this Mullion (never dispatched here, or the server restarted). */
 export class ReviewRunNotFoundError extends Error {
   constructor() {
     super("No such review run — it was not dispatched by this Mullion, or the server restarted");
     this.name = "ReviewRunNotFoundError";
+  }
+}
+
+/**
+ * A review of this target is already in flight (issue #1749).
+ *
+ * The refusal is the point: an agent that asked again because the first
+ * request "took too long" used to get a SECOND review queued behind the
+ * first, so the delay grew with every retry. Now the answer is the run id of
+ * the review that is already working — wait for it, or stop it deliberately.
+ */
+export class ReviewInFlightError extends Error {
+  constructor(
+    readonly runId: string,
+    /** The commit the running review covers, when known. */
+    readonly headSha?: string,
+    /** The target's kind — a triage is not a review (issue #1629). */
+    readonly kind: RelayTargetKind = "pull_request",
+  ) {
+    super(
+      kind === "issue"
+        ? `A triage of this issue is already in flight (run ${runId}) — wait for it, or stop it with stop_review, instead of requesting another one`
+        : `A review of this pull request is already in flight (run ${runId}) — wait for it, or stop it with stop_review, instead of requesting another one`,
+    );
+    this.name = "ReviewInFlightError";
+  }
+}
+
+/**
+ * The statuses that mean the run is FINISHED. Everything else is treated as
+ * live — the list is inverted on purpose: Hermes parks a run in statuses this
+ * code has never heard of (`waiting_for_approval` while the agent waits for
+ * a tool approval, for one), and a status missing from a "live" list reads as
+ * finished, which dispatches a second review of a pull request that is still
+ * being reviewed.
+ *
+ * "completed" is finished, but it is NOT evidence that a review landed
+ * (Hermes reports "completed" for a run that posted nothing), so a completed
+ * run is retried under a deeper key rather than treated as "already
+ * reviewed".
+ */
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+
+/**
+ * The statuses that mean the run is GONE — Hermes does not know it any more
+ * (its window elapsed, or the gateway lost it). Not live: there is nothing
+ * running to wait for. "unknown" is here for the same reason: it is what the
+ * API answers when the run's body was unreadable.
+ */
+const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
+
+/**
+ * How many times one request may start a fresh attempt for a range whose
+ * previous run failed. Each attempt is a full review, so this is a
+ * backstop, not a budget.
+ */
+const MAX_REVIEW_ATTEMPTS = 3;
+
+/**
+ * How many session ids one attempt may try.
+ *
+ * A session that refuses the turn is stuck (it never recovers), so the round
+ * moves to a fresh one. That is a separate axis from the range's attempts:
+ * a stuck session must not eat the attempts the range itself gets, or two
+ * stuck sessions would leave no attempt for the dispatch.
+ */
+const MAX_SESSION_ATTEMPTS = 3;
+
+/**
+ * Hermes' session authority refused the turn (HTTP 409 `admission_conflict`).
+ *
+ * The session a pull request's reviews run in is stuck: the gateway paused it
+ * on an earlier conflict and never recovers
+ * (NousResearch/hermes-agent#142731), so every later round for that pull
+ * request is refused at the door. The way out is a fresh session — the caller
+ * retries the attempt there.
+ */
+export class ReviewSessionRefusedError extends Error {
+  constructor(
+    /** The session that refused the turn. */
+    readonly sessionId: string,
+  ) {
+    super(
+      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.`,
+    );
+    this.name = "ReviewSessionRefusedError";
   }
 }
 
@@ -114,8 +220,69 @@ export interface RelayTarget {
   number: number;
   /** The PR's head commit — a pull_request target only. */
   headSha?: string;
+  /**
+   * Resolves the commit the previous review round covered — the base of this
+   * round's delta. The workflow computes the same value (the bot's last
+   * landed review's commit), so both entry points describe a review of the
+   * same *range* and therefore share one idempotency key.
+   *
+   * A resolver, not a value, because the base is only needed once a dispatch
+   * is actually going to happen: reading the PR's reviews is a GitHub call
+   * (up to ten pages), and a request the relay refuses must not pay for it.
+   */
+  resolveBase?: () => Promise<string>;
   /** Dispatching Mullion session, when the request came from an agent. */
   sessionId?: number;
+  /**
+   * The GitHub token used to read and write the in-flight marker (issue
+   * #1751, #1757). Without it the relay cannot see the session the previous
+   * round ran in, and cannot write one of its own.
+   */
+  githubToken?: string;
+}
+
+/**
+ * The Hermes session a pull request's review rounds run in — one per PR, so
+ * the rounds keep their history (the reviewer remembers what it said last
+ * round) while different PRs stay independent and can be reviewed in
+ * parallel.
+ *
+ * The id becomes a file name on Hermes' side, so the owner and repo are
+ * folded to `[A-Za-z0-9_-]`: a "/" or a ".." in it would be rejected as an
+ * unsafe session id. The shared workflow computes the same value for the
+ * same PR, so a review requested through Mullion and one requested with an
+ * `@s3ntin3l8-hermes Review` comment land in the SAME session.
+ */
+export function reviewSessionId(owner: string, repo: string, number: number): string {
+  // Lower-cased: GitHub's owner and repository names are case-insensitive, so
+  // a differently-cased remote would otherwise get a second session (and a
+  // second key) for one pull request.
+  const slug = (value: string): string => value.toLowerCase().replace(/[^A-Za-z0-9_-]/g, "-");
+  return `hermes-review-${slug(owner)}-${slug(repo)}-${number}`;
+}
+
+/**
+ * The idempotency key a review range is dispatched under. It names the
+ * RANGE (base..head), not the request, so a second request for a range that
+ * is already being reviewed replays the existing run instead of queueing a
+ * second review of the same diff.
+ *
+ * Hermes fingerprints the request body against the key: the same key with a
+ * different body is a 409 conflict (not a replay) — which is still the right
+ * outcome, because a run for that range exists either way. The workflow
+ * builds the same key for the same range, so the two entry points cannot
+ * dispatch the same range twice.
+ */
+export function reviewIdempotencyKey(
+  owner: string,
+  repo: string,
+  number: number,
+  baseSha: string | undefined,
+  headSha: string,
+): string {
+  // Lower-cased, like the session id: one pull request must have one key
+  // however its remote is spelled.
+  return `hermes-review:${owner.toLowerCase()}/${repo.toLowerCase()}#${number}@${baseSha ?? ""}..${headSha}`;
 }
 
 // Deliberately generic: nothing here names a particular host's scripts or
@@ -248,6 +415,16 @@ export interface ReviewRunRecord {
   /** Dispatching Mullion session, when the request came from an agent. */
   sessionId?: number;
   dispatchedAt: number;
+  /**
+   * The in-flight marker's check-run id, when the relay wrote one.
+   *
+   * The marker is closed when the run reaches a terminal status, so the next
+   * request does not mistake a finished review for a live one. The shared
+   * workflow closes its own marker the same way.
+   */
+  markerCheckRunId?: number;
+  /** The Hermes session the round runs in — the marker remembers it. */
+  hermesSessionId?: string;
 }
 
 // Run index, also in-memory: Hermes keeps run status for 24h (durable, keyed by
@@ -429,8 +606,21 @@ export interface HermesReviewRequest {
   prNumber: number;
   /** PR head commit; part of the Idempotency-Key, so a push is always a fresh review. */
   headSha: string;
+  /**
+   * Resolves the commit the previous review round covered — the base of this
+   * round's delta, and part of the Idempotency-Key. The shared workflow
+   * computes the same value, so both entry points describe the same review
+   * RANGE and cannot dispatch it twice.
+   */
+  resolveBase?: () => Promise<string>;
   /** Dispatching Mullion session, so only it can stop the run. */
   sessionId?: number;
+  /**
+   * The GitHub token used to read and write the in-flight marker (issues
+   * #1751, #1757). Without it the relay cannot see the session the previous
+   * round ran in, and cannot write one of its own.
+   */
+  githubToken?: string;
 }
 
 /**
@@ -463,7 +653,7 @@ export function assertReviewerConfigured(app: FastifyInstance): string {
  */
 export async function requestHermesReview(
   app: FastifyInstance,
-  { owner, repo, prNumber, headSha, sessionId }: HermesReviewRequest,
+  { owner, repo, prNumber, headSha, resolveBase, sessionId, githubToken }: HermesReviewRequest,
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
   return requestRelay(app, {
     kind: "pull_request",
@@ -471,8 +661,39 @@ export async function requestHermesReview(
     repo,
     number: prNumber,
     headSha,
+    resolveBase,
     sessionId,
+    githubToken,
   });
+}
+
+/**
+ * The live run for a target, when one is still working.
+ *
+ * The run index is in-memory (a server restart loses it), so this is a
+ * best-effort answer: an unknown run is not a live one, and a status that
+ * cannot be read is not proof of a live run either — refusing on an
+ * unreadable answer would drop the review entirely.
+ */
+async function findLiveRun(
+  app: FastifyInstance,
+  target: RelayTarget,
+  root: string,
+  key: string,
+): Promise<ReviewRunRecord | null> {
+  const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
+  if (!record) return null;
+  try {
+    const status = await fetchRun(root, key, record);
+    // An unreadable status is not proof of a live run (it is also not proof of
+    // a finished one): treat it as not live, so a request is never dropped.
+    if (!status.status) return null;
+    if (TERMINAL_RUN_STATUSES.has(status.status)) return null;
+    if (GONE_RUN_STATUSES.has(status.status)) return null;
+    return record;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -498,6 +719,17 @@ export async function requestRelay(
   }
   const root = baseUrl(apiUrl);
 
+  // One review in flight per pull request (issue #1749). A second request for
+  // a PR that is already being reviewed used to dispatch a SECOND review,
+  // which queued behind the first: the delay grew with every retry, and each
+  // queued round inherited the previous rounds' transcript. The refusal names
+  // the run that is already working, so the caller can wait for it (or stop
+  // it deliberately) instead of adding to the queue.
+  const live = await findLiveRun(app, target, root, key);
+  if (live) {
+    throw new ReviewInFlightError(live.runId, live.headSha, target.kind);
+  }
+
   const cooldownKey = cooldownKeyFor(target);
   sweepCooldown(Date.now(), cooldownMinutes * 60_000);
   const last = lastRequested.get(cooldownKey);
@@ -516,37 +748,164 @@ export async function requestRelay(
   // and double-dispatch. A failed dispatch gives the slot back.
   lastRequested.set(cooldownKey, Date.now());
   try {
-    // Hermes replays an identical request that reuses a key (same run id, even
-    // once finished) for 24h, so a key per commit alone would make a deliberate
-    // re-request — after a failed or stopped run — silently dispatch nothing.
-    // Bucketing by the cooldown window keeps a retry of one request (a failure
-    // frees the cooldown slot) idempotent while a later request gets a new key.
-    // With the cooldown disabled (0) there is no window: every request is fresh.
-    // The bucket window and the cooldown window are the same length on
-    // purpose (issue #1703): the cooldown is keyed by the commit, so "the
-    // cooldown has expired" and "the idempotency bucket has rolled over" stay
-    // in step — a same-commit request is refused by the cooldown until the
-    // bucket rolls, and dispatched fresh after it does.
+    // The key names the RANGE for a pull request, so a second request for a
+    // range that is already being reviewed replays the run that is already
+    // there instead of queueing a second review of the same diff. The shared
+    // workflow builds the same key for the same range, so a review requested
+    // through Mullion and one requested with an `@s3ntin3l8-hermes Review`
+    // comment are the same request as far as Hermes' replay window is
+    // concerned.
+    //
+    // An issue triage has no commit to pin, so it keeps a per-window key: a
+    // triage of the same issue is a fresh job each time, not a replay of the
+    // last one.
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
-    // The key names the kind, so a triage of issue #5 and a review of PR #5
-    // are never the same request as far as Hermes' replay window is
-    // concerned.
-    const scope =
+    const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
+    // An empty range means the bot's last landed review is on this very
+    // commit: there is nothing new to review, and a run for it would be a
+    // second review of the same diff.
+    if (target.kind === "pull_request" && baseSha && baseSha === target.headSha) {
+      throw new ReviewAlreadyLandedError(baseSha);
+    }
+    const rangeKey =
       target.kind === "issue"
-        ? `mullion-triage:${owner}/${repo}#${number}`
-        : `mullion-review:${owner}/${repo}#${number}@${target.headSha}`;
-    const idempotencyKey = `${scope}:${bucket}`;
-    const run = await dispatchReview(root, key, {
-      idempotencyKey,
-      model,
-      kind: target.kind,
-      owner,
-      repo,
-      number,
-      promptRepo,
-      promptPath,
-    });
+        ? `mullion-triage:${owner}/${repo}#${number}:${bucket}`
+        : reviewIdempotencyKey(owner, repo, number, baseSha, target.headSha ?? "");
+    // The attempt chain (issue #1750): Hermes replays the run a key names, so
+    // a range whose run FAILED would be stuck — the retry would replay the
+    // failed run instead of starting a new attempt, and "ask again" would do
+    // nothing. A retry therefore goes under a deeper key, derived from the
+    // run that failed: the key is a function of what failed, not of the
+    // clock, so a repeat of the retry computes the same key and replays it
+    // rather than dispatching a second attempt.
+    let idempotencyKey = rangeKey;
+    // One Hermes session per pull request, so the review rounds of a PR
+    // continue the same conversation (the reviewer remembers the earlier
+    // rounds) while different PRs stay independent.
+    const baseSessionId =
+      target.kind === "pull_request" ? reviewSessionId(owner, repo, number) : undefined;
+    let sessionId = baseSessionId;
+    // The attempt that owns the current session id: 1 is the pull request's
+    // own session, 2 and 3 are the retries that follow a stuck one.
+    let sessionAttempt = 1;
+    // The previous round may have had to move to a fresh session (its own was
+    // stuck, and a stuck session never recovers). The in-flight marker it
+    // wrote records the session it used, so the next round continues in it
+    // instead of starting from the stuck base id and paying a refused POST
+    // every round. The shared workflow reads the same marker (issue #1757).
+    if (target.kind === "pull_request" && baseSha && baseSessionId && target.githubToken) {
+      const remembered = await readRememberedSession(
+        target.githubToken,
+        owner,
+        repo,
+        baseSha,
+        baseSessionId,
+      );
+      if (remembered) {
+        sessionId = remembered.id;
+        sessionAttempt = remembered.attempt;
+      }
+    }
+    let run: { runId: string; status: string; replayed: boolean } | undefined;
+    let lastError: Error | undefined;
+    for (let attempt = 0; attempt < MAX_REVIEW_ATTEMPTS; attempt++) {
+      let dispatched: { runId: string; status: string; replayed: boolean } | undefined;
+      // The session has its own budget: a session that refuses the turn
+      // (it is stuck) is not a failed attempt at this range, so it must not
+      // eat the range's attempts — otherwise two stuck sessions would leave
+      // no attempt for the dispatch itself.
+      for (let sessionTry = 0; sessionTry < MAX_SESSION_ATTEMPTS; sessionTry++) {
+        try {
+          dispatched = await dispatchReview(root, key, {
+            idempotencyKey,
+            model,
+            kind: target.kind,
+            owner,
+            repo,
+            number,
+            promptRepo,
+            promptPath,
+            sessionId,
+          });
+        } catch (err) {
+          if (!(err instanceof ReviewSessionRefusedError) || !sessionId) throw err;
+          // The session refused the turn: it is stuck, and it will refuse every
+          // later round of this pull request too. Start over in a fresh session.
+          // The body carries the session id, so the idempotency key moves with
+          // it — a key that stayed would conflict with the body it holds.
+          sessionAttempt += 1;
+          sessionId = `${baseSessionId}-${sessionAttempt}`;
+          idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
+          lastError = err;
+          continue;
+        }
+        break;
+      }
+      if (!dispatched) {
+        // Every session id for this range was refused. The range itself was
+        // never tried — report the session refusal, not a failed range.
+        throw new HermesUnavailableError(
+          "The review could not be started — Hermes refused every session for this pull request",
+          `gave up after ${MAX_SESSION_ATTEMPTS} sessions${lastError ? `: ${lastError.message}` : ""}`,
+        );
+      }
+      if (!dispatched.replayed) {
+        run = dispatched;
+        break;
+      }
+      // A replay: this range already has a run. Is it still working?
+      //
+      // The rule is INVERTED on purpose, like findLiveRun's: a status this
+      // code has never heard of must not read as "finished" — that would
+      // dispatch a second review of a pull request that is still being
+      // reviewed. Only a status that is known to be OVER is treated as over.
+      if (!TERMINAL_RUN_STATUSES.has(dispatched.status)) {
+        throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
+      }
+      // The run is over — it failed, or it completed. A completed run is NOT
+      // evidence that a review landed: Hermes reports "completed" for a run
+      // that posted nothing (no App credentials, for instance). The range is
+      // still un-reviewed when it is not empty (the empty-range check above
+      // refuses that case), so start a fresh attempt under a deeper key.
+      idempotencyKey = `${idempotencyKey}#${dispatched.runId}`;
+    }
+    if (!run) {
+      throw new HermesUnavailableError(
+        "The review could not be started — every attempt for this range failed",
+        `gave up after ${MAX_REVIEW_ATTEMPTS} attempts${lastError ? `: ${lastError.message}` : ""}`,
+      );
+    }
+    // The in-flight marker: a check run on the reviewed head whose external_id
+    // is the Hermes run id and whose summary records the session the round
+    // runs in. The shared workflow reads and writes the same marker, so a
+    // request through either entry point sees the other's in-flight review
+    // (issue #1751) and continues in its session (issue #1757).
+    let markerCheckRunId: number | undefined;
+    if (
+      target.kind === "pull_request" &&
+      target.headSha &&
+      sessionId &&
+      target.githubToken &&
+      !run.replayed
+    ) {
+      try {
+        markerCheckRunId = await createReviewMarkerCheckRun(target.githubToken, owner, repo, {
+          name: REVIEW_MARKER_NAME,
+          headSha: target.headSha,
+          externalId: run.runId,
+          sessionId,
+          detailsUrl: `https://github.com/${owner}/${repo}/pull/${number}`,
+        });
+      } catch (err) {
+        // A marker that cannot be written is not a failed review: the run is
+        // already on its way, and the next request simply cannot see it.
+        app.log.warn(
+          { err, owner, repo, prNumber: number },
+          "could not write the in-flight marker for the review run",
+        );
+      }
+    }
     trackRun({
       ...run,
       kind: target.kind,
@@ -556,6 +915,8 @@ export async function requestRelay(
       headSha: target.headSha ?? "",
       sessionId: target.sessionId,
       dispatchedAt: Date.now(),
+      markerCheckRunId,
+      hermesSessionId: sessionId,
     });
     return { runId: run.runId, status: run.status, replayed: run.replayed };
   } catch (err) {
@@ -565,6 +926,59 @@ export async function requestRelay(
       app.log.warn({ detail: err.detail }, "Hermes review relay failed");
     }
     throw err;
+  }
+}
+
+/**
+ * The in-flight marker's check-run name.
+ *
+ * The shared workflow writes the same marker under the same name (its
+ * `hermes-review-ledger-name` input, default "Hermes review"), so a marker
+ * written by one entry point is found by the other — that is what lets a
+ * request through the relay see a review the workflow started, and the other
+ * way round.
+ */
+const REVIEW_MARKER_NAME = "Hermes review";
+
+/**
+ * The session the previous round ran in, read off the in-flight marker it
+ * wrote (issue #1757).
+ *
+ * A round whose own session was stuck moves to a fresh one
+ * (`<base id>-<n>`) and records it on the marker. The next round continues
+ * in that session instead of starting from the stuck base id — which would be
+ * refused at the door, every round, forever.
+ *
+ * Only an id of the exact shape this code generates is honoured (the base id,
+ * or the base id with a numeric suffix): a malformed id, or one belonging to
+ * another pull request, is ignored rather than used.
+ */
+async function readRememberedSession(
+  token: string,
+  owner: string,
+  repo: string,
+  baseSha: string,
+  baseSessionId: string,
+): Promise<{ id: string; attempt: number } | null> {
+  try {
+    const runs = await listCommitCheckRuns(token, owner, repo, baseSha);
+    // The NEWEST marker on that commit: the list comes back newest first (by
+    // id), and the newest one is the round that actually ran — an older
+    // marker names the session that was stuck, which is exactly the id the
+    // next round must not go back to.
+    const marker = runs.find((r) => r.name === REVIEW_MARKER_NAME);
+    const match = /^session: (\S+)$/.exec((marker?.summary ?? "").trim());
+    if (!match) return null;
+    const id = match[1];
+    const escaped = baseSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const shape = new RegExp(`^${escaped}(-[0-9]+)?$`).exec(id);
+    if (!shape) return null;
+    return { id, attempt: shape[1] ? Number(shape[1].slice(1)) : 1 };
+  } catch {
+    // The marker is an optimisation, not a requirement: a request that cannot
+    // read it simply starts from the base id (and moves to a fresh one if
+    // that session refuses the turn).
+    return null;
   }
 }
 
@@ -631,6 +1045,8 @@ async function dispatchReview(
     number: number;
     promptRepo: string;
     promptPath: string;
+    /** The Hermes session to run in — one per pull request. */
+    sessionId?: string;
   },
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
   const prompt = r.promptRepo
@@ -643,6 +1059,11 @@ async function dispatchReview(
   const body = JSON.stringify({
     model: r.model,
     input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt),
+    // The session id is what makes the review rounds of one pull request
+    // continue the same conversation. Without it Hermes derives the session
+    // from the request text, which made every request for a PR land in the
+    // same session — and queue behind each other.
+    ...(r.sessionId ? { session_id: r.sessionId } : {}),
   });
   const res = await hermesFetch(root, key, "/v1/runs", {
     method: "POST",
@@ -657,13 +1078,22 @@ async function dispatchReview(
     const refusal = await readJson<{ error?: { code?: unknown }; code?: unknown }>(res);
     const code = refusal?.error?.code ?? refusal?.code;
     if (code === "idempotency_key_conflict") throw new ReviewConflictError();
+    if (code === "admission_conflict" && r.sessionId) {
+      // Hermes' session authority refused the turn. The session this pull
+      // request's reviews run in is stuck — the gateway paused it on an
+      // earlier conflict and never recovers
+      // (NousResearch/hermes-agent#142731) — so every later round of this
+      // pull request is refused at the door. The caller retries in a fresh
+      // session.
+      throw new ReviewSessionRefusedError(r.sessionId);
+    }
     throw new HermesUnavailableError(
       "Hermes refused the review request (HTTP 409) — review not dispatched",
       `HTTP 409: ${JSON.stringify(refusal)?.slice(0, 300)}`,
     );
   }
   if (!res.ok) throw await unavailableFromResponse(res, "review not dispatched");
-  const parsed = await readJson<{ run_id?: unknown; status?: unknown }>(res);
+  const parsed = await readJson<{ run_id?: unknown; status?: unknown; replayed?: unknown }>(res);
   if (typeof parsed?.run_id !== "string" || parsed.run_id === "") {
     throw new HermesUnavailableError(
       "Hermes accepted the request but returned no run id",
@@ -674,8 +1104,9 @@ async function dispatchReview(
     runId: parsed.run_id,
     status: typeof parsed.status === "string" ? parsed.status : "queued",
     // Hermes answers a repeat of an earlier request with the ORIGINAL run
-    // (possibly already finished) and this header, instead of starting one.
-    replayed: res.headers.get("idempotency-replayed") === "true",
+    // (possibly already finished) instead of starting one: the header says
+    // so, and so does the body.
+    replayed: res.headers.get("idempotency-replayed") === "true" || parsed.replayed === true,
   };
 }
 

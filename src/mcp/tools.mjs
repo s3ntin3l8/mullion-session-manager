@@ -7,6 +7,7 @@
 // `isError: true` result rather than a protocol-level failure.
 
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
+import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";
 
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
@@ -618,16 +619,15 @@ const requestReview = {
   description:
     "Ask the Mullion server to request an automated Hermes review of this session's pull " +
     "request. Reachable from inside a normal agent session (session scope). The review is " +
-    "dispatched asynchronously and posts to the PR as the review bot within a few minutes — " +
-    "wait for it rather than requesting again (the result carries a runId; use review_status " +
-    "only to troubleshoot a review that never shows up); a repeat request for the same COMMIT " +
-    "is refused for a cooldown period (a request for a new head commit, after pushing fixes, " +
-    "goes through right away). Omit pr_number to use the open PR for the session's current " +
-    "branch. Fails with a clear message if the relay isn't configured in Mullion's " +
-    "Settings → Integrations or no PR exists yet. The result may carry a warning that a bot " +
-    "review for this commit already landed — the request still goes through. Use this " +
-    "for a re-review after pushing fixes; a newly opened PR is " +
-    "reviewed automatically.",
+    "dispatched asynchronously and posts to the PR as the review bot within a few minutes; " +
+    "the result carries a runId. " +
+    REVIEW_PROTOCOL_NOTE +
+    " Omit pr_number to use the open PR for the session's current branch. Fails with a clear " +
+    "message if the relay isn't configured in Mullion's Settings → Integrations or no PR " +
+    "exists yet. A commit that has ALREADY been reviewed is refused (409): there is nothing " +
+    "new to review, so push a new commit to ask for another round, or dismiss that review " +
+    "first. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
+    "automatically.",
   inputSchema: {
     type: "object",
     properties: {
@@ -647,11 +647,13 @@ const requestReview = {
 const reviewStatus = {
   name: "review_status",
   description:
-    "Troubleshoot a review requested with request_review: returns the run's Hermes status " +
+    "Check a review requested with request_review: returns the run's Hermes status " +
     "(queued, running, stopping, completed, failed, cancelled, interrupted, unknown, not_found), the review " +
     "bot's reply or error, and whether the bot's review actually landed on the PR — including the " +
-    "review's own text and a link to it. Use it " +
-    "when a requested review has not appeared after several minutes — not to poll in a loop. " +
+    "review's own text and a link to it. Call it ONCE, about ten minutes after requesting: a " +
+    "review takes 10-30 minutes, and this is not a poll loop — a second request_review while " +
+    "one is in flight is refused, and asking again anyway is what used to queue a second " +
+    "review behind the first. " +
     "Omit pr_number to use the open PR for the session's current branch. not_found means " +
     "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",
   inputSchema: {
@@ -695,10 +697,14 @@ const requestTriage = {
     "session's repository. Reachable from inside a normal agent session (session scope). The " +
     "triage is dispatched asynchronously and posts its findings as a comment on the issue — " +
     "wait for it rather than requesting again (the result carries a runId; use triage_status " +
-    "only to troubleshoot a triage that never shows up); a repeat request for the same issue " +
-    "is refused for a cooldown period. Fails with a clear message if the relay isn't " +
-    "configured in Mullion's Settings → Integrations or the issue does not exist. The " +
-    "result may carry a warning when the issue is closed — the request still goes through.",
+    "only to troubleshoot a triage that never shows up). One triage per issue at a time: a " +
+    "request while one is running is refused with the run id of the triage that is already " +
+    "working — that refusal is the answer, not an error to retry: wait for it, or stop it with " +
+    "stop_review (it stops a triage run too). A repeat request for the same issue is also " +
+    "refused for a cooldown period. " +
+    "Fails with a clear message if the relay isn't configured in Mullion's Settings → " +
+    "Integrations or the issue does not exist. The result may carry a warning when the issue " +
+    "is closed — the request still goes through.",
   inputSchema: {
     type: "object",
     properties: {

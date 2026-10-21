@@ -474,6 +474,22 @@ export interface AppSettings {
     triagePromptPath: string;
     // Minimum minutes between two requests for the same PR.
     cooldownMinutes: number;
+    /**
+     * The GitHub login of the bot that posts the review (e.g.
+     * "s3ntin3l8-hermes[bot]").
+     *
+     * Only THIS bot's landed reviews set the delta base of the next round.
+     * Another bot's review on the head (claude[bot], Copilot, a Task Master
+     * reviewer) must neither make a request a no-op nor become the base of
+     * Hermes' next round — that round would then skip everything Hermes
+     * itself has not looked at.
+     *
+     * The shared workflow computes the same value (its `mention-trigger`
+     * input plus "[bot]"), and both put it in the idempotency key: a
+     * difference here means the two entry points stop deduplicating against
+     * each other. Empty = any bot's review counts (the old rule).
+     */
+    reviewerBotLogin: string;
   };
   browser: {
     // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
@@ -637,6 +653,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     triagePromptRepo: "",
     triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
+    reviewerBotLogin: "s3ntin3l8-hermes[bot]",
   },
   browser: {
     framerate: -1,
@@ -1196,6 +1213,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         max: 1440,
         fallback: DEFAULT_SETTINGS.reviewRelay.cooldownMinutes,
       }),
+      reviewerBotLogin: normalizeBotLogin(
+        safeString(
+          settings.reviewRelay.reviewerBotLogin,
+          DEFAULT_SETTINGS.reviewRelay.reviewerBotLogin,
+        ),
+      ),
     },
   };
 }
@@ -1204,6 +1227,20 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
 // the settings form can't turn "http://host:8643 " into an invalid URL.
 function safeString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+/**
+ * The reviewer's GitHub login, in the form a bot's reviews carry.
+ *
+ * A bot's review is authored by "<app-slug>[bot]", and the shared workflow
+ * derives the same login from its `mention-trigger` input — so a value
+ * without the suffix would match nothing, and the base rule it guards (only
+ * the reviewer's own landed review sets the delta base) would quietly stop
+ * applying. Normalising here keeps the two entry points in agreement.
+ */
+function normalizeBotLogin(login: string): string {
+  if (login === "") return "";
+  return login.endsWith("[bot]") ? login : `${login}[bot]`;
 }
 
 /** Deep-merges a possibly-partial/older stored blob over the current defaults. */
