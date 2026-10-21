@@ -472,11 +472,13 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   child's model — Claude Code's `Task` tool takes a `subagent_type` and an
   optional per-call `model` that takes precedence over that subagent's own
   definition's `model:` frontmatter (ignored for `subagent_type: "fork"`,
-  which always inherits the parent model), Codex's `spawn_agent` takes a
-  per-child model and reasoning effort where the install exposes them,
-  opencode's subagents are `agents.<name>` entries each carrying a model,
-  agy's `invoke_subagent` takes a spec with a model and a `modelTier`. One
-  generic sentence would be wrong for three of the four.
+  which always inherits the parent model, and ignored outright when the
+  tool reports that the model parameter is ignored on this session), Codex's
+  `spawn_agent` takes a per-child model and reasoning effort where the
+  install exposes them, opencode's subagents are `agents.<name>` entries
+  each carrying a model, agy's `invoke_subagent` takes a spec with a model
+  and a `modelTier`. One generic sentence would be wrong for three of the
+  four.
 
   This is **advisory**, not an obligation to delegate: the clause says the
   task _may_ be split, and the agent decides whether it is worth splitting.

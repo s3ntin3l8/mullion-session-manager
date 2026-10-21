@@ -501,11 +501,12 @@ export const claudeCodeAdapter: HookAgentAdapter = {
     "the Task tool spawns a subagent and takes an optional `model` for that " +
     "call (`sonnet`, `opus`, `haiku`, `fable`), which takes precedence over " +
     "that subagent's own definition — so route the mechanical parts to a " +
-    "cheaper model, unless the child is a fork or this session pins the " +
-    "subagent model (either way it inherits yours), and keep the parts that " +
-    "need your own judgement for yourself. A delegated part may run in its " +
-    "own workspace or fork, so whatever you delegate has to land on this " +
-    "branch — you remain responsible for the final commit here.",
+    "cheaper model, unless the child is a fork (a fork always inherits your " +
+    "model) or the tool reports that the model parameter is ignored on this " +
+    "session, and keep the parts that need your own judgement for " +
+    "yourself. A delegated part may run in its own workspace or fork, so " +
+    "whatever you delegate has to land on this branch — you remain " +
+    "responsible for the final commit here.",
   // `claude [options] [prompt]` — interactive is the default (only `-p`
   // opts into print/non-interactive mode), and the prompt is a plain
   // trailing positional, so this is safe to append after commandTransform's
