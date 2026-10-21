@@ -267,7 +267,8 @@ export { extractDtachSocketPath };
  *
  * Callers must pass the SAME value PtyManager itself derived its
  * `sessionsDir` from (`this.sessionsDir`, already `path.resolve`d and, on a
- * host near the 108-byte AF_UNIX `sun_path` limit, redirected by
+ * host near the platform's AF_UNIX `sun_path` limit — 108 bytes on Linux,
+ * 104 on macOS — redirected by
  * `ensureSessionsDir` — see src/plugins/pty.ts), not
  * `app.config.SESSIONS_DIR` directly — a host that hit that redirect would
  * otherwise derive a mismatched id from the two.

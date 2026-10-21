@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
@@ -145,11 +146,47 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
   }
 }
 
-// Linux's struct sockaddr_un limits sun_path to 108 bytes. Worktree paths
-// (.mullion-worktrees/<branch>/, .wt/<branch>/, or any deep server CWD) can
-// push the socket path over this limit. When that happens, redirect the
-// entire sessionsDir to a deterministic short path under /tmp/ so Unix
-// socket creation always succeeds regardless of project layout.
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
+ *
+ * Linux allows 108; macOS allows 104. The four-byte difference is exactly
+ * the size of the window in which a path passes the check on Linux and then
+ * fails at `bind()` on macOS — a failure that is silent until a socket is
+ * actually created, and then is a bare EINVAL with nothing pointing at the
+ * path.
+ *
+ * Exported (and platform-parameterised) so the limit can be exercised for a
+ * platform other than the one the test happens to run on.
+ */
+export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): number {
+  return platform === "darwin" ? 104 : 108;
+}
+
+/**
+ * The length of the longest socket path a sessions dir will have to hold.
+ *
+ * `hooks.sock`, the control socket `mullion.sock`, and a 12-digit
+ * session-id socket all live in it, and the session-id case is the longest
+ * of the three.
+ */
+function longestSocketPath(dir: string): number {
+  return Math.max(
+    Buffer.byteLength(path.join(dir, "hooks.sock"), "utf8"),
+    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
+    // directory; its name is longer than hooks.sock but shorter than the
+    // session-id case below, so it can never actually be the max — included
+    // explicitly anyway so this stays correct if either name ever changes.
+    Buffer.byteLength(path.join(dir, "mullion.sock"), "utf8"),
+    Buffer.byteLength(path.join(dir, "999999999999.sock"), "utf8"),
+  );
+}
+
+// The `sockaddr_un.sun_path` limit is platform-specific (see
+// maxSunPathBytes above). Worktree paths (.mullion-worktrees/<branch>/,
+// .wt/<branch>/, or any deep server CWD) can push the socket path over it.
+// When that happens, redirect the entire sessionsDir to a deterministic
+// short path under the platform's temp dir so Unix socket creation always
+// succeeds regardless of project layout.
 // Exported — src/plugins/device.ts calls this with the identical
 // app.config.SESSIONS_DIR input so DeviceManager's scope-ownership
 // namespace (deriveInstanceId, device-process.ts) always agrees with
@@ -158,35 +195,50 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
 // input, so calling it a second time here is safe — no shared state.
 export function ensureSessionsDir(configured: string): string {
   const resolved = path.resolve(configured);
-  // Check worst-case socket path: hooks.sock (10 bytes) or a 12-digit
-  // session-ID socket (15 bytes + ".sock"). If both fit within 1 byte of
-  // the 108-byte sun_path limit, the original path is safe.
-  const longestSocket = Math.max(
-    Buffer.byteLength(path.join(resolved, "hooks.sock"), "utf8"),
-    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
-    // directory; its name is longer than hooks.sock but shorter than the
-    // session-id case below, so it can never actually be the max — included
-    // explicitly anyway so this stays correct if either name ever changes.
-    Buffer.byteLength(path.join(resolved, "mullion.sock"), "utf8"),
-    Buffer.byteLength(path.join(resolved, "999999999999.sock"), "utf8"),
-  );
-  if (longestSocket <= 107) return resolved;
+  const limit = maxSunPathBytes();
+  // The limit counts the NUL terminator, so the usable path is one byte
+  // shorter than it.
+  if (longestSocketPath(resolved) <= limit - 1) return resolved;
 
-  const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
-  const fallback = `/tmp/ms-${hash}`;
-  secureFallbackDir(fallback);
-  return fallback;
+  // The fallback has to fit TOO: it lives under the platform's temp dir,
+  // and a temp dir long enough to push the CONFIGURED path over the limit
+  // can push the fallback over it as well — and a fallback that cannot
+  // hold a socket is worse than no fallback at all. The hash is shortened
+  // until it fits, which keeps the path a pure function of its input: the
+  // socket-dir ownership check and deriveInstanceId both key off it, so it
+  // has to be stable across restarts.
+  const hash = createHash("md5").update(resolved).digest("hex");
+  const tmp = os.tmpdir();
+  for (const len of [8, 6, 4, 2, 0]) {
+    const candidate = path.join(tmp, `ms-${hash.slice(0, len)}`);
+    if (longestSocketPath(candidate) <= limit - 1) {
+      secureFallbackDir(candidate);
+      return candidate;
+    }
+  }
+  throw new Error(
+    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
+      `sun_path limit, and no path under ${tmp} does either — ` +
+      `set SESSIONS_DIR to a shorter path`,
+  );
 }
 
-// The fallback lives in world-writable /tmp under a predictable name, and
-// holds live dtach sockets plus hook tokens, so another local user could
-// pre-create it (or plant a symlink) to read or hijack them (H4). Create it
-// 0700, then lstat (never follow a symlink) and refuse a symlink or a
-// directory owned by anyone else. A directory that is ours but looser than
-// 0700 (made by an older release under the umask) is tightened in place
-// rather than refused, so upgrading doesn't break startup. The path itself
-// must stay stable: socket-dir ownership resolution and deriveInstanceId
-// both key off it.
+// The fallback lives under the platform's temp dir under a predictable
+// name, and holds live dtach sockets plus hook tokens, so another local
+// user could pre-create it (or plant a symlink) to read or hijack them
+// (H4). Create it 0700, then lstat (never follow a symlink) and refuse a
+// symlink or a directory owned by anyone else. A directory that is ours but
+// looser than 0700 (made by an older release under the umask) is tightened
+// in place rather than refused, so upgrading doesn't break startup. The path
+// itself must stay stable: socket-dir ownership resolution and
+// deriveInstanceId both key off it.
+//
+// On Linux the temp dir is the world-writable /tmp, which is why the
+// hardening above matters there. On macOS `os.tmpdir()` is a PER-USER
+// directory (`/var/folders/.../T`), so the same pre-creation attack is not
+// available to other users to begin with — the hardening is kept anyway,
+// because it costs nothing and the temp dir is still a shared location
+// within a user account.
 function secureFallbackDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const st = lstatSync(dir);
@@ -209,7 +261,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
-      "sessionsDir socket path approaches 108-byte sun_path limit, using short fallback",
+      `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback`,
     );
   }
   // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full
