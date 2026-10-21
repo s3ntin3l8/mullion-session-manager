@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Dropdown, Row } from "../ui/primitives.js";
 import { ErrorText } from "../ui/ErrorText.js";
+import { CLI_MODEL_RE } from "../cliModel.js";
 
 export interface ModelOption {
   value: string;
@@ -9,12 +10,6 @@ export interface ModelOption {
 }
 
 const CUSTOM = "__custom__";
-
-// Mirror of CLI_MODEL_RE in src/services/task-model-resolve.ts — the backend
-// is the source of truth. A value that fails it is only logged and skipped at
-// launch, so rejecting it here is what keeps the user from saving a model
-// that silently never applies.
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
 
 // The select + Custom… escape hatch, with no label/description layout of its
 // own — issue #1424 pulled this out of ModelPicker (below) so the same
@@ -93,7 +88,7 @@ export function ModelSelect({
       onChange(null);
       return;
     }
-    if (!MODEL_RE.test(next)) {
+    if (!CLI_MODEL_RE.test(next)) {
       setError("Use letters, digits and . _ : / @ [ ] - only, starting with a letter or digit.");
       return;
     }

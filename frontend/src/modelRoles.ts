@@ -1,3 +1,5 @@
+import { isValidCliModelName, isValidOpenCodeModel } from "./cliModel.js";
+
 // DOM-free mirror of the install-wide model-role fallback in
 // src/services/task-model-resolve.ts — same algorithm, same sentinel
 // semantics, kept in its own module (the taskConfig.ts convention) so it's
@@ -24,15 +26,17 @@
 // a silent "same model as the implementer", and in the second family two
 // settings that happen to name the same model are the same thing.
 //
-// One deliberate omission: the backend also VALIDATES each candidate and
-// falls through to the next tier when a stored value is malformed
-// (`validateModel` / `validateCliModel`). A stored `reviewerModel` that
-// fails validation therefore resolves to the implementer's model on the
-// backend — a real collapse — while this mirror would report the two as
-// distinct. That is not reachable from the Settings UI (the picker's own
-// `MODEL_RE` rejects such a value before it can be saved), so it is
-// named here rather than mirrored: a validation tier would need the same
-// regexes the backend owns, and a copy of those drifts.
+// The VALIDATION tier is mirrored too, via cliModel.ts. The backend skips
+// any candidate that fails its own check and falls through to the next tier,
+// so a stored-but-invalid value resolves to something else entirely — an
+// invalid `reviewerModel` collapses onto the implementer's model, and an
+// invalid `defaultModel` leaves the role with no model at all. Mirroring
+// the check is what lets this module agree with the backend in both
+// directions, rather than only in the one the UI can produce.
+//
+// A copy of a regex can drift; the backend stays authoritative, and that is
+// why the mirrors live in one place (cliModel.ts) rather than being
+// inlined at each call site.
 
 export interface ModelRoleResolution {
   /** The model the implementer role resolves to, install-wide. */
@@ -41,8 +45,8 @@ export interface ModelRoleResolution {
   reviewer: string | null;
   /**
    * True when the two roles resolve to the SAME model — i.e. the reviewer
-   * offers no second opinion, because it IS the implementer with the same
-   * weights. This is the case worth warning about.
+   * sees no second opinion, because it IS the same model with the same
+   * prompt. The Settings panel warns about this.
    */
   shared: boolean;
 }
@@ -50,37 +54,35 @@ export interface ModelRoleResolution {
 /**
  * claude-code / codex / agy — mirrors resolveCliModel's install-wide tail.
  * The reviewer falls back to the implementer's model, so the two are shared
- * whenever the reviewer model is unset or names the same value.
+ * whenever the reviewer model is unset, invalid, or names the same value.
  */
 export function resolveCliModelRoles(
   defaultModel: string | null | undefined,
   reviewerModel: string | null | undefined,
 ): ModelRoleResolution {
-  // `||`, not `??`: the backend's own candidate loop skips any FALSY value
-  // (`if (!value) continue`), so an empty string is "unset" there — and a
-  // `reviewerModel: ""` persisted by a direct PATCH (the UI maps "" to
-  // null) collapses onto the implementer's model on the backend while
-  // `??` would report the two as distinct here.
-  const implementer = defaultModel || null;
-  const reviewer = reviewerModel || implementer;
+  // The backend's candidate loop skips any candidate that is falsy OR fails
+  // validation, falling through to the next tier. So an invalid
+  // `defaultModel` leaves the implementer with NO model at all (not the bad
+  // name), and an invalid `reviewerModel` falls through to the
+  // implementer's model — which is a real collapse the backend performs.
+  const implementer = isValidCliModelName(defaultModel) ? defaultModel : null;
+  const reviewer = isValidCliModelName(reviewerModel) ? reviewerModel : implementer;
   return { implementer, reviewer, shared: reviewer === implementer };
 }
 
 /**
  * opencode — mirrors resolveOpenCodeModel's install-wide tail. The two
  * roles have separate settings and NEITHER falls back to the other: an
- * unset value resolves to null, which at spawn time means "no override", so
- * opencode's own default applies. The roles are therefore shared only when
- * both name the same model — including both being unset, which means both
- * land on opencode's own default.
+ * unset or invalid value resolves to null, which at spawn time means "no
+ * override", so opencode's own default applies. The roles are therefore
+ * shared only when both name the same model — including both being unset,
+ * which means both land on opencode's own default.
  */
 export function resolveOpencodeModelRoles(
   implementerModel: string | null | undefined,
   reviewerModel: string | null | undefined,
 ): ModelRoleResolution {
-  // `||` for the same reason as above: opencode's `validateModel("")`
-  // fails, so an empty string resolves to null on the backend too.
-  const implementer = implementerModel || null;
-  const reviewer = reviewerModel || null;
+  const implementer = isValidOpenCodeModel(implementerModel) ? implementerModel : null;
+  const reviewer = isValidOpenCodeModel(reviewerModel) ? reviewerModel : null;
   return { implementer, reviewer, shared: reviewer === implementer };
 }

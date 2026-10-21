@@ -42,13 +42,21 @@ const FLAG_HINT =
  * both roles unset there is no deliberate implementer choice being
  * silently inherited — there is just no opinion configured at all — and
  * warning about it on a fresh install would be noise about nothing.
+ *
+ * It is scoped to the CLI in question because the review AGENT is chosen
+ * separately (settings.taskMaster.defaultReviewAgent, or a task's own
+ * `ReviewAgent:` line), and the reviewer session resolves its model
+ * through THAT agent's CLI — so a note under Codex describes a reviewer
+ * that may never spawn, and a review agent with no model support at all
+ * gets no model from any of these settings.
  */
 function reviewerModelWarning(cliName: string, roles: ModelRoleResolution): ReactNode {
   if (!roles.shared || roles.implementer === null) return null;
   return (
     <p style={warningStyle}>
-      {cliName}'s reviewer runs on the same model as its implementer ({roles.implementer}) — no
-      second opinion, unless a task sets its own <code>Reviewer-Model:</code>.
+      When {cliName} is your review agent, its reviewer runs on the same model as its implementer (
+      {roles.implementer}) — no second opinion, unless a task sets its own{" "}
+      <code>Reviewer-Model:</code>.
     </p>
   );
 }

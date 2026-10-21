@@ -359,8 +359,12 @@ describe("Settings -> Models", () => {
     // Only fires when the implementer model is EXPLICITLY configured — with
     // both roles unset there is no deliberate implementer choice being
     // silently inherited, so warning would be noise about nothing.
-    const claudeWarning = /Claude Code's reviewer runs on the same model/i;
-    const opencodeWarning = /opencode's reviewer runs on the same model/i;
+    //
+    // The note is scoped to the CLI ("when <cli> is your review agent"),
+    // because the review AGENT is chosen separately and the reviewer
+    // session resolves its model through THAT agent's CLI.
+    const claudeWarning = /When Claude Code is your review agent/i;
+    const opencodeWarning = /When opencode is your review agent/i;
 
     it("warns for Claude Code when the reviewer model is unset", () => {
       useDashboardStore.setState({

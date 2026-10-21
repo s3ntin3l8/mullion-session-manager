@@ -59,6 +59,28 @@ describe("resolveCliModelRoles", () => {
     expect(roles.reviewer).toBe("opusplan");
     expect(roles.shared).toBe(true);
   });
+
+  it("treats a stored-but-invalid reviewer model as unset, like the backend", () => {
+    // The backend skips a candidate that fails validation and falls through
+    // to the next tier, so an invalid `reviewerModel` collapses onto the
+    // implementer's model — a REAL collapse the backend performs. Reporting
+    // the two as distinct would hide it.
+    const roles = resolveCliModelRoles("opusplan", "not a valid model!");
+    expect(roles.implementer).toBe("opusplan");
+    expect(roles.reviewer).toBe("opusplan");
+    expect(roles.shared).toBe(true);
+  });
+
+  it("treats a stored-but-invalid implementer model as no model at all", () => {
+    // The same fall-through, the other direction: an invalid `defaultModel`
+    // leaves the implementer with NO model, so the backend applies no model
+    // to either role. Keeping the bad name would make the note name a
+    // model that will never be applied.
+    const roles = resolveCliModelRoles("not a valid model!", null);
+    expect(roles.implementer).toBeNull();
+    expect(roles.reviewer).toBeNull();
+    expect(roles.shared).toBe(true);
+  });
 });
 
 describe("resolveOpencodeModelRoles", () => {
@@ -92,6 +114,15 @@ describe("resolveOpencodeModelRoles", () => {
       "opencode-go/minimax-m3.1-flash-free",
       "opencode-go/claude-haiku-5-5",
     );
+    expect(roles.shared).toBe(false);
+  });
+
+  it("treats a stored-but-invalid opencode model as unset, like the backend", () => {
+    // opencode's `validateModel` requires a `provider/model` shape, so a
+    // bare name is skipped and the role ends up with no override at all.
+    const roles = resolveOpencodeModelRoles("opencode-go/minimax-m3.1-flash-free", "haiku");
+    expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
+    expect(roles.reviewer).toBeNull();
     expect(roles.shared).toBe(false);
   });
 });
