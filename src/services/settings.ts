@@ -1213,9 +1213,11 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         max: 1440,
         fallback: DEFAULT_SETTINGS.reviewRelay.cooldownMinutes,
       }),
-      reviewerBotLogin: safeString(
-        settings.reviewRelay.reviewerBotLogin,
-        DEFAULT_SETTINGS.reviewRelay.reviewerBotLogin,
+      reviewerBotLogin: normalizeBotLogin(
+        safeString(
+          settings.reviewRelay.reviewerBotLogin,
+          DEFAULT_SETTINGS.reviewRelay.reviewerBotLogin,
+        ),
       ),
     },
   };
@@ -1225,6 +1227,20 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
 // the settings form can't turn "http://host:8643 " into an invalid URL.
 function safeString(value: unknown, fallback: string): string {
   return typeof value === "string" ? value.trim() : fallback;
+}
+
+/**
+ * The reviewer's GitHub login, in the form a bot's reviews carry.
+ *
+ * A bot's review is authored by "<app-slug>[bot]", and the shared workflow
+ * derives the same login from its `mention-trigger` input — so a value
+ * without the suffix would match nothing, and the base rule it guards (only
+ * the reviewer's own landed review sets the delta base) would quietly stop
+ * applying. Normalising here keeps the two entry points in agreement.
+ */
+function normalizeBotLogin(login: string): string {
+  if (login === "") return "";
+  return login.endsWith("[bot]") ? login : `${login}[bot]`;
 }
 
 /** Deep-merges a possibly-partial/older stored blob over the current defaults. */

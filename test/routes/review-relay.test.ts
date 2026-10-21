@@ -266,6 +266,13 @@ describe("review-request routes", () => {
       // The token lets the relay read and write the in-flight marker.
       githubToken: expect.any(String),
     });
+    // The marker is a check run: writing one needs `checks: write`, which
+    // the read token does not have. So the marker gets its own token.
+    expect(mocks.resolveGitHubToken).toHaveBeenCalledWith(
+      expect.anything(),
+      { owner: "acme", repo: "widgets" },
+      "checks",
+    );
   });
 
   describe("the review range (issue #1749)", () => {

@@ -148,5 +148,25 @@ describe("Hermes review relay integration routes", () => {
         applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } }).reviewRelay,
       ).toMatchObject({ cooldownMinutes: 0 });
     });
+
+    it("normalises the reviewer bot login to the form a bot's reviews carry", async () => {
+      // A bot's review is authored by "<app-slug>[bot]", and the shared
+      // workflow derives the same login from its `mention-trigger` input. A
+      // value without the suffix would match nothing, and the base rule it
+      // guards would quietly stop applying.
+      expect(
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes" } })
+          .reviewRelay.reviewerBotLogin,
+      ).toBe("s3ntin3l8-hermes[bot]");
+      expect(
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]" } })
+          .reviewRelay.reviewerBotLogin,
+      ).toBe("s3ntin3l8-hermes[bot]");
+      // Empty keeps "any bot's review counts".
+      expect(
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } }).reviewRelay
+          .reviewerBotLogin,
+      ).toBe("");
+    });
   });
 });

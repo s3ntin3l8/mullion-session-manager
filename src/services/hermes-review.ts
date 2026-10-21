@@ -962,7 +962,11 @@ async function readRememberedSession(
 ): Promise<{ id: string; attempt: number } | null> {
   try {
     const runs = await listCommitCheckRuns(token, owner, repo, baseSha);
-    const marker = runs.filter((r) => r.name === REVIEW_MARKER_NAME).at(-1);
+    // The NEWEST marker on that commit: the list comes back newest first (by
+    // id), and the newest one is the round that actually ran — an older
+    // marker names the session that was stuck, which is exactly the id the
+    // next round must not go back to.
+    const marker = runs.find((r) => r.name === REVIEW_MARKER_NAME);
     const match = /^session: (\S+)$/.exec((marker?.summary ?? "").trim());
     if (!match) return null;
     const id = match[1];

@@ -277,7 +277,20 @@ export const REVIEW_PERMISSIONS = {
   metadata: "read",
 } as const;
 
-export type InstallationTokenScope = "write" | "read" | "issues" | "dispatch" | "review";
+// The in-flight marker of the Hermes review protocol is a check run, and
+// writing one needs `checks: write` — a scope none of the sets above grants.
+// Its own narrow set: the marker is the only thing that touches checks.
+//
+// A GitHub App install has to be APPROVED for this permission before the
+// mint succeeds; until it is, the mint fails and resolveGitHubToken falls
+// back to the PAT/OAuth token (a `repo`-scoped user token covers check runs),
+// so the marker works on an install that has not re-approved the App.
+export const CHECKS_PERMISSIONS = {
+  checks: "write",
+  metadata: "read",
+} as const;
+
+export type InstallationTokenScope = "write" | "read" | "issues" | "dispatch" | "review" | "checks";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -291,6 +304,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return DISPATCH_PERMISSIONS;
     case "review":
       return REVIEW_PERMISSIONS;
+    case "checks":
+      return CHECKS_PERMISSIONS;
   }
 }
 

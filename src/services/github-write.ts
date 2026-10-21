@@ -789,6 +789,10 @@ export interface PullRequestReviewSummary {
 
 const REVIEWS_PAGE_SIZE = 100;
 const REVIEWS_MAX_PAGES = 10;
+// The check runs of a commit: a busy commit has hundreds of them, so the
+// marker can be off the first page.
+const CHECK_RUNS_PAGE_SIZE = 100;
+const CHECK_RUNS_MAX_PAGES = 10;
 /**
  * How much of a review body is kept (issue #1704). A review body is prose
  * written by a bot (or by whoever the bot quotes) — long, but not unbounded:
@@ -836,6 +840,12 @@ export interface CommitCheckRunSummary {
 /**
  * The check runs on a commit. Used to find the in-flight marker (and the
  * session it remembers) on the previous round's commit.
+ *
+ * Every page is read (the newest marker can be off the first page — a busy
+ * commit has hundreds of check runs), and the list is returned NEWEST FIRST:
+ * the endpoint answers in descending id order, but the ids are what the
+ * order is decided by here, so a caller that takes the first marker gets the
+ * newest one whatever the endpoint does.
  */
 export async function listCommitCheckRuns(
   token: string,
@@ -843,24 +853,39 @@ export async function listCommitCheckRuns(
   repo: string,
   sha: string,
 ): Promise<CommitCheckRunSummary[]> {
-  const data = await githubRequest<{
-    check_runs?: Array<{
-      id: number;
-      name: string;
-      external_id?: string | null;
-      status?: string;
-      conclusion?: string | null;
-      output?: { summary?: string | null } | null;
-    }>;
-  }>(token, owner, repo, "GET", `/commits/${encodeURIComponent(sha)}/check-runs?per_page=100`);
-  return (data.check_runs ?? []).map((r) => ({
-    id: r.id,
-    name: r.name,
-    externalId: r.external_id ?? "",
-    status: r.status ?? "",
-    conclusion: r.conclusion ?? null,
-    summary: r.output?.summary ?? "",
-  }));
+  const out: CommitCheckRunSummary[] = [];
+  for (let page = 1; page <= CHECK_RUNS_MAX_PAGES; page++) {
+    const data = await githubRequest<{
+      check_runs?: Array<{
+        id: number;
+        name: string;
+        external_id?: string | null;
+        status?: string;
+        conclusion?: string | null;
+        output?: { summary?: string | null } | null;
+      }>;
+    }>(
+      token,
+      owner,
+      repo,
+      "GET",
+      `/commits/${encodeURIComponent(sha)}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&page=${page}`,
+    );
+    const runs = data.check_runs ?? [];
+    for (const r of runs) {
+      out.push({
+        id: r.id,
+        name: r.name,
+        externalId: r.external_id ?? "",
+        status: r.status ?? "",
+        conclusion: r.conclusion ?? null,
+        summary: r.output?.summary ?? "",
+      });
+    }
+    if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
+  }
+  // Newest first, by id — the endpoint's own order is not the contract.
+  return out.sort((a, b) => b.id - a.id);
 }
 
 /**

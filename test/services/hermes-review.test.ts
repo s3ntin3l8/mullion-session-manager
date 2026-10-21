@@ -585,6 +585,43 @@ describe("hermes review relay", () => {
       expect(body.session_id).toBe("hermes-review-acme-widgets-7-2");
     });
 
+    it("takes the NEWEST marker on the base commit, not the oldest", async () => {
+      // The check-runs endpoint answers newest first, so the newest marker is
+      // the FIRST one — taking the last would send the next round back into
+      // the stuck session the fresh one was left to avoid. Two markers on one
+      // commit: the stuck base id, then the one the round actually used.
+      checkRuns = async () =>
+        new Response(
+          JSON.stringify({
+            check_runs: [
+              {
+                id: 900,
+                name: "Hermes review",
+                external_id: "run_new",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7-2" },
+              },
+              {
+                id: 800,
+                name: "Hermes review",
+                external_id: "run_old",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        resolveBase: async () => "base123",
+      });
+      const [post] = calls("/v1/runs");
+      const body = JSON.parse((post[1] as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7-2");
+    });
+
     it("ignores a remembered session that is not this pull request's", async () => {
       // Only an id of the exact shape this code generates is honoured: a
       // malformed id, or one belonging to another pull request, must not be

@@ -2244,7 +2244,9 @@ export async function projectsRoute(app: FastifyInstance) {
           prNumber: number,
           headSha: detail.headSha,
           resolveBase: reader.base,
-          githubToken: ctx.token,
+          // The in-flight marker is a check run: it needs `checks: write`,
+          // which the read token this route resolved does not have.
+          githubToken: (await resolveGitHubToken(app, ctx.repoRef, "checks")) ?? undefined,
         });
         return { status: "dispatched", runId: run.runId, replayed: run.replayed };
       } catch (err) {

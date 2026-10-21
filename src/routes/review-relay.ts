@@ -112,6 +112,13 @@ interface ReviewTarget {
   prNumber: number;
   headSha: string;
   token: string;
+  /**
+   * The token for the in-flight marker (a check run). It needs
+   * `checks: write`, which the read token does not have — absent when no
+   * such token could be resolved, in which case the relay simply keeps no
+   * marker.
+   */
+  markerToken?: string | null;
 }
 
 interface TriageTarget {
@@ -311,7 +318,20 @@ async function resolveReviewTarget(
     // Always read the PR itself: it confirms the number exists and carries the
     // head SHA the review's idempotency key is built from.
     const pr = await getPullRequestByNumber(token, owner, repo, prNumber);
-    return { owner, repo, prNumber, headSha: pr.headSha, token };
+    return {
+      owner,
+      repo,
+      prNumber,
+      headSha: pr.headSha,
+      token,
+      // The in-flight marker is a check run, and writing one needs
+      // `checks: write` — a scope the read token does not have. The App
+      // install usually has not been approved for it either, so this falls
+      // back to the PAT/OAuth token (a `repo`-scoped user token covers check
+      // runs). Without it the marker write 403s and the cross-entry-point
+      // session sharing never happens.
+      markerToken: await resolveGitHubToken(app, { owner, repo }, "checks"),
+    };
   } catch (err) {
     // Only a genuine 404 means "no such PR". An expired token, a rate
     // limit or an unreachable GitHub (statusCode 0) must not tell the
@@ -471,8 +491,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           resolveBase: reader.base,
           sessionId,
           // The token lets the relay read and write the in-flight marker: the
-          // session the previous round ran in, and one for this round.
-          githubToken: target.token,
+          // session the previous round ran in, and one for this round. It
+          // needs `checks: write` — the read token does not have it.
+          githubToken: target.markerToken ?? undefined,
         });
         // The PR's reviews are read once per request: the delta base and the
         // duplicate-review warning need the same list, and it is a walk of up
@@ -534,7 +555,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           if (conclusion) {
             try {
               await completeReviewMarkerCheckRun(
-                token,
+                target.markerToken ?? token,
                 owner,
                 repo,
                 record.markerCheckRunId,
@@ -1001,16 +1022,14 @@ export function reviewReader(
  * Issue #1705 wrote this as "warn, never refuse" — the repository reviews
  * new PRs on its own, and a request for a commit it has already reviewed was
  * routine, so it warned and dispatched anyway. That is now the *refusal*
- * above (a commit that has already been reviewed has nothing new to
- * review), and this warning is the rarer case it left: a bot review landed
- * on this commit while a NEWER bot review covers an older one, so the head
- * is not what the last round looked at.
+ * above (a commit the REVIEWER has already reviewed has nothing new to
+ * review), and this warning is the rarer case it left: a review by some
+ * OTHER bot landed on this commit while a newer review of the reviewer's own
+ * covers an older one, so the head is not what the last round looked at.
  *
- * The repository reviews new PRs on its own, so a relay request for a commit
- * that already has a bot review is routine — it produces a second review of
- * the same commit, which the requester may or may not want. This **warns and
- * dispatches anyway**: refusing would break the legitimate "ask for a
- * second opinion" case, and the warning is enough for the caller to see it.
+ * It warns and dispatches anyway: refusing would break the legitimate "ask
+ * for a second opinion" case, and the warning is enough for the caller to
+ * see it.
  *
  * A GitHub failure degrades to "no warning" — it must never block or fail the
  * dispatch it is attached to.
