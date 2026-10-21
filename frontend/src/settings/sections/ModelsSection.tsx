@@ -6,7 +6,9 @@ import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
 import {
   resolveCliModelRoles,
+  resolveInstalledRoleModels,
   resolveOpencodeModelRoles,
+  type InstalledRoleModels,
   type ModelRoleResolution,
 } from "../../modelRoles.js";
 
@@ -27,36 +29,34 @@ const FLAG_HINT =
   "Adds --model to new sessions and Task Master workers. A task's Model: / Reviewer-Model: line overrides these; a launcher command that already passes --model is left alone.";
 
 /**
- * The advisory note under a reviewer-model picker when the reviewer role
- * resolves to the same model as the implementer role.
+ * The advisory note under a reviewer-model picker when the reviewer and the
+ * worker run on the SAME model — so the reviewer offers no second opinion.
  *
- * The reviewer is the last line of defence on a Task Master task: it is a
- * separate session with its own context, judging the diff against the
- * issue's acceptance criteria. When it runs on the implementer's model it
- * is still a separate context, but it is not a second opinion in the
- * sense that matters — same weights, same blind spots. Saying so is the
- * whole point of this note; the dropdown itself can only show which model
- * is selected, not what that selection means for the review.
+ * The comparison is between the models the two roles ACTUALLY run, which
+ * come from two independent agent settings: the worker agent (an issue's
+ * `Agent:` line, the project's default agent, or
+ * `settings.taskMaster.defaultAgent`) and the review agent (an issue's
+ * `ReviewAgent:` line, the project's default review agent, or
+ * `settings.taskMaster.defaultReviewAgent`). They may be different CLIs,
+ * and then each side's model comes from that CLI's own settings — so
+ * comparing one CLI's two roles against each other would compare two
+ * models that never met, and a reviewer on a different CLI is the
+ * cheapest way to get a genuinely different model.
  *
- * Only fires when the implementer model is EXPLICITLY configured. With
- * both roles unset there is no deliberate implementer choice being
- * silently inherited — there is just no opinion configured at all — and
+ * It is therefore shown only under the REVIEW agent's CLI — under any
+ * other CLI the reviewer-model setting is inert, because that CLI is not
+ * the one the reviewer runs on.
+ *
+ * Only fires when both models are explicitly configured. With nothing
+ * configured there is no deliberate choice being silently inherited, and
  * warning about it on a fresh install would be noise about nothing.
- *
- * It is scoped to the CLI in question because the review AGENT is chosen
- * separately (settings.taskMaster.defaultReviewAgent, or a task's own
- * `ReviewAgent:` line), and the reviewer session resolves its model
- * through THAT agent's CLI — so a note under Codex describes a reviewer
- * that may never spawn, and a review agent with no model support at all
- * gets no model from any of these settings.
  */
-function reviewerModelWarning(cliName: string, roles: ModelRoleResolution): ReactNode {
-  if (!roles.shared || roles.implementer === null) return null;
+function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): ReactNode {
+  if (!roles.shared) return null;
+  if (roles.reviewCli !== cliKey) return null;
   return (
     <p style={warningStyle}>
-      When {cliName} is your review agent, its reviewer runs on the same model as its implementer (
-      {roles.implementer}) — no second opinion, unless a task sets its own{" "}
-      <code>Reviewer-Model:</code>.
+      Your reviewer runs on the same model as your worker ({roles.reviewer}) — no second opinion.
     </p>
   );
 }
@@ -74,19 +74,29 @@ export function ModelsSection() {
 
   const opencodeOptions = opencode.models.map((value) => ({ value }));
 
-  const claudeRoles = resolveCliModelRoles(
-    settings.claudeCode?.defaultModel,
-    settings.claudeCode?.reviewerModel,
-  );
-  const codexRoles = resolveCliModelRoles(
-    settings.codex?.defaultModel,
-    settings.codex?.reviewerModel,
-  );
-  const agyRoles = resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel);
-  const opencodeRoles = resolveOpencodeModelRoles(
-    settings.opencode?.implementerModel,
-    settings.opencode?.reviewerModel,
-  );
+  // Each CLI's own two roles, keyed by the agent-option value the
+  // install-wide agent settings use ("claude", "codex", "agy", "opencode").
+  const cliPairs: Record<string, ModelRoleResolution> = {
+    claude: resolveCliModelRoles(
+      settings.claudeCode?.defaultModel,
+      settings.claudeCode?.reviewerModel,
+    ),
+    codex: resolveCliModelRoles(settings.codex?.defaultModel, settings.codex?.reviewerModel),
+    agy: resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel),
+    opencode: resolveOpencodeModelRoles(
+      settings.opencode?.implementerModel,
+      settings.opencode?.reviewerModel,
+    ),
+  };
+
+  // The models the two roles ACTUALLY run — the worker agent and the
+  // review agent are chosen independently, so they can be different CLIs,
+  // and each side's model then comes from that CLI's own settings.
+  const installedRoles = resolveInstalledRoleModels({
+    workerCli: settings.taskMaster?.defaultAgent,
+    reviewCli: settings.taskMaster?.defaultReviewAgent,
+    pairs: cliPairs,
+  });
 
   return (
     <>
@@ -110,7 +120,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
-        warning={reviewerModelWarning("Claude Code", claudeRoles)}
+        warning={reviewerModelWarning("claude", installedRoles)}
       />
       <ModelPicker
         label="Small model"
@@ -150,7 +160,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ codex: { reviewerModel: v } })}
-        warning={reviewerModelWarning("Codex", codexRoles)}
+        warning={reviewerModelWarning("codex", installedRoles)}
       />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
@@ -176,7 +186,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ agy: { reviewerModel: v } })}
-        warning={reviewerModelWarning("agy", agyRoles)}
+        warning={reviewerModelWarning("agy", installedRoles)}
       />
       <p style={hintStyle}>
         {agy.status === "error"
@@ -206,7 +216,7 @@ export function ModelsSection() {
         defaultLabel="opencode default"
         allowCustom={false}
         onChange={(v) => setOpencode("reviewerModel", v)}
-        warning={reviewerModelWarning("opencode", opencodeRoles)}
+        warning={reviewerModelWarning("opencode", installedRoles)}
       />
       <ModelPicker
         label="Small model"

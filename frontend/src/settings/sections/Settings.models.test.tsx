@@ -356,99 +356,104 @@ describe("Settings -> Models", () => {
   // sense that matters — same weights, same blind spots. The dropdown can
   // only show which model is selected, so the warning has to be stated.
   describe("reviewer/implementer model collapse", () => {
-    // Only fires when the implementer model is EXPLICITLY configured — with
-    // both roles unset there is no deliberate implementer choice being
-    // silently inherited, so warning would be noise about nothing.
+    // The note compares the models the two roles ACTUALLY run — the
+    // worker's and the reviewer's — and those come from two independent
+    // agent settings, so they can be different CLIs. It is shown only
+    // under the REVIEW agent's CLI, because under any other CLI the
+    // reviewer-model setting is inert.
     //
-    // The note is scoped to the CLI ("when <cli> is your review agent"),
-    // because the review AGENT is chosen separately and the reviewer
-    // session resolves its model through THAT agent's CLI.
-    const claudeWarning = /When Claude Code is your review agent/i;
-    const opencodeWarning = /When opencode is your review agent/i;
+    // Only fires when both models are explicitly configured: with nothing
+    // configured there is no deliberate choice being silently inherited, so
+    // warning would be noise about nothing.
+    const warning = /Your reviewer runs on the same model as your worker/i;
 
-    it("warns for Claude Code when the reviewer model is unset", () => {
+    const withAgents = (
+      workerAgent: string,
+      reviewAgent: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      ...DEFAULT_SETTINGS,
+      taskMaster: {
+        ...DEFAULT_SETTINGS.taskMaster,
+        defaultAgent: workerAgent,
+        defaultReviewAgent: reviewAgent,
+      },
+      ...extra,
+    });
+
+    it("warns when the worker and the reviewer land on the same model", () => {
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
+        settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
-        },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.getByText(claudeWarning)).toBeInTheDocument();
+      expect(screen.getByText(warning)).toBeInTheDocument();
     });
 
-    it("warns for Claude Code when both roles name the same model", () => {
+    it("does NOT warn when the review agent is a different CLI with a different model", () => {
+      // The case that matters most: a reviewer on a different CLI is the
+      // cheapest way to get a genuinely different model. Codee's own two
+      // roles are identical (gpt-5 vs gpt-5), but the worker runs claude
+      // on opusplan — so there IS a second opinion and no warning.
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
-          claudeCode: { defaultModel: "opusplan", reviewerModel: "opusplan", smallModel: null },
-        },
+        settings: withAgents("claude", "codex", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          codex: { defaultModel: "gpt-5", reviewerModel: null },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.getByText(claudeWarning)).toBeInTheDocument();
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
     });
 
-    it("does not warn for Claude Code when the reviewer names a different model", () => {
+    it("shows the note only under the review agent's CLI", () => {
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      // Exactly one note, and it is in Claude Code's block — the reviewer
+      // model row of every other CLI is inert for this install.
+      expect(screen.getAllByText(warning)).toHaveLength(1);
+      const claudeRow = screen.getAllByText("Reviewer model")[0].closest(".settings-row");
+      expect(within(claudeRow as HTMLElement).getByText(warning)).toBeInTheDocument();
+    });
+
+    it("does not warn when the reviewer names a different model", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
-        },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.queryByText(claudeWarning)).not.toBeInTheDocument();
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
     });
 
     it("does not warn when neither role has a model configured", () => {
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
+        settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
-        },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.queryByText(claudeWarning)).not.toBeInTheDocument();
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
     });
 
-    it("warns for opencode when both roles name the same model", () => {
+    it("does not warn when there is no review agent", () => {
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
-          opencode: {
-            implementerModel: "opencode-go/minimax-m3.1-flash-free",
-            reviewerModel: "opencode-go/minimax-m3.1-flash-free",
-            defaultSmallModel: null,
-          },
-        },
+        settings: withAgents("claude", "none", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.getByText(opencodeWarning)).toBeInTheDocument();
-    });
-
-    it("does NOT warn for opencode when the reviewer model is unset", () => {
-      // opencode's roles have separate settings and neither inherits the
-      // other — an unset reviewer model means "no override" (opencode's own
-      // default), not "the implementer's model". Claude Code's unset
-      // reviewer model DOES mean the implementer's model, so the two
-      // families must not share a rule here.
-      useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
-          opencode: {
-            implementerModel: "opencode-go/minimax-m3.1-flash-free",
-            reviewerModel: null,
-            defaultSmallModel: null,
-          },
-        },
-        settingsLoaded: true,
-      });
-      render(<ModelsSection />);
-      expect(screen.queryByText(opencodeWarning)).not.toBeInTheDocument();
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
     });
 
     it("keeps the live region mounted, so the warning's arrival is announced", () => {
@@ -461,10 +466,9 @@ describe("Settings -> Models", () => {
       // node afterwards. A region mounted with its content, or re-created
       // on the change, fails the identity assertion below.
       useDashboardStore.setState({
-        settings: {
-          ...DEFAULT_SETTINGS,
+        settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
-        },
+        }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
       render(<ModelsSection />);
@@ -475,16 +479,16 @@ describe("Settings -> Models", () => {
       expect(reviewerLabels.length).toBeGreaterThan(0);
       const claudeRow = reviewerLabels[0].closest(".settings-row") as HTMLElement;
       const region = within(claudeRow).getByRole("status");
-      // Mounted, and empty — there is nothing to say yet.
+      // Mounted, and empty — the reviewer is on haiku and the worker on
+      // opusplan, so there is nothing to say yet.
       expect(region.textContent ?? "").toBe("");
 
-      // Collapse the roles: the note appears.
+      // Collapse the reviewer onto the worker's model: the note appears.
       act(() => {
         useDashboardStore.setState({
-          settings: {
-            ...DEFAULT_SETTINGS,
+          settings: withAgents("claude", "claude", {
             claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
-          },
+          }) as typeof DEFAULT_SETTINGS,
           settingsLoaded: true,
         });
       });

@@ -57,6 +57,64 @@ export interface ModelRoleResolution {
 }
 
 /**
+ * The models the worker and the reviewer actually run, install-wide.
+ *
+ * The two roles come from SEPARATE settings — the worker agent from an
+ * issue's `Agent:` line, the project's default agent, or
+ * `taskMaster.defaultAgent`; the review agent from an issue's
+ * `ReviewAgent:` line, the project's default review agent, or
+ * `taskMaster.defaultReviewAgent`. They may therefore be DIFFERENT CLIs,
+ * and then each side's model comes from that CLI's OWN settings — so
+ * comparing one CLI's two roles against each other compares two models
+ * that never met. A reviewer on a different CLI is the cheapest way to
+ * get a genuinely different model, which is exactly the configuration the
+ * warning must not misreport.
+ *
+ * Install-wide only: a project's `defaultAgent`/`defaultReviewAgent` and a
+ * task's own `Agent:`/`ReviewAgent:` line can both override these.
+ */
+export interface InstalledRoleModels {
+  /** The CLI the reviewer role runs under, install-wide. */
+  reviewCli: string | null;
+  /** The CLI the worker role runs under, install-wide. */
+  workerCli: string | null;
+  /** The model the reviewer runs, install-wide. */
+  reviewer: string | null;
+  /** The model the worker runs, install-wide. */
+  worker: string | null;
+  /** True when both are known and identical — no second opinion. */
+  shared: boolean;
+}
+
+/**
+ * Resolve the models the worker and reviewer actually run, from the
+ * install-wide agent defaults and each CLI's own model settings.
+ *
+ * `pairs` maps a CLI key to that CLI's two roles (see resolveCliModelRoles /
+ * resolveOpencodeModelRoles). A CLI absent from it has no model settings of
+ * its own — a reviewer or worker on such a CLI runs whatever that CLI
+ * defaults to, which the panel cannot know, so the comparison is skipped
+ * rather than guessed.
+ */
+export function resolveInstalledRoleModels(opts: {
+  workerCli: string | null | undefined;
+  reviewCli: string | null | undefined;
+  pairs: Record<string, ModelRoleResolution>;
+}): InstalledRoleModels {
+  const workerCli = opts.workerCli ?? null;
+  const reviewCli = opts.reviewCli ?? null;
+  const worker = workerCli ? (opts.pairs[workerCli]?.implementer ?? null) : null;
+  const reviewer = reviewCli ? (opts.pairs[reviewCli]?.reviewer ?? null) : null;
+  return {
+    workerCli,
+    reviewCli,
+    worker,
+    reviewer,
+    shared: worker !== null && reviewer !== null && worker === reviewer,
+  };
+}
+
+/**
  * claude-code / codex / agy — mirrors resolveCliModel's install-wide tail.
  * The reviewer falls back to the implementer's model, so the two are shared
  * whenever the reviewer model is unset, invalid, or names the same value.

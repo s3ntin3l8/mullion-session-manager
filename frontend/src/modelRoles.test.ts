@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveCliModelRoles, resolveOpencodeModelRoles } from "./modelRoles.js";
+import {
+  resolveCliModelRoles,
+  resolveInstalledRoleModels,
+  resolveOpencodeModelRoles,
+} from "./modelRoles.js";
 
 // The DOM-free mirror of the backend's install-wide model-role fallback
 // (src/services/task-model-resolve.ts). The two families genuinely differ
@@ -122,6 +126,82 @@ describe("resolveOpencodeModelRoles", () => {
     // bare name is skipped and the role ends up with no override at all.
     const roles = resolveOpencodeModelRoles("opencode-go/minimax-m3.1-flash-free", "haiku");
     expect(roles.implementer).toBe("opencode-go/minimax-m3.1-flash-free");
+    expect(roles.reviewer).toBeNull();
+    expect(roles.shared).toBe(false);
+  });
+});
+
+describe("resolveInstalledRoleModels", () => {
+  // The worker agent and the review agent are chosen independently, so they
+  // can be DIFFERENT CLIs — and then each side's model comes from that
+  // CLI's own settings. Comparing one CLI's two roles against each other
+  // compares two models that never met.
+  const pairs = {
+    claude: resolveCliModelRoles("opusplan", null),
+    codex: resolveCliModelRoles("gpt-5", null),
+    agy: resolveCliModelRoles("gemini-3.8-flash-medium", null),
+    opencode: resolveOpencodeModelRoles("opencode-go/minimax-m3.1-flash-free", null),
+  };
+
+  it("compares the worker's model against the REVIEWER's, across CLIs", () => {
+    // worker = claude-code (opusplan), review agent = codex (gpt-5). The two
+    // are different models, so there IS a second opinion — even though
+    // codex's own two roles are identical.
+    const roles = resolveInstalledRoleModels({
+      workerCli: "claude",
+      reviewCli: "codex",
+      pairs,
+    });
+    expect(roles.worker).toBe("opusplan");
+    expect(roles.reviewer).toBe("gpt-5");
+    expect(roles.shared).toBe(false);
+    expect(roles.reviewCli).toBe("codex");
+    expect(roles.workerCli).toBe("claude");
+  });
+
+  it("reports a collapse when the two roles land on the same model", () => {
+    const roles = resolveInstalledRoleModels({
+      workerCli: "claude",
+      reviewCli: "claude",
+      pairs,
+    });
+    expect(roles.worker).toBe("opusplan");
+    expect(roles.reviewer).toBe("opusplan");
+    expect(roles.shared).toBe(true);
+  });
+
+  it("reports a collapse across different CLIs that name the same model", () => {
+    const same: Record<string, ReturnType<typeof resolveCliModelRoles>> = {
+      claude: resolveCliModelRoles("gpt-5", null),
+      codex: resolveCliModelRoles("gpt-5", null),
+    };
+    const roles = resolveInstalledRoleModels({
+      workerCli: "claude",
+      reviewCli: "codex",
+      pairs: same,
+    });
+    expect(roles.shared).toBe(true);
+  });
+
+  it("does not compare when either side has no model settings of its own", () => {
+    // A reviewer or worker on a CLI with no model settings runs whatever
+    // that CLI defaults to, which the panel cannot know — so it is skipped
+    // rather than guessed.
+    const roles = resolveInstalledRoleModels({
+      workerCli: "claude",
+      reviewCli: "gemini",
+      pairs,
+    });
+    expect(roles.reviewer).toBeNull();
+    expect(roles.shared).toBe(false);
+  });
+
+  it("does not compare when there is no review agent at all", () => {
+    const roles = resolveInstalledRoleModels({
+      workerCli: "claude",
+      reviewCli: "none",
+      pairs,
+    });
     expect(roles.reviewer).toBeNull();
     expect(roles.shared).toBe(false);
   });
