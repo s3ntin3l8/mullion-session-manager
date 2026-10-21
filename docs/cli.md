@@ -432,9 +432,9 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   non-zero with a 409 as well. A request for a
   **new** head commit — the normal re-review after pushing fixes — is
   dispatched right away, even inside the cooldown window of the previous
-  one. The confirmation names the run id, and carries a warning when a bot
-  review for that commit already landed (the repository reviews new PRs on
-  its own, so this is routine — the request still goes through).
+  one. The confirmation names the run id. A commit that has already been
+  reviewed is refused the same way — there is nothing new to review, so push
+  a new commit to ask for another round (or dismiss that review first).
 - `review status [--pr <n>]` — checks a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes

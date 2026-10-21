@@ -936,8 +936,15 @@ export function reviewReader(
 }
 
 /**
- * A warning for a request whose commit already carries a bot review
- * (issue #1705).
+ * A warning for a request whose commit already carries a bot review.
+ *
+ * Issue #1705 wrote this as "warn, never refuse" — the repository reviews
+ * new PRs on its own, and a request for a commit it has already reviewed was
+ * routine, so it warned and dispatched anyway. That is now the *refusal*
+ * above (a commit that has already been reviewed has nothing new to
+ * review), and this warning is the rarer case it left: a bot review landed
+ * on this commit while a NEWER bot review covers an older one, so the head
+ * is not what the last round looked at.
  *
  * The repository reviews new PRs on its own, so a relay request for a commit
  * that already has a bot review is routine — it produces a second review of

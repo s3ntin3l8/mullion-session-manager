@@ -624,9 +624,10 @@ const requestReview = {
     REVIEW_PROTOCOL_NOTE +
     " Omit pr_number to use the open PR for the session's current branch. Fails with a clear " +
     "message if the relay isn't configured in Mullion's Settings → Integrations or no PR " +
-    "exists yet. The result may carry a warning that a bot review for this commit already " +
-    "landed — the request still goes through. Use this for a re-review after pushing fixes; " +
-    "a newly opened PR is reviewed automatically.",
+    "exists yet. A commit that has ALREADY been reviewed is refused (409): there is nothing " +
+    "new to review, so push a new commit to ask for another round, or dismiss that review " +
+    "first. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
+    "automatically.",
   inputSchema: {
     type: "object",
     properties: {
