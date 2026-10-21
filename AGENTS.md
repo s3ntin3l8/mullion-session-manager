@@ -205,9 +205,10 @@ previous baseline listed, not the whole tree (see `docs/ci-cd.md`). A known
 secret is matched by filename, hash and type — not by line number — but the
 baseline carries the line number as metadata and the hook refreshes it when
 it rescans. So the baseline has to be refreshed in the same change when the
-change **moves, adds or removes** a baselined secret — the build then fails
-with "the baseline file was updated". A change that leaves every baselined
-secret where it was (appending a line below one, say) needs no refresh.
+change **moves, adds or removes** a baselined secret: a moved or removed one
+fails the build with "the baseline file was updated", an added one is
+reported as a new secret. A change that leaves every baselined secret where
+it was (appending a line below one, say) needs no refresh.
 
 `scripts/check-security-antipatterns.mjs` enforces CORS security (e.g. no
 `Access-Control-Allow-Credentials: true` with wildcard or reflected origins).
