@@ -39,8 +39,10 @@ jobs:
       # detect-secrets matches a known secret by filename, hash and type -- not
       # by line number -- so a secret that shifts lines is still recognised,
       # and the hook rewrites the baseline's line number and fails the build
-      # until the baseline is refreshed. That is why a change to a baselined
-      # file needs the baseline refreshed in the same change.
+      # until the baseline is refreshed. That is why a change that moves, adds
+      # or removes a baselined secret needs the baseline refreshed in the same
+      # change; a change that leaves every baselined secret where it was does
+      # not.
       detect-secrets-scope: "changed"
     secrets: inherit # pragma: allowlist secret
 
