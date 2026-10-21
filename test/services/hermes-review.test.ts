@@ -247,7 +247,7 @@ describe("hermes review relay", () => {
     });
   });
 
-  describe("the review protocol (issue #1750)", () => {
+  describe("the review protocol (issue #1749)", () => {
     it("names a session per pull request, with only safe characters in it", () => {
       expect(reviewSessionId("acme", "widgets", 7)).toBe("hermes-review-acme-widgets-7");
       // A session id becomes a file name on Hermes' side: a "/" or a ".." in it

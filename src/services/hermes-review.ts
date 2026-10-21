@@ -92,7 +92,7 @@ export class ReviewRunNotFoundError extends Error {
 }
 
 /**
- * A review of this target is already in flight (issue #1750).
+ * A review of this target is already in flight (issue #1749).
  *
  * The refusal is the point: an agent that asked again because the first
  * request "took too long" used to get a SECOND review queued behind the
@@ -607,7 +607,7 @@ export async function requestRelay(
   }
   const root = baseUrl(apiUrl);
 
-  // One review in flight per pull request (issue #1750). A second request for
+  // One review in flight per pull request (issue #1749). A second request for
   // a PR that is already being reviewed used to dispatch a SECOND review,
   // which queued behind the first: the delay grew with every retry, and each
   // queued round inherited the previous rounds' transcript. The refusal names

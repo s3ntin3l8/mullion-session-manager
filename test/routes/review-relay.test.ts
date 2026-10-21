@@ -263,7 +263,7 @@ describe("review-request routes", () => {
     });
   });
 
-  describe("the review range (issue #1750)", () => {
+  describe("the review range (issue #1749)", () => {
     // The base is a resolver the relay calls when it dispatches, so the test
     // calls it the same way.
     const resolvedBase = async () => {
