@@ -13,7 +13,7 @@ its own, so this import is what delivers it.
 
 ## Claude Code only
 
-- Run `/code-review` on your own diff before declaring done.
+- The self-review pass AGENTS.md asks for is `/code-review` in Claude Code.
   `.claude/skills/mullion-review-invariants/SKILL.md` carries this repo's
   invariants in mechanically-checkable form.
 - Architecture: [`docs/architecture.md`](docs/architecture.md) ·

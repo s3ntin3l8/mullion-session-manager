@@ -34,7 +34,11 @@ import {
   requestRelay,
   resetHermesReviewState,
   cooldownEntryCount,
+  ReviewAlreadyLandedError,
   ReviewCooldownError,
+  ReviewInFlightError,
+  reviewIdempotencyKey,
+  reviewSessionId,
   testHermesConnection,
 } from "../../src/services/hermes-review.js";
 
@@ -58,6 +62,9 @@ describe("hermes review relay", () => {
   // GET/POST /v1/runs/<id>[/stop] — the status and stop endpoints.
   let runEndpoint: (url: string, init: RequestInit) => Promise<Response>;
   let promptResponse: () => Promise<Response>;
+  // The check runs on a commit — the in-flight marker (issue #1751, #1757).
+  let checkRuns: () => Promise<Response>;
+  let createCheckRun: (init: RequestInit) => Promise<Response>;
 
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
@@ -89,12 +96,18 @@ describe("hermes review relay", () => {
     dispatch = async () => accepted();
     runEndpoint = async () => new Response("{}", { status: 404 });
     promptResponse = async () => new Response("REVIEW PROMPT BODY", { status: 200 });
+    checkRuns = async () => new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+    createCheckRun = async () => new Response(JSON.stringify({ id: 4242 }), { status: 201 });
     fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === PROMPT_URL) return promptResponse();
       if (url === TRIAGE_PROMPT_URL) return promptResponse();
       if (url === `${API}/health`) return health();
       if (url === `${API}/v1/runs`) return dispatch(init ?? {});
       if (url.startsWith(`${API}/v1/runs/`)) return runEndpoint(url, init ?? {});
+      if (url.includes("/commits/") && url.includes("/check-runs")) return checkRuns();
+      if (url === "https://api.github.com/repos/acme/widgets/check-runs") {
+        return createCheckRun(init ?? {});
+      }
       return Promise.reject(new Error(`unexpected fetch ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -244,6 +257,156 @@ describe("hermes review relay", () => {
     });
   });
 
+  describe("the review protocol (issue #1749)", () => {
+    // The shared workflow (s3ntin3l8/.github) derives the session id and the
+    // key with the same rules, from the same inputs — the literals below are
+    // what both sides must agree on, or the two entry points stop
+    // deduplicating against each other.
+    it("names a session per pull request, with only safe characters in it", () => {
+      expect(reviewSessionId("acme", "widgets", 7)).toBe("hermes-review-acme-widgets-7");
+      // A session id becomes a file name on Hermes' side: a "/" or a ".." in it
+      // would be rejected as an unsafe session id.
+      expect(reviewSessionId("acme", "group/widgets", 7)).toBe(
+        "hermes-review-acme-group-widgets-7",
+      );
+      expect(reviewSessionId("acme", "wid..gets", 7)).toBe("hermes-review-acme-wid--gets-7");
+    });
+
+    it("names the idempotency key after the review range", () => {
+      expect(reviewIdempotencyKey("acme", "widgets", 7, "base123", "head456")).toBe(
+        "hermes-review:acme/widgets#7@base123..head456",
+      );
+      // The first round of a PR has no base: the range is empty on the left.
+      expect(reviewIdempotencyKey("acme", "widgets", 7, undefined, "head456")).toBe(
+        "hermes-review:acme/widgets#7@..head456",
+      );
+    });
+
+    it("dispatches in that session, so the rounds of a PR keep their history", async () => {
+      await requestHermesReview(app, PR);
+      const [, init] = calls("/v1/runs")[0];
+      const body = JSON.parse((init as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7");
+    });
+
+    it("refuses a second request while a review of the PR is still running", async () => {
+      dispatch = async () => accepted("run_live");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_live", status: "running" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      const posts = calls("/v1/runs").length;
+
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
+      // No second dispatch: the refusal IS the answer (wait for the run).
+      expect(calls("/v1/runs")).toHaveLength(posts);
+    });
+
+    it("says which run is already working, so the caller can wait for it", async () => {
+      dispatch = async () => accepted("run_live");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_live", status: "running" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).rejects.toThrow(/run_live/);
+    });
+
+    it("does not treat a finished review as in flight", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_done");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_done", status: "completed" }), { status: 200 });
+      await requestHermesReview(app, PR);
+      await requestHermesReview(app, PR);
+      expect(calls("/v1/runs")).toHaveLength(2);
+    });
+
+    it("treats a status it has never seen as live, not as finished", async () => {
+      // Hermes parks a run in `waiting_for_approval` while the agent waits for
+      // a tool approval — a status missing from a "live" list reads as
+      // finished, and a second review is dispatched.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_parked");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_parked", status: "waiting_for_approval" }), {
+          status: 200,
+        });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
+    });
+
+    it("refuses a commit that has already been reviewed — there is nothing new to review", async () => {
+      // The range would be empty (the last landed review is on this very
+      // commit), and an empty range is a key the previous round never used:
+      // dispatching it is how the same diff got reviewed twice.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await expect(
+        requestHermesReview(app, { ...PR, resolveBase: async () => PR.headSha }),
+      ).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
+      // Nothing was dispatched: the refusal IS the answer.
+      expect(calls("/v1/runs")).toHaveLength(0);
+    });
+
+    it("words the in-flight refusal for an issue triage", async () => {
+      applySettingsPatch(app, {
+        reviewRelay: { triagePromptRepo: "acme/.github", triagePromptPath: "triage.md" },
+      });
+      await requestRelay(app, ISSUE);
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_1", status: "running" }), { status: 200 });
+      await expect(requestRelay(app, ISSUE)).rejects.toThrow(/triage of this issue/);
+    });
+
+    it("starts a fresh attempt when the range's previous run failed (#1750)", async () => {
+      // Hermes replays the run a key names, so a failed run would make every
+      // retry replay it — "ask again" would do nothing. A retry therefore goes
+      // under a deeper key, derived from the run that failed.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      let calls = 0;
+      // The first attempt finds the range's run, and it FAILED; the second
+      // attempt (under the deeper key) is fresh.
+      dispatch = async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Response(
+            JSON.stringify({ run_id: "run_failed", status: "failed", replayed: true }),
+            { status: 202, headers: { "Idempotency-Replayed": "true" } },
+          );
+        }
+        return accepted("run_second");
+      };
+      const run = await requestHermesReview(app, PR);
+      // The second attempt went under a deeper key — and it was dispatched.
+      const keys = fetchMock.mock.calls
+        .filter(([u]) => String(u).endsWith("/v1/runs"))
+        .map(
+          ([, init]) =>
+            (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
+        );
+      expect(keys[0]).toBe("hermes-review:acme/widgets#7@..abc1234");
+      expect(keys[1]).toBe("hermes-review:acme/widgets#7@..abc1234#run_failed");
+      expect(run.replayed).toBe(false);
+      expect(run.runId).toBe("run_second");
+    });
+
+    it("refuses a range whose run is still working, without a second dispatch", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () =>
+        new Response(JSON.stringify({ run_id: "run_live", status: "running", replayed: true }), {
+          status: 202,
+          headers: { "Idempotency-Replayed": "true" },
+        });
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
+      expect(calls("/v1/runs")).toHaveLength(1);
+    });
+
+    it("does not treat an unreadable run status as in flight", async () => {
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_x");
+      runEndpoint = async () => new Response("nope", { status: 500 });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_x" });
+    });
+  });
+
   describe("requestHermesReview", () => {
     it("dispatches: health check, then an authenticated POST carrying the prompt", async () => {
       await requestHermesReview(app, PR);
@@ -255,7 +418,9 @@ describe("hermes review relay", () => {
       expect(init.method).toBe("POST");
       const headers = init.headers as Record<string, string>;
       expect(headers.Authorization).toBe("Bearer sekret-key");
-      expect(headers["Idempotency-Key"]).toMatch(/^mullion-review:acme\/widgets#7@abc1234:\d+$/);
+      // The key names the review RANGE, not the request: a repeat request for
+      // the same range must not dispatch a second review of the same diff.
+      expect(headers["Idempotency-Key"]).toBe("hermes-review:acme/widgets#7@..abc1234");
       expect(init.redirect).toBe("manual");
       const body = JSON.parse(init.body as string);
       expect(body.model).toBe("hermes-agent");
@@ -263,7 +428,7 @@ describe("hermes review relay", () => {
       expect(body.input).toContain("REVIEW PROMPT BODY");
     });
 
-    it("retries within the cooldown window reuse the key; a later request gets a new one", async () => {
+    it("a retry of the same range reuses the key, and so does a later request for it", async () => {
       const keyOf = (i: number) =>
         (fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/v1/runs"))[i][1] as RequestInit)
           .headers as Record<string, string>;
@@ -276,7 +441,10 @@ describe("hermes review relay", () => {
         expect(keyOf(1)["Idempotency-Key"]).toBe(keyOf(0)["Idempotency-Key"]);
         vi.setSystemTime(Date.now() + 11 * 60_000); // past the 10-minute window
         await requestHermesReview(app, PR);
-        expect(keyOf(2)["Idempotency-Key"]).not.toBe(keyOf(1)["Idempotency-Key"]);
+        // The key does NOT roll with the cooldown any more: it names the range,
+        // so a later request for the same range replays the existing run
+        // instead of dispatching a second review of the same diff.
+        expect(keyOf(2)["Idempotency-Key"]).toBe(keyOf(1)["Idempotency-Key"]);
       } finally {
         vi.useRealTimers();
       }
@@ -328,23 +496,220 @@ describe("hermes review relay", () => {
       }
     });
 
-    it("flags a replayed run (Idempotency-Replayed) so callers know nothing new started", async () => {
-      dispatch = async () =>
-        new Response('{"run_id":"run_old","status":"completed"}', {
-          status: 202,
-          headers: { "Idempotency-Replayed": "true" },
-        });
-      await expect(requestHermesReview(app, PR)).resolves.toEqual({
-        runId: "run_old",
-        status: "completed",
-        replayed: true,
-      });
-      resetHermesReviewState();
-      dispatch = async () => accepted();
-      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ replayed: false });
+    it("retries a stuck review session in a fresh one", async () => {
+      // Hermes' session authority refused the turn: the session this pull
+      // request's reviews run in is stuck — the gateway paused it on an
+      // earlier conflict and never recovers
+      // (NousResearch/hermes-agent#142731) — so it refuses every later round.
+      // The relay starts over in a fresh session, and under a key that moves
+      // with it, because the body carries the session id.
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n === 1) {
+          return new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
+        }
+        return accepted("run_fresh");
+      };
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_fresh" });
+      const posts = calls("/v1/runs");
+      const bodyOf = (i: number) => JSON.parse((posts[i][1] as RequestInit).body as string);
+      const keyOf = (i: number) =>
+        (posts[i][1] as RequestInit & { headers: Record<string, string> }).headers[
+          "Idempotency-Key"
+        ];
+      expect(bodyOf(0).session_id).toBe("hermes-review-acme-widgets-7");
+      expect(bodyOf(1).session_id).toBe("hermes-review-acme-widgets-7-2");
+      expect(keyOf(0)).toBe("hermes-review:acme/widgets#7@..abc1234");
+      expect(keyOf(1)).toBe("hermes-review:acme/widgets#7@..abc1234#session-2");
     });
 
-    it("gives every request a fresh key when the cooldown is disabled", async () => {
+    it("gives up when every session is refused by the stuck session", async () => {
+      // The session budget is its own: a stuck session is not a failed
+      // attempt at the range, so it must not eat the range's attempts.
+      dispatch = async () =>
+        new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
+      expect(calls("/v1/runs")).toHaveLength(3);
+    });
+
+    it("still dispatches after two stuck sessions", async () => {
+      // The range's attempts and the session's attempts are separate budgets:
+      // two refused sessions must leave an attempt for the dispatch itself.
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n <= 2) {
+          return new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
+        }
+        return accepted("run_third");
+      };
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_third" });
+      const bodies = calls("/v1/runs").map(([, init]) =>
+        JSON.parse((init as RequestInit).body as string),
+      );
+      expect(bodies.map((b) => b.session_id)).toEqual([
+        "hermes-review-acme-widgets-7",
+        "hermes-review-acme-widgets-7-2",
+        "hermes-review-acme-widgets-7-3",
+      ]);
+    });
+
+    it("continues in the session the previous round moved to", async () => {
+      // A round whose own session was stuck moves to a fresh one and records
+      // it on its in-flight marker. The next round continues THERE, instead
+      // of starting from the stuck base id (which would be refused at the
+      // door, every round). The shared workflow reads the same marker.
+      checkRuns = async () =>
+        new Response(
+          JSON.stringify({
+            check_runs: [
+              {
+                id: 1,
+                name: "Hermes review",
+                external_id: "run_prev",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7-2" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        resolveBase: async () => "base123",
+      });
+      const [post] = calls("/v1/runs");
+      const body = JSON.parse((post[1] as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7-2");
+    });
+
+    it("takes the NEWEST marker on the base commit, not the oldest", async () => {
+      // The check-runs endpoint answers newest first, so the newest marker is
+      // the FIRST one — taking the last would send the next round back into
+      // the stuck session the fresh one was left to avoid. Two markers on one
+      // commit: the stuck base id, then the one the round actually used.
+      checkRuns = async () =>
+        new Response(
+          JSON.stringify({
+            check_runs: [
+              {
+                id: 900,
+                name: "Hermes review",
+                external_id: "run_new",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7-2" },
+              },
+              {
+                id: 800,
+                name: "Hermes review",
+                external_id: "run_old",
+                status: "completed",
+                output: { summary: "session: hermes-review-acme-widgets-7" },
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        resolveBase: async () => "base123",
+      });
+      const [post] = calls("/v1/runs");
+      const body = JSON.parse((post[1] as RequestInit).body as string);
+      expect(body.session_id).toBe("hermes-review-acme-widgets-7-2");
+    });
+
+    it("ignores a remembered session that is not this pull request's", async () => {
+      // Only an id of the exact shape this code generates is honoured: a
+      // malformed id, or one belonging to another pull request, must not be
+      // used — it would put this pull request's rounds in another one's
+      // conversation.
+      for (const summary of [
+        "session: hermes-review-acme-widgets-9-2",
+        "session: not-a-session-id",
+        "session: hermes-review-acme-widgets-7-2-3",
+        "no session here",
+      ]) {
+        resetHermesReviewState();
+        checkRuns = async () =>
+          new Response(
+            JSON.stringify({
+              check_runs: [{ id: 1, name: "Hermes review", output: { summary } }],
+            }),
+            { status: 200 },
+          );
+        await requestHermesReview(app, {
+          ...PR,
+          githubToken: "gh-token",
+          resolveBase: async () => "base123",
+        });
+        const [post] = calls("/v1/runs");
+        const body = JSON.parse((post[1] as RequestInit).body as string);
+        expect(body.session_id).toBe("hermes-review-acme-widgets-7");
+      }
+    });
+
+    it("writes the in-flight marker, with the session the round runs in", async () => {
+      // The marker is what the shared workflow reads to see that a review of
+      // this pull request is already running — and which session it runs in.
+      let written: Record<string, unknown> = {};
+      createCheckRun = async (init: RequestInit) => {
+        written = JSON.parse(init.body as string) as Record<string, unknown>;
+        return new Response(JSON.stringify({ id: 4242 }), { status: 201 });
+      };
+      await requestHermesReview(app, { ...PR, githubToken: "gh-token" });
+      expect(written.name).toBe("Hermes review");
+      expect(written.head_sha).toBe("abc1234");
+      expect(written.external_id).toBe("run_1");
+      expect(written.status).toBe("in_progress");
+      expect((written.output as { summary: string }).summary).toBe(
+        "session: hermes-review-acme-widgets-7",
+      );
+    });
+
+    it("retries a replayed run that completed without landing a review", async () => {
+      // A replay means the range already has a run. What the request means
+      // then depends on that run: still working -> refused as in flight (with
+      // its run id); failed -> retried under a deeper key; completed -> ALSO
+      // retried, because a completed run is not evidence that a review landed
+      // (Hermes reports "completed" for a run that posted nothing). The
+      // empty-range check is what refuses an already-reviewed commit.
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n === 1) {
+          return new Response('{"run_id":"run_old","status":"completed"}', {
+            status: 202,
+            headers: { "Idempotency-Replayed": "true" },
+          });
+        }
+        return accepted("run_second");
+      };
+      const run = await requestHermesReview(app, PR);
+      expect(run.runId).toBe("run_second");
+      const keys = fetchMock.mock.calls
+        .filter(([u]) => String(u).endsWith("/v1/runs"))
+        .map(
+          ([, init]) =>
+            (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
+        );
+      expect(keys[0]).toBe("hermes-review:acme/widgets#7@..abc1234");
+      expect(keys[1]).toBe("hermes-review:acme/widgets#7@..abc1234#run_old");
+    });
+
+    it("refuses a range whose review already landed", async () => {
+      // The commit the previous round covered IS the head: the range is
+      // empty, so there is nothing to review. This is the only "already
+      // landed" refusal — a replayed run does not make one.
+      await expect(
+        requestHermesReview(app, { ...PR, resolveBase: async () => PR.headSha }),
+      ).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
+    });
+
+    it("keys a request by its range, not by the clock, even with the cooldown off", async () => {
       applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
       await requestHermesReview(app, PR);
       await requestHermesReview(app, PR);
@@ -355,7 +720,10 @@ describe("hermes review relay", () => {
             (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
         );
       expect(keys).toHaveLength(2);
-      expect(keys[0]).not.toBe(keys[1]);
+      // The key used to carry a time bucket, so a request after the cooldown
+      // window dispatched a SECOND review of the same diff — the pile-up. It
+      // names the range now, so the second request replays the first run.
+      expect(keys[0]).toBe(keys[1]);
     });
 
     it("passes Retry-After through on 429/503 from Hermes", async () => {

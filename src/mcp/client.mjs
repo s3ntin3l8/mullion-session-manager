@@ -8,6 +8,7 @@ import {
   sendHookMessage,
   statusHookMessages,
 } from "../cli/client.mjs";
+import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -54,8 +55,9 @@ const BROWSER_ACTION_TIMEOUT_MS = 30_000;
 // reviews.request does up to four sequential network calls server-side (GitHub
 // PR lookup, prompt fetch, Hermes health, Hermes dispatch ~15s), which can
 // crowd the 30s default and leave the agent seeing an error for a review that
-// DID dispatch — and then re-requesting it.
-const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
+// DID dispatch — and then re-requesting it. The constant lives in
+// cli/review-protocol.mjs, which the CLI imports too: one source, so the two
+// clients cannot drift into disagreeing about how long a review may take.
 
 // isMissingIdError/resolveOwnSessionId used to be private to this file
 // (issue #1291, Hermes review PR #1292); moved to cli/client.mjs (issue

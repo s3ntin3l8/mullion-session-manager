@@ -421,15 +421,21 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   current branch is used. With the reviewer set to None the command exits non-zero (412). The
   Hermes API URL and key never reach the session; the prompt repository is
   optional, and an empty one uses Mullion's built-in review prompt. The
-  review is dispatched asynchronously and posts to the PR within a few
-  minutes; a repeat request for the **same commit** inside the configured
-  cooldown exits non-zero with a 409. A request for a **new** head commit —
-  the normal re-review after pushing fixes — is dispatched right away, even
-  inside the cooldown window of the previous one. The confirmation names the
-  run id, and carries a warning when a bot review for that commit already
-  landed (the repository reviews new PRs on its own, so this is routine — the
-  request still goes through).
-- `review status [--pr <n>]` — troubleshoots a requested review: the run's
+  review is dispatched asynchronously and posts to the PR in 10-30 minutes.
+  **One review per pull request at a time:** a request while a review of the
+  same PR is still running exits non-zero with a 409 that names the run id of
+  the review already in flight — wait for it, or stop it deliberately with
+  `review stop <runId>`. A request for a commit that has **already been
+  reviewed** is refused the same way: there is nothing new to review, so push
+  a new commit to ask for another round (or dismiss that review first). A
+  repeat request for the **same commit** inside the configured cooldown exits
+  non-zero with a 409 as well. A request for a
+  **new** head commit — the normal re-review after pushing fixes — is
+  dispatched right away, even inside the cooldown window of the previous
+  one. The confirmation names the run id. A commit that has already been
+  reviewed is refused the same way — there is nothing new to review, so push
+  a new commit to ask for another round (or dismiss that review first).
+- `review status [--pr <n>]` — checks a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes
   answered with something unreadable — retry later — or `not_found`), the review bot's reply or error, and whether
@@ -437,8 +443,11 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   (Hermes can report `completed` for a run that posted nothing, e.g. when it
   had no App credentials) — including the review's own text and a link to
   it. `not_found` means this Mullion has no run for the
-  PR: nothing was requested here, or the server restarted. Use it when a
-  review has not appeared after several minutes, not to poll.
+  PR: nothing was requested here, or the server restarted. Call it once,
+  about ten minutes after requesting — a review takes 10-30 minutes, and
+  asking again while one is in flight is refused (so the answer to "still
+  nothing" is to wait, not to ask again). The MCP spelling of this command
+  is `review_status`, and of `review` itself `request_review`.
 - `review stop <runId>` — stops a run **this session** dispatched; another
   session's run is refused (403). Operators can stop any tracked run from
   Settings → Integrations → Review relay → Recent reviews.

@@ -20,6 +20,7 @@ import {
   statusHookMessages,
   statusTruncationNote,
 } from "./client.mjs";
+import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
 function readAll(stream) {
@@ -1457,8 +1458,10 @@ async function runStatus(client, args, opts, io) {
 
 // reviews.request does several sequential network calls server-side (GitHub
 // PR lookup, prompt fetch, Hermes health + dispatch), which can crowd the
-// client's 30s default — see REVIEW_REQUEST_TIMEOUT_MS in mcp/client.mjs.
-const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
+// client's 30s default. The constant (and the review protocol's wording) live
+// in review-protocol.mjs, which the MCP client imports too — one source, so
+// the two clients cannot drift into contradicting each other.
+
 // How much of a review's or a triage's own text the CLI prints (issue #1704).
 // The server already bounds it (MAX_REVIEW_BODY_CHARS in
 // services/github-write.ts); this is the shorter excerpt a terminal can show
@@ -1524,7 +1527,10 @@ async function runReview(client, args, opts, io) {
     const warning = result.warning ? ` — warning: ${result.warning}` : "";
     return {
       json: result,
-      text: `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ${result.runId} (${result.runStatus}) — see "mullion review status"${warning}`,
+      text:
+        `no new review started for ${result.repo}#${result.prNumber}: Hermes returned the earlier run ` +
+        `${result.runId} (${result.runStatus}) — a review of this commit is already under way. ` +
+        `Wait for it; see "mullion review status".${warning}`,
     };
   }
   // Issue #1705 — the request may carry a warning (a bot review already landed
@@ -1533,7 +1539,14 @@ async function runReview(client, args, opts, io) {
   const warning = result.warning ? ` — warning: ${result.warning}` : "";
   return {
     json: result,
-    text: `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}) — it will post to the PR in a few minutes${warning}`,
+    // The rule, in the place the caller reads it right after asking: asking
+    // again in the meantime is what used to queue a second review behind the
+    // first. The wording is the shared one (review-protocol.mjs), so the CLI
+    // and the MCP tool description cannot drift apart.
+    text:
+      `review requested for ${result.repo}#${result.prNumber} (run ${result.runId}). ` +
+      REVIEW_PROTOCOL_NOTE +
+      warning,
   };
 }
 

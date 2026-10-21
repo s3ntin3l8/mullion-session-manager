@@ -104,7 +104,7 @@ import {
   getReviewRunForPr,
   requestHermesReview,
 } from "../services/hermes-review.js";
-import { getRelayReviewState, replyReviewError } from "./review-relay.js";
+import { getRelayReviewState, replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
@@ -2226,11 +2226,27 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         assertReviewerConfigured(app);
         const { detail } = await loadPrDetail(projectId, number, ctx);
+        // The base of the review's range: the commit the previous round
+        // covered. Without it the key was always the first round's key, so a
+        // second click replayed that run instead of reviewing anything (and
+        // once the agent's own round had used the same key, the two bodies
+        // differed and Hermes answered a conflict).
+        const reader = reviewReader(
+          ctx.token,
+          ctx.repoRef.owner,
+          ctx.repoRef.repo,
+          number,
+          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+        );
         const run = await requestHermesReview(app, {
           owner: ctx.repoRef.owner,
           repo: ctx.repoRef.repo,
           prNumber: number,
           headSha: detail.headSha,
+          resolveBase: reader.base,
+          // The in-flight marker is a check run: it needs `checks: write`,
+          // which the read token this route resolved does not have.
+          githubToken: (await resolveGitHubToken(app, ctx.repoRef, "checks")) ?? undefined,
         });
         return { status: "dispatched", runId: run.runId, replayed: run.replayed };
       } catch (err) {

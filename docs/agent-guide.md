@@ -363,6 +363,33 @@ polling GitHub. Delivery is best effort and edge-triggered (one event per
 transition, at the poll cadence): treat a missing event as "no change", not
 as an error.
 
+## Asking for a review
+
+Mullion can ask the review bot to review your pull request. Ask for it with
+`mullion review` (or the `request_review` MCP tool), then check on it with
+`mullion review status` (or `review_status`).
+
+**One review per pull request at a time.** A review takes **10-30 minutes**.
+If you ask again while one is running, the request is _refused_ and hands you
+the run id of the review that is already working — that refusal is the answer,
+not an error to retry. Wait for it, or stop it deliberately with
+`mullion review stop <runId>` (the `stop_review` MCP tool).
+
+Why this is worth knowing: a request that comes back "still running" used to
+be read as "nothing happened", and the retry queued a _second_ review behind
+the first. Every extra round made the next one slower — each round inherits
+the previous rounds' transcript — until the queue was deep enough that
+reviews took hours and the review gateway started refusing new ones. Asking
+once and waiting is faster than asking twice.
+
+After pushing fixes, ask again — a new head commit is a new review, and the
+previous round's findings are in the reviewer's context, so the new round
+focuses on what changed.
+
+Do **not** re-trigger a review by commenting `@s3ntin3l8-hermes Review` on
+the PR. That path is for humans; from an agent it dispatches another round
+that queues behind whatever is already running.
+
 ## Reporting your own status
 
 If your CLI has no Mullion hook adapter (a plain shell script, an unsupported

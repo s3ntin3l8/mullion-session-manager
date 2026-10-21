@@ -7,7 +7,9 @@ import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
+import { getStoredSettings } from "../services/settings.js";
 import {
+  completeReviewMarkerCheckRun,
   findPullRequestByHead,
   getIssueState,
   getPullRequestByNumber,
@@ -20,8 +22,11 @@ import {
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
+  ReviewAlreadyLandedError,
   ReviewConflictError,
   ReviewCooldownError,
+  ReviewInFlightError,
+  ReviewSessionRefusedError,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   assertReviewerConfigured,
@@ -107,6 +112,13 @@ interface ReviewTarget {
   prNumber: number;
   headSha: string;
   token: string;
+  /**
+   * The token for the in-flight marker (a check run). It needs
+   * `checks: write`, which the read token does not have — absent when no
+   * such token could be resolved, in which case the relay simply keeps no
+   * marker.
+   */
+  markerToken?: string | null;
 }
 
 interface TriageTarget {
@@ -127,8 +139,20 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
     return reply.conflict(err.message);
   }
   if (err instanceof ReviewConflictError) return reply.conflict(err.message);
+  // The commit has already been reviewed: there is nothing new to review.
+  if (err instanceof ReviewAlreadyLandedError) return reply.conflict(err.message);
+  // A review of this PR is already running: the answer is the run id, not a
+  // second review queued behind it.
+  if (err instanceof ReviewInFlightError) {
+    reply.header("Retry-After", "60");
+    return reply.conflict(err.message);
+  }
   if (err instanceof ReviewRunNotFoundError) return reply.notFound(err.message);
   if (err instanceof ReviewRunForbiddenError) return reply.forbidden(err.message);
+  // The pull request's review session is stuck: Hermes refuses every turn
+  // into it. The relay retries in a fresh session — this is the case where
+  // that did not get through either.
+  if (err instanceof ReviewSessionRefusedError) return reply.serviceUnavailable(err.message);
   if (err instanceof HermesAuthError) return reply.badGateway(err.message);
   if (err instanceof HermesUnavailableError) {
     if (err.retryAfterSeconds !== undefined) {
@@ -294,7 +318,20 @@ async function resolveReviewTarget(
     // Always read the PR itself: it confirms the number exists and carries the
     // head SHA the review's idempotency key is built from.
     const pr = await getPullRequestByNumber(token, owner, repo, prNumber);
-    return { owner, repo, prNumber, headSha: pr.headSha, token };
+    return {
+      owner,
+      repo,
+      prNumber,
+      headSha: pr.headSha,
+      token,
+      // The in-flight marker is a check run, and writing one needs
+      // `checks: write` — a scope the read token does not have. The App
+      // install usually has not been approved for it either, so this falls
+      // back to the PAT/OAuth token (a `repo`-scoped user token covers check
+      // runs). Without it the marker write 403s and the cross-entry-point
+      // session sharing never happens.
+      markerToken: await resolveGitHubToken(app, { owner, repo }, "checks"),
+    };
   } catch (err) {
     // Only a genuine 404 means "no such PR". An expired token, a rate
     // limit or an unreachable GitHub (statusCode 0) must not tell the
@@ -439,7 +476,28 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, headSha } = target;
 
       try {
-        const run = await requestHermesReview(app, { owner, repo, prNumber, headSha, sessionId });
+        const reader = reviewReader(
+          target.token,
+          owner,
+          repo,
+          prNumber,
+          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+        );
+        const run = await requestHermesReview(app, {
+          owner,
+          repo,
+          prNumber,
+          headSha,
+          resolveBase: reader.base,
+          sessionId,
+          // The token lets the relay read and write the in-flight marker: the
+          // session the previous round ran in, and one for this round. It
+          // needs `checks: write` — the read token does not have it.
+          githubToken: target.markerToken ?? undefined,
+        });
+        // The PR's reviews are read once per request: the delta base and the
+        // duplicate-review warning need the same list, and it is a walk of up
+        // to ten pages.
         return {
           status: "dispatched",
           repo: `${owner}/${repo}`,
@@ -456,7 +514,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           // to 10 pages) for a warning it never returns. The wording makes no
           // promise about a second review — on a replay no new run is
           // dispatched, so there is no second review to promise.
-          ...(await existingBotReviewWarning(app, target)),
+          ...(await existingBotReviewWarning(target, reader)),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -482,6 +540,34 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       try {
         const status = await getHermesReviewStatus(app, { owner, repo, prNumber });
         const record = getReviewRunForPr(owner, repo, prNumber);
+        // Close the in-flight marker once the run it names has finished, so a
+        // later request does not mistake a finished review for a live one.
+        // The shared workflow closes its own marker the same way.
+        if (record?.markerCheckRunId) {
+          const conclusion =
+            status.status === "completed"
+              ? "success"
+              : status.status === "failed" ||
+                  status.status === "cancelled" ||
+                  status.status === "interrupted"
+                ? "failure"
+                : null;
+          if (conclusion) {
+            try {
+              await completeReviewMarkerCheckRun(
+                target.markerToken ?? token,
+                owner,
+                repo,
+                record.markerCheckRunId,
+                conclusion,
+              );
+              record.markerCheckRunId = undefined;
+            } catch {
+              // A marker that cannot be closed is not a failed status read: the
+              // ledger step treats a marker whose run is terminal as stale.
+            }
+          }
+        }
         return {
           ...status,
           github: await findLandedReview(app, token, target, record),
@@ -853,25 +939,107 @@ async function findLandedComment(
 }
 
 /**
- * A warning for a request whose commit already carries a bot review
- * (issue #1705).
+ * The PR's reviews, read at most once per request.
  *
- * The repository reviews new PRs on its own, so a relay request for a commit
- * that already has a bot review is routine — it produces a second review of
- * the same commit, which the requester may or may not want. This **warns and
- * dispatches anyway**: refusing would break the legitimate "ask for a
- * second opinion" case, and the warning is enough for the caller to see it.
+ * Two things need them: the delta base (the commit the previous round
+ * covered) and the duplicate-review warning. The first is only needed once a
+ * dispatch is actually going to happen — reading them is a GitHub call (up to
+ * ten pages), and a request the relay refuses must not pay for it — so the
+ * walk is memoized and the base is resolved lazily, by the relay itself.
+ *
+ * Shared with the operator's "re-review" route (routes/projects.ts): without
+ * a base there, that route's key was always the FIRST round's key, so a
+ * second click replayed the first run instead of reviewing anything.
+ */
+export function reviewReader(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  /**
+   * The login of the bot that posts the review (e.g. "s3ntin3l8-hermes[bot]").
+   * Only its landed reviews set the delta base — see the setting's comment.
+   * Empty = any bot's review counts.
+   */
+  reviewerBotLogin = "",
+): {
+  reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
+  base: () => Promise<string>;
+} {
+  let cached: Awaited<ReturnType<typeof listPullRequestReviews>> | undefined;
+  const reviews = async () => {
+    cached ??= await listPullRequestReviews(token, owner, repo, prNumber);
+    return cached;
+  };
+  return {
+    reviews,
+    /**
+     * The commit the previous review round covered — the base of this round's
+     * delta.
+     *
+     * It is the most recent LANDED review by the reviewer bot itself (a
+     * DISMISSED review was retracted, so it did not land). The shared workflow
+     * computes the same value for the same PR, and both put it in the
+     * idempotency key: a request for a range that is already being reviewed
+     * therefore names the same range on both paths, and cannot dispatch it
+     * twice.
+     *
+     * A failure to read the reviews is not fatal: the round simply reviews
+     * the whole diff (an empty base), which is what the first round does
+     * anyway.
+     */
+    base: async () => {
+      try {
+        const landed = (await reviews()).filter(
+          (r) =>
+            r.authorIsBot &&
+            // Only the reviewer's OWN reviews count. Another bot's review
+            // (claude[bot], Copilot, a Task Master reviewer) landing on the
+            // head must neither make this request a no-op nor become the base
+            // of the next round — that round would then skip everything the
+            // reviewer itself has not looked at yet. The shared workflow
+            // applies the same rule (its `mention-trigger` input plus
+            // "[bot]"), and the two must agree or their idempotency keys
+            // diverge and the same range can be dispatched twice.
+            (reviewerBotLogin === "" || r.author === reviewerBotLogin) &&
+            // A landed review, not merely a non-dismissed one: a PENDING
+            // (draft) review never landed, and using it as the base would
+            // skip part of the diff.
+            LANDED_REVIEW_STATES.has(r.state) &&
+            r.commitId !== "",
+        );
+        return landed.at(-1)?.commitId ?? "";
+      } catch {
+        return "";
+      }
+    },
+  };
+}
+
+/**
+ * A warning for a request whose commit already carries a bot review.
+ *
+ * Issue #1705 wrote this as "warn, never refuse" — the repository reviews
+ * new PRs on its own, and a request for a commit it has already reviewed was
+ * routine, so it warned and dispatched anyway. That is now the *refusal*
+ * above (a commit the REVIEWER has already reviewed has nothing new to
+ * review), and this warning is the rarer case it left: a review by some
+ * OTHER bot landed on this commit while a newer review of the reviewer's own
+ * covers an older one, so the head is not what the last round looked at.
+ *
+ * It warns and dispatches anyway: refusing would break the legitimate "ask
+ * for a second opinion" case, and the warning is enough for the caller to
+ * see it.
  *
  * A GitHub failure degrades to "no warning" — it must never block or fail the
  * dispatch it is attached to.
  */
 async function existingBotReviewWarning(
-  app: FastifyInstance,
   t: ReviewTarget,
+  reader: { reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>> },
 ): Promise<{ warning?: string }> {
   try {
-    const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
-    const existing = reviews
+    const existing = (await reader.reviews())
       .filter(
         (r) =>
           r.authorIsBot &&
@@ -885,11 +1053,8 @@ async function existingBotReviewWarning(
     return {
       warning: `A review by ${existing.author} (${existing.state}) already landed on this commit`,
     };
-  } catch (err) {
-    app.log.warn(
-      { detail: (err as Error).message },
-      "review-request: duplicate-review check failed (continuing without a warning)",
-    );
+  } catch {
+    // The warning is best effort: a failed lookup must not fail the request.
     return {};
   }
 }

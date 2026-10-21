@@ -329,6 +329,15 @@ export function ReviewRelaySection() {
             value={relay.triagePromptPath}
             onCommit={(v) => updateSettings({ reviewRelay: { triagePromptPath: v } })}
           />
+          <TextSettingRow
+            label="Reviewer bot login"
+            desc="The GitHub login of the bot that posts the review. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree."
+            key={relay.reviewerBotLogin}
+            value={relay.reviewerBotLogin}
+            placeholder="name[bot]"
+            width={220}
+            onCommit={(v) => updateSettings({ reviewRelay: { reviewerBotLogin: v } })}
+          />
           <Row
             label="Cooldown"
             desc="Minimum time between two requests for the same target — the same commit for a review, the same issue for a triage."

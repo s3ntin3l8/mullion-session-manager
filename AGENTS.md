@@ -30,26 +30,28 @@ context if you're running inside a Mullion-hosted session.
   (repo-wide — covers `frontend/` too). Verify patch coverage with
   `make test-patch-coverage` ($\ge 75\%$ required) and ensure the branch is
   rebased cleanly onto the latest `origin/main`.
-- **Get a review, and close the loop on it.** Hermes reviews automatically
-  on open (`.github/workflows/hermes.yml`'s `auto-review` job) — don't also
-  `@s3ntin3l8-hermes Review` right after opening the PR, or you'll trigger a
-  redundant second review. This doesn't apply to Task Master's own PRs
+- **Get a review, and close the loop on it.** **One review per pull request
+  at a time:** a review takes 10-30 minutes, and asking again while one is
+  running is _refused_ (with the run id of the review that is already
+  working) — that refusal is the answer, not an error to retry. Wait for it,
+  or stop it deliberately. Inside a Mullion session, ask with `mullion review`
+  (the `request_review` MCP tool): the server relays the request to the
+  Hermes API, hands back a run id, and `mullion review status`
+  (`review_status`) shows the outcome. `make review` is the shorthand — it
+  runs `mullion review` inside a session and falls back to an
+  `@s3ntin3l8-hermes Review` comment only when the relay is not there at all
+  (a refusal never falls back: that would queue a second review behind the
+  running one). Do **not** re-trigger a review with an
+  `@s3ntin3l8-hermes Review` comment — that path is for humans, and from an
+  agent it dispatches another round that queues behind whatever is already
+  running. Reviews are also requested automatically when a PR is opened
+  (`.github/workflows/hermes.yml`'s `auto-review` job), so don't ask for one
+  right after opening the PR; this doesn't apply to Task Master's own PRs
   (`mullion/task-*` branches), which are excluded from that automatic
   trigger entirely — see `docs/tasks.md`'s "External review workflows" for
-  why. A re-review can be requested the same way
-  (`@s3ntin3l8-hermes Review` on the PR) after pushing fixes, but keep it to
-  a couple of rounds — don't loop on it indefinitely. Inside a Mullion
-  session, prefer `mullion review` (or the `request_review` MCP tool): the
-  Mullion server relays the request straight to the Hermes API, and a repeat
-  request for the same PR is refused during a cooldown. `make review` is the
-  shorthand — it runs `mullion review` inside a session (falling back to the
-  comment if the relay is unavailable, but not on a cooldown refusal) and
-  otherwise posts that same `@s3ntin3l8-hermes Review` comment on the current
-  branch's PR (via `gh pr comment`). Either way it is for requesting a re-review after
-  pushing fixes, not something to run right after opening the PR (the
-  auto-review already covers that). Fixing
-  the code is not enough to address feedback — reply to each inline comment
-  via the GitHub API, then resolve the thread via the GraphQL
+  why. After pushing fixes, ask again: a new head commit is a new review.
+  Fixing the code is not enough to address feedback — reply to each inline
+  comment via the GitHub API, then resolve the thread via the GraphQL
   `resolveReviewThread` mutation. See "Addressing review feedback" below for
   the exact two-step recipe.
 - **Run a review pass on your own diff before declaring done** — `/code-review`

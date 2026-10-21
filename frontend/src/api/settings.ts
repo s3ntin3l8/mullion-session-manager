@@ -236,6 +236,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     triagePromptRepo: "",
     triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
+    reviewerBotLogin: "s3ntin3l8-hermes[bot]",
   },
   browser: {
     framerate: -1,

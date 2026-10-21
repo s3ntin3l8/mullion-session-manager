@@ -601,6 +601,7 @@ function renderPane(
         triagePromptRepo: "",
         triagePromptPath: "hermes-triage-prompt.md",
         cooldownMinutes: 10,
+        reviewerBotLogin: "s3ntin3l8-hermes[bot]",
       },
       browser: { framerate: -1, maxInstances: -1 },
       devices: { discoveryEnabled: "inherit", emulatorHeadless: "inherit", emulatorGpu: null },
