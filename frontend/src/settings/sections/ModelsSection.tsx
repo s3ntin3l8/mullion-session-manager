@@ -48,14 +48,21 @@ const FLAG_HINT =
  * Only fires when both models are explicitly configured. With nothing
  * configured there is no deliberate choice being silently inherited, and
  * warning about it on a fresh install would be noise about nothing.
+ *
+ * The wording names the per-task directives that outrank this tier, and
+ * says that `Model:` applies to BOTH roles: the panel cannot see task
+ * bodies, so a task's `Model:` line can create a collapse the panel
+ * never sees (and can make the model named here the wrong one). The note
+ * points at the levers rather than claiming nothing can change it.
  */
 function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): ReactNode {
   if (!roles.shared) return null;
   if (roles.reviewCli !== cliKey) return null;
   return (
     <p style={warningStyle}>
-      Your reviewer runs on the same model as your worker ({roles.reviewer}) — no second opinion,
-      unless a task sets its own <code>Reviewer-Model:</code>.
+      Install-wide, your reviewer runs on the same model as your worker ({roles.reviewer}) — no
+      second opinion. A task's own <code>Model:</code> / <code>Reviewer-Model:</code> line overrides
+      this — and <code>Model:</code> applies to both roles, so it can also make them the same.
     </p>
   );
 }

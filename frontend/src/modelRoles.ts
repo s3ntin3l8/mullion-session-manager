@@ -160,9 +160,11 @@ export function resolveCliModelRoles(
  * opencode — mirrors resolveOpenCodeModel's install-wide tail. The two
  * roles have separate settings and NEITHER falls back to the other: an
  * unset or invalid value resolves to null, which at spawn time means "no
- * override", so opencode's own default applies. The roles are therefore
- * shared only when both name the same model — including both being unset,
- * which means both land on opencode's own default.
+ * override", so opencode's own default applies. The roles resolve to the
+ * same model only when both NAME one — when both are unset they both
+ * resolve to null here, which means "no override" rather than a shared
+ * model, and the cross-CLI comparison skips it for that reason (a null
+ * model is not a model that will be applied).
  */
 export function resolveOpencodeModelRoles(
   implementerModel: string | null | undefined,

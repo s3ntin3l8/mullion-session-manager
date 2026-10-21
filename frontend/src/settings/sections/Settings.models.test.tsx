@@ -392,12 +392,17 @@ describe("Settings -> Models", () => {
       expect(screen.getByText(warning)).toBeInTheDocument();
     });
 
-    it("keeps the per-task `Reviewer-Model:` escape clause in the note", () => {
+    it("names both per-task directives in the note", () => {
       // A task's `Reviewer-Model:` line outranks the install-wide tier, so
       // an unqualified "no second opinion" would be false for exactly the
       // users who pinned one — and reads as their directive being ignored,
       // which is the opposite of what the backend does. The clause was
       // dropped once already; this pins it.
+      //
+      // `Model:` is named alongside it because it applies to BOTH roles:
+      // the panel cannot see task bodies, so a task's `Model:` can create a
+      // collapse the panel never sees, and can also make the model named
+      // here the wrong one.
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
           claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
@@ -405,7 +410,8 @@ describe("Settings -> Models", () => {
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.getByText(/unless a task sets its own/i)).toBeInTheDocument();
+      expect(screen.getByText(/A task's own/i)).toBeInTheDocument();
+      expect(screen.getByText(/applies to both roles/i)).toBeInTheDocument();
     });
 
     it("does NOT warn when the review agent is a different CLI with a different model", () => {
