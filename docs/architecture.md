@@ -67,8 +67,9 @@ one-to-one onto this backend's (`live` → `alive`, `dead` → `dead`,
 than assumed: dtach's master serves any number of attached terminals, so a
 probe is one more client; it does not displace a live attach, does not kill
 the session, and closed probe connections do not pile up in the accept
-queue. The socket file itself proves nothing either way — dtach does not
-remove it — so it is not used as a liveness signal.
+queue. The socket file itself proves nothing either way — dtatch removes it
+on a clean exit, but a master killed outright leaves it behind — so it
+is not used as a liveness signal.
 
 The _process table_ is used for the two things it is actually good for:
 finding the master's pid (to terminate it) and building the process

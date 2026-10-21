@@ -154,12 +154,14 @@ async function waitForExit(pids: number[], timeoutMs: number): Promise<void> {
 /**
  * Removes a socket file that nothing is serving any more.
  *
- * dtach does NOT remove its socket when its master exits, so the file
- * outlives the session it belonged to. That is harmless for liveness — the
- * probe asks the SOCKET whether anything is serving it, and a stale file
- * with nothing behind it answers ECONNREFUSED, i.e. "dead" — but it is not
- * harmless for the next session at that id, because `bind()` refuses an
- * existing path. So the teardown clears it.
+ * dtatch removes its socket on a CLEAN exit, but a master that is killed
+ * outright (the SIGKILL escalation below, or a crash) leaves the file
+ * behind — so the file can outlive the session it belonged to. That is
+ * harmless for liveness, because the probe asks the SOCKET whether
+ * anything is serving it, and a stale file with nothing behind it answers
+ * ECONNREFUSED, i.e. "dead" — but it is not harmless for the next session
+ * at that id, because `bind()` refuses an existing path. So the teardown
+ * clears it.
  */
 function removeSocket(socketPath: string): void {
   try {
@@ -395,9 +397,9 @@ export class DetachedScopeBackend implements ScopeBackend {
       safeKill(pid, "SIGKILL");
     }
     if (group !== null) safeKillGroup(group, "SIGKILL");
-    // The socket is stale now — dtach does not clean it up itself. Remove
-    // it, but only once the tree is confirmed gone: unlinking the socket of
-    // a LIVE session would break its attach.
+    // The socket is stale now — a master killed outright leaves it behind.
+    // Remove it, but only once the tree is confirmed gone: unlinking the
+    // socket of a LIVE session would break its attach.
     await waitForExit(tree, TERMINATE_POLL_MS * 10);
     if (tree.every((pid) => !isProcessAlive(pid))) removeSocket(socketPath);
   }
