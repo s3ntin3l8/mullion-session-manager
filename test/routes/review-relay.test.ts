@@ -77,6 +77,7 @@ import {
   HermesNotConfiguredError,
   HermesUnavailableError,
   ReviewConflictError,
+  ReviewAlreadyLandedError,
   ReviewCooldownError,
   ReviewInFlightError,
   ReviewRunForbiddenError,
@@ -287,6 +288,38 @@ describe("review-request routes", () => {
       expect(await resolvedBase()).toBe("sha40");
     });
 
+    it("takes the base from the last review that actually landed, by a bot", async () => {
+      // The rule the shared workflow uses too: both put it in the idempotency
+      // key, so a difference here means the two entry points stop
+      // deduplicating against each other. A PENDING (draft) review never
+      // landed, and a human's review is not a bot's.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        {
+          author: "s3ntin3l8",
+          authorIsBot: false,
+          state: "APPROVED",
+          commitId: "sha-human",
+          submittedAt: new Date().toISOString(),
+        },
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "PENDING",
+          commitId: "sha-draft",
+          submittedAt: null,
+        },
+        {
+          author: "hermes[bot]",
+          authorIsBot: true,
+          state: "APPROVED",
+          commitId: "sha40",
+          submittedAt: new Date().toISOString(),
+        },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
     it("does not treat a dismissed (retracted) review as the base", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
         {
@@ -316,6 +349,13 @@ describe("review-request routes", () => {
       const res = await post(sessionId, {});
       expect(res.statusCode).toBe(409);
       expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+
+    it("409s when the commit has already been reviewed", async () => {
+      mocks.requestHermesReview.mockRejectedValue(new ReviewAlreadyLandedError("sha42"));
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("already landed");
     });
 
     it("409s when a review of the PR is already in flight, naming its run", async () => {

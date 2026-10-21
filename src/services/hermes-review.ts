@@ -83,6 +83,25 @@ export class ReviewConflictError extends Error {
   }
 }
 
+/**
+ * The commit has already been reviewed (issue #1749).
+ *
+ * The review's range is empty: the bot's last landed review is on this very
+ * commit, so there is nothing new to review. Dispatching a run for an empty
+ * range is how the same diff got reviewed twice — the key would be
+ * `<head>..<head>`, a key the previous round never used, so it looked like
+ * a fresh request.
+ */
+export class ReviewAlreadyLandedError extends Error {
+  constructor(readonly headSha: string) {
+    super(
+      `A review of this commit already landed (at ${headSha.slice(0, 7)}) — there is nothing new to review. ` +
+        `Push a new commit to ask for another round, or dismiss that review first`,
+    );
+    this.name = "ReviewAlreadyLandedError";
+  }
+}
+
 /** The run id is unknown to this Mullion (never dispatched here, or the server restarted). */
 export class ReviewRunNotFoundError extends Error {
   constructor() {
@@ -104,19 +123,35 @@ export class ReviewInFlightError extends Error {
     readonly runId: string,
     /** The commit the running review covers, when known. */
     readonly headSha?: string,
+    /** The target's kind — a triage is not a review (issue #1629). */
+    readonly kind: RelayTargetKind = "pull_request",
   ) {
     super(
-      `A review of this pull request is already in flight (run ${runId}) — wait for it, or stop it with stop_review, instead of requesting another one`,
+      kind === "issue"
+        ? `A triage of this issue is already in flight (run ${runId}) — wait for it, or stop it with stop_review, instead of requesting another one`
+        : `A review of this pull request is already in flight (run ${runId}) — wait for it, or stop it with stop_review, instead of requesting another one`,
     );
     this.name = "ReviewInFlightError";
   }
 }
 
 /**
- * The Hermes run statuses that mean the run is still working. Anything else
- * (completed, failed, cancelled, interrupted) is a finished run.
+ * The Hermes run statuses that mean the run is FINISHED. Everything else is
+ * treated as live — the list is inverted on purpose: Hermes parks a run in
+ * statuses this code has never heard of (`waiting_for_approval` while the
+ * agent waits for a tool approval, for one), and a status missing from a
+ * "live" list reads as finished, which dispatches a second review of a pull
+ * request that is still being reviewed.
  */
-const LIVE_RUN_STATUSES = new Set(["queued", "running", "stopping", "pending", "started"]);
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
+
+/**
+ * The statuses that mean the run is GONE — Hermes does not know it any more
+ * (its window elapsed, or the gateway lost it). Not live: there is nothing
+ * running to wait for. "unknown" is here for the same reason: it is what the
+ * API answers when the run's body was unreadable.
+ */
+const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
 
 /** A session tried to stop a run another session dispatched. */
 export class ReviewRunForbiddenError extends Error {
@@ -169,7 +204,10 @@ export interface RelayTarget {
  * `@s3ntin3l8-hermes Review` comment land in the SAME session.
  */
 export function reviewSessionId(owner: string, repo: string, number: number): string {
-  const slug = (value: string): string => value.replace(/[^A-Za-z0-9_-]/g, "-");
+  // Lower-cased: GitHub's owner and repository names are case-insensitive, so
+  // a differently-cased remote would otherwise get a second session (and a
+  // second key) for one pull request.
+  const slug = (value: string): string => value.toLowerCase().replace(/[^A-Za-z0-9_-]/g, "-");
   return `hermes-review-${slug(owner)}-${slug(repo)}-${number}`;
 }
 
@@ -192,7 +230,9 @@ export function reviewIdempotencyKey(
   baseSha: string | undefined,
   headSha: string,
 ): string {
-  return `hermes-review:${owner}/${repo}#${number}@${baseSha ?? ""}..${headSha}`;
+  // Lower-cased, like the session id: one pull request must have one key
+  // however its remote is spelled.
+  return `hermes-review:${owner.toLowerCase()}/${repo.toLowerCase()}#${number}@${baseSha ?? ""}..${headSha}`;
 }
 
 // Deliberately generic: nothing here names a particular host's scripts or
@@ -578,7 +618,12 @@ async function findLiveRun(
   if (!record) return null;
   try {
     const status = await fetchRun(root, key, record);
-    return LIVE_RUN_STATUSES.has(status.status) ? record : null;
+    // An unreadable status is not proof of a live run (it is also not proof of
+    // a finished one): treat it as not live, so a request is never dropped.
+    if (!status.status) return null;
+    if (TERMINAL_RUN_STATUSES.has(status.status)) return null;
+    if (GONE_RUN_STATUSES.has(status.status)) return null;
+    return record;
   } catch {
     return null;
   }
@@ -615,7 +660,7 @@ export async function requestRelay(
   // it deliberately) instead of adding to the queue.
   const live = await findLiveRun(app, target, root, key);
   if (live) {
-    throw new ReviewInFlightError(live.runId, live.headSha);
+    throw new ReviewInFlightError(live.runId, live.headSha, target.kind);
   }
 
   const cooldownKey = cooldownKeyFor(target);
@@ -650,6 +695,12 @@ export async function requestRelay(
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
+    // An empty range means the bot's last landed review is on this very
+    // commit: there is nothing new to review, and a run for it would be a
+    // second review of the same diff.
+    if (target.kind === "pull_request" && baseSha && baseSha === target.headSha) {
+      throw new ReviewAlreadyLandedError(baseSha);
+    }
     const idempotencyKey =
       target.kind === "issue"
         ? `mullion-triage:${owner}/${repo}#${number}:${bucket}`

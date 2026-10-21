@@ -34,6 +34,6 @@ export const REVIEW_PROTOCOL_NOTE =
   "refusal is the answer, not an error to retry: wait for it, or stop it with " +
   "stop_review. A review takes 10-30 minutes; check review_status once " +
   "instead of asking again. After pushing fixes, ask again only when no " +
-  "review is in flight. Never re-trigger a review by commenting " +
-  "'@s3ntin3l8-hermes Review': that path is for humans and queues another " +
-  "round behind the running one.";
+  "review is in flight. Never re-trigger a review with an @mention of the " +
+  "review bot: that path is for humans, and it queues another round behind " +
+  "the running one.";

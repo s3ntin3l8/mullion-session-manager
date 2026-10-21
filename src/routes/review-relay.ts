@@ -20,6 +20,7 @@ import {
   HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
+  ReviewAlreadyLandedError,
   ReviewConflictError,
   ReviewCooldownError,
   ReviewInFlightError,
@@ -128,6 +129,8 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
     return reply.conflict(err.message);
   }
   if (err instanceof ReviewConflictError) return reply.conflict(err.message);
+  // The commit has already been reviewed: there is nothing new to review.
+  if (err instanceof ReviewAlreadyLandedError) return reply.conflict(err.message);
   // A review of this PR is already running: the answer is the run id, not a
   // second review queued behind it.
   if (err instanceof ReviewInFlightError) {
@@ -455,6 +458,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           resolveBase: reader.base,
           sessionId,
         });
+        // The PR's reviews are read once per request: the delta base and the
+        // duplicate-review warning need the same list, and it is a walk of up
+        // to ten pages.
         return {
           status: "dispatched",
           repo: `${owner}/${repo}`,
@@ -471,7 +477,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           // to 10 pages) for a warning it never returns. The wording makes no
           // promise about a second review — on a replay no new run is
           // dispatched, so there is no second review to promise.
-          ...(await existingBotReviewWarning(app, target)),
+          ...(await existingBotReviewWarning(target, reader)),
         };
       } catch (err) {
         return replyReviewError(reply, err);
@@ -875,8 +881,12 @@ async function findLandedComment(
  * dispatch is actually going to happen — reading them is a GitHub call (up to
  * ten pages), and a request the relay refuses must not pay for it — so the
  * walk is memoized and the base is resolved lazily, by the relay itself.
+ *
+ * Shared with the operator's "re-review" route (routes/projects.ts): without
+ * a base there, that route's key was always the FIRST round's key, so a
+ * second click replayed the first run instead of reviewing anything.
  */
-function reviewReader(
+export function reviewReader(
   token: string,
   owner: string,
   repo: string,
@@ -909,7 +919,13 @@ function reviewReader(
     base: async () => {
       try {
         const landed = (await reviews()).filter(
-          (r) => r.authorIsBot && r.state !== "DISMISSED" && r.commitId !== "",
+          (r) =>
+            r.authorIsBot &&
+            // A landed review, not merely a non-dismissed one: a PENDING
+            // (draft) review never landed, and using it as the base would
+            // skip part of the diff.
+            LANDED_REVIEW_STATES.has(r.state) &&
+            r.commitId !== "",
         );
         return landed.at(-1)?.commitId ?? "";
       } catch {
@@ -933,12 +949,11 @@ function reviewReader(
  * dispatch it is attached to.
  */
 async function existingBotReviewWarning(
-  app: FastifyInstance,
   t: ReviewTarget,
+  reader: { reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>> },
 ): Promise<{ warning?: string }> {
   try {
-    const reviews = await listPullRequestReviews(t.token, t.owner, t.repo, t.prNumber);
-    const existing = reviews
+    const existing = (await reader.reviews())
       .filter(
         (r) =>
           r.authorIsBot &&
@@ -952,11 +967,8 @@ async function existingBotReviewWarning(
     return {
       warning: `A review by ${existing.author} (${existing.state}) already landed on this commit`,
     };
-  } catch (err) {
-    app.log.warn(
-      { detail: (err as Error).message },
-      "review-request: duplicate-review check failed (continuing without a warning)",
-    );
+  } catch {
+    // The warning is best effort: a failed lookup must not fail the request.
     return {};
   }
 }

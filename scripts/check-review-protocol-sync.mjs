@@ -53,6 +53,7 @@ const CLAUSES = ["one review per pull request", "10-30 minutes", "review_status"
 const SURFACES = [
   { label: "AGENTS.md", file: "AGENTS.md" },
   { label: "docs/agent-guide.md", file: "docs/agent-guide.md" },
+  { label: "docs/cli.md", file: "docs/cli.md" },
 ];
 
 function read(rel) {

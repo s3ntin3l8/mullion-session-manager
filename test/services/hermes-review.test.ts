@@ -34,6 +34,7 @@ import {
   requestRelay,
   resetHermesReviewState,
   cooldownEntryCount,
+  ReviewAlreadyLandedError,
   ReviewCooldownError,
   ReviewInFlightError,
   reviewIdempotencyKey,
@@ -307,6 +308,42 @@ describe("hermes review relay", () => {
       await requestHermesReview(app, PR);
       await requestHermesReview(app, PR);
       expect(calls("/v1/runs")).toHaveLength(2);
+    });
+
+    it("treats a status it has never seen as live, not as finished", async () => {
+      // Hermes parks a run in `waiting_for_approval` while the agent waits for
+      // a tool approval — a status missing from a "live" list reads as
+      // finished, and a second review is dispatched.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      dispatch = async () => accepted("run_parked");
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_parked", status: "waiting_for_approval" }), {
+          status: 200,
+        });
+      await requestHermesReview(app, PR);
+      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
+    });
+
+    it("refuses a commit that has already been reviewed — there is nothing new to review", async () => {
+      // The range would be empty (the last landed review is on this very
+      // commit), and an empty range is a key the previous round never used:
+      // dispatching it is how the same diff got reviewed twice.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await expect(
+        requestHermesReview(app, { ...PR, resolveBase: async () => PR.headSha }),
+      ).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
+      // Nothing was dispatched: the refusal IS the answer.
+      expect(calls("/v1/runs")).toHaveLength(0);
+    });
+
+    it("words the in-flight refusal for an issue triage", async () => {
+      applySettingsPatch(app, {
+        reviewRelay: { triagePromptRepo: "acme/.github", triagePromptPath: "triage.md" },
+      });
+      await requestRelay(app, ISSUE);
+      runEndpoint = async () =>
+        new Response(JSON.stringify({ run_id: "run_1", status: "running" }), { status: 200 });
+      await expect(requestRelay(app, ISSUE)).rejects.toThrow(/triage of this issue/);
     });
 
     it("does not treat an unreadable run status as in flight", async () => {

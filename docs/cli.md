@@ -425,8 +425,11 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   **One review per pull request at a time:** a request while a review of the
   same PR is still running exits non-zero with a 409 that names the run id of
   the review already in flight — wait for it, or stop it deliberately with
-  `review stop <runId>`. A repeat request for the **same commit** inside the
-  configured cooldown exits non-zero with a 409 as well. A request for a
+  `review stop <runId>`. A request for a commit that has **already been
+  reviewed** is refused the same way: there is nothing new to review, so push
+  a new commit to ask for another round (or dismiss that review first). A
+  repeat request for the **same commit** inside the configured cooldown exits
+  non-zero with a 409 as well. A request for a
   **new** head commit — the normal re-review after pushing fixes — is
   dispatched right away, even inside the cooldown window of the previous
   one. The confirmation names the run id, and carries a warning when a bot
@@ -443,7 +446,8 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   PR: nothing was requested here, or the server restarted. Call it once,
   about ten minutes after requesting — a review takes 10-30 minutes, and
   asking again while one is in flight is refused (so the answer to "still
-  nothing" is to wait, not to ask again).
+  nothing" is to wait, not to ask again). The MCP spelling of this command
+  is `review_status`, and of `review` itself `request_review`.
 - `review stop <runId>` — stops a run **this session** dispatched; another
   session's run is refused (403). Operators can stop any tracked run from
   Settings → Integrations → Review relay → Recent reviews.

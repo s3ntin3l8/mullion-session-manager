@@ -32,6 +32,7 @@ const NOTE = [
 const FIXTURE_FILES: Record<string, string> = {
   "AGENTS.md": `- **Get a review.** ${NOTE}\n`,
   "docs/agent-guide.md": `## Asking for a review\n\n${NOTE}\n`,
+  "docs/cli.md": `### review\n\n${NOTE}\n`,
   "src/mcp/tools.mjs": `import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";\n// ${NOTE}\n`,
   "src/cli/core.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";\n// ${NOTE}\n`,
   "src/mcp/client.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";\n`,

@@ -696,10 +696,14 @@ const requestTriage = {
     "session's repository. Reachable from inside a normal agent session (session scope). The " +
     "triage is dispatched asynchronously and posts its findings as a comment on the issue — " +
     "wait for it rather than requesting again (the result carries a runId; use triage_status " +
-    "only to troubleshoot a triage that never shows up); a repeat request for the same issue " +
-    "is refused for a cooldown period. Fails with a clear message if the relay isn't " +
-    "configured in Mullion's Settings → Integrations or the issue does not exist. The " +
-    "result may carry a warning when the issue is closed — the request still goes through.",
+    "only to troubleshoot a triage that never shows up). One triage per issue at a time: a " +
+    "request while one is running is refused with the run id of the triage that is already " +
+    "working — that refusal is the answer, not an error to retry: wait for it, or stop it with " +
+    "stop_review (it stops a triage run too). A repeat request for the same issue is also " +
+    "refused for a cooldown period. " +
+    "Fails with a clear message if the relay isn't configured in Mullion's Settings → " +
+    "Integrations or the issue does not exist. The result may carry a warning when the issue " +
+    "is closed — the request still goes through.",
   inputSchema: {
     type: "object",
     properties: {
