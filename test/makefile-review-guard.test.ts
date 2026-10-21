@@ -50,6 +50,19 @@ const REFUSALS: Array<{ what: string; message: string }> = [
     what: "Hermes refused the request (its concurrent-run cap)",
     message: "Hermes API returned HTTP 429 — review not dispatched",
   },
+  {
+    what: "every attempt for the range failed",
+    message: "The review could not be started — every attempt for this range failed",
+  },
+  {
+    what: "every session for the pull request was refused",
+    message: "The review could not be started — Hermes refused every session for this pull request",
+  },
+  {
+    what: "the pull request's review session is stuck",
+    message:
+      "Hermes refused the turn for the review session of this pull request (hermes-review-acme-widgets-7-2) — that session is stuck and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.",
+  },
 ];
 
 function guardPatterns(): string {

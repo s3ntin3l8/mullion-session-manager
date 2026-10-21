@@ -85,7 +85,7 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 review: ## Request a Hermes review on the current branch's PR (via the Mullion relay when run inside a session)
 	@if [ -n "$$MULLION_SOCKET_PATH" ] && command -v mullion >/dev/null 2>&1; then \
 		out=$$(mullion review 2>&1); rc=$$?; echo "$$out"; \
-		if [ $$rc -ne 0 ] && ! echo "$$out" | grep -qiE "requested recently|already in flight|already under way|already requested|already landed|no new review started|not dispatched"; then \
+		if [ $$rc -ne 0 ] && ! echo "$$out" | grep -qiE "requested recently|already in flight|already under way|already requested|already landed|no new review started|not dispatched|could not be started|refused the turn"; then \
 			echo "relay unavailable - falling back to an @mention comment"; \
 			gh pr comment --body "@s3ntin3l8-hermes Review"; \
 		fi; \

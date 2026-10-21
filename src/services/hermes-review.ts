@@ -137,12 +137,17 @@ export class ReviewInFlightError extends Error {
 }
 
 /**
- * The Hermes run statuses that mean the run is FINISHED. Everything else is
- * treated as live — the list is inverted on purpose: Hermes parks a run in
- * statuses this code has never heard of (`waiting_for_approval` while the
- * agent waits for a tool approval, for one), and a status missing from a
- * "live" list reads as finished, which dispatches a second review of a pull
- * request that is still being reviewed.
+ * The statuses that mean the run is FINISHED. Everything else is treated as
+ * live — the list is inverted on purpose: Hermes parks a run in statuses this
+ * code has never heard of (`waiting_for_approval` while the agent waits for
+ * a tool approval, for one), and a status missing from a "live" list reads as
+ * finished, which dispatches a second review of a pull request that is still
+ * being reviewed.
+ *
+ * "completed" is finished, but it is NOT evidence that a review landed
+ * (Hermes reports "completed" for a run that posted nothing), so a completed
+ * run is retried under a deeper key rather than treated as "already
+ * reviewed".
  */
 const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 
@@ -155,20 +160,6 @@ const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "inte
 const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
 
 /**
- * The statuses that mean a run is still working. Used where the status
- * comes from Hermes itself (a replayed run's own record), where "finished"
- * is the complement.
- */
-const LIVE_RUN_STATUSES = new Set([
-  "queued",
-  "running",
-  "stopping",
-  "pending",
-  "started",
-  "waiting_for_approval",
-]);
-
-/**
  * How many times one request may start a fresh attempt for a range whose
  * previous run failed. Each attempt is a full review, so this is a
  * backstop, not a budget.
@@ -176,10 +167,14 @@ const LIVE_RUN_STATUSES = new Set([
 const MAX_REVIEW_ATTEMPTS = 3;
 
 /**
- * The statuses that mean a run is over and the range may be tried again.
- * Only these: a range whose run ended badly is retried under a deeper key.
+ * How many session ids one attempt may try.
+ *
+ * A session that refuses the turn is stuck (it never recovers), so the round
+ * moves to a fresh one. That is a separate axis from the range's attempts:
+ * a stuck session must not eat the attempts the range itself gets, or two
+ * stuck sessions would leave no attempt for the dispatch.
  */
-const DEAD_RUN_STATUSES = new Set(["failed", "cancelled", "interrupted"]);
+const MAX_SESSION_ATTEMPTS = 3;
 
 /**
  * Hermes' session authority refused the turn (HTTP 409 `admission_conflict`).
@@ -196,7 +191,7 @@ export class ReviewSessionRefusedError extends Error {
     readonly sessionId: string,
   ) {
     super(
-      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round`,
+      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.`,
     );
     this.name = "ReviewSessionRefusedError";
   }
@@ -815,49 +810,64 @@ export async function requestRelay(
     let run: { runId: string; status: string; replayed: boolean } | undefined;
     let lastError: Error | undefined;
     for (let attempt = 0; attempt < MAX_REVIEW_ATTEMPTS; attempt++) {
-      let dispatched: { runId: string; status: string; replayed: boolean };
-      try {
-        dispatched = await dispatchReview(root, key, {
-          idempotencyKey,
-          model,
-          kind: target.kind,
-          owner,
-          repo,
-          number,
-          promptRepo,
-          promptPath,
-          sessionId,
-        });
-      } catch (err) {
-        if (!(err instanceof ReviewSessionRefusedError) || !sessionId) throw err;
-        // The session refused the turn: it is stuck, and it will refuse every
-        // later round of this pull request too. Start over in a fresh session.
-        // The body carries the session id, so the idempotency key moves with
-        // it — a key that stayed would conflict with the body it holds.
-        sessionAttempt += 1;
-        sessionId = `${baseSessionId}-${sessionAttempt}`;
-        idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
-        lastError = err;
-        continue;
+      let dispatched: { runId: string; status: string; replayed: boolean } | undefined;
+      // The session has its own budget: a session that refuses the turn
+      // (it is stuck) is not a failed attempt at this range, so it must not
+      // eat the range's attempts — otherwise two stuck sessions would leave
+      // no attempt for the dispatch itself.
+      for (let sessionTry = 0; sessionTry < MAX_SESSION_ATTEMPTS; sessionTry++) {
+        try {
+          dispatched = await dispatchReview(root, key, {
+            idempotencyKey,
+            model,
+            kind: target.kind,
+            owner,
+            repo,
+            number,
+            promptRepo,
+            promptPath,
+            sessionId,
+          });
+        } catch (err) {
+          if (!(err instanceof ReviewSessionRefusedError) || !sessionId) throw err;
+          // The session refused the turn: it is stuck, and it will refuse every
+          // later round of this pull request too. Start over in a fresh session.
+          // The body carries the session id, so the idempotency key moves with
+          // it — a key that stayed would conflict with the body it holds.
+          sessionAttempt += 1;
+          sessionId = `${baseSessionId}-${sessionAttempt}`;
+          idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
+          lastError = err;
+          continue;
+        }
+        break;
+      }
+      if (!dispatched) {
+        // Every session id for this range was refused. The range itself was
+        // never tried — report the session refusal, not a failed range.
+        throw new HermesUnavailableError(
+          "The review could not be started — Hermes refused every session for this pull request",
+          `gave up after ${MAX_SESSION_ATTEMPTS} sessions${lastError ? `: ${lastError.message}` : ""}`,
+        );
       }
       if (!dispatched.replayed) {
         run = dispatched;
         break;
       }
       // A replay: this range already has a run. Is it still working?
-      if (LIVE_RUN_STATUSES.has(dispatched.status)) {
+      //
+      // The rule is INVERTED on purpose, like findLiveRun's: a status this
+      // code has never heard of must not read as "finished" — that would
+      // dispatch a second review of a pull request that is still being
+      // reviewed. Only a status that is known to be OVER is treated as over.
+      if (!TERMINAL_RUN_STATUSES.has(dispatched.status)) {
         throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
       }
-      if (dispatched.status === "completed") {
-        throw new ReviewAlreadyLandedError(target.headSha ?? "");
-      }
-      if (!DEAD_RUN_STATUSES.has(dispatched.status)) {
-        // A status we cannot vouch for (Hermes could not read the run's own
-        // record): treat it as in flight rather than starting a second review
-        // of the same range. A stuck range is the cheaper mistake.
-        throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
-      }
-      // It failed (or was stopped): start a fresh attempt under a deeper key.
+      // The run is over — it failed, or it completed. A completed run is NOT
+      // evidence that a review landed: Hermes reports "completed" for a run
+      // that posted nothing (no App credentials, for instance). The range is
+      // still un-reviewed when it is not empty (the empty-range check above
+      // refuses that case), so start a fresh attempt under a deeper key.
       idempotencyKey = `${idempotencyKey}#${dispatched.runId}`;
     }
     if (!run) {

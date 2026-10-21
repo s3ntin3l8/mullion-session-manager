@@ -524,11 +524,35 @@ describe("hermes review relay", () => {
       expect(keyOf(1)).toBe("hermes-review:acme/widgets#7@..abc1234#session-2");
     });
 
-    it("gives up when every attempt is refused by the stuck session", async () => {
+    it("gives up when every session is refused by the stuck session", async () => {
+      // The session budget is its own: a stuck session is not a failed
+      // attempt at the range, so it must not eat the range's attempts.
       dispatch = async () =>
         new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(HermesUnavailableError);
       expect(calls("/v1/runs")).toHaveLength(3);
+    });
+
+    it("still dispatches after two stuck sessions", async () => {
+      // The range's attempts and the session's attempts are separate budgets:
+      // two refused sessions must leave an attempt for the dispatch itself.
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n <= 2) {
+          return new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
+        }
+        return accepted("run_third");
+      };
+      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_third" });
+      const bodies = calls("/v1/runs").map(([, init]) =>
+        JSON.parse((init as RequestInit).body as string),
+      );
+      expect(bodies.map((b) => b.session_id)).toEqual([
+        "hermes-review-acme-widgets-7",
+        "hermes-review-acme-widgets-7-2",
+        "hermes-review-acme-widgets-7-3",
+      ]);
     });
 
     it("continues in the session the previous round moved to", async () => {
@@ -609,21 +633,43 @@ describe("hermes review relay", () => {
       );
     });
 
-    it("refuses a replayed run whose range was already reviewed", async () => {
+    it("retries a replayed run that completed without landing a review", async () => {
       // A replay means the range already has a run. What the request means
       // then depends on that run: still working -> refused as in flight (with
-      // its run id); finished -> nothing left to review; failed -> retried
-      // under a deeper key. None of them dispatches a second review of the
-      // same diff, which is what the replay used to mean here.
-      dispatch = async () =>
-        new Response('{"run_id":"run_old","status":"completed"}', {
-          status: 202,
-          headers: { "Idempotency-Replayed": "true" },
-        });
-      await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
-      resetHermesReviewState();
-      dispatch = async () => accepted();
-      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ replayed: false });
+      // its run id); failed -> retried under a deeper key; completed -> ALSO
+      // retried, because a completed run is not evidence that a review landed
+      // (Hermes reports "completed" for a run that posted nothing). The
+      // empty-range check is what refuses an already-reviewed commit.
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n === 1) {
+          return new Response('{"run_id":"run_old","status":"completed"}', {
+            status: 202,
+            headers: { "Idempotency-Replayed": "true" },
+          });
+        }
+        return accepted("run_second");
+      };
+      const run = await requestHermesReview(app, PR);
+      expect(run.runId).toBe("run_second");
+      const keys = fetchMock.mock.calls
+        .filter(([u]) => String(u).endsWith("/v1/runs"))
+        .map(
+          ([, init]) =>
+            (init as RequestInit & { headers: Record<string, string> }).headers["Idempotency-Key"],
+        );
+      expect(keys[0]).toBe("hermes-review:acme/widgets#7@..abc1234");
+      expect(keys[1]).toBe("hermes-review:acme/widgets#7@..abc1234#run_old");
+    });
+
+    it("refuses a range whose review already landed", async () => {
+      // The commit the previous round covered IS the head: the range is
+      // empty, so there is nothing to review. This is the only "already
+      // landed" refusal — a replayed run does not make one.
+      await expect(
+        requestHermesReview(app, { ...PR, resolveBase: async () => PR.headSha }),
+      ).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
     });
 
     it("keys a request by its range, not by the clock, even with the cooldown off", async () => {
