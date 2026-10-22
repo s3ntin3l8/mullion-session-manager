@@ -432,6 +432,13 @@ describe("Settings -> Models", () => {
       //   - rename BOTH occurrences → `Reviewer-Model:` → red.
       const note = screen.getByText(/no second opinion/i).closest("p");
       expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*\/\s*Reviewer-Model:/);
+      // The note's TRAILING clause is a second, separate claim: that
+      // `Model:` — not just `Reviewer-Model:` — applies to BOTH roles, and
+      // can therefore make them the same. Deleting that clause wholesale
+      // used to leave this file green, so it is pinned here too, with the
+      // same lookbehind: "Reviewer-Model: applies to both roles" must not
+      // satisfy it.
+      expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*applies to both roles/);
     });
 
     it("does NOT warn when the review agent is a different CLI with a different model", () => {
