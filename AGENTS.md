@@ -1,81 +1,82 @@
 # AGENTS.md — Mullion
 
-This file is the single source of truth for this repo's workflow rules and
-load-bearing invariants — the ones every agent needs before touching
-anything, regardless of which CLI you are. `CLAUDE.md` is a one-line
-`@AGENTS.md` import, so every CLI Mullion hosts (Claude Code, Codex,
-opencode, agy) reads this file, natively or via that import. For deeper
-detail beyond what's here, see [`docs/architecture.md`](docs/architecture.md)
+This file is the single source of truth for this repo's agent instructions.
+`CLAUDE.md` is a one-line `@AGENTS.md` import, so every CLI Mullion hosts
+(Claude Code, Codex, opencode, agy) reads this file, natively or via that
+import. It has two halves with different owners:
+
+- **The `mullion:briefing` region** is written by Mullion's project setup:
+  the workflow conventions this Mullion install generates (branching,
+  reviews, merging, cleanup), plus a pointer to this repo's skill and
+  reviewer agent. The next setup apply replaces it wholesale — change the
+  rules in Settings → Agent context & skills, not here.
+- **Everything outside it** is about this repo itself: its layout, commands
+  and invariants. Workflow rules do not belong there.
+
+For deeper detail, see [`docs/architecture.md`](docs/architecture.md)
 (plugins/routes/services tour), [`docs/ci-cd.md`](docs/ci-cd.md) (CI/CD
-internals), and [`CONTRIBUTING.md`](CONTRIBUTING.md) (contributor workflow).
+internals) and [`CONTRIBUTING.md`](CONTRIBUTING.md) (contributor workflow).
 [`docs/agent-guide.md`](docs/agent-guide.md) is also auto-injected into your
 context if you're running inside a Mullion-hosted session.
 
 <!-- mullion:briefing:start -->
 
-- **Never commit directly to `main`.** Branch protection has no bypass.
-  Always branch off the latest `origin/main` and open a PR.
-- **PR title needs a Conventional Commits prefix** (`feat:`, `fix:`, `chore:`,
-  ...). This repo squash-merges, so the PR title becomes the commit message on
-  `main`.
-- **Get a review, and close the loop on it.** **One review per pull request
-  at a time:** a review takes 10-30 minutes, and asking again while one is
-  running is _refused_ (with the run id of the review that is already
-  working) — that refusal is the answer, not an error to retry. Wait for it,
-  or stop it deliberately. Inside a Mullion session, ask with `mullion review`
-  (the `request_review` MCP tool): the server relays the request to the
-  Hermes API, hands back a run id, and `mullion review status`
-  (`review_status`) shows the outcome. `make review` is the shorthand — it
-  runs `mullion review` inside a session and falls back to an
-  `@s3ntin3l8-hermes Review` comment only when the relay is not there at all
-  (a refusal never falls back: that would queue a second review behind the
-  running one). Do **not** re-trigger a review with an
-  `@s3ntin3l8-hermes Review` comment — that path is for humans, and from an
-  agent it dispatches another round that queues behind whatever is already
-  running. Reviews are also requested automatically when a PR is opened
-  (`.github/workflows/hermes.yml`'s `auto-review` job), so don't ask for one
-  right after opening the PR. After pushing fixes, ask again: a new head
-  commit is a new review. Fixing the code is not enough to address feedback
-  — reply to each inline comment via the GitHub API, then resolve the thread
-  via the GraphQL `resolveReviewThread` mutation. See "Addressing review
-  feedback" below for the exact two-step recipe.
+This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)
+to run AI coding agents. A project-specific skill and reviewer subagent for
+this repo live at `.claude/skills/mullion-review-invariants/SKILL.md` and
+`.claude/agents/mullion-reviewer.md` — read the skill before making
+changes, and use the reviewer subagent (or `/code-review`) before declaring a
+change done.
+
+## Workflow Conventions
+
+Never commit directly to the default branch. Always branch and open a PR.
+
+Branch off the latest remote default branch, never off your local one: `git fetch origin && git checkout -b <branch> origin/<default>`. A local default branch is routinely stale, which is what makes a PR show up as "out-of-date with the base branch" the moment it's opened.
+
+Work in a dedicated worktree per branch, under `.wt/<branch>`, off the latest remote default branch: `git fetch origin && git worktree add .wt/<branch> -b <branch> origin/<default>`. A fresh worktree does not inherit installed dependencies — reinstall them there before testing or building.
+
+Commit and PR titles need a Conventional Commits prefix (`feat:`, `fix:`, `chore:`, ...).
+
+Squash-merge PRs — the PR title becomes the commit message on the default branch.
+
+Require green CI before merging.
+
+Run a self-review pass on your own diff before declaring done.
+
+Request an automated/bot review through the review relay (`mullion review`, or the `request_review` tool) — once after opening the pull request, and once per head commit after pushing fixes, then wait for it. A review comment that mentions the review bot is for humans, not agents; if no relay is set up, tell the human instead. One review per pull request at a time: a review that is already running is not re-requested — the request is refused with its run id, and that refusal is the answer, not an error to retry: wait for it, or stop it with stop_review. A review takes 10-30 minutes; check review_status once instead of asking again. After pushing fixes, ask again only when no review is in flight. Never re-trigger a review with an @mention of the review bot: that path is for humans, and it queues another round behind the running one.
+
+Fixing the code is not enough to address review feedback — reply to each inline comment via the GitHub API, then resolve the thread via the GraphQL `resolveReviewThread` mutation, rather than pushing a silent fix. Reply with `gh api repos/{owner}/{repo}/pulls/<pr>/comments/<comment_id>/replies -f body="…"`; resolve with `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'`, taking the thread id from a `reviewThreads` query on the pull request, not from the REST comment id.
+
+File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record.
+
+After a merge, delete the local and remote branch and remove any associated worktree.
+
+Before pushing, run the full lint/typecheck/test/format gate.
 
 <!-- mullion:briefing:end -->
 
-## Repo rules
+## Repo specifics
 
-This repo's own specifics. They live OUTSIDE the `mullion:briefing` region on
-purpose: that region's content is written by Mullion's project setup (the
-workflow conventions the install generates, plus the pointer to this repo's
-skill and reviewer agent), and the next setup apply replaces it wholesale —
-anything parked inside it is lost with it.
+How this repo applies the conventions above — facts and commands, not rules.
 
-- **Work in a worktree.** Developer worktrees live under `.wt/<slug>`. Create
-  one with `make wt name=<slug>` (or `git fetch origin && git worktree add
-.wt/<slug> -b <slug> origin/main`). A fresh worktree does **not** inherit
-  `node_modules` — run `npm ci` at the repo root **and** `npm ci` in
-  `frontend/` before testing or building.
-- **Before pushing, run the full gate:** `make lint`, `make typecheck`, `make
-test` and `make format-check` (repo-wide — covers `frontend/` too). Verify
-  patch coverage with `make test-patch-coverage` ($\ge 75\%$ required) and
-  ensure the branch is rebased cleanly onto the latest `origin/main`.
-- **PR titles land in the changelog.** An unprefixed title silently drops out
-  of it (this repo squash-merges, so the PR title becomes the commit message).
-- **Self-review your own diff before declaring done** — `/code-review` in
-  Claude Code, or the equivalent step in your own CLI.
-- **File a GitHub issue for anything a plan defers, blocks, or descopes** —
-  one issue per item, in the
-  [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md) format, linked
-  from the PR. A footnote in a plan doc is not a durable record.
-- **Task Master's own PRs** (`mullion/task-*` branches) are excluded from the
-  automatic review trigger — see `docs/tasks.md`'s "External review workflows"
-  for why.
-- **Note for Codex:** an `AGENTS.override.md`, if one is ever added, takes
-  precedence over `AGENTS.md` _entirely_ — Codex reads it _instead of_ this
-  file. `npm run check:scaffold-region-sync` (also a pre-commit hook)
-  hard-fails if one ever carries its own copy of the `mullion:briefing` region
-  — AGENTS.md is the single source of truth now, so don't paste that region
-  into it; point at this one instead.
+- **Worktrees:** `make wt name=<slug>` creates `.wt/<slug>` off the latest
+  `origin/main` and runs `npm ci` in the repo root **and** in `frontend/`. A
+  worktree made by hand needs both `npm ci`s before it can build or test.
+- **The pre-push gate** is `make lint && make typecheck && make test && make
+format-check` (repo-wide — covers `frontend/` too), plus
+  `make test-patch-coverage` ($\ge 75\%$ patch coverage required) on a branch
+  rebased cleanly onto the latest `origin/main`.
+- **Reviews:** this repo reviews every pull request automatically when it
+  opens (`.github/workflows/hermes.yml`'s `auto-review` job), except Task
+  Master's own `mullion/task-*` branches — see `docs/tasks-internals.md`'s
+  "External review workflows". Asking through the relay after opening is
+  still safe: it refuses a review that is already running or already landed.
+- **Issues:** use the [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md)
+  format.
+- **Codex:** an `AGENTS.override.md` would be read _instead of_ this file;
+  `npm run check:scaffold-region-sync` (also a pre-commit hook) fails if one
+  carries its own copy of the region.
 
 ## Core invariants
 
@@ -147,7 +148,7 @@ test` and `make format-check` (repo-wide — covers `frontend/` too). Verify
 - **Two distinct worktree concepts** — don't conflate them: `.mullion-worktrees/`
   is a product feature (`src/services/git-worktree.ts`, end-user session
   isolation, managed by the backend); `.wt/` is _your own_ developer
-  workspace, described above.
+  workspace, described in "Repo specifics" above.
 - **Patch test coverage ($\ge 75\%$) and clean mergeability.** PR branches
   must cleanly rebase onto `origin/main` without merge conflicts. Any new or
   modified executable lines in `src/` or `frontend/src/` must meet $\ge 75\%$
@@ -158,12 +159,6 @@ test` and `make format-check` (repo-wide — covers `frontend/` too). Verify
 
 ## Everyday commands
 
-- `make wt name=<slug>` — create `.wt/<slug>` off the latest `origin/main`
-  and run both `npm ci`s.
-- `make review` — request a Hermes re-review of the current branch's PR
-  after pushing fixes (`mullion review` inside a Mullion session, otherwise
-  an `@s3ntin3l8-hermes Review` comment; not for the initial review — that
-  fires automatically on open).
 - `make dev` — backend (`tsx watch`) + frontend (Vite, HMR) together.
 - `make test-backend` — backend tests only, the fast inner loop; `make test`
   runs both workspaces.
@@ -171,33 +166,6 @@ test` and `make format-check` (repo-wide — covers `frontend/` too). Verify
 - `make format` — fixes a failing `make format-check` in place (repo-wide,
   covers `frontend/` too).
 - `npm run db:generate` — after any `src/db/schema.ts` edit.
-- A fresh `.wt/<slug>` worktree needs `npm ci` at the repo root **and**
-  `cd frontend && npm ci` before it can build or test.
-
-## Addressing review feedback (Hermes or human)
-
-Always reply to and resolve inline conversations via the API — fixing the
-code alone is not enough. Thread resolution is a GraphQL-only concept, so use
-both steps:
-
-1. **Reply to the comment:**
-   ```bash
-   gh api repos/s3ntin3l8/mullion-session-manager/pulls/<PR>/comments/<comment_id>/replies -f body="Fixed in latest commit"
-   ```
-2. **Resolve the thread:**
-   ```bash
-   gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }'
-   ```
-   _(Get `thread_id` via a `reviewThreads` query on the PR, not the REST
-   comment ID.)_
-
-## Post-merge cleanup
-
-Skipping this lets stale references accumulate. Always run:
-
-1. `git branch -d <branch>` — delete the local branch.
-2. `git push origin --delete <branch>` — delete the remote branch.
-3. `git worktree remove <path>` — remove the worktree, if one was used.
 
 ## Secrets and security linters
 

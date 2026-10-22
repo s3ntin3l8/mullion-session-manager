@@ -11,6 +11,9 @@ import {
   SCAFFOLD_REGION_START,
   SCAFFOLD_REGION_END,
   scaffoldStampLine,
+  WORKTREES_IGNORE_MARKER_START,
+  WORKTREES_IGNORE_MARKER_END,
+  conventionsUseWtDirectory,
 } from "../../src/services/mullion-scaffold.js";
 import { extractMarkedRegion } from "../../src/services/marked-region.js";
 import { parseSkillFrontmatter } from "../../src/services/skills.js";
@@ -722,6 +725,37 @@ describe("computeScaffold", () => {
         { slug: "demo" },
       );
       expect(entries.some((e) => e.path === "CONTRIBUTING.md")).toBe(false);
+    });
+  });
+
+  describe(".wt/ ignore for the worktree convention", () => {
+    const withWt = { slug: "demo", workflowConventionsText: "Work in .wt/<branch>." };
+    const gitignore = (entries: ReturnType<typeof computeScaffold>) =>
+      (entries.find((e) => e.path === ".gitignore") as { contents: string } | undefined)?.contents;
+
+    it("creates a .gitignore carrying .wt/ when the committed conventions name it", () => {
+      const contents = gitignore(computeScaffold({}, withWt));
+      expect(
+        extractMarkedRegion(
+          contents as string,
+          WORKTREES_IGNORE_MARKER_START,
+          WORKTREES_IGNORE_MARKER_END,
+        ),
+      ).toBe(".wt/");
+    });
+
+    it("upserts into an existing .gitignore, leaving the rest alone, and is idempotent", () => {
+      const existing = "node_modules/\ndist/\n";
+      const once = gitignore(computeScaffold({ ".gitignore": existing }, withWt)) as string;
+      expect(once).toContain("node_modules/\ndist/");
+      expect(gitignore(computeScaffold({ ".gitignore": once }, withWt))).toBe(once);
+    });
+
+    it("leaves .gitignore alone when the conventions do not use .wt/", () => {
+      expect(gitignore(computeScaffold({}, { slug: "demo" }))).toBeUndefined();
+      expect(conventionsUseWtDirectory(undefined)).toBe(false);
+      expect(conventionsUseWtDirectory("Work in .wt/<branch>.")).toBe(true);
+      expect(conventionsUseWtDirectory("see foo.wt/bar")).toBe(false);
     });
   });
 

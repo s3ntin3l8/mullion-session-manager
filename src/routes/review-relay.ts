@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { eq, or } from "drizzle-orm";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
@@ -371,6 +371,24 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
 }
 
 /**
+ * Whether this session is a Task Master task's worker or its review agent.
+ * Task Master pushes the branch, opens the pull request and runs the task's
+ * own review, so such a session has no review of its own to ask for — and a
+ * Hermes round dispatched for it would be a second review the board never
+ * reads.
+ */
+function isTaskMasterSession(app: FastifyInstance, sessionId: number): boolean {
+  return (
+    app.db
+      .select({ id: tasks.id })
+      .from(tasks)
+      .where(or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)))
+      .limit(1)
+      .all().length > 0
+  );
+}
+
+/**
  * Session → repo + issue number (+ a read token), for the triage relay
  * (issue #1629). The repo comes from the session's project — never from the
  * request body — exactly as the review path does, so a session can only
@@ -470,6 +488,12 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
+      // A refusal like the in-flight one: the answer, not an error to retry.
+      if (isTaskMasterSession(app, sessionId)) {
+        return reply.conflict(
+          "Task Master runs this task's review — a task session does not request one",
+        );
+      }
 
       const target = await resolveReviewTarget(app, reply, sessionId, request.body.prNumber);
       if (!target) return reply;

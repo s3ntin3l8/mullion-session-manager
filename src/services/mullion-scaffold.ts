@@ -43,6 +43,20 @@ export const SCAFFOLD_REGION_END = "<!-- mullion:briefing:end -->";
 export const POINTER_MARKER_START = "<!-- mullion:pointer:start -->";
 export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
 
+// The worktree convention names `.wt/<branch>` as the place worktrees live
+// (workflow-conventions.ts's `worktree` option), so a repo whose committed
+// conventions say so must also ignore that directory, or every worktree shows
+// up as untracked content in the main checkout. `.gitignore` is not HTML, so
+// its region carries `#` comment markers.
+export const WORKTREES_IGNORE_MARKER_START = "# mullion:worktrees:start";
+export const WORKTREES_IGNORE_MARKER_END = "# mullion:worktrees:end";
+
+/** Whether the conventions text that will be committed puts worktrees under `.wt/`. */
+export function conventionsUseWtDirectory(text: string | undefined): boolean {
+  // A path segment, not any substring: `foo.wt/` is not the directory.
+  return /(^|[\s`'"(])\.wt\//.test(text ?? "");
+}
+
 // Issue #1123 — session-lifecycle.ts's committed-scaffold gate used to match
 // purely on SHAPE (a `.claude/skills/<slug>/SKILL.md` +
 // `.claude/agents/<slug>-reviewer.md` pair, any slug), which false-positives
@@ -699,6 +713,22 @@ export function computeScaffold(
       claudeMdImportBody(),
     ),
   });
+
+  // The `.wt/` worktree directory (see WORKTREES_IGNORE_MARKER_START): only
+  // when the conventions being committed name it, and upserted into its own
+  // marked region so the rest of an existing .gitignore is left alone.
+  if (conventionsUseWtDirectory(options.workflowConventionsText)) {
+    entries.push({
+      path: ".gitignore",
+      kind: "file",
+      contents: upsertMarkedRegion(
+        existingFiles[".gitignore"] ?? "",
+        WORKTREES_IGNORE_MARKER_START,
+        WORKTREES_IGNORE_MARKER_END,
+        ".wt/",
+      ),
+    });
+  }
 
   // Issue #942 — CONTRIBUTING.md pointer, opt-in only. Creates a fresh
   // pointer-only file when none exists (the checkbox itself IS the

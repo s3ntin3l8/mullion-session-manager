@@ -229,8 +229,6 @@ Backend (repo root):
 - `make wt name=<slug>` — create a developer worktree under `.wt/` off the
   latest `origin/main`, running both `npm ci`s for you
   (see [`CONTRIBUTING.md`](CONTRIBUTING.md))
-- `make review` — request a Hermes re-review on the current branch's open
-  PR (Hermes already reviews automatically when a PR opens)
 - `make check-scope-leaks` — scan for leaked `crs-session-*` systemd scopes
   (issue #1137); standalone, not part of `make test`/`make lint`
 - `make help` — list every target (the `.DEFAULT_GOAL`)

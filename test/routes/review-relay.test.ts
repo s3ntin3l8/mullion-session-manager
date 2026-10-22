@@ -72,7 +72,7 @@ vi.mock("../../src/services/remote-host-client.js", async (orig) => ({
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
-import { projects, sessions } from "../../src/db/schema.js";
+import { projects, sessions, tasks } from "../../src/db/schema.js";
 import { pruneLandedMemo } from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
@@ -233,6 +233,42 @@ describe("review-request routes", () => {
       const memo = new Map<string, { at: number }>([["a", { at: 1 }]]);
       pruneLandedMemo(memo, 2, 5);
       expect(memo.size).toBe(1);
+    });
+  });
+
+  describe("Task Master sessions", () => {
+    const taskSession = (column: "sessionId" | "reviewSessionId") => {
+      const [proj] = app.db
+        .insert(projects)
+        .values({ name: `tm-${column}`, cwd: `/tmp/review-tm-${column}` })
+        .returning()
+        .all();
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId: proj.id, command: "bash" })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({ projectId: proj.id, title: "a task", [column]: session.id })
+        .run();
+      return session.id;
+    };
+
+    it.each(["sessionId", "reviewSessionId"] as const)(
+      "409s a task's %s without touching GitHub or Hermes",
+      async (column) => {
+        const res = await post(taskSession(column), {});
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain("Task Master runs this task's review");
+        expect(mocks.getPullRequestByNumber).not.toHaveBeenCalled();
+        expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+      },
+    );
+
+    it("leaves an ordinary session alone", async () => {
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
     });
   });
 

@@ -120,6 +120,6 @@ the base repo's context.
 
 ## Addressing review feedback, and post-merge cleanup
 
-See [`AGENTS.md`](AGENTS.md)'s "Addressing review feedback" and "Post-merge
-cleanup" sections for the exact commands — the reply-and-resolve two-step for
-inline PR comments, and the branch/worktree cleanup after a merge.
+See the "Workflow Conventions" section of [`AGENTS.md`](AGENTS.md) — the
+reply-and-resolve two-step for inline PR comments, and the branch/worktree
+cleanup after a merge. `scripts/review-threads.mjs` runs the two-step for you.
