@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq, or } from "drizzle-orm";
-import { projects, sessions, tasks } from "../db/schema.js";
+import { and, eq, inArray, or } from "drizzle-orm";
+import { projects, sessions, tasks, type TaskStatus } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
@@ -370,22 +370,38 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
   }
 }
 
+// The statuses in which Task Master still owns the task's session and PR.
+const ACTIVE_TASK_STATUSES: TaskStatus[] = ["claimed", "in_progress", "reviewing"];
+
 /**
- * Whether this session is a Task Master task's worker or its review agent.
- * Task Master pushes the branch, opens the pull request and runs the task's
- * own review, so such a session has no review of its own to ask for — and a
- * Hermes round dispatched for it would be a second review the board never
- * reads.
+ * Whether this session belongs to an ACTIVE Task Master task whose own pull
+ * request is the one being asked about. Task Master pushes the branch, opens
+ * the pull request and runs the task's review, so such a session has no
+ * review of its own to ask for — a Hermes round dispatched for it would be a
+ * second review the board never reads.
+ *
+ * Scoped, because nothing clears `tasks.sessionId` when a task finishes: a
+ * finished (`done`/`failed`) task no longer owns its session, and a request
+ * naming a DIFFERENT pull request is not about the task's review at all. With
+ * no explicit pull request the target is the session's own branch, i.e. the
+ * task's.
  */
-function isTaskMasterSession(app: FastifyInstance, sessionId: number): boolean {
-  return (
-    app.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)))
-      .limit(1)
-      .all().length > 0
-  );
+function isTaskMasterReviewRequest(
+  app: FastifyInstance,
+  sessionId: number,
+  requestedPr: number | undefined,
+): boolean {
+  const rows = app.db
+    .select({ prNumber: tasks.prNumber })
+    .from(tasks)
+    .where(
+      and(
+        or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)),
+        inArray(tasks.status, ACTIVE_TASK_STATUSES),
+      ),
+    )
+    .all();
+  return rows.some((row) => requestedPr === undefined || row.prNumber === requestedPr);
 }
 
 /**
@@ -489,9 +505,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
       // A refusal like the in-flight one: the answer, not an error to retry.
-      if (isTaskMasterSession(app, sessionId)) {
+      if (isTaskMasterReviewRequest(app, sessionId, request.body.prNumber)) {
         return reply.conflict(
-          "Task Master runs this task's review — a task session does not request one",
+          "This session works an active Task Master task, and Task Master runs that task's review — do not request one",
         );
       }
 

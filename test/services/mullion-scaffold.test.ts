@@ -751,6 +751,14 @@ describe("computeScaffold", () => {
       expect(gitignore(computeScaffold({ ".gitignore": once }, withWt))).toBe(once);
     });
 
+    it("does not list .wt/ twice when the repo already ignores it outside the region", () => {
+      expect(gitignore(computeScaffold({ ".gitignore": "dist/\n.wt/\n" }, withWt))).toBeUndefined();
+      expect(gitignore(computeScaffold({ ".gitignore": "/.wt\n" }, withWt))).toBeUndefined();
+      // The region's own line does not count as "elsewhere".
+      const once = gitignore(computeScaffold({}, withWt)) as string;
+      expect(gitignore(computeScaffold({ ".gitignore": once }, withWt))).toBe(once);
+    });
+
     it("leaves .gitignore alone when the conventions do not use .wt/", () => {
       expect(gitignore(computeScaffold({}, { slug: "demo" }))).toBeUndefined();
       expect(conventionsUseWtDirectory(undefined)).toBe(false);

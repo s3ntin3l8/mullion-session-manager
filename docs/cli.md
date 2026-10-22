@@ -429,7 +429,11 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
   reviewed** is refused the same way: there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first). A
   repeat request for the **same commit** inside the configured cooldown exits
-  non-zero with a 409 as well. A request for a
+  non-zero with a 409 as well. A session that works an **active Task Master
+  task** (claimed, in progress or reviewing) is refused with a 409 for that
+  task's own pull request — Task Master runs the task's review; a request
+  naming a different pull request, or one made after the task is done or
+  failed, is not affected. A request for a
   **new** head commit — the normal re-review after pushing fixes — is
   dispatched right away, even inside the cooldown window of the previous
   one. The confirmation names the run id. A commit that has already been

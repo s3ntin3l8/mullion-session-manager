@@ -237,10 +237,13 @@ describe("review-request routes", () => {
   });
 
   describe("Task Master sessions", () => {
-    const taskSession = (column: "sessionId" | "reviewSessionId") => {
+    const taskSession = (
+      column: "sessionId" | "reviewSessionId",
+      extra: { status?: string; prNumber?: number } = {},
+    ) => {
       const [proj] = app.db
         .insert(projects)
-        .values({ name: `tm-${column}`, cwd: `/tmp/review-tm-${column}` })
+        .values({ name: `tm-${column}-${nextAddr}`, cwd: `/tmp/review-tm-${column}-${nextAddr}` })
         .returning()
         .all();
       const [session] = app.db
@@ -250,21 +253,38 @@ describe("review-request routes", () => {
         .all();
       app.db
         .insert(tasks)
-        .values({ projectId: proj.id, title: "a task", [column]: session.id })
+        .values({ projectId: proj.id, title: "a task", [column]: session.id, ...extra })
         .run();
       return session.id;
     };
 
     it.each(["sessionId", "reviewSessionId"] as const)(
-      "409s a task's %s without touching GitHub or Hermes",
+      "409s an active task's %s without touching GitHub or Hermes",
       async (column) => {
-        const res = await post(taskSession(column), {});
+        const res = await post(taskSession(column, { status: "in_progress" }), {});
         expect(res.statusCode).toBe(409);
-        expect(res.json().message).toContain("Task Master runs this task's review");
+        expect(res.json().message).toContain("active Task Master task");
         expect(mocks.getPullRequestByNumber).not.toHaveBeenCalled();
         expect(mocks.requestHermesReview).not.toHaveBeenCalled();
       },
     );
+
+    it("409s a request naming the task's own PR", async () => {
+      const id = taskSession("sessionId", { status: "reviewing", prNumber: 77 });
+      expect((await post(id, { prNumber: 77 })).statusCode).toBe(409);
+    });
+
+    it("lets a task session ask about a DIFFERENT pull request", async () => {
+      const id = taskSession("sessionId", { status: "in_progress", prNumber: 77 });
+      const res = await post(id, { prNumber: 78 });
+      expect(res.statusCode).toBe(200);
+      expect(mocks.requestHermesReview).toHaveBeenCalled();
+    });
+
+    it.each(["done", "failed"])("no longer refuses once the task is %s", async (status) => {
+      const res = await post(taskSession("sessionId", { status }), {});
+      expect(res.statusCode).toBe(200);
+    });
 
     it("leaves an ordinary session alone", async () => {
       const res = await post(sessionId, {});

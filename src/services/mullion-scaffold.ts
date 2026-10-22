@@ -51,6 +51,14 @@ export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
 export const WORKTREES_IGNORE_MARKER_START = "# mullion:worktrees:start";
 export const WORKTREES_IGNORE_MARKER_END = "# mullion:worktrees:end";
 
+function stripMarkedRegion(text: string, start: string, end: string): string {
+  const startIdx = text.indexOf(start);
+  const endIdx = startIdx === -1 ? -1 : text.indexOf(end, startIdx + start.length);
+  return startIdx === -1 || endIdx === -1
+    ? text
+    : text.slice(0, startIdx) + text.slice(endIdx + end.length);
+}
+
 /** Whether the conventions text that will be committed puts worktrees under `.wt/`. */
 export function conventionsUseWtDirectory(text: string | undefined): boolean {
   // A path segment, not any substring: `foo.wt/` is not the directory.
@@ -717,12 +725,18 @@ export function computeScaffold(
   // The `.wt/` worktree directory (see WORKTREES_IGNORE_MARKER_START): only
   // when the conventions being committed name it, and upserted into its own
   // marked region so the rest of an existing .gitignore is left alone.
-  if (conventionsUseWtDirectory(options.workflowConventionsText)) {
+  // A repo that already ignores `.wt/` outside the region keeps its own line:
+  // writing the region too would only list the directory twice.
+  const existingIgnore = existingFiles[".gitignore"] ?? "";
+  const ignoresWtElsewhere = /^\/?\.wt\/?\s*$/m.test(
+    stripMarkedRegion(existingIgnore, WORKTREES_IGNORE_MARKER_START, WORKTREES_IGNORE_MARKER_END),
+  );
+  if (conventionsUseWtDirectory(options.workflowConventionsText) && !ignoresWtElsewhere) {
     entries.push({
       path: ".gitignore",
       kind: "file",
       contents: upsertMarkedRegion(
-        existingFiles[".gitignore"] ?? "",
+        existingIgnore,
         WORKTREES_IGNORE_MARKER_START,
         WORKTREES_IGNORE_MARKER_END,
         ".wt/",
