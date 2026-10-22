@@ -112,7 +112,9 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   "Fetched 25.9 MB in 10min 2s"). At 15 minutes that left only ~3.5m of
   headroom for a 2-minute suite, so a slightly slower mirror timed the job
   out — a red e2e that is easy to miss, since this job gates nothing. The
-  step now also sets `Acquire::Retries "3"` so a stalled mirror is retried.
+  step also sets `Acquire::Retries "3"`, which covers a mirror that fails
+  outright — but not the slow-but-successful case above, where the timeout
+  bump is what actually helps.
 - **Codecov**: Uploads coverage using `CODECOV_TOKEN`. Target patch coverage
   is 75% (configured via `codecov.yml` to prevent failures on minor,
   well-tested diffs). The `codecov/patch` status is **advisory**: it is
@@ -198,18 +200,35 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
 
 ## Branch protection
 
-Required status checks for merge:
+Required status checks for merge **today**:
 
 - `test-node / lint-and-test`
 - `test-node / test-merge` (sharded backend coverage gate)
 - `test-frontend / lint-and-test`
-- `test-frontend / test-merge` (sharded frontend coverage gate)
 - `analyze / Analyze (javascript-typescript)` (CodeQL is mandatory)
 
-Both workspaces shard their test run, so **both** `test-merge` contexts are
-required. Their matching `lint-and-test` contexts keep running
-lint/typecheck/build and report green whether or not any test ran — drop a
-`test-merge` context and a broken suite merges silently.
+**Pending follow-up — `test-frontend / test-merge` is NOT yet required.**
+The frontend shards its test run, which moves the frontend's tests **and**
+its `coverage-fail-under: 70` gate out of `test-frontend / lint-and-test`
+into a new `test-frontend / test-merge` job. Until that context is added
+to this list, `test-frontend / lint-and-test` reports green while running
+no tests at all, and a broken frontend suite would merge silently. Add it
+right after the sharding change lands (adding it earlier would block the
+open PRs on a context that does not exist yet):
+
+```bash
+gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection \
+  --jq '.required_status_checks.contexts'
+```
+
+Read the current protection object first and preserve every other field
+(`strict`, `enforce_admins`, `required_pull_request_reviews`,
+`restrictions`, ...) — a PUT replaces the whole object.
+
+Both workspaces shard their test run, so **both** `test-merge` contexts
+must eventually be required. Their matching `lint-and-test` contexts keep
+running lint/typecheck/build and report green whether or not any test ran —
+drop a `test-merge` context and a broken suite merges silently.
 
 Verify the current contexts via:
 
@@ -272,6 +291,14 @@ repo-wide consistency checks and the whitespace/conflict/secret checks. The
   `scripts/check-patch-coverage.mjs` that `make test-patch-coverage` runs,
   so the local and Codecov numbers cannot drift. It skips (rather than
   fails) when no base ref is available.
+- **`npm run check:pre-push-hook-order`** — asserts the wiring above is
+  still intact: the patch-coverage hook is the LAST hook in
+  `.pre-commit-config.yaml` (pre-commit runs hooks in file order, and it
+  consumes the coverage report the test hooks write), and the two test
+  hooks run `test:coverage` rather than `test`. Both drift silently, so
+  they are checked rather than merely documented. It runs in `npm run
+lint` (so in CI) and as its own pre-commit hook scoped to
+  `.pre-commit-config.yaml`.
 
 Lint is a **pre-commit** hook only and is path-scoped, so the hooks do not
 run the repo-wide lint for you — run `make lint && make typecheck && make

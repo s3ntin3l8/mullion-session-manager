@@ -15,6 +15,8 @@
 //
 // Exit codes: 0 = covered (or skipped), 1 = below the threshold.
 
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { resolveBaseRef, runPatchCoverageCheck } from "./check-patch-coverage.mjs";
 
 export const THRESHOLD = 75;
@@ -45,7 +47,13 @@ export function runHook({ baseRef = resolveBaseRef(), check = runPatchCoverageCh
 
 // Direct execution — imported by the test suite, so only run when invoked
 // directly (same guard as scripts/check-patch-coverage.mjs's own `cli`).
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+//
+// `fileURLToPath` + `path.resolve`, NOT a raw `file://` string concat:
+// `import.meta.url` percent-encodes special characters, so on a checkout
+// whose path contains a space the two sides never match, `runHook()` is
+// never called, and the hook exits 0 without checking anything — a
+// fail-open gate that is worse than no gate at all.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
   process.exit(runHook());
 }

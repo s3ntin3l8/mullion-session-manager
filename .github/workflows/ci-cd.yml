@@ -205,9 +205,12 @@ jobs:
         run: |
           # `playwright install --with-deps` also runs apt, and apt is the
           # step that actually varies: one measured run fetched 25.9 MB at
-          # 43.1 kB/s and took 10m02s on its own. Retrying the fetch is
-          # cheaper than losing the job to it — a mirror that stalls once
-          # usually answers the retry.
+          # 43.1 kB/s and took 10m02s on its own. That transfer SUCCEEDED,
+          # just slowly — so `Acquire::Retries` (which only re-attempts a
+          # fetch that FAILED) does not address it; the timeout bump on this
+          # job is the real fix. The retry below is still worth setting:
+          # a mirror that fails outright is then retried instead of
+          # failing the job.
           echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99-retries
           npx playwright install --with-deps chromium
       # Install the pinned opencode (v2) the

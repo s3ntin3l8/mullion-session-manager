@@ -141,6 +141,22 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # The pre-push hook wiring's own invariants: the patch-coverage hook
+      # must stay the LAST hook in this file (pre-commit runs hooks in file
+      # order, and it consumes the coverage report the test hooks write),
+      # and the test hooks must run the coverage variant so that report
+      # exists. Both fail silently if they drift, so they are checked
+      # instead of merely documented — and this check itself has to sit
+      # BEFORE the patch-coverage hook, or it would break the very
+      # invariant it asserts.
+      - id: pre-push-hook-order
+        name: the pre-push patch-coverage hook wiring is intact
+        entry: node scripts/check-pre-push-hook-order.mjs
+        language: system
+        files: '^\.pre-commit-config\.yaml$'
+        pass_filenames: false
+        stages: [pre-commit]
+
       # The >=75% patch-coverage rule (AGENTS.md's "Core invariants"). This
       # hook MUST stay last in this file: pre-commit runs hooks in file
       # order, and this one consumes the coverage/coverage-final.json that
