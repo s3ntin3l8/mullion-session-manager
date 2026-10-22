@@ -34,6 +34,7 @@ jobs:
       # since lint-and-test itself still only runs lint/typecheck/build
       # once sharded and would report green regardless.
       test-shards: "2"
+      artifact-prefix: "-backend"
       strict-checks: true
       # Only the files this push touched can have introduced a secret.
       # detect-secrets matches a known secret by filename, hash and type -- not
@@ -65,6 +66,8 @@ jobs:
       # timeout as a single job), so unlike test-node this doesn't need
       # test-shards/test-merge.
       coverage-fail-under: "70"
+      test-shards: "2"
+      artifact-prefix: "-frontend"
       strict-checks: true
       # The tree was already scanned by the test-node job above.
       detect-secrets: false
