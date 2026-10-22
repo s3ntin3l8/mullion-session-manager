@@ -415,10 +415,23 @@ describe("Settings -> Models", () => {
       // pinned that a per-task clause EXISTS, but neither one is about
       // `Model:`: the note's final clause still says "applies to both roles"
       // after `Model:` is dropped from the first one, so the whole point of
-      // this commit's copy was unpinned. Verified by mutation: renaming the
-      // first clause's `Model:` to `Reviewer-Model:` turns this red.
+      // this commit's copy was unpinned.
+      //
+      // The lookbehind is load-bearing, and it is the whole reason this
+      // assertion can be trusted. WITHOUT it the regex matches inside
+      // `"Reviewer-Model:"` — that token ENDS with the substring `Model:` —
+      // so renaming the first clause's `Model:` to `Reviewer-Model:` leaves
+      // the note reading "Reviewer-Model: / Reviewer-Model:", which still
+      // contains the run "Model: / Reviewer-Model:" and still matches. The
+      // `(?<![-\w])` says the `Model:` must not be the tail of a
+      // hyphenated token.
+      //
+      // Verified by mutation, both ways:
+      //   - rename ONLY the first clause's `Model:` → `Reviewer-Model:`
+      //     (leaving the "/ Reviewer-Model:" that follows it) → red;
+      //   - rename BOTH occurrences → `Reviewer-Model:` → red.
       const note = screen.getByText(/no second opinion/i).closest("p");
-      expect(note?.textContent ?? "").toMatch(/Model:\s*\/\s*Reviewer-Model:/);
+      expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*\/\s*Reviewer-Model:/);
     });
 
     it("does NOT warn when the review agent is a different CLI with a different model", () => {
