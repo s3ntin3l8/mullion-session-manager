@@ -63,10 +63,22 @@ How this repo applies the conventions above — facts and commands, not rules.
 - **Worktrees:** `make wt name=<slug>` creates `.wt/<slug>` off the latest
   `origin/main` and runs `npm ci` in the repo root **and** in `frontend/`. A
   worktree made by hand needs both `npm ci`s before it can build or test.
-- **The pre-push gate** is `make lint && make typecheck && make test && make
-format-check` (repo-wide — covers `frontend/` too), plus
-  `make test-patch-coverage` ($\ge 75\%$ patch coverage required) on a branch
-  rebased cleanly onto the latest `origin/main`.
+- **The pre-push gate** is what `.pre-commit-config.yaml` actually wires to
+  the `pre-push` stage: `typecheck` (both workspaces, path-scoped), a
+  repo-wide `prettier --check` (covers `frontend/` too), the two vitest
+  suites (path-scoped, run as `test:coverage` so the coverage JSON is on
+  disk), and the **≥75% patch-coverage check**
+  (`npm run check:patch-coverage`). It is **not** `make lint` — lint is a
+  **pre-commit** hook only, path-scoped to the workspace you touched. Run
+  `make lint && make typecheck && make test && make format-check` yourself
+  before pushing; the hooks do not run the repo-wide lint for you.
+- **Patch test coverage (≥75%)** on changed lines in `src/` and
+  `frontend/src/` is enforced locally by the pre-push hook
+  (`scripts/check-patch-coverage-hook.mjs`, a thin wrapper over
+  `scripts/check-patch-coverage.mjs`). In CI the same floor is **advisory**:
+  Codecov posts a `codecov/patch` status on the PR, but it is not one of
+  `main`'s required status checks, so a red patch status does not block a
+  merge on its own.
 - **Reviews:** this repo reviews every pull request automatically when it
   opens (`.github/workflows/hermes.yml`'s `auto-review` job), except Task
   Master's own `mullion/task-*` branches — see `docs/tasks-internals.md`'s

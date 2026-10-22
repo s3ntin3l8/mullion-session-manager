@@ -62,8 +62,8 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
 `strict-checks: true` is safe here.
 
 - **`test-node` (backend)**: Runs at root. Script: `test:coverage`,
-  `coverage-fail-under: 80`. Runs `npm ci`, lint, typecheck, format-check, and
-  tests.
+  `coverage-fail-under: 80`, `test-shards: 4`. Runs `npm ci`, lint, typecheck,
+  format-check, and tests.
 - **Shell scripts under `deploy/`/`scripts/` get coverage here too** — this
   is the same `vitest run` invocation, and `vitest.config.ts` has no
   `include` override, so its default glob already sweeps up
@@ -82,8 +82,8 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   `systemd-run`/network call fire, and never let `$HOME` resolve to the
   machine's real home directory.
 - **`test-frontend`**: Runs under `frontend/`. Script: `test:coverage`,
-  `coverage-fail-under: 70`. Skips format-check in CI (root-level
-  `make format-check` hook covers it).
+  `coverage-fail-under: 70`, `test-shards: 2`. Skips format-check in CI
+  (root-level `make format-check` hook covers it).
 - **`test-e2e`**: Custom job — checkout, `npm ci`,
   `npx playwright install --with-deps chromium`, then installs a **pinned,
   integrity-checked `opencode` binary** (currently `2.0.29`) via a
@@ -105,19 +105,99 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   Deliberately **not** a required status check yet — this is its first run
   anywhere outside a developer's own machine, and it needs a stretch of
   real, unattended CI runs before every merge is gated on it.
+  Its `timeout-minutes` is **25**, not 15: the `playwright install
+--with-deps` step measured 11-32s in 8 of 10 runs but 632s and 509s in the
+  other two, and the slow runs are **apt**, not Playwright (the Chromium
+  cache hit normally; one run fetched 25.9 MB of OS packages at 43.1 kB/s —
+  "Fetched 25.9 MB in 10min 2s"). At 15 minutes that left only ~3.5m of
+  headroom for a 2-minute suite, so a slightly slower mirror timed the job
+  out — a red e2e that is easy to miss, since this job gates nothing. The
+  step also sets `Acquire::Retries "3"`, which covers a mirror that fails
+  outright — but not the slow-but-successful case above, where the timeout
+  bump is what actually helps.
 - **Codecov**: Uploads coverage using `CODECOV_TOKEN`. Target patch coverage
   is 75% (configured via `codecov.yml` to prevent failures on minor,
-  well-tested diffs).
-- **Test sharding (`test-shards: "2"`)**:
-  - Node tests shard into `shard-plan` → 2×`test-shard` → `test-merge`.
+  well-tested diffs). The `codecov/patch` status is **advisory**: it is
+  reported on the PR but is not one of `main`'s required status checks, so a
+  red patch status does not block a merge by itself. The same floor is
+  enforced _locally_ by the `pre-push` hook (see "Local hooks" below).
+- **Test sharding**:
+  - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests
+    shard into 2×`test-shard` → `test-merge`.
   - `test-node / lint-and-test` runs lint/typecheck/format/build but **no
-    tests**.
-  - `test-merge` is the final test/coverage check; it must be a **required
-    check** in branch protection.
+    tests**. Same for `test-frontend / lint-and-test` (lint/typecheck/build).
+  - `test-merge` is the final test/coverage check for each workspace; both
+    must be **required checks** in branch protection. This is not optional:
+    the matching `lint-and-test` context reports green while running no
+    tests at all, so dropping a `test-merge` context from branch protection
+    lets a broken suite merge silently.
   - Requires istanbul `json` reporter format alongside `json-summary` —
     set once, in the shared `vitest.shared.ts` coverage config both
     `vitest.config.ts` and `frontend/vitest.config.ts` import, not
     duplicated per workspace — to merge shard results.
+  - **The shard matrix is passed explicitly** (`test-shard-matrix`), which
+    skips the shared workflow's `shard-plan` job — a whole runner spent
+    running `jq` to emit `[1..N]` on every CI run. `test-shards` is still
+    set because it is what gates the sharded path on.
+  - **The shard jobs skip the build** (`shard-build-script: "none"`): they
+    run the suite against the source tree, so the per-shard `npm run build`
+    (a full `tsc` + copy + smoke test) was pure overhead. `lint-and-test`
+    still builds once, so a broken build is still caught.
+  - **Both callers need a distinct `artifact-prefix`.** This workflow calls
+    the shared `ci-node.yml` twice, and both callers shard. Artifact names
+    are scoped to the **workflow run**, not to the caller, so without a
+    prefix the backend's `coverage-shard-1` and the frontend's
+    `coverage-shard-1` are the same artifact name — and `test-merge`
+    downloads whichever it finds first. The backend's merge then folds the
+    frontend's coverage maps into the backend's report and enforces the
+    threshold against a number that describes neither workspace. Measured:
+    merged backend coverage fell from **93.92%** to **74.9%** and the
+    `coverage-fail-under: 80` gate fired on that bogus figure. The backend's
+    own 4-way merge is sound (recomputed from the shard artifacts: 91.84%
+    statements vs the 2-shard baseline's 91.83% — identical within
+    rounding), so the fix is purely the artifact namespace.
+    The shared workflow's `artifact-prefix` input
+    ([s3ntin3l8/.github#118](https://github.com/s3ntin3l8/.github/pull/118))
+    provides it, and its `test-merge` now asserts it received exactly one
+    coverage map per expected shard — so a collision fails loudly instead
+    of silently reporting a wrong percentage.
+    **If a third sharded caller is ever added here, it needs its own
+    prefix too.**
+  - **Why 4 backend shards.** Vitest's shard split sorts spec paths by
+    SHA-1 hash and slices by index, so it balances by **file count** and is
+    blind to **duration** — a file with 300 tests weighs the same as one
+    with 3. At 2 shards the backend's 314 files put 157 in each, and the
+    slowest shard measured 157-203s against the fastest's 126-186s (1.52x
+    spread, 196s vs 129s in one run). The slowest shard, not the average,
+    sets the critical path.
+  - **Why the frontend does NOT use `test-pool: vmThreads`.** The frontend's
+    158.90s was 52% tests, **31% jsdom environment setup**, 9% setup, and
+    `vmThreads` cuts that environment share to ~3% — measured locally, it
+    runs the suite in 117s instead of 159s. It is still **not** enabled: the
+    `vm` context makes `globalThis.location` non-configurable, and five
+    frontend test files stub it (`src/api/client.test.ts`,
+    `src/hooks/useSdkLicenses.test.tsx`,
+    `src/hooks/useSystemImageInstall.test.tsx`,
+    `src/settings/sections/AccountSection.test.tsx`,
+    `src/voice/support.test.ts`), so 24 tests fail with "Cannot redefine
+    property: location". Re-evaluate once those files stop stubbing
+    `location`/`window`. `test-pool` must stay unset on the `test-node`
+    caller regardless: `vmThreads` does not load native addons, and the
+    backend needs the `better-sqlite3` and `node-pty` native bindings over a
+    real temp SQLite DB.
+- **Concurrency**: `ci-cd.yml` declares a `concurrency` group
+  (`CI/CD-<pr-number>`, or `CI/CD-<ref>` for pushes to `main`) with
+  `cancel-in-progress` restricted to `pull_request`. A superseded PR run is
+  cancelled instead of burning ~14 runner-minutes on a commit that has
+  already been superseded; a post-merge `push` validation run on `main` is
+  never cancelled by a later push. Cancelling leaves `cancelled` checks on
+  the _old_ head SHA, which branch protection does not evaluate — the
+  newest run for the current head SHA always completes.
+- **Action pinning**: this repo's own workflows pin every first-party action
+  by SHA (`actions/checkout@3d3c42e…`, `actions/setup-node@949feb24…`,
+  `actions/cache@55cc8345…`), matching the shared workflow's own convention.
+  Dependabot's `github-actions` group understands SHA-pinned `uses:` and
+  bumps the SHA and its `# vX` comment together.
 - **Secrets detection**: `ci-node.yml`'s `detect-secrets` step is
   pip-cache-warmed to avoid uncached overhead. It scans the files the push
   touched rather than the whole tree (`detect-secrets-scope: changed`), plus
@@ -128,12 +208,35 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
 
 ## Branch protection
 
-Required status checks for merge:
+Required status checks for merge **today**:
 
 - `test-node / lint-and-test`
-- `test-node / test-merge` (sharded coverage gate)
+- `test-node / test-merge` (sharded backend coverage gate)
 - `test-frontend / lint-and-test`
 - `analyze / Analyze (javascript-typescript)` (CodeQL is mandatory)
+
+**Pending follow-up — `test-frontend / test-merge` is NOT yet required.**
+The frontend shards its test run, which moves the frontend's tests **and**
+its `coverage-fail-under: 70` gate out of `test-frontend / lint-and-test`
+into a new `test-frontend / test-merge` job. Until that context is added
+to this list, `test-frontend / lint-and-test` reports green while running
+no tests at all, and a broken frontend suite would merge silently. Add it
+right after the sharding change lands (adding it earlier would block the
+open PRs on a context that does not exist yet):
+
+```bash
+gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection \
+  --jq '.required_status_checks.contexts'
+```
+
+Read the current protection object first and preserve every other field
+(`strict`, `enforce_admins`, `required_pull_request_reviews`,
+`restrictions`, ...) — a PUT replaces the whole object.
+
+Both workspaces shard their test run, so **both** `test-merge` contexts
+must eventually be required. Their matching `lint-and-test` contexts keep
+running lint/typecheck/build and report green whether or not any test ran —
+drop a `test-merge` context and a broken suite merges silently.
 
 Verify the current contexts via:
 
@@ -178,3 +281,47 @@ throttled warning in the reconcile log — a human still has to notice and
 act. The command above returning a 403 (rather than the contexts list, or a
 404 for "no protection configured") is the same signal Mullion's own code
 sees.
+
+## Local hooks
+
+The local gate lives in `.pre-commit-config.yaml`. The `pre-commit` stage
+runs lint (path-scoped per workspace), typecheck, `shellcheck`, the two
+repo-wide consistency checks and the whitespace/conflict/secret checks. The
+`pre-push` stage runs:
+
+- `typecheck` (both workspaces, path-scoped)
+- `prettier --check .` (repo-wide, covers `frontend/`)
+- the two vitest suites (path-scoped) — as `test:coverage`, **not** `test`,
+  so the coverage JSON is already on disk for the next hook
+- **`npm run check:patch-coverage`** — the ≥75% patch-coverage rule, the
+  same floor Codecov reports as `codecov/patch` on the PR. It is a thin
+  wrapper (`scripts/check-patch-coverage-hook.mjs`) over the same
+  `scripts/check-patch-coverage.mjs` that `make test-patch-coverage` runs,
+  so the local and Codecov numbers cannot drift. It skips (rather than
+  fails) when no base ref is available.
+- **`npm run check:pre-push-hook-order`** — asserts the wiring above is
+  still intact: the patch-coverage hook is the LAST hook in
+  `.pre-commit-config.yaml` (pre-commit runs hooks in file order, and it
+  consumes the coverage report the test hooks write), and the two test
+  hooks run `test:coverage` rather than `test`. Both drift silently, so
+  they are checked rather than merely documented. It runs in `npm run
+lint` (so in CI) and as its own pre-commit hook scoped to
+  `.pre-commit-config.yaml`.
+
+Lint is a **pre-commit** hook only and is path-scoped, so the hooks do not
+run the repo-wide lint for you — run `make lint && make typecheck && make
+test && make format-check` before pushing.
+
+## By design, not a gap
+
+- **Release-please PRs are approval-gated.** The workflows on a
+  release-please pull request sit at `action_required` with no jobs
+  executed until the maintainer approves them, which happens as part of
+  cutting a release. That is intentional, not a misconfiguration: it means
+  a release PR is not CI-validated, and its required status checks are
+  neither satisfied nor reported pending. Do not "fix" this by adding a
+  push trigger for the release branch.
+- **`test-e2e` is not a required status check** (see above).
+- **`detect-secrets-scope: changed` on the backend + `detect-secrets: false`
+  on the frontend** is a deliberate "scan the tree once" pairing, not an
+  oversight.
