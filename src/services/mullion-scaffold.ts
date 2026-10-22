@@ -728,7 +728,7 @@ export function computeScaffold(
   // A repo that already ignores `.wt/` outside the region keeps its own line:
   // writing the region too would only list the directory twice.
   const existingIgnore = existingFiles[".gitignore"] ?? "";
-  const ignoresWtElsewhere = /^\/?\.wt\/?\s*$/m.test(
+  const ignoresWtElsewhere = /^(\*\*\/)?\/?\.wt(\/(\*\*)?)?\s*$/m.test(
     stripMarkedRegion(existingIgnore, WORKTREES_IGNORE_MARKER_START, WORKTREES_IGNORE_MARKER_END),
   );
   if (conventionsUseWtDirectory(options.workflowConventionsText) && !ignoresWtElsewhere) {

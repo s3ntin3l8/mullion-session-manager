@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { and, eq, inArray, or } from "drizzle-orm";
-import { projects, sessions, tasks, type TaskStatus } from "../db/schema.js";
+import { projects, sessions, tasks } from "../db/schema.js";
+import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
@@ -370,9 +371,6 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
   }
 }
 
-// The statuses in which Task Master still owns the task's session and PR.
-const ACTIVE_TASK_STATUSES: TaskStatus[] = ["claimed", "in_progress", "reviewing"];
-
 /**
  * Whether this session belongs to an ACTIVE Task Master task whose own pull
  * request is the one being asked about. Task Master pushes the branch, opens
@@ -397,7 +395,7 @@ function isTaskMasterReviewRequest(
     .where(
       and(
         or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)),
-        inArray(tasks.status, ACTIVE_TASK_STATUSES),
+        inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
       ),
     )
     .all();

@@ -16,7 +16,12 @@ import {
   FAILURE_REASON_LABEL_LOST,
   FAILURE_REASON_ISSUE_CLOSED,
 } from "./task-github-sync.js";
-import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
+import {
+  ACTIVE_TASK_STATUSES,
+  canTransition,
+  recordTaskTransition,
+  type TaskStatus,
+} from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { isTrustedAuthor, resolveTrustedLogins } from "./task-trust.js";
 import {
@@ -232,7 +237,7 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
         and(
           eq(tasks.projectId, projectId),
           eq(tasks.issueNumber, issue.number),
-          inArray(tasks.status, ["claimed", "in_progress", "reviewing"] satisfies TaskStatus[]),
+          inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
         ),
       )
       .all();
