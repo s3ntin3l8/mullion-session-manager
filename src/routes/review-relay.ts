@@ -256,6 +256,43 @@ function isDetachedBranch(branch: string): boolean {
   return /^[0-9a-f]{7}$/i.test(branch);
 }
 
+// The other projects' repo refs, for "is this repo registered". Each lookup is a
+// git-config read (local) or a remote-host RPC, and the relay routes are
+// rate-limited per client, not per project, so without this a request naming a
+// repo costs N-1 lookups every time. A project's remote changes rarely, so a
+// short TTL bounds the staleness; the key carries cwd and host so editing a
+// project invalidates its entry, and only a lookup that ANSWERED is kept — an
+// unreachable host must stay a 503 on the next request, not a cached miss.
+const REPO_REF_TTL_MS = 60_000;
+type RepoRefResult = Awaited<ReturnType<typeof resolveRepoRefResult>>;
+// Keyed by the database handle, not the FastifyInstance: a route plugin runs on
+// an encapsulated child instance, but `db` is the one object every instance of
+// one app shares.
+const repoRefMemos = new WeakMap<
+  object,
+  Map<number, { key: string; at: number; result: RepoRefResult }>
+>();
+
+/** Forgets the memoized repo refs (tests change what a project resolves to). */
+export function resetRepoRefMemo(app: FastifyInstance): void {
+  repoRefMemos.delete(app.db);
+}
+
+async function resolveOtherProjectRef(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+): Promise<RepoRefResult> {
+  let memo = repoRefMemos.get(app.db);
+  if (!memo) repoRefMemos.set(app.db, (memo = new Map()));
+  const key = `${project.hostId}\0${project.cwd}`;
+  const hit = memo.get(project.id);
+  if (hit && hit.key === key && Date.now() - hit.at < REPO_REF_TTL_MS) return hit.result;
+  const result = await resolveRepoRefResult(app, project);
+  if (result.ok) memo.set(project.id, { key, at: Date.now(), result });
+  else memo.delete(project.id);
+  return result;
+}
+
 interface RelayRepo {
   owner: string;
   repo: string;
@@ -332,7 +369,7 @@ async function selectRelayRepo(
     .from(projects)
     .all()
     .filter((p) => p.id !== project.id);
-  const results = await Promise.all(others.map((p) => resolveRepoRefResult(app, p)));
+  const results = await Promise.all(others.map((p) => resolveOtherProjectRef(app, p)));
   const registered = results
     .map((result) => (result.ok ? result.value : null))
     .find((ref) => ref && matches(ref));

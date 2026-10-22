@@ -198,9 +198,10 @@ there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
 set, not for you. `get_scrollback` (defaults to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
 (defaults to your own project), and `request_review` / `review_status` / `stop_review` (your own session's
-PR and runs) work normally at session scope. So do `request_triage` /
-`triage_status` — an issue triage in your own project's repository, named by
-its issue number.
+PR and runs; pass `repo` for a PR in another registered project's repository)
+work normally at session scope. So do `request_triage` / `triage_status` — an
+issue triage in your own project's repository (or another registered one, via
+`repo`), named by its issue number.
 
 ## Browser automation
 

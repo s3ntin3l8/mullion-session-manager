@@ -69,11 +69,12 @@ vi.mock("../../src/services/remote-host-client.js", async (orig) => ({
   getRemoteHostClient: mocks.getRemoteHostClient,
 }));
 
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions, tasks } from "../../src/db/schema.js";
-import { pruneLandedMemo } from "../../src/routes/review-relay.js";
+import { pruneLandedMemo, resetRepoRefMemo } from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
   HermesNotConfiguredError,
@@ -128,6 +129,9 @@ describe("review-request routes", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Each test sets what the projects resolve to; a memoized answer from the
+    // previous one would outlive it.
+    resetRepoRefMemo(app);
     mocks.resolveRepoRefResult.mockResolvedValue({
       ok: true,
       value: { owner: "acme", repo: "widgets" },
@@ -1441,6 +1445,77 @@ describe("review-request routes", () => {
       );
       const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
       expect(res.statusCode).toBe(403);
+    });
+
+    describe("the other projects' repo refs are memoized", () => {
+      const siblingLookups = () =>
+        mocks.resolveRepoRefResult.mock.calls.filter(
+          ([, project]) => (project as { cwd: string }).cwd === "/tmp/review-sibling",
+        ).length;
+
+      it("looks each other project up once across requests", async () => {
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(200);
+        expect(siblingLookups()).toBe(1);
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 })).statusCode,
+        ).toBe(200);
+        expect(siblingLookups()).toBe(1);
+      });
+
+      it("looks again once the entry is past its TTL", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+          vi.setSystemTime(Date.now() + 61_000);
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          expect(siblingLookups()).toBe(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("never keeps an unreachable answer: the next request asks again", async () => {
+        let up = false;
+        mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) => {
+          if (project.cwd !== "/tmp/review-sibling") {
+            return { ok: true, value: { owner: "acme", repo: "widgets" } };
+          }
+          return up
+            ? { ok: true, value: { owner: "acme", repo: ".github" } }
+            : { ok: false, reason: "unreachable", detail: "down" };
+        });
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(503);
+        up = true;
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(200);
+      });
+
+      it("drops the entry when the project's cwd changes", async () => {
+        await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+        app.db
+          .update(projects)
+          .set({ cwd: "/tmp/review-sibling-moved" })
+          .where(eq(projects.name, "sibling"))
+          .run();
+        try {
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          const movedLookups = mocks.resolveRepoRefResult.mock.calls.filter(
+            ([, project]) => (project as { cwd: string }).cwd === "/tmp/review-sibling-moved",
+          ).length;
+          expect(movedLookups).toBe(1);
+        } finally {
+          app.db
+            .update(projects)
+            .set({ cwd: "/tmp/review-sibling" })
+            .where(eq(projects.name, "sibling"))
+            .run();
+        }
+      });
     });
 
     it("treats naming the project's own repo as no override", async () => {

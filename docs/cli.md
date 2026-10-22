@@ -449,7 +449,7 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   one. The confirmation names the run id. A commit that has already been
   reviewed is refused the same way — there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first).
-- `review status [--pr <n>]` — checks a requested review: the run's
+- `review status [--pr <n>] [--repo <owner/name>] [--branch <b>]` — checks a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes
   answered with something unreadable — retry later — or `not_found`), the review bot's reply or error, and whether
@@ -477,13 +477,15 @@ takes a run id and does not look at the project.
   Hermes) for an issue in the session's project (the `triage.request` op,
   `request_triage` over MCP). The issue number is required: unlike a pull
   request, there is no "current issue" to infer from the session's branch.
-  The repo comes from the session's project, never from the command line.
+  The repo defaults to the session's project's; `--repo <owner/name>` (or the
+  directory the CLI is run from) names another registered project's repo, on
+  the same rules as `review`.
   The triage is dispatched asynchronously and posts its findings as a
   comment on the issue within a few minutes; a repeat request for the same
   issue inside the configured cooldown exits non-zero with a 409. The
   confirmation names the run id, and carries a warning when the issue is
   closed (the triage still goes out).
-- `triage status --issue <n>` — troubleshoots a requested triage: the run's
+- `triage status --issue <n> [--repo <owner/name>]` — troubleshoots a requested triage: the run's
   Hermes status, the triage bot's reply or error, and whether a comment
   actually landed on the issue after the request — including the comment's
   own text and a link to it. The comment is matched by the marker Mullion's

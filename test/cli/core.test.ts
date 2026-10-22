@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
@@ -1361,43 +1362,81 @@ describe("runCommand", () => {
         });
       });
 
+      // The real git calls, against throwaway repos with a known branch and
+      // origin - never the ambient checkout, whose shape (a branch locally, a
+      // detached HEAD under actions/checkout) would decide what is asserted.
       describe("the real git inference", () => {
-        it("does not let a leaked GIT_DIR redirect it to another repository", async () => {
-          const prev = process.env.GIT_DIR;
-          process.env.GIT_DIR = "/nonexistent/leaked.git";
-          try {
-            const client = fakeClient({ request: vi.fn(async () => dispatched) });
-            const io = fakeIo() as Record<string, unknown>;
-            delete io.gitTarget;
-            await runCommand(["review"], {
-              client,
-              io: io as unknown as ReturnType<typeof fakeIo>,
-            });
-            const [, body] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
-            // With the leaked GIT_DIR honoured, git would fail and send nothing;
-            // scrubbed, it reads the cwd's own checkout (when it has an origin).
-            const real = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-              encoding: "utf8",
-              env: gitEnv(),
-            }).trim();
-            if (real !== "HEAD") expect(body.branch).toBe(real);
-          } finally {
-            if (prev === undefined) delete process.env.GIT_DIR;
-            else process.env.GIT_DIR = prev;
-          }
+        const dirs: string[] = [];
+        afterAll(() => {
+          for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
         });
 
-        it("reads this checkout's origin and branch when io has no gitTarget", async () => {
+        const g = (cwd: string, ...args: string[]) =>
+          execFileSync("git", args, { cwd, env: gitEnv(), stdio: "ignore" });
+        const fixture = (origin: string | null, branch = "feat/x") => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-cli-infer-"));
+          dirs.push(dir);
+          g(dir, "init", "-q", "-b", branch);
+          if (origin) g(dir, "remote", "add", "origin", origin);
+          g(dir, "commit", "-q", "--allow-empty", "-m", "init");
+          return dir;
+        };
+        const run = async (cwd: string, ...args: string[]) => {
           const client = fakeClient({ request: vi.fn(async () => dispatched) });
-          const io = fakeIo() as Record<string, unknown>;
+          const io = { ...fakeIo(), cwd } as Record<string, unknown>;
           delete io.gitTarget;
-          await runCommand(["review"], { client, io: io as unknown as ReturnType<typeof fakeIo> });
-          const [, body] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
-          // A GitHub remote parses to owner/name; the tests run inside a
-          // checkout, but a CI sandbox may have no origin, so only the shape
-          // is asserted.
-          if (body.repo !== undefined) expect(body.repo).toMatch(/^[\w-]+\/[\w.-]+$/);
-          if (body.branch !== undefined) expect(body.branch).not.toBe("HEAD");
+          await runCommand(["review", ...args], {
+            client,
+            io: io as unknown as ReturnType<typeof fakeIo>,
+          });
+          return (client.request as ReturnType<typeof vi.fn>).mock.calls[0][1];
+        };
+
+        it.each([
+          ["an ssh remote", "git@github.com:acme/.github.git"],
+          ["an https remote", "https://github.com/acme/.github.git"],
+          ["an https remote with credentials", "https://user:tok@github.com/acme/.github"], // pragma: allowlist secret
+          ["an ssh:// remote", "ssh://git@github.com/acme/.github.git"],
+        ])("reads the repo and branch of the cwd's checkout from %s", async (_name, origin) => {
+          expect(await run(fixture(origin))).toEqual({ repo: "acme/.github", branch: "feat/x" });
+        });
+
+        it("does not read a look-alike host as GitHub, and then sends no branch either", async () => {
+          // A branch from a checkout whose repo is unknown could match an
+          // unrelated PR in the session's own project.
+          expect(await run(fixture("https://mygithub.com/acme/widget.git"))).toEqual({});
+          expect(await run(fixture("git@evilgithub.com:acme/widget.git"))).toEqual({});
+        });
+
+        it("sends no branch from a detached HEAD", async () => {
+          const dir = fixture("git@github.com:acme/.github.git");
+          g(dir, "checkout", "-q", "--detach");
+          expect(await run(dir)).toEqual({ repo: "acme/.github" });
+        });
+
+        it("sends nothing outside a git checkout or without an origin", async () => {
+          const bare = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-cli-infer-"));
+          dirs.push(bare);
+          // An unrelated directory could sit inside some repo; the fixture dir
+          // under tmp does not.
+          expect(await run(bare)).toEqual({});
+          expect((await run(fixture(null))).repo).toBeUndefined();
+        });
+
+        it("does not let a leaked GIT_DIR/GIT_CONFIG redirect it to another repository", async () => {
+          const target = fixture("git@github.com:acme/.github.git", "feat/target");
+          const decoy = fixture("git@github.com:evil/decoy.git", "feat/decoy");
+          const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
+          process.env.GIT_DIR = path.join(decoy, ".git");
+          process.env.GIT_WORK_TREE = decoy;
+          try {
+            expect(await run(target)).toEqual({ repo: "acme/.github", branch: "feat/target" });
+          } finally {
+            if (saved.dir === undefined) delete process.env.GIT_DIR;
+            else process.env.GIT_DIR = saved.dir;
+            if (saved.tree === undefined) delete process.env.GIT_WORK_TREE;
+            else process.env.GIT_WORK_TREE = saved.tree;
+          }
         });
       });
 

@@ -1484,9 +1484,11 @@ function clipForTerminal(body) {
 // a session that also works in another repository (a sibling `.github` checkout)
 // would ask about the wrong one. The CLI runs in the agent's shell, so ITS cwd
 // is the repository being worked in: read the origin remote and the branch
-// from it and send them along. `io.gitTarget` replaces the git calls in tests.
+// from it and send them along. `io.gitTarget` replaces the git calls in tests, `io.cwd` points them at a fixture.
 
-const GITHUB_REMOTE = /github\.com[:/]([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
+// The host is anchored (start, `//` or `@` before it): an unanchored match read
+// `https://mygithub.com/acme/widget.git` as acme/widget.
+const GITHUB_REMOTE = /(?:^|\/\/|@)github\.com[:/]([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
 
 // Every GIT_* variable is dropped, not just services/git-env.ts's list: this
 // file is copied into dist/ verbatim and cannot import that TypeScript module,
@@ -1502,8 +1504,9 @@ function cliGitEnv() {
   return env;
 }
 
-function git(args) {
+function git(args, cwd) {
   return execFileSync("git", args, {
+    cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5_000,
@@ -1516,9 +1519,10 @@ function inferGitTarget(io) {
   if (typeof io?.gitTarget === "function") return io.gitTarget();
   const out = {};
   try {
-    const match = GITHUB_REMOTE.exec(git(["remote", "get-url", "origin"]));
+    // `io.cwd` is a test seam; production runs in the process's own cwd.
+    const match = GITHUB_REMOTE.exec(git(["remote", "get-url", "origin"], io?.cwd));
     if (match) out.repo = match[1];
-    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], io?.cwd);
     // "HEAD" is a detached checkout: no branch to look a PR up by.
     if (branch && branch !== "HEAD") out.branch = branch;
   } catch {
