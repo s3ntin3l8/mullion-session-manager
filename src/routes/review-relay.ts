@@ -332,17 +332,24 @@ async function selectRelayRepo(
     .from(projects)
     .all()
     .filter((p) => p.id !== project.id);
-  // A registered project whose host is down (or too old) just doesn't match:
-  // for "is this repo registered" that is the right answer, so the failure
-  // collapses to null here.
-  const refs = await Promise.all(
-    others.map(async (p) => {
-      const result = await resolveRepoRefResult(app, p);
-      return result.ok ? result.value : null;
-    }),
-  );
-  const registered = refs.find((ref) => ref && matches(ref));
+  const results = await Promise.all(others.map((p) => resolveRepoRefResult(app, p)));
+  const registered = results
+    .map((result) => (result.ok ? result.value : null))
+    .find((ref) => ref && matches(ref));
   if (!registered) {
+    // A registered project whose host is DOWN might be the very repo asked
+    // for, so "not registered" would be a wrong answer — and the CLI treats a
+    // 403 for a repo it merely inferred as "a fork checkout" and retries
+    // against the session's own project, which would review the wrong
+    // repository's PR. Say so instead (a 503 is never retried that way). A
+    // host that is merely too old ("unsupported") can't be told apart from
+    // not registered and stays a 403.
+    if (results.some((result) => !result.ok && result.reason === "unreachable")) {
+      reply.serviceUnavailable(
+        `Could not check whether ${requested} is registered: a registered project's host is unreachable — try again shortly`,
+      );
+      return null;
+    }
     reply.forbidden(
       `${requested} is not a repository registered as a Mullion project — a session can only ask about its own project's repository or another registered one`,
     );
@@ -360,6 +367,7 @@ async function resolveReviewTarget(
   reply: FastifyReply,
   sessionId: number,
   requested: { prNumber?: number; repo?: string; branch?: string },
+  { taskMasterGuard = false }: { taskMasterGuard?: boolean } = {},
 ): Promise<ReviewTarget | null> {
   const requestedPr = requested.prNumber;
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
@@ -376,6 +384,13 @@ async function resolveReviewTarget(
   const target = await selectRelayRepo(app, reply, project, requested.repo, "review-request");
   if (!target) return null;
   const { owner, repo, foreign } = target;
+  // A PR number in ANOTHER repo is not the task's PR, so the guard needs the
+  // resolved repo; it still runs before any token or GitHub lookup, so the
+  // refusal stays the answer a task session gets.
+  if (taskMasterGuard && !foreign && isTaskMasterReviewRequest(app, sessionId, requestedPr)) {
+    reply.conflict(TASK_MASTER_REFUSAL);
+    return null;
+  }
   // The session's own branch says nothing about a PR in another repo: the
   // caller has to name the PR (or the branch it is on there).
   if (foreign && requestedPr === undefined && requested.branch === undefined) {
@@ -461,6 +476,9 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
     return false;
   }
 }
+
+const TASK_MASTER_REFUSAL =
+  "This session works an active Task Master task, and Task Master runs that task's review — do not request one";
 
 /**
  * Whether this session belongs to an ACTIVE Task Master task whose own pull
@@ -573,29 +591,19 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
       // A refusal like the in-flight one: the answer, not an error to retry.
-      const taskMasterRefusal = () =>
-        reply.conflict(
-          "This session works an active Task Master task, and Task Master runs that task's review — do not request one",
-        );
-      // Without a named repo this runs first, before any GitHub lookup. With
-      // one, whether it is the task's repo is only known once it resolves, and
-      // a PR number in ANOTHER repo is not the task's PR (see below).
+      // Without a named repo it runs first, before any lookup; with one,
+      // resolveReviewTarget runs it once the repo is known.
       if (
         request.body.repo === undefined &&
         isTaskMasterReviewRequest(app, sessionId, request.body.prNumber)
       ) {
-        return taskMasterRefusal();
+        return reply.conflict(TASK_MASTER_REFUSAL);
       }
 
-      const target = await resolveReviewTarget(app, reply, sessionId, request.body);
+      const target = await resolveReviewTarget(app, reply, sessionId, request.body, {
+        taskMasterGuard: request.body.repo !== undefined,
+      });
       if (!target) return reply;
-      if (
-        request.body.repo !== undefined &&
-        !target.foreign &&
-        isTaskMasterReviewRequest(app, sessionId, target.prNumber)
-      ) {
-        return taskMasterRefusal();
-      }
       const { owner, repo, prNumber, headSha } = target;
 
       try {

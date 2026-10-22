@@ -1404,10 +1404,39 @@ describe("review-request routes", () => {
       expect(mocks.requestHermesReview).not.toHaveBeenCalled();
     });
 
-    it("does not count another registered project whose host is unreachable", async () => {
+    it("503s, not 403s, when a registered project's host is unreachable and nothing matched", async () => {
+      // The unreachable project might be the very repo asked for. A 403 would
+      // read as "not registered" and make the CLI retry against the session's
+      // own project - reviewing the wrong repository's PR.
       mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) =>
         project.cwd === "/tmp/review-sibling"
           ? { ok: false, reason: "unreachable", detail: "down" }
+          : { ok: true, value: { owner: "acme", repo: "widgets" } },
+      );
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+    });
+
+    it("still resolves a registered repo when ANOTHER project's host is unreachable", async () => {
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) => {
+        if (project.cwd === "/tmp/review-sibling") {
+          return { ok: true, value: { owner: "acme", repo: ".github" } };
+        }
+        if (project.cwd === "/tmp/review-tm-foreign") {
+          return { ok: false, reason: "unreachable", detail: "down" };
+        }
+        return { ok: true, value: { owner: "acme", repo: "widgets" } };
+      });
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("keeps an agent build too old for the repo-ref route as a plain 403", async () => {
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) =>
+        project.cwd === "/tmp/review-sibling"
+          ? { ok: false, reason: "unsupported" }
           : { ok: true, value: { owner: "acme", repo: "widgets" } },
       );
       const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
@@ -1440,6 +1469,17 @@ describe("review-request routes", () => {
     });
 
     describe("with an active Task Master task", () => {
+      it("answers 409 before any GitHub lookup when the repo is the project's own and no PR is named", async () => {
+        // The CLI always sends the repo it infers, so this is the common case:
+        // the refusal must not wait on (and be replaced by) a failing lookup.
+        mocks.findPullRequestByHead.mockResolvedValue(null);
+        const res = await post(taskSessionId, { repo: "acme/widgets", branch: "feat/x" });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain("active Task Master task");
+        expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
+        expect(mocks.findPullRequestByHead).not.toHaveBeenCalled();
+      });
+
       it("still refuses the task's own PR in the project's own repo", async () => {
         const res = await post(taskSessionId, { repo: "acme/widgets", prNumber: 77 });
         expect(res.statusCode).toBe(409);

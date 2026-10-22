@@ -1298,6 +1298,19 @@ describe("runCommand", () => {
           expect(request).toHaveBeenCalledTimes(1);
         });
 
+        it("does not retry an inferred repo on a 503 (its host could not be checked)", async () => {
+          // Retrying would review the session's own project's PR instead - the
+          // wrong repository - on the strength of a check that never ran.
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(503, "unreachable"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review", "--pr", "5"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
         it("rethrows any other error from an inferred request", async () => {
           const request = vi.fn().mockRejectedValue(new MullionSocketError(409, "in flight"));
           const client = fakeClient({ request });
