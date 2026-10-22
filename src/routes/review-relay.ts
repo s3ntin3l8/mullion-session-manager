@@ -278,6 +278,11 @@ export function resetRepoRefMemo(app: FastifyInstance): void {
   repoRefMemos.delete(app.db);
 }
 
+/** How many projects have a memoized repo ref (tests assert the memo is pruned). */
+export function repoRefMemoSize(app: FastifyInstance): number {
+  return repoRefMemos.get(app.db)?.size ?? 0;
+}
+
 async function resolveOtherProjectRef(
   app: FastifyInstance,
   project: typeof projects.$inferSelect,
@@ -285,10 +290,15 @@ async function resolveOtherProjectRef(
   let memo = repoRefMemos.get(app.db);
   if (!memo) repoRefMemos.set(app.db, (memo = new Map()));
   const key = `${project.hostId}\0${project.cwd}`;
+  const now = Date.now();
+  // Entries are otherwise only replaced when their own project is read again,
+  // so one for a project that was deleted would sit here for the process's
+  // life; the map is small (one per project), so sweeping it is cheap.
+  for (const [id, entry] of memo) if (now - entry.at >= REPO_REF_TTL_MS) memo.delete(id);
   const hit = memo.get(project.id);
-  if (hit && hit.key === key && Date.now() - hit.at < REPO_REF_TTL_MS) return hit.result;
+  if (hit && hit.key === key) return hit.result;
   const result = await resolveRepoRefResult(app, project);
-  if (result.ok) memo.set(project.id, { key, at: Date.now(), result });
+  if (result.ok) memo.set(project.id, { key, at: now, result });
   else memo.delete(project.id);
   return result;
 }

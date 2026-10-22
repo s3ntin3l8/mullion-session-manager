@@ -1376,7 +1376,9 @@ describe("runCommand", () => {
         const fixture = (origin: string | null, branch = "feat/x") => {
           const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-cli-infer-"));
           dirs.push(dir);
-          g(dir, "init", "-q", "-b", branch);
+          g(dir, "init", "-q");
+          // symbolic-ref, not `init -b`, which needs git >= 2.28.
+          g(dir, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
           if (origin) g(dir, "remote", "add", "origin", origin);
           g(dir, "commit", "-q", "--allow-empty", "-m", "init");
           return dir;

@@ -74,7 +74,11 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions, tasks } from "../../src/db/schema.js";
-import { pruneLandedMemo, resetRepoRefMemo } from "../../src/routes/review-relay.js";
+import {
+  pruneLandedMemo,
+  repoRefMemoSize,
+  resetRepoRefMemo,
+} from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
   HermesNotConfiguredError,
@@ -1493,6 +1497,26 @@ describe("review-request routes", () => {
         expect(
           (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
         ).toBe(200);
+      });
+
+      it("prunes entries past their TTL, including those of projects that no longer exist", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const [gone] = app.db
+            .insert(projects)
+            .values({ name: "short-lived", cwd: "/tmp/review-short-lived" })
+            .returning()
+            .all();
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+          const withGone = repoRefMemoSize(app);
+          app.db.delete(projects).where(eq(projects.id, gone.id)).run();
+          vi.setSystemTime(Date.now() + 61_000);
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          // The deleted project's entry went; the live ones were re-read.
+          expect(repoRefMemoSize(app)).toBe(withGone - 1);
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("drops the entry when the project's cwd changes", async () => {
