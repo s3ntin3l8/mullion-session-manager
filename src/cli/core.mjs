@@ -8,6 +8,7 @@
 // real process-level wiring lives in mullion.mjs.
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import {
   MullionSocketError,
   SELF_REPORT_STATES,
@@ -1478,12 +1479,104 @@ function clipForTerminal(body) {
   return `${[...body].slice(0, MAX_CLI_REVIEW_BODY).join("")}…`;
 }
 
+// Where the agent actually is. The server resolves a relay request's repo from
+// the session's PROJECT and its branch from the session's launch directory, so
+// a session that also works in another repository (a sibling `.github` checkout)
+// would ask about the wrong one. The CLI runs in the agent's shell, so ITS cwd
+// is the repository being worked in: read the origin remote and the branch
+// from it and send them along. `io.gitTarget` replaces the git calls in tests, `io.cwd` points them at a fixture.
+
+// The host is anchored (start, `//` or `@` before it): an unanchored match read
+// `https://mygithub.com/acme/widget.git` as acme/widget.
+const GITHUB_REMOTE = /(?:^|\/\/|@)github\.com[:/]([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
+
+// Every GIT_* variable is dropped, not just services/git-env.ts's list: this
+// file is copied into dist/ verbatim and cannot import that TypeScript module,
+// and a leaked GIT_DIR/GIT_CONFIG_* would point these two read-only calls at a
+// repository other than the cwd's (test/git-env-guard.test.ts requires an
+// explicit scrubbed env at every git spawn). Neither command's output is
+// locale-dependent, so unlike gitEnv() there is no LC_ALL to pin.
+function cliGitEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_")) env[key] = value;
+  }
+  return env;
+}
+
+function git(args, cwd) {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5_000,
+    env: cliGitEnv(),
+  }).trim();
+}
+
+/** `{ repo, branch }` of the cwd's checkout; either is omitted when unknown. */
+function inferGitTarget(io) {
+  if (typeof io?.gitTarget === "function") return io.gitTarget();
+  const out = {};
+  try {
+    // `io.cwd` is a test seam; production runs in the process's own cwd.
+    const match = GITHUB_REMOTE.exec(git(["remote", "get-url", "origin"], io?.cwd));
+    if (match) out.repo = match[1];
+    const branch = git(["rev-parse", "--abbrev-ref", "HEAD"], io?.cwd);
+    // "HEAD" is a detached checkout: no branch to look a PR up by.
+    if (branch && branch !== "HEAD") out.branch = branch;
+  } catch {
+    // Not a git checkout (or no origin): the server's own defaults apply.
+  }
+  return out;
+}
+
+/**
+ * Sends a relay op, adding the target the cwd implies unless the caller named
+ * one. An INFERRED repo that the server refuses (403: not a registered
+ * project — a fork checkout, say) is retried without it, so inference can
+ * only ever add a correct target, never turn a request that used to work into
+ * a failure.
+ */
+async function sendRelayOp(client, op, body, opts, io, { infer }) {
+  const send = (b) =>
+    opts.session !== undefined
+      ? client.request(op, b)
+      : requestOwnSessionFallback(client, op, b, io, "'sessionId' is required", (ownId) => ({
+          ...b,
+          sessionId: ownId,
+        }));
+  if (!infer) return send(body);
+  // An explicit --repo is the caller's whole answer: nothing is inferred then.
+  const inferred = body.repo === undefined ? { ...inferGitTarget(io) } : {};
+  // The inferred branch only stands in for a missing PR number and --branch: a
+  // named PR makes it moot, and an explicit --branch must not be overridden.
+  if (body.prNumber !== undefined || body.issueNumber !== undefined || body.branch !== undefined) {
+    delete inferred.branch;
+  }
+  if (inferred.repo === undefined) return send(body);
+  try {
+    return await send({ ...body, ...inferred });
+  } catch (err) {
+    if (!(err instanceof MullionSocketError) || err.status !== 403) throw err;
+    return send(body);
+  }
+}
+
 async function runReview(client, args, opts, io) {
   // `mullion review` requests; `status` and `stop <runId>` troubleshoot / cancel.
   const sub = args[0] === "status" || args[0] === "stop" ? args[0] : "request";
   const rest = sub === "request" ? args : args.slice(1);
-  const { flags, rest: positionals } = extractFlags(rest, { pr: "string" });
+  const { flags, rest: positionals } = extractFlags(rest, {
+    pr: "string",
+    repo: "string",
+    branch: "string",
+  });
   const body = {};
+  if (sub !== "stop") {
+    if (flags.repo !== undefined) body.repo = flags.repo;
+    if (flags.branch !== undefined) body.branch = flags.branch;
+  }
   if (flags.pr !== undefined) {
     const prNumber = Number(flags.pr);
     if (!Number.isInteger(prNumber) || prNumber < 1) {
@@ -1500,20 +1593,7 @@ async function runReview(client, args, opts, io) {
   if (opts.session !== undefined) body.sessionId = opts.session;
   client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
   const op = sub === "request" ? "reviews.request" : `reviews.${sub}`;
-  const result =
-    opts.session !== undefined
-      ? await client.request(op, body)
-      : await requestOwnSessionFallback(
-          client,
-          op,
-          body,
-          io,
-          "'sessionId' is required",
-          (ownId) => ({
-            ...body,
-            sessionId: ownId,
-          }),
-        );
+  const result = await sendRelayOp(client, op, body, opts, io, { infer: sub !== "stop" });
   if (sub === "stop") {
     return { json: result, text: `review run ${result.runId}: ${result.status}` };
   }
@@ -1591,8 +1671,9 @@ function formatReviewStatus(r) {
 async function runTriage(client, args, opts, io) {
   const sub = args[0] === "status" || args[0] === "stop" ? args[0] : "request";
   const rest = sub === "request" ? args : args.slice(1);
-  const { flags, rest: positionals } = extractFlags(rest, { issue: "string" });
+  const { flags, rest: positionals } = extractFlags(rest, { issue: "string", repo: "string" });
   const body = {};
+  if (sub !== "stop" && flags.repo !== undefined) body.repo = flags.repo;
   if (flags.issue !== undefined) {
     const issueNumber = Number(flags.issue);
     if (!Number.isInteger(issueNumber) || issueNumber < 1) {
@@ -1616,20 +1697,7 @@ async function runTriage(client, args, opts, io) {
   client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
   const op =
     sub === "request" ? "triage.request" : sub === "status" ? "triage.status" : "reviews.stop";
-  const result =
-    opts.session !== undefined
-      ? await client.request(op, body)
-      : await requestOwnSessionFallback(
-          client,
-          op,
-          body,
-          io,
-          "'sessionId' is required",
-          (ownId) => ({
-            ...body,
-            sessionId: ownId,
-          }),
-        );
+  const result = await sendRelayOp(client, op, body, opts, io, { infer: sub !== "stop" });
   if (sub === "stop") {
     return { json: result, text: `triage run ${result.runId}: ${result.status}` };
   }

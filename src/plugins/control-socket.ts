@@ -708,6 +708,27 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 const enc = encodeURIComponent;
 
+/**
+ * The target-selecting fields a review/triage relay request may carry:
+ * `prNumber`, and the `repo`/`branch` of work happening outside the session's
+ * own project repo. Only fields the caller actually set are forwarded, so an
+ * absent one keeps the route's own default; the route's schema validates them.
+ */
+function relayTargetFields(
+  body: Record<string, unknown> | undefined,
+  keys: readonly string[] = ["prNumber", "repo", "branch"],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) if (body?.[key] !== undefined) out[key] = body[key];
+  return out;
+}
+
+/** `?a=1&b=x` for the set fields, `""` for none. */
+function relayQuery(fields: Record<string, unknown>): string {
+  const pairs = Object.entries(fields).map(([k, v]) => `${enc(k)}=${enc(String(v))}`);
+  return pairs.length === 0 ? "" : `?${pairs.join("&")}`;
+}
+
 type WaitBodyOpts = {
   until: Set<string>;
   timeoutMs: number;
@@ -1333,7 +1354,7 @@ export const OPS: Record<string, OpSpec> = {
     onSession((id, { body }) => ({
       method: "POST",
       url: `/api/sessions/${enc(id)}/review-request`,
-      payload: json(body?.prNumber === undefined ? {} : { prNumber: body.prNumber }),
+      payload: json(relayTargetFields(body)),
     })),
   ),
   // Status of the latest review run for the caller's PR, and stopping a run the
@@ -1342,9 +1363,7 @@ export const OPS: Record<string, OpSpec> = {
     ["full", "session"],
     onSession((id, { body }) => ({
       method: "GET",
-      url: `/api/sessions/${enc(id)}/review-request${
-        body?.prNumber === undefined ? "" : `?prNumber=${enc(String(body.prNumber))}`
-      }`,
+      url: `/api/sessions/${enc(id)}/review-request${relayQuery(relayTargetFields(body))}`,
     })),
   ),
   // The stop op covers every relay run — a review or a triage — because the
@@ -1361,8 +1380,9 @@ export const OPS: Record<string, OpSpec> = {
           },
     ),
   ),
-  // Issue triage through the same relay (issue #1629). The repo comes from
-  // the caller's own project, exactly as for a review; the issue number
+  // Issue triage through the same relay (issue #1629). The repo is chosen
+  // exactly as for a review (the caller's project, or a named registered
+  // one); the issue number
   // always comes from the caller — there is no "current issue" to infer.
   "triage.request": routeOp(
     ["full", "session"],
@@ -1374,7 +1394,7 @@ export const OPS: Record<string, OpSpec> = {
       return {
         method: "POST",
         url: `/api/sessions/${enc(id)}/triage-request`,
-        payload: json({ issueNumber }),
+        payload: json({ issueNumber, ...relayTargetFields(body, ["repo"]) }),
       };
     }),
   ),
@@ -1387,7 +1407,10 @@ export const OPS: Record<string, OpSpec> = {
       }
       return {
         method: "GET",
-        url: `/api/sessions/${enc(id)}/triage-request?issueNumber=${enc(String(issueNumber))}`,
+        url: `/api/sessions/${enc(id)}/triage-request${relayQuery({
+          issueNumber,
+          ...relayTargetFields(body, ["repo"]),
+        })}`,
       };
     }),
   ),

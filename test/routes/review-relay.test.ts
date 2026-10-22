@@ -69,11 +69,16 @@ vi.mock("../../src/services/remote-host-client.js", async (orig) => ({
   getRemoteHostClient: mocks.getRemoteHostClient,
 }));
 
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions, tasks } from "../../src/db/schema.js";
-import { pruneLandedMemo } from "../../src/routes/review-relay.js";
+import {
+  pruneLandedMemo,
+  repoRefMemoSize,
+  resetRepoRefMemo,
+} from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
   HermesNotConfiguredError,
@@ -128,6 +133,9 @@ describe("review-request routes", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // Each test sets what the projects resolve to; a memoized answer from the
+    // previous one would outlive it.
+    resetRepoRefMemo(app);
     mocks.resolveRepoRefResult.mockResolvedValue({
       ok: true,
       value: { owner: "acme", repo: "widgets" },
@@ -569,8 +577,18 @@ describe("review-request routes", () => {
     expect(res.json()).toMatchObject({ status: "dispatched", repo: "acme/widgets", prNumber: 99 });
   });
 
-  it("ignores an attacker-chosen repo in the body (Fastify strips unknown fields)", async () => {
-    const res = await post(sessionId, { prNumber: 99, repo: "evil/repo", owner: "evil" });
+  it("refuses an attacker-chosen repo in the body: it is not a registered project", async () => {
+    // `repo` is a real field now (see "a repo other than the session's
+    // project's"), but it only widens the target to a registered project.
+    const res = await post(sessionId, { prNumber: 99, repo: "evil/repo" });
+    expect(res.statusCode).toBe(403);
+    expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
+    expect(mocks.getPullRequestByNumber).not.toHaveBeenCalled();
+    expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+  });
+
+  it("ignores an unknown owner field in the body (Fastify strips unknown fields)", async () => {
+    const res = await post(sessionId, { prNumber: 99, owner: "evil" });
     expect(res.statusCode).toBe(200);
     expect(mocks.getPullRequestByNumber).toHaveBeenCalledWith("ghs_token", "acme", "widgets", 99);
     expect(mocks.requestHermesReview).toHaveBeenCalledWith(expect.anything(), {
@@ -1286,6 +1304,351 @@ describe("review-request routes", () => {
     it("maps a relay error on the status route", async () => {
       mocks.getRelayStatus.mockRejectedValue(new HermesUnavailableError("down"));
       expect((await triageGet(sessionId, "?issueNumber=12")).statusCode).toBe(503);
+    });
+  });
+
+  // A session in one project that also works in a sibling repo names it with
+  // `repo`; the server honours that only for a repo registered as a project.
+  describe("a repo other than the session's project's", () => {
+    let siblingSessionId: number;
+    let taskSessionId: number;
+
+    beforeAll(() => {
+      const [sibling] = app.db
+        .insert(projects)
+        .values({ name: "sibling", cwd: "/tmp/review-sibling" })
+        .returning()
+        .all();
+      void sibling;
+      const [taskProj] = app.db
+        .insert(projects)
+        .values({ name: "tm-foreign", cwd: "/tmp/review-tm-foreign" })
+        .returning()
+        .all();
+      [{ id: taskSessionId }] = app.db
+        .insert(sessions)
+        .values({ projectId: taskProj.id, command: "bash" })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: taskProj.id,
+          title: "a task",
+          sessionId: taskSessionId,
+          status: "in_progress",
+          prNumber: 77,
+        })
+        .run();
+      siblingSessionId = sessionId;
+    });
+
+    beforeEach(() => {
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) => ({
+        ok: true,
+        value:
+          project.cwd === "/tmp/review-sibling"
+            ? { owner: "acme", repo: ".github" }
+            : { owner: "acme", repo: "widgets" },
+      }));
+    });
+
+    const get = (id: number, query: string) =>
+      app.inject({
+        method: "GET",
+        url: `/api/sessions/${id}/review-request${query}`,
+        remoteAddress: `10.6.0.${nextAddr++}`,
+      });
+
+    it("reviews the named PR in the registered repo, with that repo's token", async () => {
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().repo).toBe("acme/.github");
+      expect(mocks.resolveGitHubToken).toHaveBeenCalledWith(
+        expect.anything(),
+        { owner: "acme", repo: ".github" },
+        "read",
+      );
+      expect(mocks.getPullRequestByNumber).toHaveBeenCalledWith("ghs_token", "acme", ".github", 7);
+      expect(mocks.findPullRequestByHead).not.toHaveBeenCalled();
+      expect(mocks.requestHermesReview).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ owner: "acme", repo: ".github", prNumber: 7 }),
+      );
+    });
+
+    it("matches the repo case-insensitively and uses the registered spelling", async () => {
+      const res = await post(siblingSessionId, { repo: "ACME/.GitHub", prNumber: 7 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().repo).toBe("acme/.github");
+    });
+
+    it("finds the PR by the branch the caller names", async () => {
+      const res = await post(siblingSessionId, { repo: "acme/.github", branch: "feat/ci" });
+      expect(res.statusCode).toBe(200);
+      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+        "ghs_token",
+        "acme",
+        ".github",
+        "acme:feat/ci",
+      );
+      // The session's own branch says nothing about another repo.
+      expect(mocks.getGitStatus).not.toHaveBeenCalled();
+    });
+
+    it("400s when it names neither a PR nor a branch", async () => {
+      const res = await post(siblingSessionId, { repo: "acme/.github" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("pass prNumber or branch");
+      expect(mocks.getPullRequestByNumber).not.toHaveBeenCalled();
+      expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+    });
+
+    it("403s a repo that is not a registered project, before any GitHub call", async () => {
+      const res = await post(siblingSessionId, { repo: "evil/other", prNumber: 7 });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().message).toContain("not a repository registered");
+      expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
+      expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+    });
+
+    it("503s, not 403s, when a registered project's host is unreachable and nothing matched", async () => {
+      // The unreachable project might be the very repo asked for. A 403 would
+      // read as "not registered" and make the CLI retry against the session's
+      // own project - reviewing the wrong repository's PR.
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) =>
+        project.cwd === "/tmp/review-sibling"
+          ? { ok: false, reason: "unreachable", detail: "down" }
+          : { ok: true, value: { owner: "acme", repo: "widgets" } },
+      );
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
+      expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+    });
+
+    it("still resolves a registered repo when ANOTHER project's host is unreachable", async () => {
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) => {
+        if (project.cwd === "/tmp/review-sibling") {
+          return { ok: true, value: { owner: "acme", repo: ".github" } };
+        }
+        if (project.cwd === "/tmp/review-tm-foreign") {
+          return { ok: false, reason: "unreachable", detail: "down" };
+        }
+        return { ok: true, value: { owner: "acme", repo: "widgets" } };
+      });
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("keeps an agent build too old for the repo-ref route as a plain 403", async () => {
+      mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) =>
+        project.cwd === "/tmp/review-sibling"
+          ? { ok: false, reason: "unsupported" }
+          : { ok: true, value: { owner: "acme", repo: "widgets" } },
+      );
+      const res = await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+      expect(res.statusCode).toBe(403);
+    });
+
+    describe("the other projects' repo refs are memoized", () => {
+      const siblingLookups = () =>
+        mocks.resolveRepoRefResult.mock.calls.filter(
+          ([, project]) => (project as { cwd: string }).cwd === "/tmp/review-sibling",
+        ).length;
+
+      it("looks each other project up once across requests", async () => {
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(200);
+        expect(siblingLookups()).toBe(1);
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 })).statusCode,
+        ).toBe(200);
+        expect(siblingLookups()).toBe(1);
+      });
+
+      it("looks again once the entry is past its TTL", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+          vi.setSystemTime(Date.now() + 61_000);
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          expect(siblingLookups()).toBe(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("never keeps an unreachable answer: the next request asks again", async () => {
+        let up = false;
+        mocks.resolveRepoRefResult.mockImplementation(async (_app, project: { cwd: string }) => {
+          if (project.cwd !== "/tmp/review-sibling") {
+            return { ok: true, value: { owner: "acme", repo: "widgets" } };
+          }
+          return up
+            ? { ok: true, value: { owner: "acme", repo: ".github" } }
+            : { ok: false, reason: "unreachable", detail: "down" };
+        });
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(503);
+        up = true;
+        expect(
+          (await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 })).statusCode,
+        ).toBe(200);
+      });
+
+      it("prunes entries past their TTL, including those of projects that no longer exist", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          const [gone] = app.db
+            .insert(projects)
+            .values({ name: "short-lived", cwd: "/tmp/review-short-lived" })
+            .returning()
+            .all();
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+          const withGone = repoRefMemoSize(app);
+          app.db.delete(projects).where(eq(projects.id, gone.id)).run();
+          vi.setSystemTime(Date.now() + 61_000);
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          // The deleted project's entry went; the live ones were re-read.
+          expect(repoRefMemoSize(app)).toBe(withGone - 1);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("drops the entry when the project's cwd changes", async () => {
+        await post(siblingSessionId, { repo: "acme/.github", prNumber: 7 });
+        app.db
+          .update(projects)
+          .set({ cwd: "/tmp/review-sibling-moved" })
+          .where(eq(projects.name, "sibling"))
+          .run();
+        try {
+          await post(siblingSessionId, { repo: "acme/.github", prNumber: 8 });
+          const movedLookups = mocks.resolveRepoRefResult.mock.calls.filter(
+            ([, project]) => (project as { cwd: string }).cwd === "/tmp/review-sibling-moved",
+          ).length;
+          expect(movedLookups).toBe(1);
+        } finally {
+          app.db
+            .update(projects)
+            .set({ cwd: "/tmp/review-sibling" })
+            .where(eq(projects.name, "sibling"))
+            .run();
+        }
+      });
+    });
+
+    it("treats naming the project's own repo as no override", async () => {
+      const res = await post(siblingSessionId, { repo: "acme/widgets" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().repo).toBe("acme/widgets");
+      // Not foreign, so the session's own branch is still the fallback.
+      expect(mocks.getGitStatus).toHaveBeenCalled();
+    });
+
+    it("prefers the branch the caller reports over the session's launch branch", async () => {
+      const res = await post(siblingSessionId, { branch: "feat/elsewhere" });
+      expect(res.statusCode).toBe(200);
+      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        "acme:feat/elsewhere",
+      );
+      expect(mocks.getGitStatus).not.toHaveBeenCalled();
+    });
+
+    it("rejects a malformed repo at the schema", async () => {
+      expect((await post(siblingSessionId, { repo: "not a repo" })).statusCode).toBe(400);
+      expect((await post(siblingSessionId, { repo: "a/b/c", prNumber: 1 })).statusCode).toBe(400);
+    });
+
+    describe("with an active Task Master task", () => {
+      it("answers 409 before any GitHub lookup when the repo is the project's own and no PR is named", async () => {
+        // The CLI always sends the repo it infers, so this is the common case:
+        // the refusal must not wait on (and be replaced by) a failing lookup.
+        mocks.findPullRequestByHead.mockResolvedValue(null);
+        const res = await post(taskSessionId, { repo: "acme/widgets", branch: "feat/x" });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain("active Task Master task");
+        expect(mocks.resolveGitHubToken).not.toHaveBeenCalled();
+        expect(mocks.findPullRequestByHead).not.toHaveBeenCalled();
+      });
+
+      it("still refuses the task's own PR in the project's own repo", async () => {
+        const res = await post(taskSessionId, { repo: "acme/widgets", prNumber: 77 });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain("active Task Master task");
+        expect(mocks.requestHermesReview).not.toHaveBeenCalled();
+      });
+
+      it("does not mistake the same number in another repo for the task's PR", async () => {
+        const res = await post(taskSessionId, { repo: "acme/.github", prNumber: 77 });
+        expect(res.statusCode).toBe(200);
+        expect(mocks.requestHermesReview).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ repo: ".github", prNumber: 77 }),
+        );
+      });
+    });
+
+    describe("status", () => {
+      beforeEach(() => {
+        mocks.getHermesReviewStatus.mockResolvedValue({
+          provider: "hermes",
+          runId: "run_1",
+          status: "running",
+        });
+        mocks.getReviewRunForPr.mockReturnValue(null);
+      });
+
+      it("reads the run for the named repo's PR", async () => {
+        const res = await get(siblingSessionId, "?repo=acme/.github&prNumber=7");
+        expect(res.statusCode).toBe(200);
+        expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(expect.anything(), {
+          owner: "acme",
+          repo: ".github",
+          prNumber: 7,
+        });
+      });
+
+      it("403s an unregistered repo", async () => {
+        const res = await get(siblingSessionId, "?repo=evil/other&prNumber=7");
+        expect(res.statusCode).toBe(403);
+        expect(mocks.getHermesReviewStatus).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("triage", () => {
+      it("triages an issue in the registered repo", async () => {
+        const res = await triagePost(siblingSessionId, { issueNumber: 5, repo: "acme/.github" });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().repo).toBe("acme/.github");
+        expect(mocks.getIssueState).toHaveBeenCalledWith("ghs_token", "acme", ".github", 5);
+        expect(mocks.requestRelay).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ kind: "issue", owner: "acme", repo: ".github", number: 5 }),
+        );
+      });
+
+      it("403s an unregistered repo", async () => {
+        const res = await triagePost(siblingSessionId, { issueNumber: 5, repo: "evil/other" });
+        expect(res.statusCode).toBe(403);
+        expect(mocks.requestRelay).not.toHaveBeenCalled();
+      });
+
+      it("reads the status for the named repo", async () => {
+        const res = await triageGet(siblingSessionId, "?issueNumber=5&repo=acme/.github");
+        expect(res.statusCode).toBe(200);
+        expect(mocks.getRelayStatus).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ kind: "issue", owner: "acme", repo: ".github", number: 5 }),
+        );
+      });
     });
   });
 

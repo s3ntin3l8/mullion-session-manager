@@ -37,3 +37,17 @@ export const REVIEW_PROTOCOL_NOTE =
   "review is in flight. Never re-trigger a review with an @mention of the " +
   "review bot: that path is for humans, and it queues another round behind " +
   "the running one.";
+
+/**
+ * What `repo` is for. The relay targets the repository of the session's
+ * project by default; a session that also edits another repository (a sibling
+ * `.github` repo, say) has to name it, or the request is about the wrong
+ * repository's pull request. The server only honours a repository registered
+ * as a Mullion project (403 otherwise).
+ */
+export const REVIEW_REPO_NOTE =
+  "By default this targets the repository of the session's Mullion project. " +
+  "When the pull request is in a DIFFERENT repository (you are also changing " +
+  "a sibling repo), pass repo as owner/name — it must be registered as a " +
+  "Mullion project — together with pr_number, or the branch you are on there; " +
+  "without repo, a pr_number is looked up in the session's own repository.";

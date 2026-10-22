@@ -4,3 +4,4 @@
 // canonical wording instead of restating it.
 export const REVIEW_REQUEST_TIMEOUT_MS: number;
 export const REVIEW_PROTOCOL_NOTE: string;
+export const REVIEW_REPO_NOTE: string;

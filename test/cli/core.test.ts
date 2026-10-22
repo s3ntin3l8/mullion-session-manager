@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import fs from "node:fs";
+import { execFileSync } from "node:child_process";
+import { gitEnv } from "../../src/services/git-env.js";
+import { describe, it, expect, vi, afterAll, afterEach, beforeEach } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
@@ -735,6 +738,9 @@ function fakeIo() {
     },
     setRawMode: vi.fn(),
     env: {},
+    // Never read this checkout's real origin/branch: `mullion review` infers
+    // its target from the cwd (see sendRelayOp in cli/core.mjs).
+    gitTarget: (): { repo?: string; branch?: string } => ({}),
   };
 }
 
@@ -1189,6 +1195,251 @@ describe("runCommand", () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
         await runCommand(["review"], { client, io: fakeIo() });
         expect((client as unknown as { requestTimeoutMs: number }).requestTimeoutMs).toBe(60_000);
+      });
+
+      describe("which repository (cwd inference, --repo, --branch)", () => {
+        const withGit = (target: { repo?: string; branch?: string }) => {
+          const io = fakeIo();
+          io.gitTarget = () => target;
+          return io;
+        };
+
+        it("sends the repo and branch of the directory it is run from", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            repo: "acme/.github",
+            branch: "feat/ci",
+          });
+        });
+
+        it("drops the inferred branch when --pr names the PR", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--pr", "7"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            prNumber: 7,
+            repo: "acme/.github",
+          });
+        });
+
+        it("infers for status too", async () => {
+          const client = fakeClient({
+            request: vi.fn(async () => ({
+              status: "running",
+              runId: "r",
+              repo: "a/b",
+              prNumber: 1,
+            })),
+          });
+          await runCommand(["review", "status"], { client, io: withGit({ repo: "acme/.github" }) });
+          expect(client.request).toHaveBeenCalledWith("reviews.status", { repo: "acme/.github" });
+        });
+
+        it("an explicit --repo and --branch are the whole answer: nothing is inferred", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--repo", "acme/other", "--branch", "feat/x"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledTimes(1);
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            repo: "acme/other",
+            branch: "feat/x",
+          });
+        });
+
+        it("keeps an explicit --branch when only the repo is inferred", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--branch", "feat/x"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            branch: "feat/x",
+            repo: "acme/.github",
+          });
+        });
+
+        it("sends nothing extra outside a git checkout", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review"], { client, io: withGit({}) });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {});
+        });
+
+        it("retries without an INFERRED repo the server refuses (403)", async () => {
+          const request = vi
+            .fn()
+            .mockRejectedValueOnce(new MullionSocketError(403, "not a registered project"))
+            .mockResolvedValueOnce(dispatched);
+          const client = fakeClient({ request });
+          const code = await runCommand(["review"], {
+            client,
+            io: withGit({ repo: "me/fork", branch: "feat/x" }),
+          });
+          expect(code).toBe(0);
+          expect(request).toHaveBeenNthCalledWith(1, "reviews.request", {
+            repo: "me/fork",
+            branch: "feat/x",
+          });
+          expect(request).toHaveBeenNthCalledWith(2, "reviews.request", {});
+        });
+
+        it("does not retry an EXPLICIT --repo the server refuses", async () => {
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(403, "not registered"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review", "--repo", "evil/other", "--pr", "1"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
+        it("does not retry an inferred repo on a 503 (its host could not be checked)", async () => {
+          // Retrying would review the session's own project's PR instead - the
+          // wrong repository - on the strength of a check that never ran.
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(503, "unreachable"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review", "--pr", "5"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
+        it("rethrows any other error from an inferred request", async () => {
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(409, "in flight"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review"], { client, io: withGit({ repo: "a/b" }) });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
+        it("never infers for stop", async () => {
+          const client = fakeClient({
+            request: vi.fn(async () => ({ runId: "run_1", status: "stopping" })),
+          });
+          await runCommand(["review", "stop", "run_1"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.stop", { runId: "run_1" });
+        });
+
+        it("triage infers the repo (never a branch) and takes --repo", async () => {
+          const triaged = {
+            status: "dispatched",
+            repo: "acme/.github",
+            issueNumber: 5,
+            runId: "run_t",
+            runStatus: "queued",
+          };
+          const client = fakeClient({ request: vi.fn(async () => triaged) });
+          await runCommand(["triage", "--issue", "5"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("triage.request", {
+            issueNumber: 5,
+            repo: "acme/.github",
+          });
+          const explicit = fakeClient({ request: vi.fn(async () => triaged) });
+          await runCommand(["triage", "--issue", "5", "--repo", "acme/other"], {
+            client: explicit,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(explicit.request).toHaveBeenCalledWith("triage.request", {
+            issueNumber: 5,
+            repo: "acme/other",
+          });
+        });
+      });
+
+      // The real git calls, against throwaway repos with a known branch and
+      // origin - never the ambient checkout, whose shape (a branch locally, a
+      // detached HEAD under actions/checkout) would decide what is asserted.
+      describe("the real git inference", () => {
+        const dirs: string[] = [];
+        afterAll(() => {
+          for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+        });
+
+        const g = (cwd: string, ...args: string[]) =>
+          execFileSync("git", args, { cwd, env: gitEnv(), stdio: "ignore" });
+        const fixture = (origin: string | null, branch = "feat/x") => {
+          const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-cli-infer-"));
+          dirs.push(dir);
+          g(dir, "init", "-q");
+          // symbolic-ref, not `init -b`, which needs git >= 2.28.
+          g(dir, "symbolic-ref", "HEAD", `refs/heads/${branch}`);
+          if (origin) g(dir, "remote", "add", "origin", origin);
+          g(dir, "commit", "-q", "--allow-empty", "-m", "init");
+          return dir;
+        };
+        const run = async (cwd: string, ...args: string[]) => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          const io = { ...fakeIo(), cwd } as Record<string, unknown>;
+          delete io.gitTarget;
+          await runCommand(["review", ...args], {
+            client,
+            io: io as unknown as ReturnType<typeof fakeIo>,
+          });
+          return (client.request as ReturnType<typeof vi.fn>).mock.calls[0][1];
+        };
+
+        it.each([
+          ["an ssh remote", "git@github.com:acme/.github.git"],
+          ["an https remote", "https://github.com/acme/.github.git"],
+          ["an https remote with credentials", "https://user:tok@github.com/acme/.github"], // pragma: allowlist secret
+          ["an ssh:// remote", "ssh://git@github.com/acme/.github.git"],
+        ])("reads the repo and branch of the cwd's checkout from %s", async (_name, origin) => {
+          expect(await run(fixture(origin))).toEqual({ repo: "acme/.github", branch: "feat/x" });
+        });
+
+        it("does not read a look-alike host as GitHub, and then sends no branch either", async () => {
+          // A branch from a checkout whose repo is unknown could match an
+          // unrelated PR in the session's own project.
+          expect(await run(fixture("https://mygithub.com/acme/widget.git"))).toEqual({});
+          expect(await run(fixture("git@evilgithub.com:acme/widget.git"))).toEqual({});
+        });
+
+        it("sends no branch from a detached HEAD", async () => {
+          const dir = fixture("git@github.com:acme/.github.git");
+          g(dir, "checkout", "-q", "--detach");
+          expect(await run(dir)).toEqual({ repo: "acme/.github" });
+        });
+
+        it("sends nothing outside a git checkout or without an origin", async () => {
+          const bare = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-cli-infer-"));
+          dirs.push(bare);
+          // An unrelated directory could sit inside some repo; the fixture dir
+          // under tmp does not.
+          expect(await run(bare)).toEqual({});
+          expect((await run(fixture(null))).repo).toBeUndefined();
+        });
+
+        it("does not let a leaked GIT_DIR/GIT_CONFIG redirect it to another repository", async () => {
+          const target = fixture("git@github.com:acme/.github.git", "feat/target");
+          const decoy = fixture("git@github.com:evil/decoy.git", "feat/decoy");
+          const saved = { dir: process.env.GIT_DIR, tree: process.env.GIT_WORK_TREE };
+          process.env.GIT_DIR = path.join(decoy, ".git");
+          process.env.GIT_WORK_TREE = decoy;
+          try {
+            expect(await run(target)).toEqual({ repo: "acme/.github", branch: "feat/target" });
+          } finally {
+            if (saved.dir === undefined) delete process.env.GIT_DIR;
+            else process.env.GIT_DIR = saved.dir;
+            if (saved.tree === undefined) delete process.env.GIT_WORK_TREE;
+            else process.env.GIT_WORK_TREE = saved.tree;
+          }
+        });
       });
 
       it("--pr forwards prNumber as an integer", async () => {

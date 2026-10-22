@@ -7,7 +7,7 @@
 // `isError: true` result rather than a protocol-level failure.
 
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
-import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";
+import { REVIEW_PROTOCOL_NOTE, REVIEW_REPO_NOTE } from "../cli/review-protocol.mjs";
 
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
@@ -622,7 +622,9 @@ const requestReview = {
     "dispatched asynchronously and posts to the PR as the review bot within a few minutes; " +
     "the result carries a runId. " +
     REVIEW_PROTOCOL_NOTE +
-    " Omit pr_number to use the open PR for the session's current branch. Fails with a clear " +
+    " Omit pr_number to use the open PR for the session's current branch. " +
+    REVIEW_REPO_NOTE +
+    " Fails with a clear " +
     "message if the relay isn't configured in Mullion's Settings → Integrations or no PR " +
     "exists yet. A commit that has ALREADY been reviewed is refused (409): there is nothing " +
     "new to review, so push a new commit to ask for another round, or dismiss that review " +
@@ -637,10 +639,24 @@ const requestReview = {
         minimum: 1,
         description: "PR number to review. Defaults to the open PR for the current branch.",
       },
+      repo: {
+        type: "string",
+        pattern: "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+        description:
+          "owner/name of the repository the PR is in, when it is not the session's project's repository.",
+      },
+      branch: {
+        type: "string",
+        description:
+          "With repo and no pr_number: the branch in that repository to find the open PR for.",
+      },
     },
   },
   async handler(args, client) {
-    const result = await client.requestReview(args?.pr_number);
+    const result = await client.requestReview(args?.pr_number, {
+      repo: args?.repo,
+      branch: args?.branch,
+    });
     return JSON.stringify(result);
   },
 };
@@ -655,7 +671,8 @@ const reviewStatus = {
     "review takes 10-30 minutes, and this is not a poll loop — a second request_review while " +
     "one is in flight is refused, and asking again anyway is what used to queue a second " +
     "review behind the first. " +
-    "Omit pr_number to use the open PR for the session's current branch. not_found means " +
+    "Omit pr_number to use the open PR for the session's current branch; pass the same repo " +
+    "you requested with when the PR is not in the session's project's repository. not_found means " +
     "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",
   inputSchema: {
     type: "object",
@@ -665,10 +682,23 @@ const reviewStatus = {
         minimum: 1,
         description: "PR number. Defaults to the open PR for the current branch.",
       },
+      repo: {
+        type: "string",
+        pattern: "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+        description:
+          "owner/name of the repository the PR is in, when it is not the session's project's repository.",
+      },
+      branch: {
+        type: "string",
+        description:
+          "With repo and no pr_number: the branch in that repository to find the open PR for.",
+      },
     },
   },
   async handler(args, client) {
-    return JSON.stringify(await client.reviewStatus(args?.pr_number));
+    return JSON.stringify(
+      await client.reviewStatus(args?.pr_number, { repo: args?.repo, branch: args?.branch }),
+    );
   },
 };
 
@@ -714,11 +744,17 @@ const requestTriage = {
         minimum: 1,
         description: "The issue number to triage, in this session's repository.",
       },
+      repo: {
+        type: "string",
+        pattern: "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+        description:
+          "owner/name of the repository the issue is in, when it is not the session's project's repository (it must be registered as a Mullion project).",
+      },
     },
     required: ["issue_number"],
   },
   async handler(args, client) {
-    return JSON.stringify(await client.requestTriage(args?.issue_number));
+    return JSON.stringify(await client.requestTriage(args?.issue_number, { repo: args?.repo }));
   },
 };
 
@@ -739,11 +775,17 @@ const triageStatus = {
         minimum: 1,
         description: "The issue number the triage was requested for.",
       },
+      repo: {
+        type: "string",
+        pattern: "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+        description:
+          "owner/name of the repository the issue is in, when it is not the session's project's repository (it must be registered as a Mullion project).",
+      },
     },
     required: ["issue_number"],
   },
   async handler(args, client) {
-    return JSON.stringify(await client.triageStatus(args?.issue_number));
+    return JSON.stringify(await client.triageStatus(args?.issue_number, { repo: args?.repo }));
   },
 };
 

@@ -137,7 +137,13 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   cooldown. If a requested review never appears, `mullion review status` (or
   `review_status`) shows the run's state, the bot's reply, whether its
   review landed and the review's own text; `mullion review stop <runId>` (or
-  `stop_review`) cancels a run you started.
+  `stop_review`) cancels a run you started. If the PR is in a **different
+  repository** than the session's project (you are also changing a sibling
+  repo such as `.github`), run `mullion review` from that checkout — the CLI
+  reads the repo and branch from its working directory — or pass `--repo
+owner/name` with `--pr` (MCP: `repo` + `pr_number`). The repository must be
+  registered as a Mullion project; without it the request is about the
+  session's own project's repository.
 - `mullion triage --issue <n>` (or the `request_triage` MCP tool) — the same
   relay, pointed at an issue instead of a PR: Hermes triages it and posts
   its findings as a comment on the issue. The issue number is required —

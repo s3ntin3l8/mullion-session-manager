@@ -1189,6 +1189,73 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    describe("repo and branch targeting", () => {
+      // Each op forwards only the target fields the caller set, as the
+      // route's own body/query, so the route's schema is the one validator.
+      const forwardedTo = async (op: string, body: Record<string, unknown>, urlPart: string) => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op, body: { sessionId, ...body } })}\n`);
+        await waitForReply(socket);
+        socket.destroy();
+        return injectSpy.mock.calls
+          .map(([opts]) => opts as { method?: string; url?: string; payload?: unknown })
+          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/${urlPart}`));
+      };
+
+      it("reviews.request forwards repo and branch with prNumber", async () => {
+        const forwarded = await forwardedTo(
+          "reviews.request",
+          { prNumber: 7, repo: "acme/.github", branch: "feat/ci", ignored: "x" },
+          "review-request",
+        );
+        expect(JSON.parse(String(forwarded!.payload))).toEqual({
+          prNumber: 7,
+          repo: "acme/.github",
+          branch: "feat/ci",
+        });
+      });
+
+      it("reviews.status puts the target fields in the query string, encoded", async () => {
+        const forwarded = await forwardedTo(
+          "reviews.status",
+          { repo: "acme/.github", branch: "feat/a b" },
+          "review-request",
+        );
+        expect(forwarded!.method).toBe("GET");
+        expect(forwarded!.url).toMatch(/\?repo=acme%2F\.github&branch=feat%2Fa%20b$/);
+      });
+
+      it("reviews.status keeps a bare URL when nothing is targeted", async () => {
+        const forwarded = await forwardedTo("reviews.status", {}, "review-request");
+        expect(forwarded!.url).toMatch(/\/review-request$/);
+      });
+
+      it("triage.request forwards repo only", async () => {
+        const request = await forwardedTo(
+          "triage.request",
+          { issueNumber: 5, repo: "acme/.github", branch: "dropped" },
+          "triage-request",
+        );
+        expect(JSON.parse(String(request!.payload))).toEqual({
+          issueNumber: 5,
+          repo: "acme/.github",
+        });
+      });
+
+      it("triage.status forwards repo only, in the query", async () => {
+        const status = await forwardedTo(
+          "triage.status",
+          { issueNumber: 5, repo: "acme/.github", branch: "dropped" },
+          "triage-request",
+        );
+        expect(status!.url).toMatch(/\?issueNumber=5&repo=acme%2F\.github$/);
+      });
+    });
+
     describe("reviews.status / reviews.stop", () => {
       it("session scope: status routes to its own pinned session's review-request GET", async () => {
         app = await buildApp();
