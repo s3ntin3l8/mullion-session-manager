@@ -10,7 +10,7 @@ jobs:
   test-node:
     permissions:
       contents: read
-    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
+    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@feat/ci-node-shard-controls
     with:
       node-version: "26"
       typecheck-script: "typecheck"
@@ -49,7 +49,7 @@ jobs:
   test-frontend:
     permissions:
       contents: read
-    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
+    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@feat/ci-node-shard-controls
     with:
       node-version: "26"
       working-directory: "frontend"
