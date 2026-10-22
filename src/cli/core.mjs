@@ -1488,11 +1488,26 @@ function clipForTerminal(body) {
 
 const GITHUB_REMOTE = /github\.com[:/]([A-Za-z0-9-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
 
+// Every GIT_* variable is dropped, not just services/git-env.ts's list: this
+// file is copied into dist/ verbatim and cannot import that TypeScript module,
+// and a leaked GIT_DIR/GIT_CONFIG_* would point these two read-only calls at a
+// repository other than the cwd's (test/git-env-guard.test.ts requires an
+// explicit scrubbed env at every git spawn). Neither command's output is
+// locale-dependent, so unlike gitEnv() there is no LC_ALL to pin.
+function cliGitEnv() {
+  const env = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_")) env[key] = value;
+  }
+  return env;
+}
+
 function git(args) {
   return execFileSync("git", args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: 5_000,
+    env: cliGitEnv(),
   }).trim();
 }
 

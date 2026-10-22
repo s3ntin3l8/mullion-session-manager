@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { gitEnv } from "../../src/services/git-env.js";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import net from "node:net";
 import path from "node:path";
@@ -1360,6 +1362,31 @@ describe("runCommand", () => {
       });
 
       describe("the real git inference", () => {
+        it("does not let a leaked GIT_DIR redirect it to another repository", async () => {
+          const prev = process.env.GIT_DIR;
+          process.env.GIT_DIR = "/nonexistent/leaked.git";
+          try {
+            const client = fakeClient({ request: vi.fn(async () => dispatched) });
+            const io = fakeIo() as Record<string, unknown>;
+            delete io.gitTarget;
+            await runCommand(["review"], {
+              client,
+              io: io as unknown as ReturnType<typeof fakeIo>,
+            });
+            const [, body] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
+            // With the leaked GIT_DIR honoured, git would fail and send nothing;
+            // scrubbed, it reads the cwd's own checkout (when it has an origin).
+            const real = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+              encoding: "utf8",
+              env: gitEnv(),
+            }).trim();
+            if (real !== "HEAD") expect(body.branch).toBe(real);
+          } finally {
+            if (prev === undefined) delete process.env.GIT_DIR;
+            else process.env.GIT_DIR = prev;
+          }
+        });
+
         it("reads this checkout's origin and branch when io has no gitTarget", async () => {
           const client = fakeClient({ request: vi.fn(async () => dispatched) });
           const io = fakeIo() as Record<string, unknown>;
