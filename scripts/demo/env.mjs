@@ -68,15 +68,19 @@ const SECRET_KEY = /(SECRET|PASSWORD|_KEY|_TOKEN)$|ENCRYPTION/;
  * The whole TABLE is mirrored, not just the platforms that differ today, so
  * a platform added to the backend's table and not to this one is caught —
  * comparing only today's two platforms would let that divergence through.
+ *
+ * A Map, not a plain object: an object literal inherits
+ * `Object.prototype`'s keys, so an arbitrary platform string like
+ * "constructor" would return a function rather than the default.
  */
-export const sunPathBytesByPlatform = { darwin: 104 };
+export const sunPathBytesByPlatform = new Map([["darwin", 104]]);
 
 /** The `sun_path` limit for every platform not listed in the table above. */
 export const defaultSunPathBytes = 108;
 
 /** The `sockaddr_un.sun_path` limit, in bytes, for a given platform. */
 export function maxSunPathBytes(platform = process.platform) {
-  return sunPathBytesByPlatform[platform] ?? defaultSunPathBytes;
+  return sunPathBytesByPlatform.get(platform) ?? defaultSunPathBytes;
 }
 
 /**

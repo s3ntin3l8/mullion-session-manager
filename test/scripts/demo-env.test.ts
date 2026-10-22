@@ -138,12 +138,17 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
     // today's two platforms would not catch it.
     expect(demoSunPathBytesByPlatform).toEqual(backendSunPathBytesByPlatform);
     expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
-    for (const platform of Object.keys(backendSunPathBytesByPlatform) as NodeJS.Platform[]) {
+    for (const platform of backendSunPathBytesByPlatform.keys()) {
       expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
     }
-    // A platform neither table lists takes the default on both sides.
+    // A platform neither table lists takes the default on both sides — and
+    // so does an arbitrary string that happens to name an Object.prototype
+    // key, which is why the tables are Maps and not plain objects.
     const unlisted = "not-a-real-platform" as NodeJS.Platform;
     expect(demoMaxSunPathBytes(unlisted)).toBe(backendMaxSunPathBytes(unlisted));
+    const prototypeKey = "constructor" as NodeJS.Platform;
+    expect(demoMaxSunPathBytes(prototypeKey)).toBe(backendMaxSunPathBytes(prototypeKey));
+    expect(backendMaxSunPathBytes(prototypeKey)).toBe(backendDefaultSunPathBytes);
     // Same for the socket name the guard counts against that limit: the
     // backend takes the max over every socket a sessions dir holds, so a
     // longer socket added there would leave the demo under-counting and

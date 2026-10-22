@@ -155,10 +155,14 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
  * fails at `bind()` on macOS — a failure that is silent until a socket is
  * actually created, and then is a bare EINVAL with nothing pointing at the
  * path.
+ *
+ * A Map, not a plain object: an object literal inherits `Object.prototype`'s
+ * keys, so an arbitrary platform string like "constructor" would return a
+ * function rather than the default.
  */
-export const SUN_PATH_BYTES_BY_PLATFORM: Readonly<Partial<Record<NodeJS.Platform, number>>> = {
-  darwin: 104,
-};
+export const SUN_PATH_BYTES_BY_PLATFORM: ReadonlyMap<NodeJS.Platform, number> = new Map([
+  ["darwin", 104],
+]);
 
 /** The `sun_path` limit for every platform not listed in the table above. */
 export const DEFAULT_SUN_PATH_BYTES = 108;
@@ -177,7 +181,7 @@ export const DEFAULT_SUN_PATH_BYTES = 108;
  * only today's two platforms would let the divergence through.
  */
 export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): number {
-  return SUN_PATH_BYTES_BY_PLATFORM[platform] ?? DEFAULT_SUN_PATH_BYTES;
+  return SUN_PATH_BYTES_BY_PLATFORM.get(platform) ?? DEFAULT_SUN_PATH_BYTES;
 }
 
 /**
