@@ -90,9 +90,10 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   }
 
   // Same directory as hooks.sock (app.pty.hookSocketPath) — sessionsDir's
-  // own short-fallback resolution (pty.ts) already guards the 108-byte
-  // sun_path limit for that socket; reusing its directory means this one
-  // inherits the same guarantee for free instead of re-deriving it.
+  // own short-fallback resolution (pty.ts) already guards the platform's
+  // sun_path limit (108 bytes on Linux, 104 on macOS) for that socket;
+  // reusing its directory means this one inherits the same guarantee for
+  // free instead of re-deriving it.
   // sshAgentSocketPath is the same helper resolveSshAuthSock/buildAgentConfig
   // use (PR5d) so the filename never drifts from where this actually binds.
   const socketPath = sshAgentSocketPath(path.dirname(app.pty.hookSocketPath));

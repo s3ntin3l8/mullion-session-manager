@@ -137,13 +137,18 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
     if (env[key] !== undefined && !(path.isAbsolute(env[key]) && inside(demoDir, env[key])))
       problems.push(`${key} must be an absolute path inside the demo dir`);
   }
-  // ensureSessionsDir() (src/plugins/pty.ts) silently moves SESSIONS_DIR to
-  // /tmp/ms-<hash> when its longest socket path would pass 107 bytes; the
-  // backend's sockets, and so teardown's ownership check, would then point
-  // somewhere else. Refuse a path that long instead.
+  // ensureSessionsDir() (src/plugins/pty.ts) moves SESSIONS_DIR to a short
+  // fallback under the platform's temp dir when its longest socket path would
+  // pass the platform's sun_path limit; the backend's sockets, and so
+  // teardown's ownership check, would then point somewhere else. Refuse a path
+  // that long instead. The limit is the platform's own (108 on Linux, 104 on
+  // macOS), less one for the NUL terminator — the same rule the backend
+  // applies, so a SESSIONS_DIR the backend would keep is not refused here.
+  const maxSunPathBytes = process.platform === "darwin" ? 104 : 108;
   if (
     env.SESSIONS_DIR !== undefined &&
-    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), "999999999999.sock")) > 107
+    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), "999999999999.sock")) >
+      maxSunPathBytes - 1
   )
     problems.push("SESSIONS_DIR is too long; the backend would relocate it");
   for (const key of ["HOME", "TMPDIR"])

@@ -118,8 +118,9 @@ export async function startDemo({
   preflight(bins);
   await assertPortsFree([DEMO_BACKEND_PORT, DEMO_FRONTEND_PORT]);
 
-  // /tmp keeps SESSIONS_DIR short: the backend silently relocates it when a
-  // dtach socket path would exceed 107 bytes (src/plugins/pty.ts).
+  // /tmp keeps SESSIONS_DIR short: the backend relocates it when a dtach
+  // socket path would exceed the platform's sun_path limit
+  // (src/plugins/pty.ts).
   const demoDir = await mkdtemp("/tmp/mullion-demo-");
   const runDir = path.join(demoDir, "run"); // backend cwd: no .env, migrations via symlink
   const sessionsDir = path.join(demoDir, "s");

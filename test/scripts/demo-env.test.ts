@@ -26,6 +26,17 @@ afterAll(() => rmSync(demoDir, { recursive: true, force: true }));
 
 const PATH = `${bin}:/usr/bin`;
 
+/** Runs `fn` with `process.platform` reporting as `platform`. */
+function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
+  const original = process.platform;
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    fn();
+  } finally {
+    Object.defineProperty(process, "platform", { value: original, configurable: true });
+  }
+}
+
 describe("demoEnv", () => {
   it("inherits only the allowlist from the parent", () => {
     const env = demoEnv(
@@ -74,6 +85,35 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
   it("a PATH without the docker shim first", () => refuses({ PATH: "/usr/bin" }));
   it("a SESSIONS_DIR long enough for the backend to relocate it", () =>
     refuses({ SESSIONS_DIR: path.join(demoDir, "x".repeat(100)) }));
+  it("a SESSIONS_DIR long enough to need relocating on macOS but not on Linux", () => {
+    // The guard follows the platform's own sun_path limit (108 on Linux, 104
+    // on macOS), so a path the backend would keep on Linux is one it would
+    // relocate on macOS — and the demo must refuse it on macOS for the same
+    // reason the backend would move it. A guard hardcoded to Linux's number
+    // would let a demo start on a Mac with a sessions dir the backend then
+    // relocates out from under it.
+    //
+    // The longest socket is the 12-digit session id plus ".sock" (18 bytes
+    // with the separator), so a SESSIONS_DIR of N bytes needs N + 18.
+    const socketName = "/999999999999.sock";
+    const sessionsDir = (bytes: number) => {
+      const name = "y".repeat(Math.max(1, bytes - demoDir.length - 1));
+      return path.join(demoDir, name);
+    };
+    // 104 bytes of socket path: inside Linux's 107, outside macOS's 103.
+    const dir = sessionsDir(104 - socketName.length);
+    expect(Buffer.byteLength(path.join(dir, socketName.slice(1)), "utf8")).toBe(104);
+    withPlatform("linux", () => {
+      expect(problems({ SESSIONS_DIR: dir })).not.toContain(
+        "SESSIONS_DIR is too long; the backend would relocate it",
+      );
+    });
+    withPlatform("darwin", () => {
+      expect(problems({ SESSIONS_DIR: dir })).toContain(
+        "SESSIONS_DIR is too long; the backend would relocate it",
+      );
+    });
+  });
   it("a working directory holding a .env", () => {
     const cwd = mkdtempSync(path.join(demoDir, "cwd-"));
     writeFileSync(path.join(cwd, ".env"), "PROJECTS_ROOTS=/home/me/projects\n");

@@ -57,6 +57,42 @@ function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
   }
 }
 
+/**
+ * The bytes the fallback path adds on top of the temp dir it lives in: the
+ * separator, `ms-`, the 8-hex-char hash, the separator, and the longest
+ * socket name the sessions dir has to hold.
+ *
+ * The fallback's socket path is therefore `len(tmp) + FALLBACK_OVERHEAD`
+ * bytes, and it fits the platform's budget iff that is within
+ * `maxSunPathBytes(platform) - 1` (the limit counts the NUL terminator, so
+ * the usable path is one byte shorter than it).
+ */
+const FALLBACK_OVERHEAD = 1 + 3 + 8 + 1 + LONGEST_SOCKET.length;
+
+/** The longest temp dir (in bytes) whose fallback still fits the platform. */
+function maxFittingTmpBytes(platform: NodeJS.Platform): number {
+  return maxSunPathBytes(platform) - 1 - FALLBACK_OVERHEAD;
+}
+
+/**
+ * A temp dir path of EXACTLY `bytes` bytes, for exercising the sun_path
+ * budget at its boundary.
+ *
+ * The temp dir's own length is what decides whether the fallback fits, so the
+ * fixture has to hit an exact size rather than merely a long one. The name is
+ * padded to the requested length and the result is asserted, so the helper
+ * cannot drift out of step with the arithmetic it stands in for.
+ */
+function tmpDirOfLength(bytes: number, tag: string): string {
+  const base = tmpdir();
+  // "<base>/<tag>/<padding>" — one separator either side of the tag.
+  const overhead = base.length + 1 + tag.length + 1;
+  const padding = "t".repeat(Math.max(0, bytes - overhead));
+  const dir = path.join(base, tag, padding);
+  expect(Buffer.byteLength(dir, "utf8")).toBe(bytes);
+  return dir;
+}
+
 function cleanup(): void {
   rmSync(fallback, { recursive: true, force: true });
 }
@@ -126,49 +162,99 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     expect(ensureSessionsDir(configured).startsWith(tmpdir())).toBe(true);
   });
 
-  it("shortens the fallback's hash when the temp dir is too long for it", () => {
-    // The fallback has to fit the limit TOO: a temp dir long enough to push
-    // the CONFIGURED path over the limit can push the fallback over it as
-    // well — and a fallback that cannot hold a socket is worse than none.
-    // The hash is shortened until the path fits, which keeps it a pure
-    // function of the configured path (the socket-dir ownership check and
-    // deriveInstanceId both key off it, so it must be stable).
-    // A temp-dir length at which the 8-character hash does NOT fit but a
-    // shorter one does: the socket path is len(tmp) + 21 + hashLen bytes, so
-    // the 8-char hash needs len(tmp) <= 78 and the 0-char one len(tmp) <= 86.
-    const base = tmpdir();
-    const longTmp = path.join(base, "t".repeat(Math.max(0, 82 - base.length)));
-    mkdirSync(longTmp, { recursive: true });
-    const prev = process.env.TMPDIR;
-    process.env.TMPDIR = longTmp;
-    try {
-      const result = ensureSessionsDir(configured);
-      expect(result.startsWith(longTmp)).toBe(true);
-      // The 8-character hash did not fit, so the path was shortened.
-      expect(result).not.toBe(path.join(longTmp, `ms-${hash}`));
-      const longest = Buffer.byteLength(path.join(result, LONGEST_SOCKET), "utf8");
-      expect(longest).toBeLessThanOrEqual(maxSunPathBytes() - 1);
-    } finally {
-      if (prev === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = prev;
-      rmSync(longTmp, { recursive: true, force: true });
+  it("uses the FULL 8-hex-char hash for the fallback name, never a shortened one", () => {
+    // The fallback's name is what makes it distinct per configured path, and
+    // that distinctness is load-bearing: deriveInstanceId (session-process.ts)
+    // hashes the resolved sessions dir to namespace this instance's systemd
+    // scopes, so two projects sharing one fallback dir would share one scope
+    // namespace and could stop each other's scopes. Shortening the hash to
+    // squeeze the path into a shrinking budget trades that away — at 2 hex
+    // chars there are only 256 buckets, and at 0 the name is the SAME for
+    // every configured path (a certain collision, not a probable one).
+    //
+    // So the name is fixed at the same 32 bits deriveInstanceId itself uses,
+    // and the path shape does not depend on how long the temp dir is.
+    for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+      withPlatform(platform, () => {
+        // The longest temp dir whose fallback still fits: at exactly the
+        // boundary, the name still has to come out whole.
+        const tmp = tmpDirOfLength(maxFittingTmpBytes(platform), "fit");
+        mkdirSync(tmp, { recursive: true });
+        const prev = process.env.TMPDIR;
+        process.env.TMPDIR = tmp;
+        try {
+          const result = ensureSessionsDir(configured);
+          // The name is the FULL hash of the resolved configured path — exactly
+          // 8 hex chars, no truncation, on BOTH platforms.
+          expect(result).toBe(path.join(tmp, `ms-${hash}`));
+          const longest = Buffer.byteLength(path.join(result, LONGEST_SOCKET), "utf8");
+          expect(longest).toBe(maxSunPathBytes(platform) - 1);
+        } finally {
+          if (prev === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = prev;
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      });
     }
   });
 
-  it("fails with a clear error when NO path under the temp dir can hold a socket", () => {
-    // A temp dir so long that even the shortest fallback overflows the
-    // limit. The error has to say what to do about it — a bare EINVAL at
-    // bind() time is what this whole check exists to prevent.
-    const hopelessTmp = path.join(tmpdir(), "t".repeat(120));
-    mkdirSync(hopelessTmp, { recursive: true });
-    const prev = process.env.TMPDIR;
-    process.env.TMPDIR = hopelessTmp;
-    try {
-      expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
-    } finally {
-      if (prev === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = prev;
-      rmSync(hopelessTmp, { recursive: true, force: true });
+  it("resolves two DISTINCT configured paths to two DISTINCT fallbacks", () => {
+    // The property the `len = 0` rung destroyed: at a temp-dir length where
+    // the hash was shortened to nothing, EVERY configured path resolved to the
+    // same `<tmp>/ms-` directory — one sessions dir, one deriveInstanceId, one
+    // systemd scope namespace shared by unrelated projects. This asserts the
+    // exact expected path per input, so a future re-introduction of
+    // truncation fails loudly rather than merely "differing".
+    for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+      withPlatform(platform, () => {
+        const tmp = tmpDirOfLength(maxFittingTmpBytes(platform), "dist");
+        mkdirSync(tmp, { recursive: true });
+        const prev = process.env.TMPDIR;
+        process.env.TMPDIR = tmp;
+        try {
+          const other = path.join(tmp, "u".repeat(110), "sessions");
+          const otherHash = createHash("md5").update(path.resolve(other)).digest("hex").slice(0, 8);
+          // A precondition, so a fixture collision reports as such instead of
+          // masquerading as a distinctness failure.
+          expect(otherHash).not.toBe(hash);
+          const a = ensureSessionsDir(configured);
+          const b = ensureSessionsDir(other);
+          expect(a).not.toBe(b);
+          expect(a).toBe(path.join(tmp, `ms-${hash}`));
+          expect(b).toBe(path.join(tmp, `ms-${otherHash}`));
+        } finally {
+          if (prev === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = prev;
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      });
+    }
+  });
+
+  it("fails with a clear error when the fallback itself does not fit", () => {
+    // The fallback has to fit the limit TOO: it lives under the platform's
+    // temp dir, and a temp dir long enough to push the CONFIGURED path over
+    // the limit can push the fallback over it as well — and a fallback that
+    // cannot hold a socket is worse than none. The error has to say what to
+    // do about it — a bare EINVAL at bind() time is what this whole check
+    // exists to prevent — and to name BOTH levers: the temp dir is what
+    // overflowed here, not just SESSIONS_DIR.
+    for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+      withPlatform(platform, () => {
+        // One byte past the longest temp dir that still fits.
+        const tmp = tmpDirOfLength(maxFittingTmpBytes(platform) + 1, "over");
+        mkdirSync(tmp, { recursive: true });
+        const prev = process.env.TMPDIR;
+        process.env.TMPDIR = tmp;
+        try {
+          expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
+          expect(() => ensureSessionsDir(configured)).toThrow(/point TMPDIR at a shorter/);
+        } finally {
+          if (prev === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = prev;
+          rmSync(tmp, { recursive: true, force: true });
+        }
+      });
     }
   });
 

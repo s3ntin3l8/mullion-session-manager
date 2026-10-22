@@ -137,7 +137,7 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
   it("degrades instead of crashing boot when the bridge socket path is already a live listener from before boot", async () => {
     // sshAgentSocketPath, not a hand-derived join — reuses the exact same
     // helper ptyPlugin/sshAgentPlugin call, rather than bypassing
-    // ensureSessionsDir's 108-byte sun_path fallback logic the way a plain
+    // ensureSessionsDir's sun_path fallback logic the way a plain
     // path.join would (mullion-reviewer, PR #877 self-review: this file's
     // SESSIONS_DIR happens to be short enough that the fallback never
     // triggers today, but that's incidental, not guaranteed by this test).

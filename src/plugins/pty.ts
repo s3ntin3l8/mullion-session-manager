@@ -200,26 +200,40 @@ export function ensureSessionsDir(configured: string): string {
   // shorter than it.
   if (longestSocketPath(resolved) <= limit - 1) return resolved;
 
-  // The fallback has to fit TOO: it lives under the platform's temp dir,
-  // and a temp dir long enough to push the CONFIGURED path over the limit
-  // can push the fallback over it as well — and a fallback that cannot
-  // hold a socket is worse than no fallback at all. The hash is shortened
-  // until it fits, which keeps the path a pure function of its input: the
-  // socket-dir ownership check and deriveInstanceId both key off it, so it
-  // has to be stable across restarts.
-  const hash = createHash("md5").update(resolved).digest("hex");
+  // The fallback's NAME is a fixed 8-hex-char hash of the resolved path, and
+  // it is never shortened to buy bytes. The name is not decoration: it is
+  // what makes the fallback distinct per configured path, and that distinctness
+  // is load-bearing — deriveInstanceId (session-process.ts) hashes the
+  // resolved sessions dir to namespace this instance's systemd scopes, so two
+  // projects sharing one fallback dir would share one scope namespace and
+  // could stop each other's scopes. Shortening the hash to squeeze the path
+  // into a shrinking budget trades that away: at 2 hex chars there are only
+  // 256 buckets, and at 0 the name is the SAME for every configured path —
+  // a certain collision, not a probable one.
+  //
+  // So the name is fixed at the same 32 bits deriveInstanceId itself uses,
+  // and the path shape no longer depends on how long the temp dir happens to
+  // be today: a temp dir that grew by two bytes must not silently move a
+  // project to a different sessions dir, and a different deriveInstanceId
+  // with it.
+  const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
   const tmp = os.tmpdir();
-  for (const len of [8, 6, 4, 2, 0]) {
-    const candidate = path.join(tmp, `ms-${hash.slice(0, len)}`);
-    if (longestSocketPath(candidate) <= limit - 1) {
-      secureFallbackDir(candidate);
-      return candidate;
-    }
+  const candidate = path.join(tmp, `ms-${hash}`);
+  // The fallback has to fit TOO: it lives under the platform's temp dir, and a
+  // temp dir long enough to push the CONFIGURED path over the limit can push
+  // the fallback over it as well — and a fallback that cannot hold a socket
+  // is worse than no fallback at all. When even the full-width name does not
+  // fit, that is a real, operator-actionable failure: name the temp dir and
+  // both levers, rather than silently landing two projects in one directory.
+  if (longestSocketPath(candidate) <= limit - 1) {
+    secureFallbackDir(candidate);
+    return candidate;
   }
   throw new Error(
     `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
-      `sun_path limit, and no path under ${tmp} does either — ` +
-      `set SESSIONS_DIR to a shorter path`,
+      `sun_path limit, and neither does the fallback at ${candidate} — ` +
+      `set SESSIONS_DIR to a shorter path, or point TMPDIR at a shorter ` +
+      `directory (${tmp})`,
   );
 }
 
@@ -573,7 +587,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
     manager.killAll();
-    // Deliberately no rmSync of a /tmp/ms-* fallback sessionsDir here: sessions
+    // Deliberately no rmSync of a fallback sessionsDir here: sessions
     // run in transient systemd scopes precisely so they survive a restart,
     // and removing the directory would delete their live dtach sockets and
     // hook tokens.
