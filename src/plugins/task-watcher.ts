@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, gt, inArray, isNotNull, or } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
+import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { HostRequestError, HostUnreachableError } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -22,7 +23,7 @@ import { REBASE_ATTEMPT_STALE_MS } from "../services/task-reconciler.js";
 // counts as active), rather than by widening this set wholesale, which
 // would defeat the whole point of this sweep for the (far more common)
 // `done` task that finished normally and has no worktree at all.
-const ACTIVE_WORKTREE_STATUSES = ["claimed", "in_progress", "reviewing"] as const;
+const ACTIVE_WORKTREE_STATUSES = [...ACTIVE_TASK_STATUSES];
 
 /**
  * Phase 6's 6.8 (issue #283), widened to remote hosts by #484 — a boot-time

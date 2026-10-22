@@ -36,6 +36,7 @@ const FIXTURE_FILES: Record<string, string> = {
   "src/mcp/tools.mjs": `import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";\n// ${NOTE}\n`,
   "src/cli/core.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";\n// ${NOTE}\n`,
   "src/mcp/client.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";\n`,
+  "src/services/workflow-conventions.ts": `import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";\nconst F = "x " + REVIEW_PROTOCOL_NOTE;\n`,
   "src/cli/review-protocol.mjs": `export const REVIEW_PROTOCOL_NOTE = "${NOTE}";\n`,
 };
 
@@ -82,6 +83,20 @@ describe("check-review-protocol-sync", () => {
       "src/cli/core.mjs": "// the review rule, copied by hand\n",
     });
     await expect(run(dir)).rejects.toThrow(/review-protocol\.mjs/);
+  });
+
+  it("fails when the conventions text keeps its own copy of the wording", async () => {
+    const dir = makeFixture({
+      "src/services/workflow-conventions.ts": 'const FRAGMENT = "Ask for a review.";\n',
+    });
+    await expect(run(dir)).rejects.toThrow(/workflow-conventions\.ts does not import/);
+  });
+
+  it("fails when the conventions text imports the note but never uses it", async () => {
+    const dir = makeFixture({
+      "src/services/workflow-conventions.ts": `import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";\n// REVIEW_PROTOCOL_NOTE\n`,
+    });
+    await expect(run(dir)).rejects.toThrow(/never uses it/);
   });
 
   it("fails when the canonical note itself says nothing about the rule", async () => {

@@ -99,9 +99,9 @@ describe("buildTaskMasterPreamble", () => {
     );
   });
 
-  it("tells the agent not to push, open a PR, or comment on the issue", () => {
+  it("tells the agent not to push, open a PR, request a review, or comment on the issue", () => {
     expect(buildTaskMasterPreamble(BASE)).toContain(
-      "Do not push, open a\npull request, or comment on the issue yourself",
+      "Do not push, open a\npull request, request a review, or comment on the issue yourself",
     );
   });
 

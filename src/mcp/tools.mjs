@@ -626,7 +626,8 @@ const requestReview = {
     "message if the relay isn't configured in Mullion's Settings → Integrations or no PR " +
     "exists yet. A commit that has ALREADY been reviewed is refused (409): there is nothing " +
     "new to review, so push a new commit to ask for another round, or dismiss that review " +
-    "first. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
+    "first. A session working an ACTIVE Task Master task is refused (409) for that task's own " +
+    "PR: Task Master runs the task's review. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
     "automatically.",
   inputSchema: {
     type: "object",

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Encodes AGENTS.md's "Addressing review feedback" recipe as a runnable
+// Encodes AGENTS.md's "Workflow Conventions" review-feedback recipe as a runnable
 // command instead of prose every agent has to re-derive: fixing the code a
 // reviewer flagged is not enough to close the loop — the reply and the
 // GraphQL-only thread resolution are two separate API calls, and the
@@ -143,7 +143,7 @@ try {
         "",
         "Reply first (with the comment's databaseId from `list`), then resolve",
         "(with the thread's GraphQL id, also from `list`) — see AGENTS.md's",
-        "'Addressing review feedback' section for why both steps are required.",
+        "'Workflow Conventions' section for why both steps are required.",
       ].join("\n"),
     );
     process.exit(1);

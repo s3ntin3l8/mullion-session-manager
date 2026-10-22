@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { REVIEW_PROTOCOL_NOTE } from "../../src/cli/review-protocol.mjs";
 import {
   WORKFLOW_CONVENTION_QUESTIONS,
   buildWorkflowConventionsText,
@@ -93,24 +94,65 @@ describe("buildWorkflowConventionsText", () => {
     ]);
   });
 
-  // Issue #1749 — the "once per head commit, then wait for it" option for
-  // the code-review axis. It is an OPTION, not a change to the plain
-  // bot-review fragment: an install without a review relay has no use for the
-  // rule, and an install that already answered "bot-review" must keep the
-  // text it has.
-  it("offers a 'once per head commit, then wait' option for the code-review axis", () => {
-    const question = WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === "codeReview");
-    expect(question).toBeDefined();
-    const option = question?.options.find((o) => o.id === "bot-review-once");
-    expect(option).toBeDefined();
-    expect(option?.fragment).toContain("once per head commit");
-    expect(option?.fragment).toContain("10-30 minutes");
-    expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(option?.fragment);
-    // The plain option is untouched: an install that already picked it keeps
-    // the text it has.
-    expect(buildWorkflowConventionsText({ codeReview: "bot-review" })).toBe(
-      "Request an automated/bot review.",
+  // Issue #1749 — the review-relay option for the code-review axis. It is an
+  // OPTION, not a change to the plain bot-review fragment: an install without
+  // a relay has no use for the protocol, and an install that already answered
+  // "bot-review" or "both" must keep the text it has, byte for byte.
+  const codeReviewFragment = (id: string) =>
+    WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === "codeReview")?.options.find(
+      (o) => o.id === id,
+    )?.fragment;
+
+  it("sends agents to the review relay, built from the one canonical protocol note", () => {
+    const fragment = codeReviewFragment("bot-review-once");
+    expect(fragment).toBeDefined();
+    // Imported, not restated: the same string the CLI and MCP clients carry.
+    expect(fragment).toContain(REVIEW_PROTOCOL_NOTE);
+    expect(fragment).toContain("review relay");
+    expect(fragment).toContain("`mullion review`");
+    expect(fragment).toContain("`request_review`");
+    // Asking is safe everywhere (the relay refuses a review that is already
+    // running or landed), so the rule needs no "the repository reviews on its
+    // own" exception — and a comment mentioning the bot is the humans' path.
+    expect(fragment).toContain("once after opening the pull request");
+    expect(fragment).toContain("once per head commit after pushing fixes");
+    expect(fragment).toContain("for humans, not agents");
+    expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(fragment);
+  });
+
+  it("leaves the plain 'bot-review' and 'both' options byte-for-byte as they were", () => {
+    expect(codeReviewFragment("bot-review")).toBe("Request an automated/bot review.");
+    expect(codeReviewFragment("both")).toBe(
+      "Run a self-review pass on your own diff before declaring done, and also request an automated/bot review.",
     );
+  });
+
+  it("offers self-review plus the relay rule as its own option", () => {
+    const combined = codeReviewFragment("self-review-and-bot-review-once");
+    expect(combined).toContain(codeReviewFragment("self-review") as string);
+    expect(combined).toContain(codeReviewFragment("bot-review-once") as string);
+    const text = buildWorkflowConventionsText({ codeReview: "self-review-and-bot-review-once" });
+    expect(text).toContain("Run a self-review pass on your own diff");
+    // The clauses scripts/check-review-protocol-sync.mjs checks (it compares
+    // case-insensitively).
+    expect(text.toLowerCase()).toContain("one review per pull request");
+    expect(text).toContain("10-30 minutes");
+    expect(text).toContain("review_status");
+  });
+
+  // The conventions are written into every scaffolded repo, so they name what
+  // a fresh repo needs, not what this one has.
+  it("puts worktrees under .wt/, and carries the review-feedback and issue-template details", () => {
+    const text = buildWorkflowConventionsText({
+      worktrees: "worktree",
+      reviewFeedback: "reply-and-resolve",
+      deferredWork: "tracked-issue",
+    });
+    expect(text).toContain("git worktree add .wt/<branch> -b <branch> origin/<default>");
+    expect(text).toContain("/pulls/<pr>/comments/<comment_id>/replies");
+    expect(text).toContain("resolveReviewThread");
+    expect(text).toContain("`reviewThreads` query");
+    expect(text).toContain("the repository's issue template");
   });
 
   it("answering the full question set produces a longer, all-fragments-present text (a full 'regenerate' run)", () => {

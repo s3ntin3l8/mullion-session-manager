@@ -93,6 +93,10 @@ for (const [label, file] of [
   ["src/mcp/tools.mjs", "src/mcp/tools.mjs"],
   ["src/cli/core.mjs", "src/cli/core.mjs"],
   ["src/mcp/client.mjs", "src/mcp/client.mjs"],
+  // The install-wide conventions text the wizard generates and the scaffold
+  // writes into every project's AGENTS.md: it builds its review fragment
+  // from the note rather than restating it.
+  ["src/services/workflow-conventions.ts", "src/services/workflow-conventions.ts"],
 ]) {
   if (!read(file).includes("review-protocol.mjs")) {
     console.error(
@@ -100,6 +104,17 @@ for (const [label, file] of [
     );
     failed = true;
   }
+}
+// Importing the note is not enough: the conventions fragment has to USE it.
+// Comments stripped, the name must appear beyond the import itself.
+const conventionsCode = read("src/services/workflow-conventions.ts")
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .replace(/^\s*\/\/.*$/gm, "");
+if ((conventionsCode.match(/REVIEW_PROTOCOL_NOTE/g) ?? []).length < 2) {
+  console.error(
+    "src/services/workflow-conventions.ts imports REVIEW_PROTOCOL_NOTE but never uses it — the generated conventions would lose the review protocol.",
+  );
+  failed = true;
 }
 if (!protocol.includes("REVIEW_PROTOCOL_NOTE")) {
   console.error("src/cli/review-protocol.mjs does not define REVIEW_PROTOCOL_NOTE.");

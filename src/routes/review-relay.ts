@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { eq } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { and, eq, inArray, or } from "drizzle-orm";
+import { projects, sessions, tasks } from "../db/schema.js";
+import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
@@ -371,6 +372,37 @@ function gateReviewer(app: FastifyInstance, reply: FastifyReply): boolean {
 }
 
 /**
+ * Whether this session belongs to an ACTIVE Task Master task whose own pull
+ * request is the one being asked about. Task Master pushes the branch, opens
+ * the pull request and runs the task's review, so such a session has no
+ * review of its own to ask for — a Hermes round dispatched for it would be a
+ * second review the board never reads.
+ *
+ * Scoped, because nothing clears `tasks.sessionId` when a task finishes: a
+ * finished (`done`/`failed`) task no longer owns its session, and a request
+ * naming a DIFFERENT pull request is not about the task's review at all. With
+ * no explicit pull request the target is the session's own branch, i.e. the
+ * task's.
+ */
+function isTaskMasterReviewRequest(
+  app: FastifyInstance,
+  sessionId: number,
+  requestedPr: number | undefined,
+): boolean {
+  const rows = app.db
+    .select({ prNumber: tasks.prNumber })
+    .from(tasks)
+    .where(
+      and(
+        or(eq(tasks.sessionId, sessionId), eq(tasks.reviewSessionId, sessionId)),
+        inArray(tasks.status, [...ACTIVE_TASK_STATUSES]),
+      ),
+    )
+    .all();
+  return rows.some((row) => requestedPr === undefined || row.prNumber === requestedPr);
+}
+
+/**
  * Session → repo + issue number (+ a read token), for the triage relay
  * (issue #1629). The repo comes from the session's project — never from the
  * request body — exactly as the review path does, so a session can only
@@ -470,6 +502,12 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
+      // A refusal like the in-flight one: the answer, not an error to retry.
+      if (isTaskMasterReviewRequest(app, sessionId, request.body.prNumber)) {
+        return reply.conflict(
+          "This session works an active Task Master task, and Task Master runs that task's review — do not request one",
+        );
+      }
 
       const target = await resolveReviewTarget(app, reply, sessionId, request.body.prNumber);
       if (!target) return reply;

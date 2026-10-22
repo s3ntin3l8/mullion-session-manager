@@ -7,6 +7,7 @@ import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   computeScaffold,
+  conventionsUseWtDirectory,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
   scaffoldSkillPath,
@@ -240,6 +241,9 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
   // apply path would silently OVERWRITE a real Code-of-Conduct/dev-setup
   // file with a pointer-only one instead of upserting into it.
   if (options.includeContributingPointer) paths.push("CONTRIBUTING.md");
+  // The worktree convention's `.wt/` ignore: read so an existing .gitignore is
+  // upserted into, never overwritten (same reasoning as CONTRIBUTING.md above).
+  if (conventionsUseWtDirectory(options.workflowConventionsText)) paths.push(".gitignore");
   // Issue #1201 — read-only. Codex reads AGENTS.override.md INSTEAD OF
   // AGENTS.md when it exists (agent-rules.ts's own precedence table), and
   // computeScaffold deliberately never writes to it (same posture as

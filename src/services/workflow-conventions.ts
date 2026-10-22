@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";
 import { clampToBytes } from "./marked-region.js";
 
 // Issue #937 — a small, finite set of well-known "how we work" policy
@@ -35,6 +36,34 @@ export interface WorkflowConventionQuestion {
   question: string;
   options: WorkflowConventionOption[];
 }
+
+/**
+ * The self-review half of the code-review policy, its own constant so the
+ * combined option below can pair it with the relay half without the two
+ * texts drifting apart.
+ */
+const SELF_REVIEW_FRAGMENT = "Run a self-review pass on your own diff before declaring done.";
+
+/**
+ * The relay half (issue #1749): ask for a review through the review relay —
+ * the one path every agent takes, for the first request and for every
+ * re-request after fixes. The relay is what makes asking safe everywhere: it
+ * refuses a pull request that already has a review in flight (including one
+ * a repository's own workflow started) and a commit that was already
+ * reviewed, so a repository that reviews on its own simply answers with a
+ * refusal, and that refusal is the answer. A review comment that mentions
+ * the review bot is the human path, never the agent's.
+ *
+ * The rule itself — one review at a time, how long it takes, where to look —
+ * is REVIEW_PROTOCOL_NOTE, imported rather than restated:
+ * scripts/check-review-protocol-sync.mjs asserts this file imports it.
+ */
+const BOT_REVIEW_ONCE_FRAGMENT =
+  "Request an automated/bot review through the review relay (`mullion review`, or the " +
+  "`request_review` tool) — once after opening the pull request, and once per head commit " +
+  "after pushing fixes, then wait for it. A review comment that mentions the review bot is " +
+  "for humans, not agents; if no relay is set up, tell the human instead. " +
+  REVIEW_PROTOCOL_NOTE;
 
 export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[] = [
   {
@@ -87,8 +116,8 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         id: "worktree",
         label: "Dedicated worktree per branch (recommended)",
         fragment:
-          "Work in a dedicated worktree per branch, off the latest remote default branch: " +
-          "`git fetch origin && git worktree add <dir> -b <branch> origin/<default>`. " +
+          "Work in a dedicated worktree per branch, under `.wt/<branch>`, off the latest remote default branch: " +
+          "`git fetch origin && git worktree add .wt/<branch> -b <branch> origin/<default>`. " +
           "A fresh worktree does not inherit installed dependencies — reinstall them there " +
           "before testing or building.",
       },
@@ -165,7 +194,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
   {
     id: "codeReview",
     question:
-      "Code review process: none required, self-review your own diff before declaring done, request an automated/bot review, or both?",
+      "Code review process: none required, self-review your own diff before declaring done, request an automated/bot review (plain, or through the review relay once per head commit), or self-review plus a bot review?",
     options: [
       {
         id: "none",
@@ -175,7 +204,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
       {
         id: "self-review",
         label: "Self-review your own diff before declaring done",
-        fragment: "Run a self-review pass on your own diff before declaring done.",
+        fragment: SELF_REVIEW_FRAGMENT,
       },
       {
         id: "bot-review",
@@ -183,22 +212,25 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         fragment: "Request an automated/bot review.",
       },
       {
-        // The "once, then wait" variant (issue #1749). Offered as its own
-        // OPTION rather than folded into the plain bot-review fragment: a
-        // request that is repeated while a review is still running is refused
-        // (or, on the GitHub Actions path, queues a second review behind the
-        // first), so an install that does not use a review relay has no use
-        // for the rule — and an install that does should say so explicitly.
+        // The review-relay variant (issue #1749), offered as its own OPTION
+        // rather than folded into the plain bot-review fragment: an install
+        // without a review relay has no use for the protocol, and an install
+        // that already answered "bot-review" must keep the text it has.
         id: "bot-review-once",
-        label: "Request an automated/bot review — once per head commit, then wait for it",
-        fragment:
-          "Request an automated/bot review before merging — request it once per head commit and then wait for it: a review takes 10-30 minutes, so check its status instead of asking again.",
+        label:
+          "Request a review through the review relay — after opening, then once per new head commit, then wait",
+        fragment: BOT_REVIEW_ONCE_FRAGMENT,
       },
       {
         id: "both",
         label: "Both self-review and an automated/bot review",
         fragment:
           "Run a self-review pass on your own diff before declaring done, and also request an automated/bot review.",
+      },
+      {
+        id: "self-review-and-bot-review-once",
+        label: "Self-review, and a review through the review relay once per head commit",
+        fragment: `${SELF_REVIEW_FRAGMENT}\n\n${BOT_REVIEW_ONCE_FRAGMENT}`,
       },
     ],
   },
@@ -216,7 +248,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         id: "reply-and-resolve",
         label: "Fix the code, then reply to and resolve each comment",
         fragment:
-          "Fixing the code is not enough to address review feedback — reply to each inline comment via the GitHub API, then resolve the thread via the GraphQL `resolveReviewThread` mutation, rather than pushing a silent fix.",
+          'Fixing the code is not enough to address review feedback — reply to each inline comment via the GitHub API, then resolve the thread via the GraphQL `resolveReviewThread` mutation, rather than pushing a silent fix. Reply with `gh api repos/{owner}/{repo}/pulls/<pr>/comments/<comment_id>/replies -f body="…"`; resolve with `gh api graphql -f query=\'mutation { resolveReviewThread(input: {threadId: "<thread_id>"}) { thread { isResolved } } }\'`, taking the thread id from a `reviewThreads` query on the pull request, not from the REST comment id.',
       },
     ],
   },
@@ -234,7 +266,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         id: "tracked-issue",
         label: "File a tracked issue for every deferred item, linked from the PR",
         fragment:
-          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR — a footnote in a plan doc is not a durable record.",
+          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record.",
       },
     ],
   },

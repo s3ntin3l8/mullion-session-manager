@@ -5,6 +5,15 @@ import { broadcastTaskEvent } from "./task-events.js";
 export { TASK_STATUSES, type TaskStatus };
 
 /**
+ * The statuses in which Task Master still owns a task's session, worktree and
+ * pull request: past `ready`, short of `done`/`failed`. One list, because the
+ * places that need it (the issue watcher's in-flight check, the boot-time
+ * worktree sweep, the review relay's refusal) each had a private copy, and a
+ * status added to the lifecycle would have to be remembered in all of them.
+ */
+export const ACTIVE_TASK_STATUSES: readonly TaskStatus[] = ["claimed", "in_progress", "reviewing"];
+
+/**
  * Phase 6 Task Master (6.2/#215) — the legal transition table for a task's
  * lifecycle. Assigning this object literal directly to a
  * `Record<TaskStatus, ...>`-typed const (same pattern as session-status.ts's

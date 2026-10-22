@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt review check-scope-leaks
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt check-scope-leaks
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -75,20 +75,3 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	git fetch origin
 	git worktree add .wt/$(name) -b $(name) origin/main
 	cd .wt/$(name) && npm ci && npm --prefix frontend ci
-
-# The fallback comment is only for "the relay is not there" — a relay that REFUSED
-# (a review is already in flight, the commit was reviewed recently, the commit was
-# already reviewed, the gateway is saturated) must not be answered with an @mention:
-# that dispatches ANOTHER review, queued behind the one that is already running,
-# which is how reviews used to pile up. The excluded phrases are the relay's own
-# refusals — keep them in step with src/services/hermes-review.ts.
-review: ## Request a Hermes review on the current branch's PR (via the Mullion relay when run inside a session)
-	@if [ -n "$$MULLION_SOCKET_PATH" ] && command -v mullion >/dev/null 2>&1; then \
-		out=$$(mullion review 2>&1); rc=$$?; echo "$$out"; \
-		if [ $$rc -ne 0 ] && ! echo "$$out" | grep -qiE "requested recently|already in flight|already under way|already requested|already landed|no new review started|not dispatched|could not be started|refused the turn"; then \
-			echo "relay unavailable - falling back to an @mention comment"; \
-			gh pr comment --body "@s3ntin3l8-hermes Review"; \
-		fi; \
-	else \
-		gh pr comment --body "@s3ntin3l8-hermes Review"; \
-	fi
