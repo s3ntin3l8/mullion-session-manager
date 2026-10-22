@@ -122,8 +122,8 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   red patch status does not block a merge by itself. The same floor is
   enforced _locally_ by the `pre-push` hook (see "Local hooks" below).
 - **Test sharding**:
-  - Node tests shard into `shard-plan` → 4×`test-shard` → `test-merge`.
-    Frontend tests shard into 2×`test-shard` → `test-merge`.
+  - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests
+    shard into 2×`test-shard` → `test-merge`.
   - `test-node / lint-and-test` runs lint/typecheck/format/build but **no
     tests**. Same for `test-frontend / lint-and-test` (lint/typecheck/build).
   - `test-merge` is the final test/coverage check for each workspace; both
@@ -135,6 +135,14 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
     set once, in the shared `vitest.shared.ts` coverage config both
     `vitest.config.ts` and `frontend/vitest.config.ts` import, not
     duplicated per workspace — to merge shard results.
+  - **The shard matrix is passed explicitly** (`test-shard-matrix`), which
+    skips the shared workflow's `shard-plan` job — a whole runner spent
+    running `jq` to emit `[1..N]` on every CI run. `test-shards` is still
+    set because it is what gates the sharded path on.
+  - **The shard jobs skip the build** (`shard-build-script: "none"`): they
+    run the suite against the source tree, so the per-shard `npm run build`
+    (a full `tsc` + copy + smoke test) was pure overhead. `lint-and-test`
+    still builds once, so a broken build is still caught.
   - **Both callers need a distinct `artifact-prefix`.** This workflow calls
     the shared `ci-node.yml` twice, and both callers shard. Artifact names
     are scoped to the **workflow run**, not to the caller, so without a

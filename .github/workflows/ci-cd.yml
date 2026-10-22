@@ -66,6 +66,16 @@ jobs:
       # build) stays parallel. The split is deterministic (path hash), so it
       # is stable from run to run.
       test-shards: "4"
+      # The shard matrix is passed explicitly, which SKIPS the shared
+      # workflow's `shard-plan` job — a whole runner spent running `jq` to
+      # emit `[1..N]` on every CI run (s3ntin3l8/.github#118). `test-shards`
+      # is still set: it is what gates the sharded path on.
+      test-shard-matrix: "[1,2,3,4]"
+      # The shard jobs run the suite against the SOURCE tree (Vitest
+      # transforms `src/` on the fly), so they do not need `npm run build` —
+      # which was a full `tsc` + copy + smoke-test in every shard.
+      # `lint-and-test` still builds once, so a broken build is still caught.
+      shard-build-script: "none"
       # Namespace this caller's shard artifacts. Artifact names are scoped to
       # the WORKFLOW RUN, not to the caller — and this workflow calls the
       # shared ci-node.yml twice, both of them sharded. Without a distinct
@@ -120,6 +130,11 @@ jobs:
       # would merge silently — `test-frontend / lint-and-test` would still
       # report green while running no tests at all.
       test-shards: "2"
+      # Same two inputs as the backend caller: no `shard-plan` runner, and
+      # no per-shard `vite build` (the shard jobs run against `frontend/src`
+      # directly).
+      test-shard-matrix: "[1,2]"
+      shard-build-script: "none"
       # Distinct from the backend's prefix — see the note on the test-node
       # caller above. Both callers shard, so both need their own namespace.
       artifact-prefix: "-frontend"
