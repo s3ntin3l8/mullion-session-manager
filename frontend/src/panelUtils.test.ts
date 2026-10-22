@@ -2478,7 +2478,6 @@ describe("openExternalFilePanel", () => {
     const api = mockDockviewApi();
     openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
       path: "~/.claude/plans/p.md",
-      sessionId: 9,
       line: 3,
     });
     expect(api.addPanel).toHaveBeenCalledWith(
@@ -2486,7 +2485,7 @@ describe("openExternalFilePanel", () => {
         id: `external-file-1-${encodeURIComponent("~/.claude/plans/p.md")}`,
         component: "external-file",
         title: "p.md — project-alpha",
-        params: { projectId: 1, path: "~/.claude/plans/p.md", sessionId: 9, line: 3 },
+        params: { projectId: 1, path: "~/.claude/plans/p.md", line: 3, rev: expect.any(Number) },
       }),
     );
   });
@@ -2503,12 +2502,15 @@ describe("openExternalFilePanel", () => {
     );
   });
 
-  it("focuses the existing panel for the same path instead of opening a second", () => {
+  it("re-targets the existing panel for the same path instead of opening a second", () => {
     const api = mockDockviewApi();
     openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md" });
     const existing = api.getPanel(`external-file-1-${encodeURIComponent("/x/y.md")}`)!;
-    openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md" });
+    openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 8 });
     expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/x/y.md", line: 8, rev: expect.any(Number) }),
+    );
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
   });
 });

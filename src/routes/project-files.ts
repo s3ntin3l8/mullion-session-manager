@@ -49,6 +49,12 @@ const pathQuery = {
   properties: { path: { type: "string", maxLength: 4096 }, sessionId: { type: "string" } },
 };
 
+const externalPathQuery = {
+  type: "object",
+  additionalProperties: false,
+  properties: { path: { type: "string", maxLength: 4096 } },
+};
+
 const writeSchema = {
   params: idParams,
   body: {
@@ -250,15 +256,20 @@ export async function projectFilesRoute(app: FastifyInstance) {
   // ~/.claude/plans, ...), gated by Settings' externalReadRoots allowlist —
   // there is deliberately no write/list/rename/delete twin. Local hosts only:
   // a remote host's filesystem isn't covered by the primary's allowlist.
-  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+  // Only the project is resolved (for its host) — no `sessionId`: the path is
+  // absolute, so a session's cwd is irrelevant, and resolveCtx would 400 a
+  // worktree session whose cwd lies outside the project.
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
     "/api/projects/:id/external-file",
-    { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
+    { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: externalPathQuery } },
     async (request, reply) => {
-      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
-      if (!ctx) return;
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
       const absPath = request.query.path;
       if (!absPath) return reply.badRequest("path is required");
-      if (ctx.hostId !== LOCAL_HOST_ID) {
+      if (project.hostId !== LOCAL_HOST_ID) {
         return reply
           .code(501)
           .send({ message: "Opening files outside the project isn't supported on remote hosts" });

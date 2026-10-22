@@ -466,7 +466,14 @@ describe("project-files routes", () => {
       await app.inject({
         method: "PATCH",
         url: "/api/settings",
-        payload: { externalReadRoots: [path.join(ext, "plans"), "/", "relative"] },
+        payload: {
+          externalReadRoots: [
+            `${path.join(ext, "plans")}///`,
+            "/",
+            "relative",
+            `x${"/".repeat(50)}y`,
+          ],
+        },
       });
       const ok = await app.inject({ method: "GET", url: url(path.join(ext, "plans", "p.md")) });
       expect(ok.statusCode).toBe(200);
@@ -477,6 +484,14 @@ describe("project-files routes", () => {
       const settings = await app.inject({ method: "GET", url: "/api/settings" });
       expect(settings.json().externalReadRoots).toEqual([path.join(ext, "plans")]);
 
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/999999/external-file?path=/x" }))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/abc/external-file?path=/x" }))
+          .statusCode,
+      ).toBe(400);
       expect((await app.inject({ method: "GET", url: url("") })).statusCode).toBe(400);
       expect((await app.inject({ method: "GET", url: url("rel/p.md") })).statusCode).toBe(400);
       await app.close();

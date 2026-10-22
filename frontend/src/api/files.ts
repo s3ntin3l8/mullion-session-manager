@@ -30,9 +30,9 @@ export const filesApi = {
   // Read-only: a file outside the project under one of Settings'
   // "Readable paths" (an agent's plan, ...). `absPath` is absolute or `~/`;
   // 403 code "not_allowlisted" when it isn't under an allowed folder.
-  readExternalFile: (projectId: number, absPath: string, sessionId?: number) =>
+  readExternalFile: (projectId: number, absPath: string) =>
     request<ProjectFileContent>(
-      `/api/projects/${projectId}/external-file?path=${encodeURIComponent(absPath)}${sessionQuery(sessionId)}`,
+      `/api/projects/${projectId}/external-file?path=${encodeURIComponent(absPath)}`,
     ),
 
   // `expectedMtimeMs` makes the write fail with 409 (code "conflict") if the

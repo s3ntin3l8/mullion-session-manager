@@ -959,7 +959,9 @@ export function sanitizeExternalReadRoots(roots: unknown): string[] {
   const out: string[] = [];
   for (const raw of roots) {
     if (typeof raw !== "string" || raw.includes("\0")) continue;
-    const trimmed = raw.trim().replace(/\/+$/, "");
+    // Not a /\/+$/ regex: that backtracks quadratically on a long run of "/".
+    let trimmed = raw.trim();
+    while (trimmed.endsWith("/")) trimmed = trimmed.slice(0, -1);
     if (trimmed === "" || trimmed === "~") continue;
     if (!trimmed.startsWith("/") && !trimmed.startsWith("~/")) continue;
     if (trimmed.split("/").includes("..")) continue;

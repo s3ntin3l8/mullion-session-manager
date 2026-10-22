@@ -342,14 +342,14 @@ describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file edito
     const [api, projectId, , , target] = openExternalFilePanelMock.mock.calls[0];
     expect(api).toBe(containerApi);
     expect(projectId).toBe(1);
-    expect(target).toEqual({ path: "~/.claude/plans/p.md", sessionId: undefined, line: 7 });
+    expect(target).toEqual({ path: "~/.claude/plans/p.md", line: 7 });
     expect(openExternalFilePanelMock.mock.calls[1][4]).toMatchObject({ path: "/etc/passwd.conf" });
   });
 
-  it("passes the session through for an outside path from a worktree session", () => {
+  it("opens an outside path from a worktree session without a session root", () => {
     mountTerminal({ cwd: "/elsewhere/feat-x/" });
     capturedOnOpenFile!("~/.claude/plans/p.md");
-    expect(openExternalFilePanelMock.mock.calls[0][4]).toMatchObject({ sessionId: 1 });
+    expect(openExternalFilePanelMock.mock.calls[0][4]).toEqual({ path: "~/.claude/plans/p.md" });
   });
 
   it("ignores parent-relative paths and unknown sessions", () => {

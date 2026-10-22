@@ -255,11 +255,7 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
       // file — open the read-only external viewer, whose backend allowlist
       // (Settings -> Readable paths) decides whether it's actually openable.
       if (rel.startsWith("~/") || (rel.startsWith("/") && !rel.startsWith(`${root}/`))) {
-        openExternalFilePanel(containerApi, project.id, projects, layout, {
-          path: rel,
-          sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
-          line,
-        });
+        openExternalFilePanel(containerApi, project.id, projects, layout, { path: rel, line });
         return;
       }
       if (rel.startsWith("/")) rel = rel.slice(root.length + 1);

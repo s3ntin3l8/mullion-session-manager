@@ -9,10 +9,11 @@ export interface ExternalFilePanelParams {
   projectId: number;
   /** Absolute or `~/` path to open on mount; empty shows just the path bar. */
   path?: string;
-  /** Session whose host the path is read from. */
-  sessionId?: number;
   /** 1-based line to scroll to (terminal `file:line` links). */
   line?: number;
+  /** Bumped when an already-open panel is re-targeted at the same path, so
+   * the new `line` is revealed again. */
+  rev?: number;
 }
 
 function noteFor(err: unknown, path: string): string {
@@ -35,7 +36,7 @@ function noteFor(err: unknown, path: string): string {
 // bar lets you paste a path a TUI wrapped across lines (so it never became a
 // single terminal link).
 export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams }) {
-  const { projectId, sessionId } = params;
+  const { projectId } = params;
   const [input, setInput] = useState(params.path ?? "");
   const [file, setFile] = useState<ProjectFileContent | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
       if (!path) return;
       const seq = ++openSeq.current;
       try {
-        const loaded = await api.readExternalFile(projectId, path, sessionId);
+        const loaded = await api.readExternalFile(projectId, path);
         if (seq !== openSeq.current) return;
         setNote(null);
         setFile({ ...loaded, path });
@@ -59,7 +60,7 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
         setNote(noteFor(err, path));
       }
     },
-    [projectId, sessionId],
+    [projectId],
   );
 
   useEffect(() => {
@@ -99,7 +100,7 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
             value={file.content}
             fileName={file.path}
             readOnly
-            revealLine={params.line ? { line: params.line, token: 0 } : undefined}
+            revealLine={params.line ? { line: params.line, token: params.rev ?? 0 } : undefined}
             ariaLabel={`Viewing ${file.path}`}
           />
         ) : (

@@ -886,13 +886,15 @@ export function openExternalFilePanel(
   projectId: number,
   projects: { id: number; name: string | null }[],
   layout: LayoutContext,
-  target: { path?: string; sessionId?: number; line?: number },
+  target: { path?: string; line?: number },
 ): void {
   const path = target.path ?? "";
   const panelId = `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`;
-  const params = { projectId, path, sessionId: target.sessionId, line: target.line };
+  const params = { projectId, path, line: target.line, rev: Date.now() };
   const existing = api.getPanel(panelId);
   if (existing) {
+    // A fresh rev/line so a second `file:line` link to the same file scrolls.
+    existing.api.updateParameters(params);
     existing.api.setActive();
     if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
