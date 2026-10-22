@@ -37,6 +37,7 @@
     "check:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts --check",
     "generate:ssh-agent-filter-vectors": "tsx scripts/generate-ssh-agent-filter-vectors.ts",
     "check:security-antipatterns": "node scripts/check-security-antipatterns.mjs",
+    "check:patch-coverage": "node scripts/check-patch-coverage-hook.mjs",
     "test:patch-coverage": "node scripts/check-patch-coverage.mjs",
     "check:scope-leaks": "tsx scripts/check-scope-leaks.ts"
   },

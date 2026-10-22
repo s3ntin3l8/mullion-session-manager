@@ -6,6 +6,25 @@ on:
   pull_request:
     branches: ["main"]
 
+# Supersede a PR's CI run when a newer commit lands on that PR. Without
+# this, every push to a PR branch spawns a full run — five `npm ci`s, the
+# whole backend suite, the whole frontend suite and the e2e suite, ~14
+# runner-minutes — even when a newer run is already going to report the
+# same result for the same branch.
+#
+# `cancel-in-progress` is deliberately restricted to `pull_request`: a
+# post-merge `push` validation run on `main` is never cancelled by a later
+# push. That run is the record of what actually landed on the default
+# branch, and dropping it would leave `main` unverified.
+#
+# Cancelling leaves `cancelled` checks on the *old* head SHA. Branch
+# protection evaluates the checks on the PR's *current* head SHA, so a
+# cancelled run neither satisfies nor breaks a required check — the newest
+# run for the head SHA always completes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test-node:
     permissions:
@@ -20,9 +39,8 @@ jobs:
       # headroom to add code without CI being fragile, not a cosmetic bump
       # off the template's starter 0.
       coverage-fail-under: "80"
-      # Test measured at ~50s of this job's ~122s total (of 96 files/1484
-      # tests) — 2-way sharding splits it across a parallel test-shard
-      # matrix + a test-merge job that re-combines coverage and enforces
+      # Sharding splits the test run across a parallel test-shard matrix +
+      # a test-merge job that re-combines coverage and enforces
       # coverage-fail-under once over the union (never per-shard). Safe to
       # enable: vitest.config.ts's coverage.reporter already includes
       # "json", the reusable workflow's stated requirement for shard-merge.
@@ -33,7 +51,21 @@ jobs:
       # pre-existing three) or a broken test suite could merge silently,
       # since lint-and-test itself still only runs lint/typecheck/build
       # once sharded and would report green regardless.
-      test-shards: "2"
+      #
+      # 4 shards, not 2 (2026-10-22 CI audit). The "96 files/1484 tests"
+      # figure above is stale: the backend suite is now 314 test files, so
+      # 2 shards put 157 files (4178 tests) in each — and Vitest's shard
+      # split sorts spec paths by SHA-1 hash and slices by index
+      # (`shard()` in node_modules/vitest/dist/chunks/index.B8VfM7Mf.js),
+      # so the split is balanced by FILE COUNT but blind to DURATION.
+      # Measured across five CI runs the slowest shard ran 157s-203s while
+      # the fastest ran 126s-186s — a 1.52x spread (196s vs 129s in one
+      # run) — and the SLOWEST shard, not the average, is what sets the
+      # critical path. 4 shards cuts the longest shard to roughly a quarter
+      # of the work, while each shard's fixed prep (checkout + npm ci +
+      # build) stays parallel. The split is deterministic (path hash), so it
+      # is stable from run to run.
+      test-shards: "4"
       strict-checks: true
       # Only the files this push touched can have introduced a secret.
       # detect-secrets matches a known secret by filename, hash and type -- not
@@ -60,11 +92,37 @@ jobs:
       # new coverage block) — 70 leaves ~10 points of headroom to add
       # uncovered code without CI going red on routine changes, same
       # philosophy as test-node's own 80-against-~92% floor above (a real
-      # floor with room to breathe, not a cosmetic bump off 0). No sharding
-      # here (frontend's suite runs in well under lint-and-test's 10-minute
-      # timeout as a single job), so unlike test-node this doesn't need
-      # test-shards/test-merge.
+      # floor with room to breathe, not a cosmetic bump off 0).
       coverage-fail-under: "70"
+      # Sharded as of 2026-10-22 (CI audit). The frontend suite is 228 test
+      # files and took 158.90s in a single job, of which 31% (~49s) was
+      # jsdom environment setup — with the backend resharded to 4, the
+      # frontend would otherwise become the critical path.
+      #
+      # IMPORTANT, same reason as test-node's note above: sharding moves the
+      # frontend's test run AND its coverage-fail-under gate out of
+      # `test-frontend / lint-and-test` into a NEW job,
+      # `test-frontend / test-merge`. Branch protection on main must
+      # include `test-frontend / test-merge`, or a broken frontend suite
+      # would merge silently — `test-frontend / lint-and-test` would still
+      # report green while running no tests at all.
+      test-shards: "2"
+      # `test-pool` is deliberately NOT set. `vmThreads` would cut this
+      # suite's jsdom environment setup (31% of its 158.90s runtime) to
+      # ~3%, but it runs each worker in a `vm` context where
+      # `globalThis.location` is non-configurable — and five test files
+      # stub it (`src/api/client.test.ts`, `src/hooks/useSdkLicenses.test.tsx`,
+      # `src/hooks/useSystemImageInstall.test.tsx`,
+      # `src/settings/sections/AccountSection.test.tsx`,
+      # `src/voice/support.test.ts`), so 24 tests fail with "Cannot redefine
+      # property: location". Measured locally with
+      # `npx vitest run --pool=vmThreads` before enabling it. Leave this
+      # unset until those files stop stubbing `location`/`window`.
+      #
+      # NEVER set `test-pool` on the test-node caller either: `vmThreads`
+      # does not load native addons, and the backend needs the
+      # better-sqlite3 and node-pty native bindings over a real temp
+      # SQLite DB.
       strict-checks: true
       # The tree was already scanned by the test-node job above.
       detect-secrets: false
@@ -93,12 +151,21 @@ jobs:
   # prove it isn't flaky before every future merge is gated on it.
   test-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, not 15 (2026-10-22 CI audit). The `Install Playwright Chromium`
+    # step measured 11-32s in 8 of 10 runs but 632s and 509s in the other
+    # two — and the slow runs are apt, not Playwright: the Chromium cache
+    # hit normally, but `playwright install --with-deps` also runs apt,
+    # and one run fetched 25.9 MB at 43.1 kB/s ("Fetched 25.9 MB in 10min
+    # 2s"). At 15 minutes the 632s case left only ~3.5m of headroom for a
+    # 2-minute e2e suite, so a slightly slower mirror timed the job out —
+    # a red e2e that is easy to miss, since this job is not a required
+    # status check.
+    timeout-minutes: 25
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "26"
           cache: "npm"
@@ -114,12 +181,19 @@ jobs:
       # unrelated dependency bump costs a full re-download rather than
       # silently reusing a stale browser build under a partial-match key.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: |
+          # `playwright install --with-deps` also runs apt, and apt is the
+          # step that actually varies: one measured run fetched 25.9 MB at
+          # 43.1 kB/s and took 10m02s on its own. Retrying the fetch is
+          # cheaper than losing the job to it — a mirror that stalls once
+          # usually answers the retry.
+          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99-retries
+          npx playwright install --with-deps chromium
       # Install the pinned opencode (v2) the
       # `test/e2e/opencode-v2-contract.e2e.test.ts` contract test asserts
       # against: `--standalone`, `OPENCODE_CONFIG_CONTENT` layering

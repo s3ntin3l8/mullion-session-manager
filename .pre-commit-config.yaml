@@ -121,9 +121,13 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # The pre-push test hooks run `test:coverage`, NOT `test` — the
+      # patch-coverage hook below reads the coverage JSON they produce, so
+      # running plain `test` here would make that hook re-run the whole
+      # suite a second time to regenerate it.
       - id: npm-test
         name: vitest (unit tests, backend)
-        entry: npm run test
+        entry: npm run test:coverage
         language: system
         files: '^(?!frontend/).*\.(ts|tsx|js|jsx|mjs|cjs)$'
         pass_filenames: false
@@ -131,8 +135,26 @@ repos:
 
       - id: npm-test-frontend
         name: vitest (unit tests, frontend)
-        entry: npm --prefix frontend run test
+        entry: npm --prefix frontend run test:coverage
         language: system
         files: '^frontend/.*\.(ts|tsx|js|jsx)$'
         pass_filenames: false
+        stages: [pre-push]
+
+      # The >=75% patch-coverage rule (AGENTS.md's "Core invariants"). This
+      # hook MUST stay last in this file: pre-commit runs hooks in file
+      # order, and this one consumes the coverage/coverage-final.json that
+      # the two test hooks above just wrote.
+      #
+      # The check itself is scripts/check-patch-coverage.mjs, reused
+      # unchanged through a thin wrapper that skips (rather than fails)
+      # when no base ref is available. CI keeps the same floor advisory
+      # via the `codecov/patch` status — this hook is the local half of
+      # that rule, and the reason it was previously enforced nowhere.
+      - id: patch-coverage
+        name: patch test coverage (>= 75% on changed lines)
+        entry: npm run check:patch-coverage
+        language: system
+        pass_filenames: false
+        always_run: true
         stages: [pre-push]

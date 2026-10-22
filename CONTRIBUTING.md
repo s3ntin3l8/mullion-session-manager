@@ -56,11 +56,13 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
 `make install-hooks` wires up local git hooks that catch most of this
 automatically — `pre-commit` runs lint/typecheck (scoped to whichever
 workspace you touched) and `pre-push` additionally runs the full test suite
-(both workspaces) and a **repo-wide** `prettier --check` (covers
-`frontend/` too, not just the backend). Run the same checks manually before
-opening a PR — `make lint`/`typecheck`/`test` already cover both
-workspaces; use `make test-backend` if you just want the backend-only fast
-loop:
+(both workspaces, with coverage enabled so the patch-coverage check can
+reuse it), a **repo-wide** `prettier --check` (covers `frontend/` too, not
+just the backend) and the **≥75% patch-coverage check**. Lint itself is a
+**pre-commit** hook only, and it is path-scoped — the hooks do not run the
+repo-wide lint for you. Run the same checks manually before opening a PR —
+`make lint`/`typecheck`/`test` already cover both workspaces; use
+`make test-backend` if you just want the backend-only fast loop:
 
 ```bash
 make lint && make typecheck && make test && make format-check
@@ -69,9 +71,13 @@ make lint && make typecheck && make test && make format-check
 If `make format-check` fails, `make format` applies the fix in place.
 
 Any new or modified executable line in `src/` or `frontend/src/` must also
-meet **≥75% patch test coverage** against `origin/main` — verify with `make
-test-patch-coverage` before pushing; Codecov enforces the same floor on the
-PR. `make test-patch-coverage`'s istanbul instrumentation only covers
+meet **≥75% patch test coverage** against `origin/main`. The `pre-push` hook
+runs this check for you (`npm run check:patch-coverage`); `make
+test-patch-coverage` runs the same thing by hand. On the PR, Codecov reports
+the same floor as the advisory `codecov/patch` status — it is **not** one of
+`main`'s required status checks, so it shows you the number but does not
+block the merge on its own. `make test-patch-coverage`'s istanbul
+instrumentation only covers
 `src/`/`frontend/src/`, so a shell-only change under `deploy/`/`scripts/`
 reports "no source changes" regardless of how much `.sh` logic changed —
 that's expected, not a gap to work around. Those scripts still get
@@ -105,10 +111,17 @@ changelog.
 
 `main` requires a PR (no direct pushes, no admin bypass) and these status
 checks: `test-node / lint-and-test`, `test-node / test-merge`,
-`test-frontend / lint-and-test`, and CodeQL's
+`test-frontend / lint-and-test`, `test-frontend / test-merge`, and CodeQL's
 `analyze / Analyze (javascript-typescript)`. All of the above (lint,
 typecheck, test, format-check) map directly to what those checks run, so a
 clean local run should mean a clean CI run.
+
+The two `test-merge` entries are the coverage gates: both workspaces shard
+their test run, so the real tests (and the `coverage-fail-under` check) live
+in `test-merge`, not in `lint-and-test`. `lint-and-test` keeps running
+lint/typecheck/build. If a `test-merge` context is ever dropped from this
+list, the corresponding `lint-and-test` context still reports green while no
+test ran — a broken suite would merge silently.
 
 ## Automated review
 
