@@ -64,6 +64,15 @@ const BROWSER_ACTION_TIMEOUT_MS = 30_000;
 // #1457) so core.mjs's own CLI-side retry can share the exact same
 // implementation instead of re-deriving it.
 
+/** The target-selecting fields of a relay request, minus the unset ones. */
+function relayTarget({ prNumber, repo, branch }) {
+  const out = {};
+  if (prNumber !== undefined) out.prNumber = prNumber;
+  if (repo !== undefined) out.repo = repo;
+  if (branch !== undefined) out.branch = branch;
+  return out;
+}
+
 export class MullionClient {
   constructor(env = process.env) {
     this.hookSocketPath = env.MULLION_HOOK_SOCKET;
@@ -561,14 +570,14 @@ export class MullionClient {
   /** Asks the Mullion server to relay a Hermes review request for this
    * session's PR. `prNumber` is optional — the server resolves the PR from
    * the session's branch when omitted. */
-  async requestReview(prNumber) {
-    return this.reviewOp("reviews.request", prNumber === undefined ? {} : { prNumber });
+  async requestReview(prNumber, target) {
+    return this.reviewOp("reviews.request", relayTarget({ prNumber, ...target }));
   }
 
   /** Status of the latest review run for this session's PR (Hermes status plus
    * whether the bot's review landed on GitHub). */
-  async reviewStatus(prNumber) {
-    return this.reviewOp("reviews.status", prNumber === undefined ? {} : { prNumber });
+  async reviewStatus(prNumber, target) {
+    return this.reviewOp("reviews.status", relayTarget({ prNumber, ...target }));
   }
 
   /** Stops a review run this session dispatched. */
@@ -579,13 +588,13 @@ export class MullionClient {
   /** Asks the Mullion server to relay a Hermes triage of an issue in this
    * session's repo. The issue number is required — there is no "current
    * issue" to infer from the session's branch. */
-  async requestTriage(issueNumber) {
-    return this.reviewOp("triage.request", { issueNumber });
+  async requestTriage(issueNumber, target) {
+    return this.reviewOp("triage.request", { issueNumber, ...relayTarget({ repo: target?.repo }) });
   }
 
   /** Status of the latest triage run for an issue in this session's repo. */
-  async triageStatus(issueNumber) {
-    return this.reviewOp("triage.status", { issueNumber });
+  async triageStatus(issueNumber, target) {
+    return this.reviewOp("triage.status", { issueNumber, ...relayTarget({ repo: target?.repo }) });
   }
 
   /** `projectId`/`url` are mutually exclusive, same as `mullion preview

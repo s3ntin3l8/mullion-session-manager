@@ -367,7 +367,10 @@ as an error.
 
 Mullion can ask the review bot to review your pull request. Ask for it with
 `mullion review` (or the `request_review` MCP tool), then check on it with
-`mullion review status` (or `review_status`).
+`mullion review status` (or `review_status`). The request is about the
+repository you run the command in; over MCP, or when the PR is in another
+registered project's repository, pass `--repo owner/name` (MCP: `repo`) with
+the PR number.
 
 **One review per pull request at a time.** A review takes **10-30 minutes**.
 If you ask again while one is running, the request is _refused_ and hands you

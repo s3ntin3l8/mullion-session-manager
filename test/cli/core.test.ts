@@ -735,6 +735,9 @@ function fakeIo() {
     },
     setRawMode: vi.fn(),
     env: {},
+    // Never read this checkout's real origin/branch: `mullion review` infers
+    // its target from the cwd (see sendRelayOp in cli/core.mjs).
+    gitTarget: (): { repo?: string; branch?: string } => ({}),
   };
 }
 
@@ -1189,6 +1192,173 @@ describe("runCommand", () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
         await runCommand(["review"], { client, io: fakeIo() });
         expect((client as unknown as { requestTimeoutMs: number }).requestTimeoutMs).toBe(60_000);
+      });
+
+      describe("which repository (cwd inference, --repo, --branch)", () => {
+        const withGit = (target: { repo?: string; branch?: string }) => {
+          const io = fakeIo();
+          io.gitTarget = () => target;
+          return io;
+        };
+
+        it("sends the repo and branch of the directory it is run from", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            repo: "acme/.github",
+            branch: "feat/ci",
+          });
+        });
+
+        it("drops the inferred branch when --pr names the PR", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--pr", "7"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            prNumber: 7,
+            repo: "acme/.github",
+          });
+        });
+
+        it("infers for status too", async () => {
+          const client = fakeClient({
+            request: vi.fn(async () => ({
+              status: "running",
+              runId: "r",
+              repo: "a/b",
+              prNumber: 1,
+            })),
+          });
+          await runCommand(["review", "status"], { client, io: withGit({ repo: "acme/.github" }) });
+          expect(client.request).toHaveBeenCalledWith("reviews.status", { repo: "acme/.github" });
+        });
+
+        it("an explicit --repo and --branch are the whole answer: nothing is inferred", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--repo", "acme/other", "--branch", "feat/x"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledTimes(1);
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            repo: "acme/other",
+            branch: "feat/x",
+          });
+        });
+
+        it("keeps an explicit --branch when only the repo is inferred", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review", "--branch", "feat/x"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {
+            branch: "feat/x",
+            repo: "acme/.github",
+          });
+        });
+
+        it("sends nothing extra outside a git checkout", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          await runCommand(["review"], { client, io: withGit({}) });
+          expect(client.request).toHaveBeenCalledWith("reviews.request", {});
+        });
+
+        it("retries without an INFERRED repo the server refuses (403)", async () => {
+          const request = vi
+            .fn()
+            .mockRejectedValueOnce(new MullionSocketError(403, "not a registered project"))
+            .mockResolvedValueOnce(dispatched);
+          const client = fakeClient({ request });
+          const code = await runCommand(["review"], {
+            client,
+            io: withGit({ repo: "me/fork", branch: "feat/x" }),
+          });
+          expect(code).toBe(0);
+          expect(request).toHaveBeenNthCalledWith(1, "reviews.request", {
+            repo: "me/fork",
+            branch: "feat/x",
+          });
+          expect(request).toHaveBeenNthCalledWith(2, "reviews.request", {});
+        });
+
+        it("does not retry an EXPLICIT --repo the server refuses", async () => {
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(403, "not registered"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review", "--repo", "evil/other", "--pr", "1"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
+        it("rethrows any other error from an inferred request", async () => {
+          const request = vi.fn().mockRejectedValue(new MullionSocketError(409, "in flight"));
+          const client = fakeClient({ request });
+          const code = await runCommand(["review"], { client, io: withGit({ repo: "a/b" }) });
+          expect(code).not.toBe(0);
+          expect(request).toHaveBeenCalledTimes(1);
+        });
+
+        it("never infers for stop", async () => {
+          const client = fakeClient({
+            request: vi.fn(async () => ({ runId: "run_1", status: "stopping" })),
+          });
+          await runCommand(["review", "stop", "run_1"], {
+            client,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("reviews.stop", { runId: "run_1" });
+        });
+
+        it("triage infers the repo (never a branch) and takes --repo", async () => {
+          const triaged = {
+            status: "dispatched",
+            repo: "acme/.github",
+            issueNumber: 5,
+            runId: "run_t",
+            runStatus: "queued",
+          };
+          const client = fakeClient({ request: vi.fn(async () => triaged) });
+          await runCommand(["triage", "--issue", "5"], {
+            client,
+            io: withGit({ repo: "acme/.github", branch: "feat/ci" }),
+          });
+          expect(client.request).toHaveBeenCalledWith("triage.request", {
+            issueNumber: 5,
+            repo: "acme/.github",
+          });
+          const explicit = fakeClient({ request: vi.fn(async () => triaged) });
+          await runCommand(["triage", "--issue", "5", "--repo", "acme/other"], {
+            client: explicit,
+            io: withGit({ repo: "acme/.github" }),
+          });
+          expect(explicit.request).toHaveBeenCalledWith("triage.request", {
+            issueNumber: 5,
+            repo: "acme/other",
+          });
+        });
+      });
+
+      describe("the real git inference", () => {
+        it("reads this checkout's origin and branch when io has no gitTarget", async () => {
+          const client = fakeClient({ request: vi.fn(async () => dispatched) });
+          const io = fakeIo() as Record<string, unknown>;
+          delete io.gitTarget;
+          await runCommand(["review"], { client, io: io as unknown as ReturnType<typeof fakeIo> });
+          const [, body] = (client.request as ReturnType<typeof vi.fn>).mock.calls[0];
+          // A GitHub remote parses to owner/name; the tests run inside a
+          // checkout, but a CI sandbox may have no origin, so only the shape
+          // is asserted.
+          if (body.repo !== undefined) expect(body.repo).toMatch(/^[\w-]+\/[\w.-]+$/);
+          if (body.branch !== undefined) expect(body.branch).not.toBe("HEAD");
+        });
       });
 
       it("--pr forwards prNumber as an integer", async () => {

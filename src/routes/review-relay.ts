@@ -43,33 +43,46 @@ import {
 // An agent's `request_review` / `review_status` / `stop_review` (MCP) and
 // `mullion review [status|stop]` (CLI) land here via the control socket's
 // `reviews.*` ops (plugins/control-socket.ts), which pin a session-scope
-// caller to its OWN session id. The repo is always derived from that session's
-// project — never from the request body — so a session can only ever ask
-// about a PR in the repo it is working in, and can only stop runs it
-// dispatched itself. The Hermes URL/key never leave the server
+// caller to its OWN session id. The repo defaults to the one the session's
+// project is in. A caller working in ANOTHER repo (a session in one project
+// that also edits a sibling repo) names it with `repo`; that is honoured only
+// when it is a repo registered as a Mullion project on this instance
+// (selectRelayRepo below), so the request body can widen the target to repos
+// the operator set up, never to an arbitrary one. A session can only stop
+// runs it dispatched itself. The Hermes URL/key never leave the server
 // (services/hermes-integration.ts).
 //
 // The same relay also serves issue triage (issue #1629): `triage.request` /
 // `triage_status` (MCP) and `mullion triage` (CLI) reach the routes below.
-// A triage's target is an issue *number* in the session's repo — there is no
-// "current issue" to infer, so the number always comes from the caller — and
-// the same scoping rules apply: the repo comes from the session's project,
-// never from the request body.
+// A triage's target is an issue *number* — there is no "current issue" to
+// infer, so the number always comes from the caller — and the same repo
+// scoping rules apply.
 
 interface ReviewRequestBody {
   prNumber?: number;
+  repo?: string;
+  branch?: string;
 }
 
 interface TriageRequestBody {
   issueNumber: number;
+  repo?: string;
 }
+
+// `owner/name`, as GitHub spells them.
+const repoProperty = {
+  type: "string",
+  pattern: "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$",
+  maxLength: 200,
+} as const;
+const branchProperty = { type: "string", minLength: 1, maxLength: 250 } as const;
 
 const triageRequestSchema = {
   body: {
     type: "object",
     additionalProperties: false,
     required: ["issueNumber"],
-    properties: { issueNumber: { type: "integer", minimum: 1 } },
+    properties: { issueNumber: { type: "integer", minimum: 1 }, repo: repoProperty },
   },
 };
 
@@ -78,7 +91,7 @@ const triageStatusSchema = {
     type: "object",
     additionalProperties: false,
     required: ["issueNumber"],
-    properties: { issueNumber: { type: "integer", minimum: 1 } },
+    properties: { issueNumber: { type: "integer", minimum: 1 }, repo: repoProperty },
   },
 };
 
@@ -86,7 +99,11 @@ const reviewRequestSchema = {
   body: {
     type: "object",
     additionalProperties: false,
-    properties: { prNumber: { type: "integer", minimum: 1 } },
+    properties: {
+      prNumber: { type: "integer", minimum: 1 },
+      repo: repoProperty,
+      branch: branchProperty,
+    },
   },
 };
 
@@ -94,7 +111,11 @@ const reviewStatusSchema = {
   querystring: {
     type: "object",
     additionalProperties: false,
-    properties: { prNumber: { type: "integer", minimum: 1 } },
+    properties: {
+      prNumber: { type: "integer", minimum: 1 },
+      repo: repoProperty,
+      branch: branchProperty,
+    },
   },
 };
 
@@ -110,6 +131,8 @@ const reviewStopSchema = {
 interface ReviewTarget {
   owner: string;
   repo: string;
+  /** The PR is in a repo other than the session's project's. */
+  foreign: boolean;
   prNumber: number;
   headSha: string;
   token: string;
@@ -233,39 +256,40 @@ function isDetachedBranch(branch: string): boolean {
   return /^[0-9a-f]{7}$/i.test(branch);
 }
 
+interface RelayRepo {
+  owner: string;
+  repo: string;
+  /** True when the caller named a repo other than the session's project's. */
+  foreign: boolean;
+}
+
 /**
- * Session → repo + PR (+ head SHA and a read token). Sends the error reply
- * itself and returns null when the target can't be resolved.
+ * Which repo a relay request is about. Sends the error reply itself and
+ * returns null when it can't be resolved.
+ *
+ * Without `requested` it is the repo of the session's project, exactly as
+ * before. With it, the caller says the work is in a repo other than that
+ * (a session in one project that also edits a sibling repo): honoured only
+ * when it is the project's own repo or another repo registered as a Mullion
+ * project here — a 403 otherwise, so the body can widen the target to repos
+ * the operator set up, never to an arbitrary one.
+ *
+ * The project's own repo is read from the project's cwd, not the session's:
+ * parseGitRemote reads `<cwd>/.git/config` directly, which doesn't exist for
+ * a worktree (where `.git` is a file). resolveRepoRefResult already proxies
+ * to the agent for a remote-hosted project (services/host-git.ts), so the
+ * ref is host-agnostic (issue #1628). It is the Result variant because the
+ * collapsing one answers "no GitHub remote" for a remote host that is DOWN or
+ * too old for this route, a wrong (and unlogged) cause: unreachable answers
+ * 503, version skew 412.
  */
-async function resolveReviewTarget(
+async function selectRelayRepo(
   app: FastifyInstance,
   reply: FastifyReply,
-  sessionId: number,
-  requestedPr: number | undefined,
-): Promise<ReviewTarget | null> {
-  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-  if (!session) {
-    reply.notFound("Session not found");
-    return null;
-  }
-  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
-  if (!project) {
-    reply.notFound("Project not found");
-    return null;
-  }
-
-  // The project's own cwd, not the session's: parseGitRemote reads
-  // `<cwd>/.git/config` directly, which doesn't exist for a worktree
-  // (where `.git` is a file). resolveRepoRef already proxies to the agent
-  // for a remote-hosted project (services/host-git.ts), so the repo ref is
-  // host-agnostic — issue #1628 removed the local-only 412 below, and the
-  // branch detection further down now resolves through the same host.
-  //
-  // resolveRepoRefResult, not resolveRepoRef: the collapsing variant
-  // answers "no GitHub remote" for a remote host that is DOWN or too old
-  // for this route, which is a wrong (and unlogged) cause for a project
-  // this route now admits. The unreachable case answers 503; the version-skew
-  // case stays a 412.
+  project: typeof projects.$inferSelect,
+  requested: string | undefined,
+  logLabel: "review-request" | "triage-request",
+): Promise<RelayRepo | null> {
   const repoResult = await resolveRepoRefResult(app, project);
   if (!repoResult.ok) {
     // Logged like routes/projects.ts does — an unreachable host and an agent
@@ -278,7 +302,7 @@ async function resolveReviewTarget(
         reason: repoResult.reason,
         detail: repoResult.reason === "unreachable" ? repoResult.detail : undefined,
       },
-      "review-request: could not resolve the project host's GitHub remote",
+      `${logLabel}: could not resolve the project host's GitHub remote`,
     );
     if (repoResult.reason === "unreachable") {
       reply.serviceUnavailable("The project host is unreachable — try again shortly");
@@ -288,12 +312,76 @@ async function resolveReviewTarget(
     reply.preconditionFailed("This project's host cannot resolve its GitHub remote");
     return null;
   }
-  const repoRef = repoResult.value;
-  if (!repoRef) {
-    reply.preconditionFailed("This project has no GitHub remote");
+  const own = repoResult.value;
+  if (requested === undefined) {
+    if (!own) {
+      reply.preconditionFailed("This project has no GitHub remote");
+      return null;
+    }
+    return { owner: own.owner, repo: own.repo, foreign: false };
+  }
+
+  // GitHub treats owner/name case-insensitively.
+  const wanted = requested.toLowerCase();
+  const matches = (ref: { owner: string; repo: string }) =>
+    `${ref.owner}/${ref.repo}`.toLowerCase() === wanted;
+  if (own && matches(own)) return { owner: own.owner, repo: own.repo, foreign: false };
+
+  const others = app.db
+    .select()
+    .from(projects)
+    .all()
+    .filter((p) => p.id !== project.id);
+  // A registered project whose host is down (or too old) just doesn't match:
+  // for "is this repo registered" that is the right answer, so the failure
+  // collapses to null here.
+  const refs = await Promise.all(
+    others.map(async (p) => {
+      const result = await resolveRepoRefResult(app, p);
+      return result.ok ? result.value : null;
+    }),
+  );
+  const registered = refs.find((ref) => ref && matches(ref));
+  if (!registered) {
+    reply.forbidden(
+      `${requested} is not a repository registered as a Mullion project — a session can only ask about its own project's repository or another registered one`,
+    );
     return null;
   }
-  const { owner, repo } = repoRef;
+  return { owner: registered.owner, repo: registered.repo, foreign: true };
+}
+
+/**
+ * Session → repo + PR (+ head SHA and a read token). Sends the error reply
+ * itself and returns null when the target can't be resolved.
+ */
+async function resolveReviewTarget(
+  app: FastifyInstance,
+  reply: FastifyReply,
+  sessionId: number,
+  requested: { prNumber?: number; repo?: string; branch?: string },
+): Promise<ReviewTarget | null> {
+  const requestedPr = requested.prNumber;
+  const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+  if (!session) {
+    reply.notFound("Session not found");
+    return null;
+  }
+  const [project] = app.db.select().from(projects).where(eq(projects.id, session.projectId)).all();
+  if (!project) {
+    reply.notFound("Project not found");
+    return null;
+  }
+
+  const target = await selectRelayRepo(app, reply, project, requested.repo, "review-request");
+  if (!target) return null;
+  const { owner, repo, foreign } = target;
+  // The session's own branch says nothing about a PR in another repo: the
+  // caller has to name the PR (or the branch it is on there).
+  if (foreign && requestedPr === undefined && requested.branch === undefined) {
+    reply.badRequest(`${owner}/${repo} is not this session's project — pass prNumber or branch`);
+    return null;
+  }
 
   const token = await resolveGitHubToken(app, { owner, repo }, "read");
   if (!token) {
@@ -304,7 +392,9 @@ async function resolveReviewTarget(
   let prNumber = requestedPr;
   try {
     if (prNumber === undefined) {
-      const branch = await resolveSessionBranch(app, project, session);
+      // A branch the caller reports (the CLI reads it from its own cwd, which
+      // is where the agent actually is) beats the session's launch cwd.
+      const branch = requested.branch ?? (await resolveSessionBranch(app, project, session));
       if (!branch || branch === "(detached)" || isDetachedBranch(branch)) {
         reply.notFound("Could not determine this session's branch — pass prNumber");
         return null;
@@ -322,6 +412,7 @@ async function resolveReviewTarget(
     return {
       owner,
       repo,
+      foreign,
       prNumber,
       headSha: pr.headSha,
       token,
@@ -404,9 +495,9 @@ function isTaskMasterReviewRequest(
 
 /**
  * Session → repo + issue number (+ a read token), for the triage relay
- * (issue #1629). The repo comes from the session's project — never from the
- * request body — exactly as the review path does, so a session can only
- * triage an issue in the repo it is working in. The issue *number* always
+ * (issue #1629). The repo is chosen exactly as the review path does
+ * (selectRelayRepo): the session's project's, or another registered project's
+ * when the caller names it. The issue *number* always
  * comes from the caller: there is no "current issue" to infer from a
  * session's branch.
  */
@@ -415,6 +506,7 @@ async function resolveTriageTarget(
   reply: FastifyReply,
   sessionId: number,
   issueNumber: number,
+  requestedRepo: string | undefined,
 ): Promise<TriageTarget | null> {
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
   if (!session) {
@@ -427,32 +519,10 @@ async function resolveTriageTarget(
     return null;
   }
 
-  // The same host-aware resolution the review path uses: a remote host that
-  // is down is not "this project has no GitHub remote" (issue #1628).
-  const repoResult = await resolveRepoRefResult(app, project);
-  if (!repoResult.ok) {
-    app.log.warn(
-      {
-        hostId: project.hostId,
-        projectId: project.id,
-        reason: repoResult.reason,
-        detail: repoResult.reason === "unreachable" ? repoResult.detail : undefined,
-      },
-      "triage-request: could not resolve the project host's GitHub remote",
-    );
-    if (repoResult.reason === "unreachable") {
-      reply.serviceUnavailable("The project host is unreachable — try again shortly");
-      return null;
-    }
-    reply.preconditionFailed("This project's host cannot resolve its GitHub remote");
-    return null;
-  }
-  const repoRef = repoResult.value;
-  if (!repoRef) {
-    reply.preconditionFailed("This project has no GitHub remote");
-    return null;
-  }
-  const { owner, repo } = repoRef;
+  // The same host-aware, scoped resolution the review path uses.
+  const target = await selectRelayRepo(app, reply, project, requestedRepo, "triage-request");
+  if (!target) return null;
+  const { owner, repo } = target;
 
   const token = await resolveGitHubToken(app, { owner, repo }, "read");
   if (!token) {
@@ -503,14 +573,29 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
       // A refusal like the in-flight one: the answer, not an error to retry.
-      if (isTaskMasterReviewRequest(app, sessionId, request.body.prNumber)) {
-        return reply.conflict(
+      const taskMasterRefusal = () =>
+        reply.conflict(
           "This session works an active Task Master task, and Task Master runs that task's review — do not request one",
         );
+      // Without a named repo this runs first, before any GitHub lookup. With
+      // one, whether it is the task's repo is only known once it resolves, and
+      // a PR number in ANOTHER repo is not the task's PR (see below).
+      if (
+        request.body.repo === undefined &&
+        isTaskMasterReviewRequest(app, sessionId, request.body.prNumber)
+      ) {
+        return taskMasterRefusal();
       }
 
-      const target = await resolveReviewTarget(app, reply, sessionId, request.body.prNumber);
+      const target = await resolveReviewTarget(app, reply, sessionId, request.body);
       if (!target) return reply;
+      if (
+        request.body.repo !== undefined &&
+        !target.foreign &&
+        isTaskMasterReviewRequest(app, sessionId, target.prNumber)
+      ) {
+        return taskMasterRefusal();
+      }
       const { owner, repo, prNumber, headSha } = target;
 
       try {
@@ -563,7 +648,10 @@ export async function reviewRequestRoute(app: FastifyInstance) {
   // Status of the latest review run for the session's PR, plus whether the
   // review bot's verdict actually landed on GitHub — Hermes can report
   // "completed" for a run that posted nothing (e.g. it had no App credentials).
-  app.get<{ Params: { id: string }; Querystring: { prNumber?: number } }>(
+  app.get<{
+    Params: { id: string };
+    Querystring: { prNumber?: number; repo?: string; branch?: string };
+  }>(
     "/api/sessions/:id/review-request",
     { schema: reviewStatusSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -571,7 +659,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
       if (!gateReviewer(app, reply)) return reply;
 
-      const target = await resolveReviewTarget(app, reply, sessionId, request.query.prNumber);
+      const target = await resolveReviewTarget(app, reply, sessionId, request.query);
       if (!target) return reply;
       const { owner, repo, prNumber, token } = target;
 
@@ -644,7 +732,13 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       // The schema requires issueNumber, so Fastify has already refused a
       // request without one.
       const issueNumber = request.body.issueNumber;
-      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      const target = await resolveTriageTarget(
+        app,
+        reply,
+        sessionId,
+        issueNumber,
+        request.body.repo,
+      );
       if (!target) return reply;
       const { owner, repo } = target;
 
@@ -676,7 +770,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
 
   // Status of the latest triage run for an issue, plus whether the triage
   // comment actually landed on it.
-  app.get<{ Params: { id: string }; Querystring: { issueNumber: number } }>(
+  app.get<{ Params: { id: string }; Querystring: { issueNumber: number; repo?: string } }>(
     "/api/sessions/:id/triage-request",
     { schema: triageStatusSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -687,7 +781,13 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       // The schema requires issueNumber, so Fastify has already refused a
       // request without one.
       const issueNumber = request.query.issueNumber;
-      const target = await resolveTriageTarget(app, reply, sessionId, issueNumber);
+      const target = await resolveTriageTarget(
+        app,
+        reply,
+        sessionId,
+        issueNumber,
+        request.query.repo,
+      );
       if (!target) return reply;
       const { owner, repo, token } = target;
 
@@ -741,7 +841,7 @@ const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTE
 async function findLandedReview(
   app: FastifyInstance,
   token: string,
-  t: ReviewTarget,
+  t: Omit<ReviewTarget, "foreign">,
   record: { dispatchedAt: number; headSha: string } | null,
 ): Promise<LandedReview> {
   if (!record) return { checked: false };
@@ -1073,7 +1173,7 @@ export function reviewReader(
  * dispatch it is attached to.
  */
 async function existingBotReviewWarning(
-  t: ReviewTarget,
+  t: Omit<ReviewTarget, "foreign">,
   reader: { reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>> },
 ): Promise<{ warning?: string }> {
   try {

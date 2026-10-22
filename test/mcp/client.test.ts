@@ -555,6 +555,27 @@ describe("MullionClient (issue #271)", () => {
         await client.requestReview(9);
       });
 
+      it("forwards repo and branch alongside prNumber, and omits the unset ones", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "dispatched" });
+        await client.requestReview(4, { repo: "acme/.github", branch: "feat/ci" });
+        expect(spy).toHaveBeenLastCalledWith(
+          "reviews.request",
+          { prNumber: 4, repo: "acme/.github", branch: "feat/ci" },
+          60_000,
+        );
+        await client.reviewStatus(undefined, { repo: "acme/.github" });
+        expect(spy).toHaveBeenLastCalledWith("reviews.status", { repo: "acme/.github" }, 60_000);
+        await client.requestTriage(5, { repo: "acme/.github" });
+        expect(spy).toHaveBeenLastCalledWith(
+          "triage.request",
+          { issueNumber: 5, repo: "acme/.github" },
+          60_000,
+        );
+        await client.triageStatus(5, undefined);
+        expect(spy).toHaveBeenLastCalledWith("triage.status", { issueNumber: 5 }, 60_000);
+      });
+
       it("uses a longer request timeout than the 30s default", async () => {
         const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
         const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "dispatched" });

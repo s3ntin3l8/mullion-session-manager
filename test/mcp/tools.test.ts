@@ -400,7 +400,7 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       .fn()
       .mockResolvedValue({ status: "dispatched", repo: "a/b", prNumber: 7 });
     const text = await tool.handler({ pr_number: 7 }, { requestReview });
-    expect(requestReview).toHaveBeenCalledWith(7);
+    expect(requestReview).toHaveBeenCalledWith(7, { repo: undefined, branch: undefined });
     expect(JSON.parse(text)).toEqual({ status: "dispatched", repo: "a/b", prNumber: 7 });
   });
 
@@ -408,9 +408,53 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const tool = TOOLS.find((t) => t.name === "request_review")!;
     const requestReview = vi.fn().mockResolvedValue({ status: "dispatched" });
     await tool.handler({}, { requestReview });
-    expect(requestReview).toHaveBeenCalledWith(undefined);
+    expect(requestReview).toHaveBeenCalledWith(undefined, { repo: undefined, branch: undefined });
     await tool.handler(undefined, { requestReview });
-    expect(requestReview).toHaveBeenLastCalledWith(undefined);
+    expect(requestReview).toHaveBeenLastCalledWith(undefined, {
+      repo: undefined,
+      branch: undefined,
+    });
+  });
+
+  it("request_review and review_status forward repo and branch for a PR in another repository", async () => {
+    const requestReview = vi.fn().mockResolvedValue({ status: "dispatched" });
+    await TOOLS.find((t) => t.name === "request_review")!.handler(
+      { pr_number: 3, repo: "acme/.github", branch: "feat/ci" },
+      { requestReview },
+    );
+    expect(requestReview).toHaveBeenCalledWith(3, { repo: "acme/.github", branch: "feat/ci" });
+    const reviewStatus = vi.fn().mockResolvedValue({ status: "running" });
+    await TOOLS.find((t) => t.name === "review_status")!.handler(
+      { repo: "acme/.github", branch: "feat/ci" },
+      { reviewStatus },
+    );
+    expect(reviewStatus).toHaveBeenCalledWith(undefined, {
+      repo: "acme/.github",
+      branch: "feat/ci",
+    });
+  });
+
+  it("request_triage and triage_status forward repo", async () => {
+    const requestTriage = vi.fn().mockResolvedValue({ status: "dispatched" });
+    await TOOLS.find((t) => t.name === "request_triage")!.handler(
+      { issue_number: 4, repo: "acme/.github" },
+      { requestTriage },
+    );
+    expect(requestTriage).toHaveBeenCalledWith(4, { repo: "acme/.github" });
+    const triageStatus = vi.fn().mockResolvedValue({ status: "running" });
+    await TOOLS.find((t) => t.name === "triage_status")!.handler(
+      { issue_number: 4, repo: "acme/.github" },
+      { triageStatus },
+    );
+    expect(triageStatus).toHaveBeenCalledWith(4, { repo: "acme/.github" });
+  });
+
+  it("the relay tools describe repo as an owner/name string, optional", () => {
+    for (const name of ["request_review", "review_status", "request_triage", "triage_status"]) {
+      const tool = TOOLS.find((t) => t.name === name)!;
+      expect(tool.inputSchema.properties).toHaveProperty("repo.type", "string");
+      expect(tool.inputSchema.required ?? []).not.toContain("repo");
+    }
   });
 
   it("request_review inputSchema has an optional positive-integer pr_number", () => {
@@ -426,10 +470,13 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const tool = TOOLS.find((t) => t.name === "review_status")!;
     const reviewStatus = vi.fn().mockResolvedValue({ status: "running", runId: "run_1" });
     const text = await tool.handler({ pr_number: 7 }, { reviewStatus });
-    expect(reviewStatus).toHaveBeenCalledWith(7);
+    expect(reviewStatus).toHaveBeenCalledWith(7, { repo: undefined, branch: undefined });
     expect(JSON.parse(text)).toEqual({ status: "running", runId: "run_1" });
     await tool.handler(undefined, { reviewStatus });
-    expect(reviewStatus).toHaveBeenLastCalledWith(undefined);
+    expect(reviewStatus).toHaveBeenLastCalledWith(undefined, {
+      repo: undefined,
+      branch: undefined,
+    });
     expect(tool.inputSchema).not.toHaveProperty("required");
   });
 
@@ -448,7 +495,7 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       .fn()
       .mockResolvedValue({ status: "dispatched", repo: "a/b", issueNumber: 12 });
     const text = await tool.handler({ issue_number: 12 }, { requestTriage });
-    expect(requestTriage).toHaveBeenCalledWith(12);
+    expect(requestTriage).toHaveBeenCalledWith(12, { repo: undefined });
     expect(JSON.parse(text)).toEqual({ status: "dispatched", repo: "a/b", issueNumber: 12 });
     expect(tool.inputSchema).toMatchObject({
       required: ["issue_number"],
@@ -460,7 +507,7 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const tool = TOOLS.find((t) => t.name === "triage_status")!;
     const triageStatus = vi.fn().mockResolvedValue({ status: "running", runId: "run_triage" });
     const text = await tool.handler({ issue_number: 12 }, { triageStatus });
-    expect(triageStatus).toHaveBeenCalledWith(12);
+    expect(triageStatus).toHaveBeenCalledWith(12, { repo: undefined });
     expect(JSON.parse(text)).toEqual({ status: "running", runId: "run_triage" });
     expect(tool.inputSchema).toMatchObject({ required: ["issue_number"] });
   });
