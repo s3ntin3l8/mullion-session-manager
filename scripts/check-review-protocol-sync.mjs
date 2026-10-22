@@ -11,11 +11,15 @@
 // stale one wins — the agent follows the rule it happens to be reading, and
 // the queue grows again.
 //
-// The canonical wording lives in ONE place — src/cli/review-protocol.mjs,
-// imported by both clients — and this check asserts that every surface that
-// restates it says the same THING. It compares the clauses that carry the
-// rule, not the whole sentence: the surfaces are prose, and a check that
-// demanded byte-identical text would be rewritten by the next person who
+// The canonical wording lives in TWO places, for two audiences: the clients'
+// note (src/cli/review-protocol.mjs, imported by both clients) is the
+// install-agnostic rule an agent reads at the moment it asks for a review,
+// and the workflow-conventions fragment (src/services/workflow-conventions.ts)
+// is the install-wide text the Settings wizard generates and the scaffold
+// writes into every project's AGENTS.md. This check asserts that every
+// surface that restates it says the same THING. It compares the clauses that
+// carry the rule, not the whole sentence: the surfaces are prose, and a check
+// that demanded byte-identical text would be rewritten by the next person who
 // touched a paragraph.
 //
 // Like check-scaffold-region-sync (the AGENTS.md region guard), this is a
@@ -56,6 +60,36 @@ const SURFACES = [
   { label: "docs/cli.md", file: "docs/cli.md" },
 ];
 
+/**
+ * The install-wide conventions text (src/services/workflow-conventions.ts) is
+ * where the rule now lives for a fresh wizard run: the AGENTS.md region is
+ * GENERATED from that text (routes/project-setup.ts's scaffold apply), so the
+ * text is the source and the committed AGENTS.md is only its copy.
+ *
+ * A whole-file substring search would not do here: this file's own comments
+ * quote the rule, so a dropped fragment could still satisfy it. The check
+ * therefore looks INSIDE the fragment constant that states the rule.
+ */
+const CONVENTIONS_FILE = "src/services/workflow-conventions.ts";
+const BOT_REVIEW_FRAGMENT = "BOT_REVIEW_ONCE_FRAGMENT";
+
+/**
+ * Pulls `const NAME = "…"` string constants out of a TypeScript source.
+ * Deliberately narrow: the fragments are plain double-quoted top-level
+ * literals with no escaped quotes, so a regex is enough and keeps this check
+ * a dependency-free .mjs script (it runs in `npm run lint` before anything
+ * is built). Anchored to the start of a line, so a commented-out or indented
+ * copy of a constant cannot stand in for the real one.
+ */
+function extractStringConstants(source, namePattern) {
+  const found = new Map();
+  const re = new RegExp(`^const\\s+(${namePattern})\\s*=\\s*"([^"]*)"`, "gm");
+  for (const match of source.matchAll(re)) {
+    found.set(match[1], match[2]);
+  }
+  return found;
+}
+
 function read(rel) {
   return readFileSync(path.join(root, rel), "utf8");
 }
@@ -83,6 +117,37 @@ for (const surface of SURFACES) {
         `import it from there.`,
     );
     failed = true;
+  }
+}
+
+// The conventions text: the fragment that states the rule must carry it.
+let conventions;
+try {
+  conventions = read(CONVENTIONS_FILE);
+} catch {
+  console.error(`${CONVENTIONS_FILE} is missing — cannot check the review protocol.`);
+  failed = true;
+}
+if (conventions !== undefined) {
+  const constants = extractStringConstants(conventions, "[A-Z_]*FRAGMENT");
+  const fragment = constants.get(BOT_REVIEW_FRAGMENT);
+  if (fragment === undefined) {
+    console.error(
+      `${CONVENTIONS_FILE} does not define ${BOT_REVIEW_FRAGMENT} — the install-wide ` +
+        `conventions text no longer states the review protocol.`,
+    );
+    failed = true;
+  } else {
+    const haystack = fragment.toLowerCase();
+    const missing = CLAUSES.filter((clause) => !haystack.includes(clause.toLowerCase()));
+    if (missing.length > 0) {
+      console.error(
+        `${CONVENTIONS_FILE}'s ${BOT_REVIEW_FRAGMENT} does not carry the review ` +
+          `protocol: missing ${missing.map((c) => `"${c}"`).join(", ")}. The rule is ` +
+          `stated in src/cli/review-protocol.mjs (REVIEW_PROTOCOL_NOTE); restate it here.`,
+      );
+      failed = true;
+    }
   }
 }
 
@@ -120,4 +185,6 @@ if (missingNote.length > 0) {
 if (failed) {
   process.exit(1);
 }
-console.log(`review protocol: ${SURFACES.length} surfaces carry the rule.`);
+console.log(
+  `review protocol: ${SURFACES.length} surfaces carry the rule, and the conventions fragment states it.`,
+);

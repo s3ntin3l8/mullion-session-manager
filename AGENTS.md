@@ -13,23 +13,11 @@ context if you're running inside a Mullion-hosted session.
 
 <!-- mullion:briefing:start -->
 
-- **Work in a worktree.** Developer worktrees live under `.wt/`, e.g.
-  `.wt/<slug>`. Create one with `git fetch origin && git worktree add
-.wt/<slug> -b <slug> origin/main`, or `make wt name=<slug>` — the Makefile
-  target that does the fetch/worktree-add and runs both `npm ci`s for you
-  in one step. A fresh worktree does **not** inherit `node_modules` — run
-  `npm ci` at the repo root **and** `npm ci` in `frontend/` before testing
-  or building (already done for you by `make wt`).
 - **Never commit directly to `main`.** Branch protection has no bypass.
   Always branch off the latest `origin/main` and open a PR.
 - **PR title needs a Conventional Commits prefix** (`feat:`, `fix:`, `chore:`,
   ...). This repo squash-merges, so the PR title becomes the commit message on
-  `main` — an unprefixed title silently drops out of the changelog.
-- **Before pushing, run the full gate:**
-  `make lint && make typecheck && make test && make format-check`
-  (repo-wide — covers `frontend/` too). Verify patch coverage with
-  `make test-patch-coverage` ($\ge 75\%$ required) and ensure the branch is
-  rebased cleanly onto the latest `origin/main`.
+  `main`.
 - **Get a review, and close the loop on it.** **One review per pull request
   at a time:** a review takes 10-30 minutes, and asking again while one is
   running is _refused_ (with the run id of the review that is already
@@ -46,31 +34,48 @@ context if you're running inside a Mullion-hosted session.
   agent it dispatches another round that queues behind whatever is already
   running. Reviews are also requested automatically when a PR is opened
   (`.github/workflows/hermes.yml`'s `auto-review` job), so don't ask for one
-  right after opening the PR; this doesn't apply to Task Master's own PRs
-  (`mullion/task-*` branches), which are excluded from that automatic
-  trigger entirely — see `docs/tasks.md`'s "External review workflows" for
-  why. After pushing fixes, ask again: a new head commit is a new review.
-  Fixing the code is not enough to address feedback — reply to each inline
-  comment via the GitHub API, then resolve the thread via the GraphQL
-  `resolveReviewThread` mutation. See "Addressing review feedback" below for
-  the exact two-step recipe.
-- **Run a review pass on your own diff before declaring done** — `/code-review`
-  in Claude Code, or the equivalent step in your own CLI.
-- **File a GitHub issue for anything a plan defers, blocks, or descopes.**
-  Before implementing, open one issue per item
-  ([Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md) format) and
-  link it from the PR — a footnote in a plan doc is not a durable record.
-- **Post-merge:** delete the local and remote branch, and
-  `git worktree remove <path>` — see "Post-merge cleanup" below for the exact
-  commands.
-- **Note for Codex:** an `AGENTS.override.md`, if one is ever added, takes
-  precedence over `AGENTS.md` _entirely_ — Codex reads it _instead of_ this
-  file. `npm run check:scaffold-region-sync` (also a pre-commit hook) hard-fails if
-  one ever carries its own copy of this region — AGENTS.md is the single
-  source of truth now, so don't paste this region into it; point at this one
-  instead.
+  right after opening the PR. After pushing fixes, ask again: a new head
+  commit is a new review. Fixing the code is not enough to address feedback
+  — reply to each inline comment via the GitHub API, then resolve the thread
+  via the GraphQL `resolveReviewThread` mutation. See "Addressing review
+  feedback" below for the exact two-step recipe.
 
 <!-- mullion:briefing:end -->
+
+## Repo rules
+
+This repo's own specifics. They live OUTSIDE the `mullion:briefing` region on
+purpose: that region's content is written by Mullion's project setup (the
+workflow conventions the install generates, plus the pointer to this repo's
+skill and reviewer agent), and the next setup apply replaces it wholesale —
+anything parked inside it is lost with it.
+
+- **Work in a worktree.** Developer worktrees live under `.wt/<slug>`. Create
+  one with `make wt name=<slug>` (or `git fetch origin && git worktree add
+.wt/<slug> -b <slug> origin/main`). A fresh worktree does **not** inherit
+  `node_modules` — run `npm ci` at the repo root **and** `npm ci` in
+  `frontend/` before testing or building.
+- **Before pushing, run the full gate:** `make lint`, `make typecheck`, `make
+test` and `make format-check` (repo-wide — covers `frontend/` too). Verify
+  patch coverage with `make test-patch-coverage` ($\ge 75\%$ required) and
+  ensure the branch is rebased cleanly onto the latest `origin/main`.
+- **PR titles land in the changelog.** An unprefixed title silently drops out
+  of it (this repo squash-merges, so the PR title becomes the commit message).
+- **Self-review your own diff before declaring done** — `/code-review` in
+  Claude Code, or the equivalent step in your own CLI.
+- **File a GitHub issue for anything a plan defers, blocks, or descopes** —
+  one issue per item, in the
+  [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md) format, linked
+  from the PR. A footnote in a plan doc is not a durable record.
+- **Task Master's own PRs** (`mullion/task-*` branches) are excluded from the
+  automatic review trigger — see `docs/tasks.md`'s "External review workflows"
+  for why.
+- **Note for Codex:** an `AGENTS.override.md`, if one is ever added, takes
+  precedence over `AGENTS.md` _entirely_ — Codex reads it _instead of_ this
+  file. `npm run check:scaffold-region-sync` (also a pre-commit hook)
+  hard-fails if one ever carries its own copy of the `mullion:briefing` region
+  — AGENTS.md is the single source of truth now, so don't paste that region
+  into it; point at this one instead.
 
 ## Core invariants
 

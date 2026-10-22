@@ -37,6 +37,9 @@ const FIXTURE_FILES: Record<string, string> = {
   "src/cli/core.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";\n// ${NOTE}\n`,
   "src/mcp/client.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";\n`,
   "src/cli/review-protocol.mjs": `export const REVIEW_PROTOCOL_NOTE = "${NOTE}";\n`,
+  // The install-wide conventions text: the fragment the wizard assembles
+  // into every project's AGENTS.md, so it states the rule too.
+  "src/services/workflow-conventions.ts": `const BOT_REVIEW_ONCE_FRAGMENT = "${NOTE}";\n`,
 };
 
 function fixture(overrides: Record<string, string> = {}): string {
@@ -89,5 +92,20 @@ describe("check-review-protocol-sync", () => {
       "src/cli/review-protocol.mjs": 'export const REVIEW_PROTOCOL_NOTE = "Just ask nicely.";\n',
     });
     await expect(run(dir)).rejects.toThrow(/REVIEW_PROTOCOL_NOTE/);
+  });
+
+  it("fails when the conventions text drops the rule from its bot-review fragment", async () => {
+    const dir = makeFixture({
+      "src/services/workflow-conventions.ts":
+        'const BOT_REVIEW_ONCE_FRAGMENT = "Ask for a review.";\n',
+    });
+    await expect(run(dir)).rejects.toThrow(/BOT_REVIEW_ONCE_FRAGMENT/);
+  });
+
+  it("fails when the conventions text has no bot-review fragment at all", async () => {
+    const dir = makeFixture({
+      "src/services/workflow-conventions.ts": "export const WORKFLOW_CONVENTION_QUESTIONS = [];\n",
+    });
+    await expect(run(dir)).rejects.toThrow(/BOT_REVIEW_ONCE_FRAGMENT/);
   });
 });

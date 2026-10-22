@@ -93,24 +93,57 @@ describe("buildWorkflowConventionsText", () => {
     ]);
   });
 
-  // Issue #1749 — the "once per head commit, then wait for it" option for
-  // the code-review axis. It is an OPTION, not a change to the plain
+  // Issue #1749 — the code-review axis's "the repository reviews pull
+  // requests on its own" option. It is an OPTION, not a change to the plain
   // bot-review fragment: an install without a review relay has no use for the
   // rule, and an install that already answered "bot-review" must keep the
   // text it has.
-  it("offers a 'once per head commit, then wait' option for the code-review axis", () => {
+  //
+  // The wording was reworked once the automatic first review landed: the old
+  // fragment told the agent to "request an automated/bot review — once per
+  // head commit, then wait for it", which made it ask for a SECOND review on
+  // the head the repository had already reviewed on its own.
+  it("states that the first review is the repository's own, and that only a new head commit asks for another one", () => {
     const question = WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === "codeReview");
     expect(question).toBeDefined();
     const option = question?.options.find((o) => o.id === "bot-review-once");
     expect(option).toBeDefined();
-    expect(option?.fragment).toContain("once per head commit");
+    // The rule's clauses — the same three scripts/check-review-protocol-sync.mjs
+    // asserts on every surface that states it.
+    expect(option?.fragment).toContain("one review per pull request");
     expect(option?.fragment).toContain("10-30 minutes");
+    expect(option?.fragment).toContain("review_status");
+    // The two halves: the first review is the repository's own (so do not
+    // ask right after opening), and only a new head commit after fixes asks
+    // for another one — once, and then wait.
+    expect(option?.fragment).toContain("do not ask for one right after opening");
+    expect(option?.fragment).toContain("ask once for the new head commit");
     expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(option?.fragment);
     // The plain option is untouched: an install that already picked it keeps
     // the text it has.
     expect(buildWorkflowConventionsText({ codeReview: "bot-review" })).toBe(
       "Request an automated/bot review.",
     );
+  });
+
+  // The "both" option has to carry BOTH halves of the policy: the old
+  // fragment said "and also request an automated/bot review", which is the
+  // half that was wrong (the repository reviews on its own) and lost the
+  // self-review rule's own wording when the bot-review half was reworked.
+  it("pairs the self-review rule with the same bot-review rule in the 'both' option", () => {
+    const question = WORKFLOW_CONVENTION_QUESTIONS.find((q) => q.id === "codeReview");
+    const selfReview = question?.options.find((o) => o.id === "self-review")?.fragment;
+    const botReview = question?.options.find((o) => o.id === "bot-review-once")?.fragment;
+    const both = question?.options.find((o) => o.id === "both")?.fragment;
+    expect(both).toContain(selfReview as string);
+    expect(both).toContain(botReview as string);
+    // The assembled text is what the install stores and injects, so it
+    // carries the self-review rule AND the review protocol.
+    const text = buildWorkflowConventionsText({ codeReview: "both" });
+    expect(text).toContain("Run a self-review pass on your own diff");
+    expect(text).toContain("one review per pull request");
+    expect(text).toContain("10-30 minutes");
+    expect(text).toContain("review_status");
   });
 
   it("answering the full question set produces a longer, all-fragments-present text (a full 'regenerate' run)", () => {
