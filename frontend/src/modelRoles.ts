@@ -1,9 +1,12 @@
 import { isValidCliModelName, isValidOpenCodeModel } from "./cliModel.js";
+import { AGENT_OPTIONS } from "./settings/agentOptions.js";
 
 // DOM-free mirror of the install-wide model-role fallback in
 // src/services/task-model-resolve.ts — same algorithm, same sentinel
 // semantics, kept in its own module (the taskConfig.ts convention) so it's
 // independently unit-testable and keeps Settings.tsx react-refresh-clean.
+// settings/agentOptions.ts is DOM-free too (a plain array of option
+// values), so importing it here does not break that property.
 //
 // Why this exists: the backend resolves a task's implementer and reviewer
 // models by a precedence chain that ends in the install-wide per-CLI
@@ -109,32 +112,53 @@ export interface CliModelSettings {
 }
 
 /**
+ * How each CLI's two roles are read out of the settings object.
+ *
+ * This map is the ONE hand-written part, and it has to stay hand-written:
+ * each CLI stores its models under a different key (claudeCode, codex, agy,
+ * opencode) and opencode splits the two roles while the others do not, so
+ * there is no shape the four share.
+ *
+ * The KEYS of the pairs map are NOT written here — buildCliModelPairs
+ * derives them from AGENT_OPTIONS, so a new agent option can never be
+ * missing from the comparison. This map only says HOW a CLI's settings are
+ * read, and the resolver-coverage test in modelRoles.test.ts fails when an
+ * agent option has no entry here. That test is what keeps the derivation
+ * honest: deriving the keys means an option with no resolver would
+ * otherwise be handed null roles and quietly skipped — the very silent gap
+ * the hand-written key list used to make a CI failure.
+ */
+export const CLI_MODEL_ROLE_RESOLVERS: Record<
+  string,
+  (settings: CliModelSettings) => ModelRoleResolution
+> = {
+  claude: (s) => resolveCliModelRoles(s.claudeCode?.defaultModel, s.claudeCode?.reviewerModel),
+  codex: (s) => resolveCliModelRoles(s.codex?.defaultModel, s.codex?.reviewerModel),
+  agy: (s) => resolveCliModelRoles(s.agy?.defaultModel, s.agy?.reviewerModel),
+  opencode: (s) =>
+    resolveOpencodeModelRoles(s.opencode?.implementerModel, s.opencode?.reviewerModel),
+};
+
+/**
  * Each model-capable CLI's two roles, keyed by the agent-option value the
  * install-wide agent settings use — "claude", "codex", "agy", "opencode"
  * (see frontend/src/settings/agentOptions.ts's AGENT_OPTIONS, and the
  * backend's own KNOWN_AGENTS in agent-detect.ts).
  *
- * The keys have to stay equal to those option values: a model-injecting
- * CLI added to either list would otherwise be missing here, and the
- * comparison would quietly report `null` for it and skip. The
- * "every model-capable agent has an entry" test below is what turns that
- * silent gap into a CI failure.
+ * The key set comes from AGENT_OPTIONS, so it cannot drift from the list
+ * the settings dropdowns offer; an option with no resolver in
+ * CLI_MODEL_ROLE_RESOLVERS resolves to null roles (the comparison skips it)
+ * and fails the resolver-coverage test in CI.
  */
 export function buildCliModelPairs(
   settings: CliModelSettings,
 ): Record<string, ModelRoleResolution> {
-  return {
-    claude: resolveCliModelRoles(
-      settings.claudeCode?.defaultModel,
-      settings.claudeCode?.reviewerModel,
-    ),
-    codex: resolveCliModelRoles(settings.codex?.defaultModel, settings.codex?.reviewerModel),
-    agy: resolveCliModelRoles(settings.agy?.defaultModel, settings.agy?.reviewerModel),
-    opencode: resolveOpencodeModelRoles(
-      settings.opencode?.implementerModel,
-      settings.opencode?.reviewerModel,
-    ),
-  };
+  const pairs: Record<string, ModelRoleResolution> = {};
+  for (const { value } of AGENT_OPTIONS) {
+    const resolve = CLI_MODEL_ROLE_RESOLVERS[value];
+    pairs[value] = resolve ? resolve(settings) : { implementer: null, reviewer: null };
+  }
+  return pairs;
 }
 
 /**

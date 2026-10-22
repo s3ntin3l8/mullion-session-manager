@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  CLI_MODEL_ROLE_RESOLVERS,
   buildCliModelPairs,
   resolveCliModelRoles,
   resolveInstalledRoleModels,
@@ -202,14 +203,32 @@ describe("resolveInstalledRoleModels", () => {
 
 describe("buildCliModelPairs", () => {
   it("covers every model-capable agent option", () => {
-    // The keys have to stay equal to the agent-option values the
-    // install-wide agent settings use. A model-injecting CLI added to
-    // AGENT_OPTIONS but not here would be missing from the comparison, and
-    // the comparison would quietly report null for it and skip — a silent
-    // gap. This turns that into a CI failure.
+    // The key set is DERIVED from AGENT_OPTIONS, so this holds structurally
+    // — a new agent option cannot be missing from the comparison.
     const pairs = buildCliModelPairs({});
     for (const option of AGENT_OPTIONS) {
       expect(pairs).toHaveProperty(option.value);
+    }
+  });
+
+  it("has a resolver for every agent option", () => {
+    // Deriving the key set means an option with no resolver would be handed
+    // null roles and quietly skipped — the comparison would report nothing
+    // for a CLI it cannot read, which is the silent gap the hand-written key
+    // list used to turn into a CI failure. This is the assertion that keeps
+    // the derivation honest: a model-injecting CLI added to AGENT_OPTIONS
+    // without a resolver fails HERE.
+    for (const option of AGENT_OPTIONS) {
+      expect(CLI_MODEL_ROLE_RESOLVERS[option.value]).toBeTypeOf("function");
+    }
+  });
+
+  it("has no resolver for an option that no longer exists", () => {
+    // The other direction: a resolver left behind for a CLI that is no
+    // longer offered would keep a stale entry in the map.
+    const optionValues = new Set(AGENT_OPTIONS.map((option) => option.value));
+    for (const key of Object.keys(CLI_MODEL_ROLE_RESOLVERS)) {
+      expect(optionValues.has(key)).toBe(true);
     }
   });
 

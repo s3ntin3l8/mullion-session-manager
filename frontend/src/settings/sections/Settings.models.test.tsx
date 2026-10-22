@@ -410,8 +410,15 @@ describe("Settings -> Models", () => {
         settingsLoaded: true,
       });
       render(<ModelsSection />);
-      expect(screen.getByText(/A task's own/i)).toBeInTheDocument();
-      expect(screen.getByText(/applies to both roles/i)).toBeInTheDocument();
+      // Assert on the note's OWN text, not on fragments of it. The previous
+      // pair of assertions — /A task's own/i and /applies to both roles/i —
+      // pinned that a per-task clause EXISTS, but neither one is about
+      // `Model:`: the note's final clause still says "applies to both roles"
+      // after `Model:` is dropped from the first one, so the whole point of
+      // this commit's copy was unpinned. Verified by mutation: renaming the
+      // first clause's `Model:` to `Reviewer-Model:` turns this red.
+      const note = screen.getByText(/no second opinion/i).closest("p");
+      expect(note?.textContent ?? "").toMatch(/Model:\s*\/\s*Reviewer-Model:/);
     });
 
     it("does NOT warn when the review agent is a different CLI with a different model", () => {
