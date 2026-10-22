@@ -24,7 +24,11 @@ floating on `@main` like every other caller here:
   review bot two ways — `auto-review` (once per PR, on `opened` for a
   non-draft PR or `ready_for_review` for one that started as a draft) and
   `on-demand-review` (`@s3ntin3l8-hermes Review`/`Triage`, restricted to
-  `MEMBER`/`OWNER`/`COLLABORATOR` commenters). **`auto-review` excludes
+  `MEMBER`/`OWNER`/`COLLABORATOR` commenters). `auto-review` also reviews
+  dependabot PRs (a bump can change a tool's version without saying so); that
+  needs the three `HERMES_*` secrets under Settings → Secrets and variables →
+  **Dependabot**, otherwise the run skips green with a notice. release-please
+  PRs stay excluded. **`auto-review` excludes
   `mullion/task-*` branches** (`!startsWith(github.event.pull_request.head.ref,
 'mullion/task-')`) — Task Master's own closed branch namespace, whose PRs
   already get a terminal review from Task Master's own review agent; see
