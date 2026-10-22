@@ -133,6 +133,26 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
     set once, in the shared `vitest.shared.ts` coverage config both
     `vitest.config.ts` and `frontend/vitest.config.ts` import, not
     duplicated per workspace — to merge shard results.
+  - **Both callers need a distinct `artifact-prefix`.** This workflow calls
+    the shared `ci-node.yml` twice, and both callers shard. Artifact names
+    are scoped to the **workflow run**, not to the caller, so without a
+    prefix the backend's `coverage-shard-1` and the frontend's
+    `coverage-shard-1` are the same artifact name — and `test-merge`
+    downloads whichever it finds first. The backend's merge then folds the
+    frontend's coverage maps into the backend's report and enforces the
+    threshold against a number that describes neither workspace. Measured:
+    merged backend coverage fell from **93.92%** to **74.9%** and the
+    `coverage-fail-under: 80` gate fired on that bogus figure. The backend's
+    own 4-way merge is sound (recomputed from the shard artifacts: 91.84%
+    statements vs the 2-shard baseline's 91.83% — identical within
+    rounding), so the fix is purely the artifact namespace.
+    The shared workflow's `artifact-prefix` input
+    ([s3ntin3l8/.github#118](https://github.com/s3ntin3l8/.github/pull/118))
+    provides it, and its `test-merge` now asserts it received exactly one
+    coverage map per expected shard — so a collision fails loudly instead
+    of silently reporting a wrong percentage.
+    **If a third sharded caller is ever added here, it needs its own
+    prefix too.**
   - **Why 4 backend shards.** Vitest's shard split sorts spec paths by
     SHA-1 hash and slices by index, so it balances by **file count** and is
     blind to **duration** — a file with 300 tests weighs the same as one

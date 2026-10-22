@@ -66,6 +66,19 @@ jobs:
       # build) stays parallel. The split is deterministic (path hash), so it
       # is stable from run to run.
       test-shards: "4"
+      # Namespace this caller's shard artifacts. Artifact names are scoped to
+      # the WORKFLOW RUN, not to the caller — and this workflow calls the
+      # shared ci-node.yml twice, both of them sharded. Without a distinct
+      # prefix per caller, the backend's `coverage-shard-1` and the
+      # frontend's `coverage-shard-1` are the SAME artifact name, and
+      # `test-merge` downloads whichever one it finds: the backend's merge
+      # then folds the frontend's coverage maps into the backend's report
+      # and enforces the threshold against a number describing neither
+      # workspace. Measured: merged backend coverage fell from 93.92% to
+      # 74.9% and the coverage gate fired on a bogus figure. The fix lives
+      # in the shared workflow's `artifact-prefix` input
+      # (s3ntin3l8/.github#118) — see docs/ci-cd.md.
+      artifact-prefix: "-backend"
       strict-checks: true
       # Only the files this push touched can have introduced a secret.
       # detect-secrets matches a known secret by filename, hash and type -- not
@@ -107,6 +120,9 @@ jobs:
       # would merge silently — `test-frontend / lint-and-test` would still
       # report green while running no tests at all.
       test-shards: "2"
+      # Distinct from the backend's prefix — see the note on the test-node
+      # caller above. Both callers shard, so both need their own namespace.
+      artifact-prefix: "-frontend"
       # `test-pool` is deliberately NOT set. `vmThreads` would cut this
       # suite's jsdom environment setup (31% of its 158.90s runtime) to
       # ~3%, but it runs each worker in a `vm` context where
