@@ -26,6 +26,22 @@ name: Hermes (review)
 # broken until s3ntin3l8/.github#54 (a `gh api --jq --arg` invocation that
 # silently failed and always reported "no prior review found"), fixed there.
 #
+# `auto-review` reviews dependabot PRs too: a dependency bump can change a
+# runtime tool version without saying so (runway-ai-usage-tracker#627: a
+# cosign-installer bump silently changed the default cosign from v2 to v3,
+# which is itself still unpatched for a high-severity advisory), which is
+# exactly what a reviewer catches. A dependabot-authored run only sees DEPENDABOT secrets, so
+# HERMES_APP_ID / HERMES_APP_PRIVATE_KEY / HERMES_API_KEY must also be set
+# under Settings -> Secrets and variables -> Dependabot; without them the
+# reusable workflow skips green with a notice (s3ntin3l8/.github#96). The
+# Dependabot secret store is repo-wide: every workflow a dependabot PR
+# triggers (CI/CD, CodeQL, Dependency Review) can read these secrets, and this
+# repo pins floating action major tags, so a bump PR runs newer upstream code
+# with access to them. That blast radius is accepted (same as the org-wide
+# pattern in #96).
+# release-please PRs (`github-actions[bot]`) stay excluded: a changelog PR
+# has nothing for a code review to say.
+#
 # `auto-review` deliberately excludes `mullion/task-*` branches (see the
 # job's own `if:` below) -- that's Task Master's own closed branch namespace
 # (deriveTaskBranchName, git-worktree.ts), and Task Master's own review
@@ -69,7 +85,6 @@ jobs:
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 's3ntin3l8-hermes[bot]' &&
-      github.event.pull_request.user.login != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.draft == false &&
       !startsWith(github.event.pull_request.head.ref, 'mullion/task-')
