@@ -184,9 +184,11 @@ vi.mock("../TerminalPane.js", () => ({
 
 // Only the file-editor opener is replaced; the rest of panelUtils stays real.
 const openFileEditorPanelMock = vi.fn();
+const openExternalFilePanelMock = vi.fn();
 vi.mock("../panelUtils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof PanelUtilsModule>()),
   openFileEditorPanel: (...args: unknown[]) => openFileEditorPanelMock(...args),
+  openExternalFilePanel: (...args: unknown[]) => openExternalFilePanelMock(...args),
 }));
 
 let capturedOnEditFile: ((path: string) => void) | null = null;
@@ -285,6 +287,7 @@ describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file edito
   function mountTerminal(sessionOverrides: Record<string, unknown> = {}) {
     capturedOnOpenFile = null;
     openFileEditorPanelMock.mockClear();
+    openExternalFilePanelMock.mockClear();
     resetStore();
     useDashboardStore.setState({
       sessions: [makeSession({ id: 1, projectId: 1, cwd: null, ...sessionOverrides })],
@@ -330,16 +333,36 @@ describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file edito
     expect(lastCall()[4]).toEqual({ path: ".env", sessionId: 1 });
   });
 
-  it("ignores paths outside the root, parent-relative paths and unknown sessions", () => {
+  it("opens ~/ and out-of-root absolute paths in the read-only external viewer", () => {
     mountTerminal();
+    capturedOnOpenFile!("~/.claude/plans/p.md", 7);
     capturedOnOpenFile!("/etc/passwd.conf");
-    capturedOnOpenFile!("../up/x.ts");
-    capturedOnOpenFile!("/proj");
     expect(openFileEditorPanelMock).not.toHaveBeenCalled();
+    expect(openExternalFilePanelMock).toHaveBeenCalledTimes(2);
+    const [api, projectId, , , target] = openExternalFilePanelMock.mock.calls[0];
+    expect(api).toBe(containerApi);
+    expect(projectId).toBe(1);
+    expect(target).toEqual({ path: "~/.claude/plans/p.md", sessionId: undefined, line: 7 });
+    expect(openExternalFilePanelMock.mock.calls[1][4]).toMatchObject({ path: "/etc/passwd.conf" });
+  });
+
+  it("passes the session through for an outside path from a worktree session", () => {
+    mountTerminal({ cwd: "/elsewhere/feat-x/" });
+    capturedOnOpenFile!("~/.claude/plans/p.md");
+    expect(openExternalFilePanelMock.mock.calls[0][4]).toMatchObject({ sessionId: 1 });
+  });
+
+  it("ignores parent-relative paths and unknown sessions", () => {
+    mountTerminal();
+    capturedOnOpenFile!("../up/x.ts");
+    expect(openFileEditorPanelMock).not.toHaveBeenCalled();
+    expect(openExternalFilePanelMock).not.toHaveBeenCalled();
 
     useDashboardStore.setState({ sessions: [] });
     capturedOnOpenFile!("src/a.ts");
+    capturedOnOpenFile!("~/x.md");
     expect(openFileEditorPanelMock).not.toHaveBeenCalled();
+    expect(openExternalFilePanelMock).not.toHaveBeenCalled();
   });
 });
 

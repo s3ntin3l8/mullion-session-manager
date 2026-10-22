@@ -136,6 +136,11 @@ export interface AppSettings {
   // this lets a fresh deploy keep working from its env config until someone
   // actually edits roots from the UI, at which point the DB value wins.
   projectRoots: string[];
+  // Folders OUTSIDE any project the file viewer may open read-only (an agent
+  // CLI's plan/artifact dirs, e.g. ~/.claude/plans). Absolute or `~/`-prefixed
+  // directory prefixes; keep them narrow — never a whole CLI dot-dir, which
+  // holds credentials next to the plans. See readExternalFile.
+  externalReadRoots: string[];
   // Settings -> Server -> Disk cleanup (issue #1606): which allowlisted
   // ~/.cache subtrees the aggressive cleanup may empty. Empty = none; opt-in
   // because they're slow to re-download (Playwright browsers, HF models).
@@ -629,6 +634,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layoutMode: "auto",
   tabletPaneCap: 2,
   projectRoots: [],
+  externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },
   launchers: {
     defaultShell: "zsh",
@@ -944,6 +950,24 @@ function sanitizeEmulatorGpu(value: string | null): string | null {
 // min/max the Settings UI's own sliders/number fields already enforce
 // client-side (Settings.tsx), so the server never rejects a value the UI
 // allows.
+/** Keep only entries that are an absolute or `~/`-prefixed directory path and
+ * not the filesystem root / home dir themselves (too broad to be a "narrow
+ * plan folder" — they'd expose ~/.ssh and friends). Trailing slashes are
+ * dropped and duplicates collapsed. */
+export function sanitizeExternalReadRoots(roots: unknown): string[] {
+  if (!Array.isArray(roots)) return [];
+  const out: string[] = [];
+  for (const raw of roots) {
+    if (typeof raw !== "string" || raw.includes("\0")) continue;
+    const trimmed = raw.trim().replace(/\/+$/, "");
+    if (trimmed === "" || trimmed === "~") continue;
+    if (!trimmed.startsWith("/") && !trimmed.startsWith("~/")) continue;
+    if (trimmed.split("/").includes("..")) continue;
+    if (!out.includes(trimmed)) out.push(trimmed);
+  }
+  return out;
+}
+
 export function sanitizeSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
@@ -960,6 +984,7 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         ? settings.layoutMode
         : DEFAULT_SETTINGS.layoutMode,
     tabletPaneCap: settings.tabletPaneCap === 3 ? 3 : 2,
+    externalReadRoots: sanitizeExternalReadRoots(settings.externalReadRoots),
     // A patch can only ever replace the array wholesale; drop anything that
     // isn't an allowlisted cache id so it can't be persisted, let alone acted on.
     diskCleanup: { cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs) },

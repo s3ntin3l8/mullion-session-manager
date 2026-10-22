@@ -143,6 +143,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   layoutMode: "auto",
   tabletPaneCap: 2,
   projectRoots: [],
+  externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },
   launchers: {
     defaultShell: "zsh",

@@ -40,6 +40,7 @@ export interface PaletteCommandOpeners {
   git: (projectId: number) => void;
   agentRules: (projectId: number) => void;
   fileEditor: (projectId: number) => void;
+  externalFile: (projectId: number) => void;
   projectBriefing: (projectId: number) => void;
   projectSetup: (projectId: number) => void;
   dockConfig: (projectId: number) => void;
@@ -159,6 +160,16 @@ export function buildPaletteCommands({
         placement: "project",
         breadcrumb: "Project",
         run: () => open.fileEditor(id),
+      },
+      {
+        id: "external-file",
+        title: "Open file by path",
+        subtitle: "View an agent's plan or other readable file outside the project",
+        icon: FileTextIcon,
+        keywords: ["open", "path", "plan", "file", "external", "~/"],
+        placement: "project",
+        breadcrumb: "Project",
+        run: () => open.externalFile(id),
       },
       {
         id: "preview",

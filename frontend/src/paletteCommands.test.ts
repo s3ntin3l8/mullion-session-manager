@@ -11,6 +11,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     git: vi.fn(),
     agentRules: vi.fn(),
     fileEditor: vi.fn(),
+    externalFile: vi.fn(),
     projectBriefing: vi.fn(),
     projectSetup: vi.fn(),
     dockConfig: vi.fn(),
@@ -52,6 +53,7 @@ describe("buildPaletteCommands", () => {
       "Dock",
       "Skills",
       "Edit project files",
+      "Open file by path",
     ]);
     expect(commands.filter((c) => c.drillIn).map((c) => c.id)).toEqual(["project"]);
   });
@@ -68,6 +70,7 @@ describe("buildPaletteCommands", () => {
     byId["dock-config"].run();
     byId["skills"].run();
     byId["file-editor"].run();
+    byId["external-file"].run();
     byId["preview"].run();
     byId["integrations-settings"].run();
     byId["blank-browser"].run();
@@ -81,6 +84,7 @@ describe("buildPaletteCommands", () => {
       "dockConfig",
       "skills",
       "fileEditor",
+      "externalFile",
       "browser",
     ] as const) {
       expect(open[key]).toHaveBeenCalledWith(5);

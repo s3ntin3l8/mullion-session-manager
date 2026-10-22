@@ -877,6 +877,38 @@ export function openFileOnlyPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+/** Opens a read-only viewer for a file OUTSIDE the project (an agent's plan
+ * under `~/.claude/plans`, ...) — one panel per path, so re-opening focuses
+ * it. An empty `path` opens the viewer on its path bar (the palette's "Open
+ * file by path"). Whether the path is allowed is the backend's call. */
+export function openExternalFilePanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  layout: LayoutContext,
+  target: { path?: string; sessionId?: number; line?: number },
+): void {
+  const path = target.path ?? "";
+  const panelId = `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`;
+  const params = { projectId, path, sessionId: target.sessionId, line: target.line };
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+  const project = projects.find((p) => p.id === projectId);
+  const base = path.split("/").pop() || "Open file";
+  const panel = api.addPanel({
+    id: panelId,
+    component: "external-file",
+    title: project ? `${base} — ${project.name}` : base,
+    params,
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
   return {

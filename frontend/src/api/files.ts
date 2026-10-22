@@ -27,6 +27,14 @@ export const filesApi = {
       `/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}${sessionQuery(sessionId)}`,
     ),
 
+  // Read-only: a file outside the project under one of Settings'
+  // "Readable paths" (an agent's plan, ...). `absPath` is absolute or `~/`;
+  // 403 code "not_allowlisted" when it isn't under an allowed folder.
+  readExternalFile: (projectId: number, absPath: string, sessionId?: number) =>
+    request<ProjectFileContent>(
+      `/api/projects/${projectId}/external-file?path=${encodeURIComponent(absPath)}${sessionQuery(sessionId)}`,
+    ),
+
   // `expectedMtimeMs` makes the write fail with 409 (code "conflict") if the
   // file changed on disk since it was loaded; `create` makes it fail with
   // 409 if the file already exists, and is the only way to create one.

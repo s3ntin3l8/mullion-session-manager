@@ -238,7 +238,12 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   and `O_NOFOLLOW` opens; an optional `sessionId` re-roots it at that session's
   cwd (a worktree's own checkout) — accepted only when that cwd is inside the project or, on
   local hosts, a registered git worktree of its repo; remote-hosted projects proxy through
-  `/internal/project-files/*`, and an agent too old to have them yields a 501),
+  `/internal/project-files/*`, and an agent too old to have them yields a 501;
+  `GET /api/projects/:id/external-file?path=` is the one read-only exception to the
+  project-root rule — an absolute or `~/` path under a Settings `externalReadRoots`
+  folder (default `~/.claude/plans`, `~/.minimax/v2/sessions`; a `/` or home-dir root is
+  ignored), read through the same `readProjectFile` with that folder as the root, 403
+  `not_allowlisted` otherwise, local hosts only (501 for remote); there is no write twin),
   `settings` (the runtime
   Settings-override store backing Task Master's safety envelope and other
   deploy-time-default overrides), `updates` (Settings → Server's

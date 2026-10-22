@@ -11,6 +11,7 @@ import { ProjectHubPanel } from "../ProjectHubPanel.js";
 import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
 import type { BrowserPanelParams } from "../BrowserPanel.js";
 import type { FileEditorPanelParams } from "../FileEditorPanel.js";
+import type { ExternalFilePanelParams } from "../ExternalFilePanel.js";
 import type { BrowserPaneParams } from "../BrowserPane.js";
 import type { DevicePaneParams } from "../DevicePane.js";
 import { SessionTimeline } from "../SessionTimeline.js";
@@ -24,7 +25,7 @@ import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
 import { formatPaneTitle } from "../paneTitle.js";
-import { openFileEditorPanel, openSessionPanel } from "../panelUtils.js";
+import { openExternalFilePanel, openFileEditorPanel, openSessionPanel } from "../panelUtils.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
 
@@ -48,6 +49,8 @@ const loadBrowserPanel = () =>
   import("../BrowserPanel.js").then((m) => ({ default: m.BrowserPanel }));
 const loadFileEditorPanel = () =>
   import("../FileEditorPanel.js").then((m) => ({ default: m.FileEditorPanel }));
+const loadExternalFilePanel = () =>
+  import("../ExternalFilePanel.js").then((m) => ({ default: m.ExternalFilePanel }));
 const loadBrowserPane = () => import("../BrowserPane.js").then((m) => ({ default: m.BrowserPane }));
 const loadDevicePane = () => import("../DevicePane.js").then((m) => ({ default: m.DevicePane }));
 
@@ -248,11 +251,18 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
       if (!session || !project) return;
       const root = (session.cwd ?? project.cwd).replace(/\/+$/, "");
       let rel = rawPath;
-      if (rel.startsWith("/")) {
-        // Absolute: only meaningful when it's inside this session's root.
-        if (!rel.startsWith(`${root}/`)) return;
-        rel = rel.slice(root.length + 1);
+      // `~/x`, or an absolute path outside this session's root: not a project
+      // file — open the read-only external viewer, whose backend allowlist
+      // (Settings -> Readable paths) decides whether it's actually openable.
+      if (rel.startsWith("~/") || (rel.startsWith("/") && !rel.startsWith(`${root}/`))) {
+        openExternalFilePanel(containerApi, project.id, projects, layout, {
+          path: rel,
+          sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
+          line,
+        });
+        return;
       }
+      if (rel.startsWith("/")) rel = rel.slice(root.length + 1);
       rel = rel.replace(/^(\.\/)+/, "");
       if (rel === "" || rel.startsWith("../")) return;
       openFileEditorPanel(containerApi, project.id, projects, layout, {
@@ -370,6 +380,23 @@ function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams
               BrowserPanelWrapper below. */}
           {/* eslint-disable-next-line react-hooks/static-components */}
           <LazyFileEditorPanel key={resetKey} params={props.params} />
+        </Suspense>
+      </div>
+    </ErrorBoundary>
+  );
+}
+
+// Read-only viewer for files outside the project; lazy for the same CodeMirror
+// reason as FileEditorPanelWrapper.
+function ExternalFilePanelWrapper(props: IDockviewPanelProps<ExternalFilePanelParams>) {
+  const [resetKey, resetPanel] = useResetKey();
+  const LazyExternalFilePanel = useRetriableLazy(loadExternalFilePanel, resetKey);
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <div style={{ position: "relative", width: "100%", height: "100%" }}>
+        <Suspense fallback={<LazyPanelFallback />}>
+          {/* eslint-disable-next-line react-hooks/static-components */}
+          <LazyExternalFilePanel key={resetKey} params={props.params} />
         </Suspense>
       </div>
     </ErrorBoundary>
@@ -577,6 +604,7 @@ export const components = {
   git: GitPanelWrapper,
   "agent-rules": AgentRulesPanelWrapper,
   "file-editor": FileEditorPanelWrapper,
+  "external-file": ExternalFilePanelWrapper,
   "project-hub": ProjectHubPanelWrapper,
   "project-briefing": ProjectBriefingPanelWrapper,
   "project-setup": ProjectSetupPanelWrapper,
