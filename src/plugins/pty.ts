@@ -147,19 +147,37 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
 }
 
 /**
- * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
+ * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
+ * differs from the default.
  *
  * Linux allows 108; macOS allows 104. The four-byte difference is exactly
  * the size of the window in which a path passes the check on Linux and then
  * fails at `bind()` on macOS — a failure that is silent until a socket is
  * actually created, and then is a bare EINVAL with nothing pointing at the
  * path.
+ */
+export const SUN_PATH_BYTES_BY_PLATFORM: Readonly<Partial<Record<NodeJS.Platform, number>>> = {
+  darwin: 104,
+};
+
+/** The `sun_path` limit for every platform not listed in the table above. */
+export const DEFAULT_SUN_PATH_BYTES = 108;
+
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
  *
  * Exported (and platform-parameterised) so the limit can be exercised for a
  * platform other than the one the test happens to run on.
+ *
+ * The two exported constants above exist so the demo's own copy of this
+ * rule (scripts/demo/env.mjs, which is .mjs and cannot import this module)
+ * can be asserted against it rather than trusted — see that file's own
+ * comment. Comparing the TABLES is what makes that check total: a platform
+ * added on one side and not the other fails the comparison, where comparing
+ * only today's two platforms would let the divergence through.
  */
 export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): number {
-  return platform === "darwin" ? 104 : 108;
+  return SUN_PATH_BYTES_BY_PLATFORM[platform] ?? DEFAULT_SUN_PATH_BYTES;
 }
 
 /**

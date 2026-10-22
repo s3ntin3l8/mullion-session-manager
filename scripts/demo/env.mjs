@@ -55,17 +55,28 @@ const FORBIDDEN = new Set([
 const SECRET_KEY = /(SECRET|PASSWORD|_KEY|_TOKEN)$|ENCRYPTION/;
 
 /**
- * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
+ * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
+ * differs from the default.
  *
- * This mirrors `maxSunPathBytes` in src/plugins/pty.ts — the rule the
- * backend actually applies — but this file is `.mjs` and cannot import that
- * TypeScript module, so the copy is structural. The demo's own guard below
- * depends on the two agreeing, so the copy is ASSERTED against the backend's
- * (test/scripts/demo-env.test.ts): a change to one that does not reach the
- * other fails the suite instead of leaving the demo's guard stale.
+ * This mirrors `SUN_PATH_BYTES_BY_PLATFORM` in src/plugins/pty.ts — the rule
+ * the backend actually applies — but this file is `.mjs` and cannot import
+ * that TypeScript module, so the copy is structural. The demo's own guard
+ * below depends on the two agreeing, so the copy is ASSERTED against the
+ * backend's (test/scripts/demo-env.test.ts): a change to one that does not
+ * reach the other fails the suite instead of leaving the demo's guard stale.
+ *
+ * The whole TABLE is mirrored, not just the platforms that differ today, so
+ * a platform added to the backend's table and not to this one is caught —
+ * comparing only today's two platforms would let that divergence through.
  */
+export const sunPathBytesByPlatform = { darwin: 104 };
+
+/** The `sun_path` limit for every platform not listed in the table above. */
+export const defaultSunPathBytes = 108;
+
+/** The `sockaddr_un.sun_path` limit, in bytes, for a given platform. */
 export function maxSunPathBytes(platform = process.platform) {
-  return platform === "darwin" ? 104 : 108;
+  return sunPathBytesByPlatform[platform] ?? defaultSunPathBytes;
 }
 
 /**

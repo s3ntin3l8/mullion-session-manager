@@ -6,12 +6,14 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   assertDemoEnv,
   assertPortsFree,
+  defaultSunPathBytes as demoDefaultSunPathBytes,
   demoEnv,
   extractDtachSocketPath,
   instanceIdFor,
   longestSocketName as demoLongestSocketName,
   maxSunPathBytes as demoMaxSunPathBytes,
   ownsScope,
+  sunPathBytesByPlatform as demoSunPathBytesByPlatform,
 } from "../../scripts/demo/env.mjs";
 import { stopDemoScopes } from "../../scripts/demo/scopes.mjs";
 import {
@@ -20,8 +22,10 @@ import {
   scopeUnitName,
 } from "../../src/services/session-process.js";
 import {
+  DEFAULT_SUN_PATH_BYTES as backendDefaultSunPathBytes,
   longestSocketPath as backendLongestSocketPath,
   maxSunPathBytes as backendMaxSunPathBytes,
+  SUN_PATH_BYTES_BY_PLATFORM as backendSunPathBytesByPlatform,
 } from "../../src/plugins/pty.js";
 
 const demoDir = mkdtempSync(path.join(tmpdir(), "mullion-demo-test-"));
@@ -120,16 +124,26 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
       );
     });
   });
-  it("mirrors the backend's own sun_path rule exactly, on both platforms", () => {
+  it("mirrors the backend's own sun_path rule exactly, on every platform either side knows", () => {
     // The demo script is .mjs and cannot import the backend's TypeScript
     // module, so it carries its own copy of the rule the backend applies.
     // A copy nothing ties to the original is a copy that silently goes
     // stale: changing the backend's limit would leave the demo's guard
     // refusing (or not refusing) the wrong paths, with the suite still
     // green. So the copy is asserted against the original here.
-    for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+    //
+    // The whole TABLE is compared, not just the platforms that differ
+    // today: a platform added to the backend's table and not to the demo's
+    // would fall through to the default on one side only, and comparing
+    // today's two platforms would not catch it.
+    expect(demoSunPathBytesByPlatform).toEqual(backendSunPathBytesByPlatform);
+    expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
+    for (const platform of Object.keys(backendSunPathBytesByPlatform) as NodeJS.Platform[]) {
       expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
     }
+    // A platform neither table lists takes the default on both sides.
+    const unlisted = "not-a-real-platform" as NodeJS.Platform;
+    expect(demoMaxSunPathBytes(unlisted)).toBe(backendMaxSunPathBytes(unlisted));
     // Same for the socket name the guard counts against that limit: the
     // backend takes the max over every socket a sessions dir holds, so a
     // longer socket added there would leave the demo under-counting and
