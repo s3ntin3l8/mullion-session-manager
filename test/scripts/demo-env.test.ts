@@ -9,6 +9,8 @@ import {
   demoEnv,
   extractDtachSocketPath,
   instanceIdFor,
+  longestSocketName as demoLongestSocketName,
+  maxSunPathBytes as demoMaxSunPathBytes,
   ownsScope,
 } from "../../scripts/demo/env.mjs";
 import { stopDemoScopes } from "../../scripts/demo/scopes.mjs";
@@ -17,6 +19,10 @@ import {
   extractDtachSocketPath as backendExtractDtachSocketPath,
   scopeUnitName,
 } from "../../src/services/session-process.js";
+import {
+  longestSocketPath as backendLongestSocketPath,
+  maxSunPathBytes as backendMaxSunPathBytes,
+} from "../../src/plugins/pty.js";
 
 const demoDir = mkdtempSync(path.join(tmpdir(), "mullion-demo-test-"));
 const bin = path.join(demoDir, "bin");
@@ -113,6 +119,25 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
         "SESSIONS_DIR is too long; the backend would relocate it",
       );
     });
+  });
+  it("mirrors the backend's own sun_path rule exactly, on both platforms", () => {
+    // The demo script is .mjs and cannot import the backend's TypeScript
+    // module, so it carries its own copy of the rule the backend applies.
+    // A copy nothing ties to the original is a copy that silently goes
+    // stale: changing the backend's limit would leave the demo's guard
+    // refusing (or not refusing) the wrong paths, with the suite still
+    // green. So the copy is asserted against the original here.
+    for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
+      expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
+    }
+    // Same for the socket name the guard counts against that limit: the
+    // backend takes the max over every socket a sessions dir holds, so a
+    // longer socket added there would leave the demo under-counting and
+    // under-refusing.
+    const dir = path.join(demoDir, "x");
+    expect(Buffer.byteLength(path.join(dir, demoLongestSocketName), "utf8")).toBe(
+      backendLongestSocketPath(dir),
+    );
   });
   it("a working directory holding a .env", () => {
     const cwd = mkdtempSync(path.join(demoDir, "cwd-"));

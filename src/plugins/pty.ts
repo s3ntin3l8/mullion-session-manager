@@ -168,8 +168,12 @@ export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): n
  * `hooks.sock`, the control socket `mullion.sock`, and a 12-digit
  * session-id socket all live in it, and the session-id case is the longest
  * of the three.
+ *
+ * Exported so the demo's own copy of this rule (scripts/demo/env.mjs, which
+ * is .mjs and cannot import this module) can be asserted against it rather
+ * than trusted — see that file's own comment.
  */
-function longestSocketPath(dir: string): number {
+export function longestSocketPath(dir: string): number {
   return Math.max(
     Buffer.byteLength(path.join(dir, "hooks.sock"), "utf8"),
     // Phase 4 (#185) — the control socket (mullion.sock) lives in the same

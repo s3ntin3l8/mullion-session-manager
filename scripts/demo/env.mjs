@@ -53,6 +53,32 @@ const FORBIDDEN = new Set([
 ]);
 
 const SECRET_KEY = /(SECRET|PASSWORD|_KEY|_TOKEN)$|ENCRYPTION/;
+
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
+ *
+ * This mirrors `maxSunPathBytes` in src/plugins/pty.ts — the rule the
+ * backend actually applies — but this file is `.mjs` and cannot import that
+ * TypeScript module, so the copy is structural. The demo's own guard below
+ * depends on the two agreeing, so the copy is ASSERTED against the backend's
+ * (test/scripts/demo-env.test.ts): a change to one that does not reach the
+ * other fails the suite instead of leaving the demo's guard stale.
+ */
+export function maxSunPathBytes(platform = process.platform) {
+  return platform === "darwin" ? 104 : 108;
+}
+
+/**
+ * The longest socket name a sessions dir has to hold: a 12-digit session-id
+ * socket.
+ *
+ * The backend takes the max over every socket a sessions dir holds
+ * (`longestSocketPath` in src/plugins/pty.ts), so this mirror is asserted
+ * against that max too — a longer socket added there would otherwise leave
+ * this one under-counting and the demo under-refusing.
+ */
+export const longestSocketName = "999999999999.sock";
+
 /** Keys that must resolve inside the demo dir. */
 const SCRATCH_PATHS = [
   "HOME",
@@ -144,11 +170,12 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
   // that long instead. The limit is the platform's own (108 on Linux, 104 on
   // macOS), less one for the NUL terminator — the same rule the backend
   // applies, so a SESSIONS_DIR the backend would keep is not refused here.
-  const maxSunPathBytes = process.platform === "darwin" ? 104 : 108;
+  // Both values are mirrors of the backend's, asserted against it in
+  // test/scripts/demo-env.test.ts.
   if (
     env.SESSIONS_DIR !== undefined &&
-    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), "999999999999.sock")) >
-      maxSunPathBytes - 1
+    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), longestSocketName)) >
+      maxSunPathBytes() - 1
   )
     problems.push("SESSIONS_DIR is too long; the backend would relocate it");
   for (const key of ["HOME", "TMPDIR"])
