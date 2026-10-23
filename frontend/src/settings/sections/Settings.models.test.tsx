@@ -348,4 +348,240 @@ describe("Settings -> Models", () => {
     await waitFor(() => expect(within(fallback).getByText("gpt-6-astra")).toBeInTheDocument());
     expect(within(fallback).queryByText("gpt-5.5")).not.toBeInTheDocument();
   });
+
+  // The reviewer is the last line of defence on a Task Master task: a
+  // separate session with its own context, judging the diff against the
+  // issue's acceptance criteria. When it resolves to the implementer's
+  // model it is still a separate context, but not a second opinion in the
+  // sense that matters — same weights, same blind spots. The dropdown can
+  // only show which model is selected, so the warning has to be stated.
+  describe("reviewer/implementer model collapse", () => {
+    // The note compares the models the two roles ACTUALLY run — the
+    // worker's and the reviewer's — and those come from two independent
+    // agent settings, so they can be different CLIs. It is shown only
+    // under the REVIEW agent's CLI, because under any other CLI the
+    // reviewer-model setting is inert.
+    //
+    // Only fires when both models are explicitly configured: with nothing
+    // configured there is no deliberate choice being silently inherited, so
+    // warning would be noise about nothing.
+    const warning = /Your reviewer runs on the same model as your worker/i;
+
+    const withAgents = (
+      workerAgent: string,
+      reviewAgent: string,
+      extra: Record<string, unknown> = {},
+    ) => ({
+      ...DEFAULT_SETTINGS,
+      taskMaster: {
+        ...DEFAULT_SETTINGS.taskMaster,
+        defaultAgent: workerAgent,
+        defaultReviewAgent: reviewAgent,
+      },
+      ...extra,
+    });
+
+    it("warns when the worker and the reviewer land on the same model", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    });
+
+    it("names both per-task directives in the note", () => {
+      // A task's `Reviewer-Model:` line outranks the install-wide tier, so
+      // an unqualified "no second opinion" would be false for exactly the
+      // users who pinned one — and reads as their directive being ignored,
+      // which is the opposite of what the backend does. The clause was
+      // dropped once already; this pins it.
+      //
+      // `Model:` is named alongside it because it applies to BOTH roles:
+      // the panel cannot see task bodies, so a task's `Model:` can create a
+      // collapse the panel never sees, and can also make the model named
+      // here the wrong one.
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      // Assert on the note's OWN text, not on fragments of it. The previous
+      // pair of assertions — /A task's own/i and /applies to both roles/i —
+      // pinned that a per-task clause EXISTS, but neither one is about
+      // `Model:`: the note's final clause still says "applies to both roles"
+      // after `Model:` is dropped from the first one, so the whole point of
+      // this commit's copy was unpinned.
+      //
+      // The lookbehind is load-bearing, and it is the whole reason this
+      // assertion can be trusted. WITHOUT it the regex matches inside
+      // `"Reviewer-Model:"` — that token ENDS with the substring `Model:` —
+      // so renaming the first clause's `Model:` to `Reviewer-Model:` leaves
+      // the note reading "Reviewer-Model: / Reviewer-Model:", which still
+      // contains the run "Model: / Reviewer-Model:" and still matches. The
+      // `(?<![-\w])` says the `Model:` must not be the tail of a
+      // hyphenated token.
+      //
+      // Verified by mutation, both ways:
+      //   - rename ONLY the first clause's `Model:` → `Reviewer-Model:`
+      //     (leaving the "/ Reviewer-Model:" that follows it) → red;
+      //   - rename BOTH occurrences → `Reviewer-Model:` → red.
+      const note = screen.getByText(/no second opinion/i).closest("p");
+      expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*\/\s*Reviewer-Model:/);
+      // The note's TRAILING clause is a second, separate claim: that
+      // `Model:` — not just `Reviewer-Model:` — applies to BOTH roles, and
+      // can therefore make them the same. Deleting that clause wholesale
+      // used to leave this file green, so it is pinned here too, with the
+      // same lookbehind: "Reviewer-Model: applies to both roles" must not
+      // satisfy it.
+      expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*applies to both roles/);
+    });
+
+    it("does NOT warn when the review agent is a different CLI with a different model", () => {
+      // The case that matters most: a reviewer on a different CLI is the
+      // cheapest way to get a genuinely different model. Codee's own two
+      // roles are identical (gpt-5 vs gpt-5), but the worker runs claude
+      // on opusplan — so there IS a second opinion and no warning.
+      useDashboardStore.setState({
+        settings: withAgents("claude", "codex", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          codex: { defaultModel: "gpt-5", reviewerModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("shows the note only under the review agent's CLI", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      // Exactly one note, and it is in Claude Code's block — the reviewer
+      // model row of every other CLI is inert for this install.
+      expect(screen.getAllByText(warning)).toHaveLength(1);
+      const claudeRow = screen.getAllByText("Reviewer model")[0].closest(".settings-row");
+      expect(within(claudeRow as HTMLElement).getByText(warning)).toBeInTheDocument();
+    });
+
+    it("does not warn when the reviewer names a different model", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("does not warn when neither role has a model configured", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("warns for opencode when both roles name the same model", () => {
+      // opencode is the one family with divergent fallback semantics — its
+      // roles never cross-fall-back — so it is the case most worth pinning
+      // at the component level too.
+      useDashboardStore.setState({
+        settings: withAgents("opencode", "opencode", {
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: "opencode-go/minimax-m3.1-flash-free",
+            defaultSmallModel: null,
+          },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    });
+
+    it("does not warn for opencode when the reviewer model is unset", () => {
+      // opencode's roles never cross-fall-back: an unset reviewer model
+      // means "no override" (opencode's own default), so it is not the
+      // implementer's model and there is no install-wide collapse to report.
+      useDashboardStore.setState({
+        settings: withAgents("opencode", "opencode", {
+          opencode: {
+            implementerModel: "opencode-go/minimax-m3.1-flash-free",
+            reviewerModel: null,
+            defaultSmallModel: null,
+          },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("does not warn when there is no review agent", () => {
+      useDashboardStore.setState({
+        settings: withAgents("claude", "none", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    });
+
+    it("keeps the live region mounted, so the warning's arrival is announced", () => {
+      // A polite live region only reliably announces a MUTATION to a region
+      // that already existed: one inserted together with its content is
+      // missed by most screen readers. And the note appears exactly when
+      // the reviewer dropdown changes — the case this is for.
+      //
+      // So the region must exist BEFORE the warning does, and be the SAME
+      // node afterwards. A region mounted with its content, or re-created
+      // on the change, fails the identity assertion below.
+      useDashboardStore.setState({
+        settings: withAgents("claude", "claude", {
+          claudeCode: { defaultModel: "opusplan", reviewerModel: "haiku", smallModel: null },
+        }) as typeof DEFAULT_SETTINGS,
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+
+      // The reviewer row for each CLI is labelled "Reviewer model"; Claude
+      // Code's is the first group.
+      const reviewerLabels = screen.getAllByText("Reviewer model");
+      expect(reviewerLabels.length).toBeGreaterThan(0);
+      const claudeRow = reviewerLabels[0].closest(".settings-row") as HTMLElement;
+      const region = within(claudeRow).getByRole("status");
+      // Mounted, and empty — the reviewer is on haiku and the worker on
+      // opusplan, so there is nothing to say yet.
+      expect(region.textContent ?? "").toBe("");
+
+      // Collapse the reviewer onto the worker's model: the note appears.
+      act(() => {
+        useDashboardStore.setState({
+          settings: withAgents("claude", "claude", {
+            claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          }) as typeof DEFAULT_SETTINGS,
+          settingsLoaded: true,
+        });
+      });
+
+      // The SAME node, still mounted, now carrying the text. A region
+      // re-created on the change would have a different identity.
+      expect(within(claudeRow).getByRole("status")).toBe(region);
+      expect(region.textContent ?? "").toMatch(/no second opinion/i);
+    });
+  });
 });

@@ -1,13 +1,71 @@
 import { useDashboardStore } from "../../store/index.js";
+import type { ReactNode } from "react";
 import { api } from "../../api/index.js";
 import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
 import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
+import {
+  buildCliModelPairs,
+  resolveInstalledRoleModels,
+  type InstalledRoleModels,
+} from "../../modelRoles.js";
 
 const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
+const warningStyle = {
+  fontSize: 11.5,
+  // Amber, not the error red: this is an advisory note, and the codebase
+  // colours advisory prose amber throughout (PromoteDialog, HostsSection,
+  // IntegrationsSection). Red reads as a failure in a neutral settings row.
+  color: "var(--y)",
+  margin: 0,
+  paddingLeft: 6,
+  maxWidth: 280,
+};
+
 const FLAG_HINT =
   "Adds --model to new sessions and Task Master workers. A task's Model: / Reviewer-Model: line overrides these; a launcher command that already passes --model is left alone.";
+
+/**
+ * The advisory note under a reviewer-model picker when the reviewer and the
+ * worker run on the SAME model — so the reviewer offers no second opinion.
+ *
+ * The comparison is between the models the two roles ACTUALLY run, which
+ * come from two independent agent settings: the worker agent (an issue's
+ * `Agent:` line, the project's default agent, or
+ * `settings.taskMaster.defaultAgent`) and the review agent (an issue's
+ * `ReviewAgent:` line, the project's default review agent, or
+ * `settings.taskMaster.defaultReviewAgent`). They may be different CLIs,
+ * and then each side's model comes from that CLI's own settings — so
+ * comparing one CLI's two roles against each other would compare two
+ * models that never met, and a reviewer on a different CLI is the
+ * cheapest way to get a genuinely different model.
+ *
+ * It is therefore shown only under the REVIEW agent's CLI — under any
+ * other CLI the reviewer-model setting is inert, because that CLI is not
+ * the one the reviewer runs on.
+ *
+ * Only fires when both models are explicitly configured. With nothing
+ * configured there is no deliberate choice being silently inherited, and
+ * warning about it on a fresh install would be noise about nothing.
+ *
+ * The wording names the per-task directives that outrank this tier, and
+ * says that `Model:` applies to BOTH roles: the panel cannot see task
+ * bodies, so a task's `Model:` line can create a collapse the panel
+ * never sees (and can make the model named here the wrong one). The note
+ * points at the levers rather than claiming nothing can change it.
+ */
+function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): ReactNode {
+  if (!roles.shared) return null;
+  if (roles.reviewCli !== cliKey) return null;
+  return (
+    <p style={warningStyle}>
+      Install-wide, your reviewer runs on the same model as your worker ({roles.reviewer}) — no
+      second opinion. A task's own <code>Model:</code> / <code>Reviewer-Model:</code> line overrides
+      this — and <code>Model:</code> applies to both roles, so it can also make them the same.
+    </p>
+  );
+}
 
 export function ModelsSection() {
   const { settings, updateSettings } = useDashboardStore();
@@ -21,6 +79,19 @@ export function ModelsSection() {
   ) => updateSettings({ opencode: { [key]: value } });
 
   const opencodeOptions = opencode.models.map((value) => ({ value }));
+
+  // Each CLI's own two roles, keyed by the agent-option value the
+  // install-wide agent settings use ("claude", "codex", "agy", "opencode").
+  const cliPairs = buildCliModelPairs(settings);
+
+  // The models the two roles ACTUALLY run — the worker agent and the
+  // review agent are chosen independently, so they can be different CLIs,
+  // and each side's model then comes from that CLI's own settings.
+  const installedRoles = resolveInstalledRoleModels({
+    workerCli: settings.taskMaster?.defaultAgent,
+    reviewCli: settings.taskMaster?.defaultReviewAgent,
+    pairs: cliPairs,
+  });
 
   return (
     <>
@@ -44,6 +115,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
+        warning={reviewerModelWarning("claude", installedRoles)}
       />
       <ModelPicker
         label="Small model"
@@ -83,6 +155,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ codex: { reviewerModel: v } })}
+        warning={reviewerModelWarning("codex", installedRoles)}
       />
       <p style={hintStyle}>{FLAG_HINT}</p>
 
@@ -108,6 +181,7 @@ export function ModelsSection() {
         defaultLabel="Same as implementer"
         allowCustom
         onChange={(v) => updateSettings({ agy: { reviewerModel: v } })}
+        warning={reviewerModelWarning("agy", installedRoles)}
       />
       <p style={hintStyle}>
         {agy.status === "error"
@@ -137,6 +211,7 @@ export function ModelsSection() {
         defaultLabel="opencode default"
         allowCustom={false}
         onChange={(v) => setOpencode("reviewerModel", v)}
+        warning={reviewerModelWarning("opencode", installedRoles)}
       />
       <ModelPicker
         label="Small model"

@@ -1,6 +1,8 @@
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { Dropdown, Row } from "../ui/primitives.js";
 import { ErrorText } from "../ui/ErrorText.js";
+import { CLI_MODEL_RE } from "../cliModel.js";
 
 export interface ModelOption {
   value: string;
@@ -8,12 +10,6 @@ export interface ModelOption {
 }
 
 const CUSTOM = "__custom__";
-
-// Mirror of CLI_MODEL_RE in src/services/task-model-resolve.ts — the backend
-// is the source of truth. A value that fails it is only logged and skipped at
-// launch, so rejecting it here is what keeps the user from saving a model
-// that silently never applies.
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
 
 // The select + Custom… escape hatch, with no label/description layout of its
 // own — issue #1424 pulled this out of ModelPicker (below) so the same
@@ -92,7 +88,7 @@ export function ModelSelect({
       onChange(null);
       return;
     }
-    if (!MODEL_RE.test(next)) {
+    if (!CLI_MODEL_RE.test(next)) {
       setError("Use letters, digits and . _ : / @ [ ] - only, starting with a letter or digit.");
       return;
     }
@@ -153,6 +149,7 @@ export function ModelPicker({
   defaultLabel,
   allowCustom,
   onChange,
+  warning,
 }: {
   label: string;
   // The visible label repeats across CLIs ("Default model"), so callers pass a
@@ -164,9 +161,36 @@ export function ModelPicker({
   defaultLabel: string;
   allowCustom: boolean;
   onChange: (value: string | null) => void;
+  // An advisory note rendered under the row's own description — used by
+  // Settings → Models to say something the dropdown itself cannot: that the
+  // reviewer role resolves to the same model as the implementer role, so the
+  // reviewer offers no second opinion. It lives in the DESCRIPTION column,
+  // not under the control: `.settings-row-control` is `flex-shrink: 0`, so a
+  // note there would widen the control column and squeeze the description
+  // beside it.
+  //
+  // Rendered inside an ALWAYS-MOUNTED live region (see below), not
+  // conditionally: `role="status"` only reliably announces a change to a
+  // region that already existed. A region inserted together with its
+  // content is missed by most screen readers — and the note appears exactly
+  // when the user changes the dropdown, which is the case this is for.
+  warning?: ReactNode;
 }) {
   return (
-    <Row label={label} desc={desc}>
+    <Row
+      label={label}
+      desc={
+        <>
+          {desc}
+          {/* Always mounted so the warning's arrival is announced. Empty and
+              inert when there is nothing to say.
+
+              A div, not a span: the live region wraps a block-level note,
+              and a span (phrasing content) may not contain one. */}
+          <div role="status">{warning}</div>
+        </>
+      }
+    >
       <ModelSelect
         ariaLabel={ariaLabel}
         value={value}
