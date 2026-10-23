@@ -3,6 +3,7 @@ import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
 import { __resetSessionRefreshBlockForTests } from "./store/slices/sessions.js";
+import { __discardPendingSettingsPatchForTests } from "./store/slices/ui.js";
 
 // vitest.config.ts doesn't set `test.globals: true` (this repo's convention
 // is explicit `import { describe, it, ... } from "vitest"` everywhere), so
@@ -28,6 +29,31 @@ afterEach(cleanup);
 afterEach(() => {
   __resetRateLimitBreakerForTests();
   __resetSessionRefreshBlockForTests();
+});
+
+// The store/slices/ui.ts settings PATCH debounce is the third piece of
+// module-scoped state, and the same cross-test leak applies to it: a test
+// that toggles a setting arms a 400ms debounce timer, and if the test ends
+// before it fires, the timer is still pending when the NEXT test in the
+// same file installs its own fetch mock — so the previous test's PATCH
+// lands in this one's assertions. The store's own resetStore() cannot reach
+// it (the pending patch is closure state, not store state).
+//
+// DISCARDS the pending patch after every test, which closes the leak at the
+// source: nothing is left pending to fire later. It discards rather than
+// sends on purpose — a test's own afterEach usually runs
+// `vi.unstubAllGlobals()` first, so by the time this runs the installed
+// `fetch` is the REAL one, and sending would make a real HTTP request (a
+// stray PATCH per leftover patch, swallowed by flushPendingPatch's catch).
+// Cancelling without sending closes the leak just as well and sends
+// nothing.
+//
+// A test that wants to assert on the PATCH calls
+// __flushPendingSettingsPatchForTests() itself, and then the fetch has
+// already been made — api.patchSettings reaches fetch() synchronously — so
+// there is no wait left to race.
+afterEach(() => {
+  __discardPendingSettingsPatchForTests();
 });
 
 // jsdom provides no window.matchMedia at all, unlike every real browser

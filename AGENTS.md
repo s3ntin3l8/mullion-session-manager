@@ -69,9 +69,30 @@ How this repo applies the conventions above — facts and commands, not rules.
   suites (path-scoped, run as `test:coverage` so the coverage JSON is on
   disk), and the **≥75% patch-coverage check**
   (`npm run check:patch-coverage`). It is **not** `make lint` — lint is a
-  **pre-commit** hook only, path-scoped to the workspace you touched. Run
-  `make lint && make typecheck && make test && make format-check` yourself
-  before pushing; the hooks do not run the repo-wide lint for you.
+  **pre-commit** hook only, path-scoped to the workspace you touched.
+- **Running the gate: once, not twice.** `make test` and the pre-push
+  hook's `test:coverage` are the **same suite** — the hook's version adds
+  istanbul instrumentation, and runs it precisely so the coverage JSON
+  lands on disk for the patch-coverage check. Running `make test` first
+  and then pushing runs the suite twice, and on a loaded host that is
+  10-30 minutes of duplicated work per push. So run the parts the hooks
+  do **not** do for you, and let the hook run the suites:
+  ```bash
+  make lint
+  ```
+  then push. (`make typecheck` and `make format-check` are worth running
+  too, but the hook runs its own — path-scoped — typecheck and format
+  check, so running the repo-wide ones is a second pass over the same
+  ground; `make lint` is the one the hook genuinely does not cover, since
+  lint is a pre-commit hook only, scoped to the workspace you touched.)
+  The hook's two suite steps are **path-scoped per workspace**
+  (`^(?!frontend/)…` for the backend, `^frontend/…` for the frontend), so
+  the workspace you did **not** touch is not run locally — say so, or run
+  that one suite yourself, if you want local parity with CI (which runs
+  both). The region above asks for the full gate; this is how **this** repo
+  satisfies it — `make lint` covers the repo-wide lint the hooks do not
+  run, and the pre-push hook supplies the test run and the coverage JSON
+  the patch-coverage check needs.
 - **Patch test coverage (≥75%)** on changed lines in `src/` and
   `frontend/src/` is enforced locally by the pre-push hook
   (`scripts/check-patch-coverage-hook.mjs`, a thin wrapper over

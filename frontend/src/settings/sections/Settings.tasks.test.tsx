@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -81,14 +82,13 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.enabled).toBe("on");
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { enabled: "on" } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { enabled: "on" } }),
+      }),
     );
   });
 
@@ -118,14 +118,13 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.autoClaimPaused).toBe(true);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { autoClaimPaused: true } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { autoClaimPaused: true } }),
+      }),
     );
   });
 
@@ -142,14 +141,13 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(5);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
+      }),
     );
   });
 
@@ -168,14 +166,13 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.rateLimitGraceMinutes).toBe(0);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
+      }),
     );
   });
 
@@ -199,11 +196,10 @@ describe("Settings -> Task Master", () => {
     // Flush the debounced PATCH before this test ends — otherwise its
     // pending patch leaks into (and corrupts the asserted body of) the
     // next test's own PATCH via the store's shared debounce/merge state.
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({ method: "PATCH" }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
     );
   });
 
@@ -223,14 +219,13 @@ describe("Settings -> Task Master", () => {
     // "inherit" sentinel server-side rather than a fixed default — clamp
     // it up to the field's own min on commit instead.
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(1);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
+      }),
     );
   });
 
@@ -246,14 +241,13 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(0);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
+      }),
     );
   });
 
@@ -286,14 +280,13 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(45);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
+      }),
     );
   });
 
@@ -309,14 +302,13 @@ describe("Settings -> Task Master", () => {
       "octocat",
       "my-bot",
     ]);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
+      }),
     );
   });
 
@@ -359,23 +351,22 @@ describe("Settings -> Task Master", () => {
     expect(tm.autoClaimPaused).toBe(true);
     expect(tm.reviewCiWaitMinutes).toBe(30);
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({
-            taskMaster: {
-              enabled: "inherit",
-              maxConcurrent: -1,
-              budgetMinutes: -1,
-              progressCommentMinutes: -1,
-              rateLimitGraceMinutes: -1,
-              skipPermissions: "inherit",
-            },
-          }),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          taskMaster: {
+            enabled: "inherit",
+            maxConcurrent: -1,
+            budgetMinutes: -1,
+            progressCommentMinutes: -1,
+            rateLimitGraceMinutes: -1,
+            skipPermissions: "inherit",
+          },
         }),
-      ),
+      }),
     );
   });
 

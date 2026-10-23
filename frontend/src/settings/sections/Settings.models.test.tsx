@@ -4,6 +4,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ModelsSection } from "./ModelsSection.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -44,10 +45,16 @@ describe("Settings -> Models", () => {
       .filter(([url, init]) => url === "/api/settings" && init?.method === "PATCH")
       .map(([, init]) => init.body as string);
 
-  // SETTINGS_PATCH_DEBOUNCE_MS (400ms) + headroom for CI load, same as
-  // Settings.notifications.test.tsx's equivalent debounce assertion.
-  const expectPatch = (body: unknown) =>
-    waitFor(() => expect(patchBodies()).toContain(JSON.stringify(body)), { timeout: 2000 });
+  // Flushed rather than waited for: the settings PATCH is debounced
+  // (SETTINGS_PATCH_DEBOUNCE_MS), and racing that against a wait is what
+  // made this flake under full-suite load. Flushing settles it, and
+  // api.patchSettings reaches fetch() synchronously — so the call has
+  // already been made by the time the flush returns, and there is no wait
+  // left to time out.
+  const expectPatch = (body: unknown) => {
+    __flushPendingSettingsPatchForTests();
+    expect(patchBodies()).toContain(JSON.stringify(body));
+  };
 
   const settle = () => new Promise((r) => setTimeout(r, 700));
 

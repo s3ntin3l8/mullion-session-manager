@@ -214,12 +214,43 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
   });
 }
 
-async function waitUntil(check: () => boolean): Promise<void> {
-  for (let i = 0; i < 50; i++) {
+/**
+ * The deadline for a wait that FOLLOWS a 3.2s source-side debounce: the
+ * default 5s fires before the debounced event can even arrive, so the
+ * test would fail on the ceiling rather than on the behaviour. The tests
+ * that wait out a debounce pass this explicitly.
+ */
+const DEBOUNCED_WAIT_MS = 20_000;
+
+/**
+ * Waits until `check` is true, or the deadline passes.
+ *
+ * DEADLINE-based, not a fixed number of turns. 50 `setImmediate` turns is
+ * however long the event loop takes to get through 50 check-phase callbacks:
+ * microseconds on an idle host, longer on a loaded one — and either way it
+ * is not a duration the test means anything by. The form that could expire
+ * before a socket frame had even been read turned a slow condition into
+ * "the condition never became true", which reads like a product bug and is
+ * not one.
+ *
+ * A wall-clock deadline is what the test actually means: "within this many
+ * milliseconds, this should have happened". The tests that need longer raise
+ * the deadline (or the test's own timeout), not an iteration count.
+ */
+async function waitUntil(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
     if (check()) return;
-    await new Promise((resolve) => setImmediate(resolve));
+    if (Date.now() >= deadline) break;
+    // A short sleep rather than another setImmediate: the point of the wait
+    // is to give the socket's I/O a chance to be read, and a 5ms timer does
+    // that without spinning a core for the whole deadline.
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error("condition never became true");
+  // One last look, so a condition that became true during the final sleep is
+  // not reported as a failure.
+  if (check()) return;
+  throw new Error(`condition never became true within ${timeoutMs}ms`);
 }
 
 /** Accumulates every complete newline-terminated line the server writes
@@ -3454,11 +3485,15 @@ describe("controlSocketPlugin (issue #185)", () => {
         // also needs the real wait rather than waitUntil's short poll.
         child.emitData("\x1b]2;still-working\x07");
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() =>
-          frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
+        await waitUntil(
+          () => frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
+          DEBOUNCED_WAIT_MS,
         );
         socket.destroy();
-      }, 10_000);
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
+      }, 30_000);
 
       it("events.subscribe (session scope): filtered to only the connection's own pinned session", async () => {
         app = await buildApp();
@@ -3478,7 +3513,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         // A1: title_change events are debounced at the source (3s) — wait
         // that out rather than short-polling.
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() => frames.some((f) => f.kind === "title_change"));
+        await waitUntil(() => frames.some((f) => f.kind === "title_change"), DEBOUNCED_WAIT_MS);
 
         // Give any (incorrect) cross-session delivery a chance to arrive
         // before asserting only session A's event ever showed up.
@@ -3487,7 +3522,10 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(titleChanges.every((f) => f.sessionId === sessionA)).toBe(true);
         expect(titleChanges.some((f) => f.sessionId === sessionB)).toBe(false);
         socket.destroy();
-      }, 10_000);
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
+      }, 30_000);
 
       it("400s re-subscribing on the same id without unsubscribing first", async () => {
         app = await buildApp();
@@ -3782,10 +3820,16 @@ describe("controlSocketPlugin (issue #185)", () => {
         child.emitData("\x1b]2;live\x07");
         // A1: title_change events are debounced at the source (3s).
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
+        await waitUntil(
+          () => frames.some((f) => f.id === 1 && f.kind === "title_change"),
+          DEBOUNCED_WAIT_MS,
+        );
         expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
         socket.destroy();
-      }, 10_000);
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
+      }, 30_000);
     });
 
     describe("browser ops (Phase 4, #189)", () => {
