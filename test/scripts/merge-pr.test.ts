@@ -355,10 +355,46 @@ describe("mergeReadiness — naming why a PR is blocked", () => {
       ],
       mergeable: "MERGEABLE",
       mergeStateStatus: "BLOCKED",
-      reviewDecision: "REVIEW_REQUIRED",
+      // An approving review still leaves the PR blocked when a required
+      // conversation is unresolved — which is what this names.
+      reviewDecision: "APPROVED",
     });
     expect(readiness.action).toBe("wait");
-    expect(readiness.reason).toContain("REVIEW_REQUIRED");
+    expect(readiness.reason).toContain("APPROVED");
     expect(readiness.reason).toMatch(/unresolved required conversations/i);
+  });
+});
+
+describe("mergeReadiness — a review decision that needs a human", () => {
+  it("stops on CHANGES_REQUESTED rather than waiting out the timeout", () => {
+    // The script cannot fix a CHANGES_REQUESTED or satisfy a
+    // REVIEW_REQUIRED. Waiting the whole timeout on either helps nobody.
+    for (const decision of ["CHANGES_REQUESTED", "REVIEW_REQUIRED"]) {
+      const readiness = mergeReadiness({
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+        ],
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "BLOCKED",
+        reviewDecision: decision,
+      });
+      expect(readiness.action).toBe("stop");
+      expect(readiness.reason).toContain(decision);
+    }
+  });
+
+  it("reads an empty review decision as 'none', not as an empty string", () => {
+    // This repo has no review requirement, so `reviewDecision` is "" in the
+    // normal case — and `review decision is ""` reads like a bug report.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "",
+    });
+    expect(readiness.action).toBe("wait");
+    expect(readiness.reason).toContain('"none"');
   });
 });

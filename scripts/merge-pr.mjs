@@ -158,11 +158,21 @@ export function mergeReadiness(pr) {
     // register — and GitHub calls the state BLOCKED throughout. That is
     // "not ready yet", not "not ready ever": a genuinely failed check was
     // already caught above, by the rollup itself.
+    // A review decision that needs a HUMAN is not a wait — the script
+    // cannot fix a CHANGES_REQUESTED or satisfy a REVIEW_REQUIRED, and
+    // burning the whole timeout on it helps nobody.
+    const decision = pr.reviewDecision || "none";
+    if (decision === "CHANGES_REQUESTED" || decision === "REVIEW_REQUIRED") {
+      return {
+        action: "stop",
+        reason: `the review decision is ${decision} — that needs a human, not a wait`,
+      };
+    }
     return {
       action: "wait",
       reason:
         `blocked, and no check has failed — review decision is ` +
-        `"${pr.reviewDecision ?? "unknown"}". This state also covers ` +
+        `"${decision}". This state also covers ` +
         `unresolved required conversations and a required check that never ` +
         `got scheduled, so a wait here is not necessarily a check that has ` +
         `not reported.`,
