@@ -54,8 +54,11 @@ function extensionOf(name: string): string | null {
  * file path worth linking. */
 export function looksLikeFilePath(candidate: string): boolean {
   if (candidate.length < 2 || candidate.length > 300) return false;
-  if (candidate.includes("://") || candidate.startsWith("~") || candidate.startsWith("-")) {
-    return false;
+  if (candidate.includes("://") || candidate.startsWith("-")) return false;
+  // `~/x` is the user's home (an agent's `~/.claude/plans/x.md`); bare `~`
+  // and `~user/...` stay unlinked. The backend decides whether it's openable.
+  if (candidate.startsWith("~")) {
+    return candidate.startsWith("~/") && looksLikeFilePath(candidate.slice(2));
   }
   if (candidate.startsWith("//") || candidate.endsWith("/")) return false;
   if (!/^[\w@+./-]+$/.test(candidate)) return false;

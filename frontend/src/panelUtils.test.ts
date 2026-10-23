@@ -8,6 +8,7 @@ import {
   openTaskDetailPanel,
   openOrFocusProjectPanel,
   openFileEditorPanel,
+  openExternalFilePanel,
   openProjectHubPanel,
   migrateLegacyProjectPanels,
   closeLegacyPanels,
@@ -2469,6 +2470,67 @@ describe("openFileEditorPanel", () => {
     const existing = api.getPanel("file-editor-1")!;
     openFileEditorPanel(api, 1, PROJECTS, PHONE_LAYOUT, { path: "a" });
     expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
+  });
+});
+
+describe("openExternalFilePanel", () => {
+  it("gives each re-open a strictly larger rev, even within one millisecond", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const api = mockDockviewApi();
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md" });
+      const existing = api.getPanel(`external-file-1-${encodeURIComponent("/x/y.md")}`)!;
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 1 });
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 2 });
+      const revs = vi
+        .mocked(existing.api.updateParameters)
+        .mock.calls.map(([p]) => (p as { rev: number }).rev);
+      expect(revs).toHaveLength(2);
+      expect(revs[1]).toBeGreaterThan(revs[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens one read-only viewer per path, titled by the file name", () => {
+    const api = mockDockviewApi();
+    openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
+      path: "~/.claude/plans/p.md",
+      line: 3,
+    });
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: `external-file-1-${encodeURIComponent("~/.claude/plans/p.md")}`,
+        component: "external-file",
+        title: "p.md — project-alpha",
+        params: { projectId: 1, path: "~/.claude/plans/p.md", line: 3, rev: expect.any(Number) },
+      }),
+    );
+  });
+
+  it("opens a blank viewer when no path is given", () => {
+    const api = mockDockviewApi();
+    openExternalFilePanel(api, 99, PROJECTS, DESKTOP_LAYOUT, {});
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "external-file-99-blank",
+        title: "Open file",
+        params: expect.objectContaining({ path: "" }),
+      }),
+    );
+  });
+
+  it("re-targets the existing panel for the same path instead of opening a second", () => {
+    const api = mockDockviewApi();
+    openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md" });
+    const existing = api.getPanel(`external-file-1-${encodeURIComponent("/x/y.md")}`)!;
+    openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 8 });
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/x/y.md", line: 8, rev: expect.any(Number) }),
+    );
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
   });
 });
 

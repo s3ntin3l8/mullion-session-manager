@@ -9,6 +9,7 @@ import {
   MAX_DIR_ENTRIES,
   listProjectDir,
   readProjectFile,
+  readExternalFile,
   writeProjectFile,
   makeProjectDir,
   deleteProjectPath,
@@ -440,5 +441,55 @@ describe("project-files service", () => {
     expect(new ProjectFileError("not_found", "x").httpStatus).toBe(404);
     expect(new ProjectFileError("not_empty", "x").httpStatus).toBe(409);
     expect(new ProjectFileError("invalid", "x").httpStatus).toBe(400);
+  });
+
+  describe("readExternalFile", () => {
+    it("reads inside an allowlisted root, with ~ expansion", () => {
+      fs.mkdirSync(path.join(outside, "plans"));
+      fs.writeFileSync(path.join(outside, "plans", "p.md"), "# plan");
+      const roots = [path.join(outside, "plans")];
+      const got = readExternalFile(path.join(outside, "plans", "p.md"), roots);
+      expect(got.content).toBe("# plan");
+      expect(got.path).toBe("p.md");
+
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-home-"));
+      const prev = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        fs.mkdirSync(path.join(home, ".claude", "plans"), { recursive: true });
+        fs.writeFileSync(path.join(home, ".claude", "plans", "x.md"), "hi");
+        expect(readExternalFile("~/.claude/plans/x.md", ["~/.claude/plans"]).content).toBe("hi");
+        // The home dir itself is never an acceptable root.
+        fs.writeFileSync(path.join(home, "secret"), "s");
+        expect(codeOf(() => readExternalFile("~/secret", ["~"]))).toBe("not_allowlisted");
+      } finally {
+        if (prev === undefined) delete process.env.HOME;
+        else process.env.HOME = prev;
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects paths outside every root, relative paths, traversal and escaping symlinks", () => {
+      const plans = path.join(outside, "plans");
+      fs.mkdirSync(plans);
+      fs.writeFileSync(path.join(outside, "secret"), "x");
+      fs.symlinkSync(path.join(outside, "secret"), path.join(plans, "link"));
+      fs.symlinkSync(outside, path.join(plans, "dirlink"));
+      expect(codeOf(() => readExternalFile(path.join(outside, "secret"), [plans]))).toBe(
+        "not_allowlisted",
+      );
+      expect(codeOf(() => readExternalFile(path.join(plans, "..", "secret"), [plans]))).toBe(
+        "not_allowlisted",
+      );
+      expect(codeOf(() => readExternalFile("plans/p.md", [plans]))).toBe("invalid");
+      expect(codeOf(() => readExternalFile(path.join(plans, "link"), [plans]))).toBe("escape");
+      expect(codeOf(() => readExternalFile(path.join(plans, "dirlink", "secret"), [plans]))).toBe(
+        "escape",
+      );
+      expect(codeOf(() => readExternalFile(path.join(plans, "p.md"), []))).toBe("not_allowlisted");
+      expect(codeOf(() => readExternalFile(path.join(plans, "p.md"), ["/"]))).toBe(
+        "not_allowlisted",
+      );
+    });
   });
 });

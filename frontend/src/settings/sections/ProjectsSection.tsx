@@ -40,6 +40,19 @@ export function ProjectsSection() {
     updateSettings({ projectRoots: roots.filter((r) => r !== path) });
   };
 
+  const readable = settings.externalReadRoots;
+  const [addingReadable, setAddingReadable] = useState(false);
+  const [newReadablePath, setNewReadablePath] = useState("");
+
+  const commitAddReadable = () => {
+    const path = newReadablePath.trim();
+    if (path && !readable.includes(path)) {
+      updateSettings({ externalReadRoots: [...readable, path] });
+    }
+    setNewReadablePath("");
+    setAddingReadable(false);
+  };
+
   const rescan = () => {
     setRescanning(true);
     api
@@ -102,6 +115,64 @@ export function ProjectsSection() {
           <button className="settings-add-btn" onClick={() => setAddingRoot(true)}>
             <PlusIcon size={13} />
             Add a root directory
+          </button>
+        )}
+      </div>
+
+      <GroupHeading
+        title="Readable paths"
+        desc="Folders outside your projects whose files can be opened read-only from a terminal path or Open file by path — e.g. an agent's plans. Keep them narrow: never a whole ~/.claude, which also holds credentials."
+      />
+      <StyledList>
+        {readable.map((root) => (
+          <ListRow
+            key={root}
+            icon={<FolderIcon size={15} />}
+            title={
+              <span style={{ fontFamily: "Geist Mono, monospace", fontSize: 12.5 }}>{root}</span>
+            }
+            trailing={
+              <span
+                onClick={() =>
+                  updateSettings({ externalReadRoots: readable.filter((r) => r !== root) })
+                }
+                style={{ cursor: "pointer", display: "flex", color: "var(--dim)" }}
+                title="Remove"
+              >
+                <CloseIcon size={14} />
+              </span>
+            }
+          />
+        ))}
+        {readable.length === 0 && (
+          <div style={{ fontSize: 12, color: "var(--dim)", padding: "4px 2px" }}>
+            No readable paths — files outside a project can't be opened.
+          </div>
+        )}
+      </StyledList>
+      <div style={{ marginTop: 7 }}>
+        {addingReadable ? (
+          <div className="settings-numberfield" style={{ width: "100%" }}>
+            <input
+              autoFocus
+              style={{ flex: 1, textAlign: "left", width: "auto" }}
+              placeholder="~/.codex/plans"
+              value={newReadablePath}
+              onChange={(e) => setNewReadablePath(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitAddReadable();
+                if (e.key === "Escape") {
+                  setNewReadablePath("");
+                  setAddingReadable(false);
+                }
+              }}
+              onBlur={commitAddReadable}
+            />
+          </div>
+        ) : (
+          <button className="settings-add-btn" onClick={() => setAddingReadable(true)}>
+            <PlusIcon size={13} />
+            Add a readable folder
           </button>
         )}
       </div>

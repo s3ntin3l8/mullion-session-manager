@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   deepMerge,
   sanitizeSettings,
+  sanitizeExternalReadRoots,
   mergeSettings,
   DEFAULT_SETTINGS,
 } from "../../src/services/settings.js";
@@ -125,6 +126,43 @@ describe("deepMerge", () => {
     // on a fresh DB.
     const result = mergeSettings({ opencode: { implementerModel: "anthropic/claude-sonnet-4-5" } });
     expect(result.opencode.implementerModel).toBe("anthropic/claude-sonnet-4-5");
+  });
+});
+
+describe("sanitizeExternalReadRoots", () => {
+  it("keeps absolute and ~/ directories, trims trailing slashes and collapses duplicates", () => {
+    expect(
+      sanitizeExternalReadRoots([
+        "~/.claude/plans/",
+        "~/.claude/plans",
+        "  /opt/plans//  ",
+        "/srv/a",
+      ]),
+    ).toEqual(["~/.claude/plans", "/opt/plans", "/srv/a"]);
+  });
+
+  it("drops the too-broad, relative, traversing, NUL and non-string entries", () => {
+    expect(
+      sanitizeExternalReadRoots([
+        "~",
+        "/",
+        "///",
+        "",
+        "   ",
+        "relative/dir",
+        "~user/x",
+        "~/a/../b",
+        "/a/../etc",
+        "/ok\0bad",
+        42,
+        null,
+      ]),
+    ).toEqual([]);
+  });
+
+  it("returns [] for a non-array and handles a long run of slashes", () => {
+    expect(sanitizeExternalReadRoots("~/x")).toEqual([]);
+    expect(sanitizeExternalReadRoots([`/a${"/".repeat(100_000)}`])).toEqual(["/a"]);
   });
 });
 

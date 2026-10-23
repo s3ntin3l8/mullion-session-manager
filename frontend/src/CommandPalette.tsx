@@ -139,6 +139,8 @@ interface CommandPaletteProps {
   onOpenAgentRules: (projectId: number) => void;
   // Same section, opening the project file editor (.env and other text files).
   onOpenFileEditor: (projectId: number) => void;
+  // Same section, the read-only viewer for a file outside the project, by path.
+  onOpenExternalFile: (projectId: number) => void;
   // Same section, opening this project's DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
   onOpenProjectSetup: (projectId: number) => void;
@@ -192,6 +194,7 @@ export function CommandPalette({
   onOpenGit,
   onOpenAgentRules,
   onOpenFileEditor,
+  onOpenExternalFile,
   onOpenProjectBriefing,
   onOpenProjectSetup,
   onOpenDockConfig,
@@ -362,6 +365,7 @@ export function CommandPalette({
       git: onOpenGit,
       agentRules: onOpenAgentRules,
       fileEditor: onOpenFileEditor,
+      externalFile: onOpenExternalFile,
       projectBriefing: onOpenProjectBriefing,
       projectSetup: onOpenProjectSetup,
       dockConfig: onOpenDockConfig,

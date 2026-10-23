@@ -782,6 +782,15 @@ export function openOrFocusProjectPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+// Monotonic `rev` for re-targeting an open panel. Date.now() can repeat within
+// one millisecond, and a repeated rev reads as "no re-target" to a consumer
+// that keys on it (e.g. a memoized reveal-line token).
+let revCounter = 0;
+function nextRev(): number {
+  revCounter = Math.max(revCounter + 1, Date.now());
+  return revCounter;
+}
+
 /** Opens (or focuses and re-targets) the project's tabbed Project panel on
  * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
 export function openProjectHubPanel(
@@ -794,7 +803,7 @@ export function openProjectHubPanel(
   const panelId = `project-hub-${projectId}`;
   const existing = api.getPanel(panelId);
   if (existing) {
-    existing.api.updateParameters({ projectId, tab, rev: Date.now() });
+    existing.api.updateParameters({ projectId, tab, rev: nextRev() });
     existing.api.setActive();
     if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
@@ -828,7 +837,7 @@ export function openFileEditorPanel(
     path: target.path,
     sessionId: target.sessionId,
     line: target.line,
-    rev: Date.now(),
+    rev: nextRev(),
   };
   const existing = api.getPanel(panelId);
   if (existing) {
@@ -871,7 +880,41 @@ export function openFileOnlyPanel(
     id: panelId,
     component: "file-editor",
     title: project ? `${base} — ${project.name}` : base,
-    params: { projectId, path, mode: "editor", rev: Date.now() },
+    params: { projectId, path, mode: "editor", rev: nextRev() },
+    ...positioningForTier(api, layout),
+  });
+  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
+/** Opens a read-only viewer for a file OUTSIDE the project (an agent's plan
+ * under `~/.claude/plans`, ...) — one panel per path, so re-opening focuses
+ * it. An empty `path` opens the viewer on its path bar (the palette's "Open
+ * file by path"). Whether the path is allowed is the backend's call. */
+export function openExternalFilePanel(
+  api: DockviewApi,
+  projectId: number,
+  projects: { id: number; name: string | null }[],
+  layout: LayoutContext,
+  target: { path?: string; line?: number },
+): void {
+  const path = target.path ?? "";
+  const panelId = `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`;
+  const params = { projectId, path, line: target.line, rev: nextRev() };
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    // A fresh rev/line so a second `file:line` link to the same file scrolls.
+    existing.api.updateParameters(params);
+    existing.api.setActive();
+    if (layout.tier === "phone") maximizeIfTiled(api, existing);
+    return;
+  }
+  const project = projects.find((p) => p.id === projectId);
+  const base = path.split("/").pop() || "Open file";
+  const panel = api.addPanel({
+    id: panelId,
+    component: "external-file",
+    title: project ? `${base} — ${project.name}` : base,
+    params,
     ...positioningForTier(api, layout),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);

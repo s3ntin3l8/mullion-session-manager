@@ -36,7 +36,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { expandHome } from "./project-config.js";
 import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-path.js";
 
 export const MAX_PROJECT_FILE_BYTES = 1024 * 1024;
@@ -59,7 +61,8 @@ export type ProjectFileErrorCode =
   | "binary"
   | "conflict"
   | "not_empty"
-  | "invalid";
+  | "invalid"
+  | "not_allowlisted";
 
 const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   escape: 400,
@@ -73,6 +76,7 @@ const HTTP_STATUS: Record<ProjectFileErrorCode, number> = {
   conflict: 409,
   not_empty: 409,
   invalid: 400,
+  not_allowlisted: 403,
 };
 
 export class ProjectFileError extends Error {
@@ -301,6 +305,33 @@ export function readProjectFile(root: string, relPath: string): ProjectFileConte
   } finally {
     closeSync(fd);
   }
+}
+
+/** Read-only read of a file OUTSIDE any project, e.g. an agent CLI's plan
+ * under `~/.claude/plans`. `absPath` (absolute or `~/`-prefixed) must sit
+ * inside one of `roots` (Settings `externalReadRoots`); the read itself is
+ * delegated to readProjectFile with that root, so lexical + realpath
+ * containment, O_NOFOLLOW, the size cap and the UTF-8 check are the exact
+ * ones project files get. `path` in the result is the root-relative form.
+ * A root of `/` or the home dir is ignored: far too broad for a "plan folder"
+ * allowlist, whatever the settings say. */
+export function readExternalFile(absPath: string, roots: string[]): ProjectFileContent {
+  const expanded = expandHome(absPath);
+  if (expanded.includes("\0") || !path.isAbsolute(expanded)) {
+    throw new ProjectFileError("invalid", "Path must be absolute or start with ~/");
+  }
+  const target = path.resolve(expanded);
+  const home = path.resolve(os.homedir());
+  for (const configured of roots) {
+    const root = path.resolve(expandHome(configured));
+    if (root === path.parse(root).root || root === home) continue;
+    if (!target.startsWith(root + path.sep)) continue;
+    return readProjectFile(root, path.relative(root, target));
+  }
+  throw new ProjectFileError(
+    "not_allowlisted",
+    "This path is not in Settings -> Readable paths, so it can't be opened",
+  );
 }
 
 export function writeProjectFile(

@@ -36,6 +36,9 @@ describe("looksLikeFilePath", () => {
       "src/Dockerfile",
       "docs/README.md",
       "a.test.tsx",
+      "~/x.ts",
+      "~/.claude/plans/p.md",
+      "~/.minimax/v2/sessions/2026/10/22/20-56-29-329-session_bXZz/artifacts/plan.md",
     ]) {
       expect(looksLikeFilePath(p), p).toBe(true);
     }
@@ -51,7 +54,10 @@ describe("looksLikeFilePath", () => {
       "v1.2",
       "example.com",
       "github.com/org/repo",
-      "~/x.ts",
+      "~",
+      "~/",
+      "~user/x.ts",
+      "~/e.g.",
       "-rf",
       "foo.bar",
       "..",
@@ -85,6 +91,13 @@ describe("computePathLinksForRow", () => {
 
   it("does not link URLs or plain prose", () => {
     expect(linksIn("see https://example.com/docs/index.html for e.g. details v1.2")).toEqual([]);
+  });
+
+  it("links a ~/ path with a line suffix", () => {
+    const [link] = linksIn("plan at ~/.claude/plans/p.md:12 done");
+    expect(link.text).toBe("~/.claude/plans/p.md:12");
+    expect(link.path).toBe("~/.claude/plans/p.md");
+    expect(link.line).toBe(12);
   });
 
   it("handles a trailing colon and empty/missing rows", () => {

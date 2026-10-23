@@ -448,6 +448,58 @@ describe("project-files routes", () => {
     await app.close();
   });
 
+  it("serves allowlisted external files read-only and 403s the rest", async () => {
+    const ext = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-ext-"));
+    try {
+      fs.mkdirSync(path.join(ext, "plans"));
+      fs.writeFileSync(path.join(ext, "plans", "p.md"), "# plan");
+      fs.writeFileSync(path.join(ext, "secret"), "s");
+      const { app, projectId } = await createProject();
+      const url = (p: string) =>
+        `/api/projects/${projectId}/external-file?path=${encodeURIComponent(p)}`;
+
+      // Default roots don't include the temp dir.
+      const denied = await app.inject({ method: "GET", url: url(path.join(ext, "plans", "p.md")) });
+      expect(denied.statusCode).toBe(403);
+      expect(denied.json().code).toBe("not_allowlisted");
+
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: {
+          externalReadRoots: [
+            `${path.join(ext, "plans")}///`,
+            "/",
+            "relative",
+            `x${"/".repeat(50)}y`,
+          ],
+        },
+      });
+      const ok = await app.inject({ method: "GET", url: url(path.join(ext, "plans", "p.md")) });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ path: "p.md", content: "# plan" });
+      const other = await app.inject({ method: "GET", url: url(path.join(ext, "secret")) });
+      expect(other.statusCode).toBe(403);
+      // Invalid roots are dropped on save.
+      const settings = await app.inject({ method: "GET", url: "/api/settings" });
+      expect(settings.json().externalReadRoots).toEqual([path.join(ext, "plans")]);
+
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/999999/external-file?path=/x" }))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/abc/external-file?path=/x" }))
+          .statusCode,
+      ).toBe(400);
+      expect((await app.inject({ method: "GET", url: url("") })).statusCode).toBe(400);
+      expect((await app.inject({ method: "GET", url: url("rel/p.md") })).statusCode).toBe(400);
+      await app.close();
+    } finally {
+      fs.rmSync(ext, { recursive: true, force: true });
+    }
+  });
+
   describe("remote host", () => {
     async function startAgent(token: string) {
       const prevEnv: Record<string, string | undefined> = {};
@@ -492,6 +544,18 @@ describe("project-files routes", () => {
       });
       return { primary, projectId: project.json().id as number };
     }
+
+    it("501s the external-file route for a remote host", async () => {
+      const { agentApp, port } = await startAgent("pf-token-ext");
+      const { primary, projectId } = await remoteProject(port, "pf-token-ext", projectCwd);
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/external-file?path=${encodeURIComponent("/tmp/x.md")}`,
+      });
+      expect(res.statusCode).toBe(501);
+      await primary.close();
+      await agentApp.close();
+    });
 
     it("round-trips list/read/write and forwards coded errors", async () => {
       fs.writeFileSync(path.join(projectCwd, ".env"), "R=1\n");

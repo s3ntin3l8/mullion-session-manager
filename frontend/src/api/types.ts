@@ -1838,6 +1838,9 @@ export interface AppSettings {
   layoutMode: LayoutMode;
   tabletPaneCap: TabletPaneCap;
   projectRoots: string[];
+  // Mirrors AppSettings.externalReadRoots: folders outside any project the
+  // file viewer may open read-only (absolute or `~/`).
+  externalReadRoots: string[];
   // Mirrors src/services/settings.ts's AppSettings.diskCleanup: which
   // allowlisted ~/.cache subtrees the aggressive cleanup may empty (ids from
   // GET /api/storage/caches). Empty = none.

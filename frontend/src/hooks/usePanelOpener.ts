@@ -9,6 +9,7 @@ import {
   focusPanelForTier,
   isTiledPanel,
   maximizeIfTiled,
+  openExternalFilePanel,
   openFileOnlyPanel,
   openDevicePanel,
   openOrFocusProjectPanel,
@@ -123,6 +124,7 @@ export interface UsePanelOpenerResult {
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's file editor (tree + CodeMirror).
   onOpenFileEditor: (projectId: number) => void;
+  onOpenExternalFile: (projectId: number) => void;
   // Opens a specific file (project-relative path) in the project's file
   // editor — the right sidebar's Files view.
   onOpenFile: (projectId: number, path: string) => void;
@@ -338,6 +340,16 @@ export function usePanelOpener({
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
   );
 
+  const onOpenExternalFile = useCallback(
+    (projectId: number) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openExternalFilePanel(dockviewApi, projectId, projects, layout, {});
+      setSidebarOpen(false);
+    },
+    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+  );
+
   const onOpenFile = useCallback(
     (projectId: number, path: string) => {
       if (!dockviewApi) return;
@@ -437,6 +449,7 @@ export function usePanelOpener({
     onOpenProjectHub,
     onOpenAgentRules,
     onOpenFileEditor,
+    onOpenExternalFile,
     onOpenFile,
     onOpenProjectBriefing,
     onOpenProjectSetup,

@@ -527,6 +527,7 @@ function renderPane(
       layoutMode: "auto",
       tabletPaneCap: 2,
       projectRoots: [],
+      externalReadRoots: [],
       diskCleanup: { cacheDirs: [] },
       launchers: {
         defaultShell: "bash",

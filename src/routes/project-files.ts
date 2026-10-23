@@ -12,12 +12,14 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { getStoredSettings } from "../services/settings.js";
 import { isSiblingWorktreeCwd } from "../services/session-lifecycle.js";
 import {
   PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
   listProjectDir,
   readProjectFile,
+  readExternalFile,
   writeProjectFile,
   makeProjectDir,
   deleteProjectPath,
@@ -45,6 +47,12 @@ const pathQuery = {
   type: "object",
   additionalProperties: false,
   properties: { path: { type: "string", maxLength: 4096 }, sessionId: { type: "string" } },
+};
+
+const externalPathQuery = {
+  type: "object",
+  additionalProperties: false,
+  properties: { path: { type: "string", maxLength: 4096 } },
 };
 
 const writeSchema = {
@@ -241,6 +249,36 @@ export async function projectFilesRoute(app: FastifyInstance) {
         (cwd) => readProjectFile(cwd, relPath),
         (client, cwd) => client.readProjectFile(cwd, relPath),
       );
+    },
+  );
+
+  // Read-only view of a file outside the project (an agent's plan under
+  // ~/.claude/plans, ...), gated by Settings' externalReadRoots allowlist —
+  // there is deliberately no write/list/rename/delete twin. Local hosts only:
+  // a remote host's filesystem isn't covered by the primary's allowlist.
+  // Only the project is resolved (for its host) — no `sessionId`: the path is
+  // absolute, so a session's cwd is irrelevant, and resolveCtx would 400 a
+  // worktree session whose cwd lies outside the project.
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    "/api/projects/:id/external-file",
+    { ...FILES_RATE_LIMIT, schema: { params: idParams, querystring: externalPathQuery } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+      const absPath = request.query.path;
+      if (!absPath) return reply.badRequest("path is required");
+      if (project.hostId !== LOCAL_HOST_ID) {
+        return reply
+          .code(501)
+          .send({ message: "Opening files outside the project isn't supported on remote hosts" });
+      }
+      try {
+        return readExternalFile(absPath, getStoredSettings(app.db).externalReadRoots);
+      } catch (err) {
+        return localErrorReply(reply, err);
+      }
     },
   );
 
