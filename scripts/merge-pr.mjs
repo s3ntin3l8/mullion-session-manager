@@ -31,6 +31,9 @@ import path from "node:path";
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
+/** A bad command line — distinct from a merge that did not happen. */
+class UsageError extends Error {}
+
 // Every gh call goes through here so a bad PR number, an unauthenticated
 // `gh`, or a missing PR surfaces as a short readable message instead of a
 // raw Node stack trace.
@@ -74,7 +77,15 @@ export function mergeReadiness(pr) {
     return { action: "wait", reason: "no status checks have reported yet" };
   }
 
-  const running = rollup.filter((c) => c.status !== "COMPLETED");
+  // A rollup entry is one of two shapes. A StatusCheck (an Actions run)
+  // carries `status` and `conclusion`; a StatusContext (a legacy commit
+  // status) carries `state` and no conclusion. Branch on the type rather
+  // than on the fields, or a legacy status reads as "still running" for
+  // the whole timeout — and a FINISHED one as failed with `(undefined)`.
+  const isCheck = (c) => (c.__typename ?? "StatusCheck") === "StatusCheck";
+  const isContext = (c) => c.__typename === "StatusContext";
+
+  const running = rollup.filter((c) => isCheck(c) && c.status !== "COMPLETED");
   if (running.length > 0) {
     return {
       action: "wait",
@@ -82,14 +93,19 @@ export function mergeReadiness(pr) {
     };
   }
 
-  const failed = rollup.filter(
-    (c) => !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(c.conclusion ?? ""),
-  );
+  const failed = rollup.filter((c) => {
+    if (isContext(c)) {
+      // A legacy commit status: SUCCESS, FAILURE, ERROR, PENDING. Anything
+      // but success (or a neutral state) is a failure.
+      return c.state !== "SUCCESS" && c.state !== "PENDING";
+    }
+    return !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(c.conclusion ?? "");
+  });
   if (failed.length > 0) {
     return {
       action: "stop",
       reason: `${failed.length} check(s) failed: ${failed
-        .map((c) => `${c.name} (${c.conclusion})`)
+        .map((c) => `${c.name} (${c.conclusion ?? c.state})`)
         .join(", ")}`,
     };
   }
@@ -161,12 +177,52 @@ function currentPrNumber() {
   return out;
 }
 
-export function cli(argv = process.argv.slice(2)) {
-  const allowRebase = !argv.includes("--no-rebase");
-  const timeoutArg = argv.indexOf("--timeout");
-  const timeoutMs = timeoutArg >= 0 ? Number(argv[timeoutArg + 1]) * 1000 : 30 * 60_000;
+/**
+ * Parses the CLI arguments.
+ *
+ * The positional PR number has to be found by SKIPPING the flag values —
+ * a plain `argv.find(a => /^\d+$/.test(a))` picks up the number after
+ * `--timeout` and then waits on, and squash-merges, the wrong PR.
+ */
+export function parseArgs(argv) {
+  const positionals = [];
+  let allowRebase = true;
+  let timeoutSeconds;
 
-  const prNumber = argv.find((a) => /^\d+$/.test(a)) ?? currentPrNumber();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--no-rebase") {
+      allowRebase = false;
+    } else if (arg === "--timeout") {
+      const raw = argv[i + 1];
+      const seconds = Number(raw);
+      // A missing or non-numeric value would make the deadline NaN, and
+      // `Date.now() >= NaN` is never true — so the wait would never time
+      // out. Refuse the flag instead.
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new UsageError(
+          `--timeout needs a positive number of seconds, got ${raw ?? "(nothing)"}`,
+        );
+      }
+      timeoutSeconds = seconds;
+      i++;
+    } else if (/^\d+$/.test(arg)) {
+      positionals.push(arg);
+    } else {
+      throw new UsageError(`unknown argument: ${arg}`);
+    }
+  }
+
+  return {
+    prNumber: positionals[0],
+    allowRebase,
+    timeoutMs: (timeoutSeconds ?? 30 * 60) * 1000,
+  };
+}
+
+export function cli(argv = process.argv.slice(2)) {
+  const { prNumber: parsed, allowRebase, timeoutMs } = parseArgs(argv);
+  const prNumber = parsed ?? currentPrNumber();
   const log = (msg) => console.log(`merge-pr: ${msg}`);
 
   let { readiness } = waitForReady(prNumber, { timeoutMs, log });
@@ -192,6 +248,8 @@ if (isMain) {
     process.exit(cli());
   } catch (err) {
     console.error(`ERROR: ${err.message}`);
-    process.exit(1);
+    // A bad flag is a usage error, not a failure of the merge — exit 2 so
+    // the two are distinguishable.
+    process.exit(err instanceof UsageError ? 2 : 1);
   }
 }

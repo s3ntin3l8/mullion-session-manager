@@ -229,6 +229,14 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
  * milliseconds, this should have happened". The tests that need longer raise
  * the deadline (or the test's own timeout), not an iteration count.
  */
+/**
+ * The deadline for a wait that FOLLOWS a 3.2s source-side debounce: the
+ * default 5s fires before the debounced event can even arrive, so the
+ * test would fail on the ceiling rather than on the behaviour. The tests
+ * that wait out a debounce pass this explicitly.
+ */
+const DEBOUNCED_WAIT_MS = 20_000;
+
 async function waitUntil(check: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -3477,8 +3485,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         // also needs the real wait rather than waitUntil's short poll.
         child.emitData("\x1b]2;still-working\x07");
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() =>
-          frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
+        await waitUntil(
+          () => frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
+          DEBOUNCED_WAIT_MS,
         );
         socket.destroy();
         // 30s, not 10s: this test waits out a 3s source-side title-change
@@ -3504,7 +3513,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         // A1: title_change events are debounced at the source (3s) — wait
         // that out rather than short-polling.
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() => frames.some((f) => f.kind === "title_change"));
+        await waitUntil(() => frames.some((f) => f.kind === "title_change"), DEBOUNCED_WAIT_MS);
 
         // Give any (incorrect) cross-session delivery a chance to arrive
         // before asserting only session A's event ever showed up.
@@ -3811,7 +3820,10 @@ describe("controlSocketPlugin (issue #185)", () => {
         child.emitData("\x1b]2;live\x07");
         // A1: title_change events are debounced at the source (3s).
         await new Promise((resolve) => setTimeout(resolve, 3_200));
-        await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
+        await waitUntil(
+          () => frames.some((f) => f.id === 1 && f.kind === "title_change"),
+          DEBOUNCED_WAIT_MS,
+        );
         expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
         socket.destroy();
         // 30s, not 10s: this test waits out a 3s source-side title-change

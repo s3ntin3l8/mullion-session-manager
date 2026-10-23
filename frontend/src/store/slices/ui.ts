@@ -40,9 +40,10 @@ function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
   };
 }
 
-// Module-scoped handle on the CURRENT slice's pending-patch flusher, so a
+// Module-scoped handles on the CURRENT slice's pending-patch settling, so a
 // test can settle the settings debounce without waiting it out — see
-// __flushPendingSettingsPatchForTests below.
+// __flushPendingSettingsPatchForTests and
+// __discardPendingSettingsPatchForTests below.
 //
 // The pending patch itself is closure state (below), not store state, so the
 // store's own resetStore() cannot reach it: a patch armed by one test can
@@ -50,6 +51,7 @@ function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
 // fetch mock, and the debounce timer then fires into that mock — a PATCH
 // from the previous test showing up in this one's assertions.
 let pendingSettingsPatchFlusher: (() => void) | null = null;
+let pendingSettingsPatchDiscarder: (() => void) | null = null;
 
 /**
  * Visible for tests: settle the pending settings PATCH now — cancel the
@@ -65,14 +67,29 @@ let pendingSettingsPatchFlusher: (() => void) | null = null;
  * 2. A patch left PENDING by one test can fire during a LATER test in the
  *    same file, because the debounce timer outlives the test that armed it.
  *
- * The global test setup flushes after EVERY test (src/testSetup.ts), so
- * nothing is ever left pending to fire later; a test that wants to assert
- * on the PATCH calls this itself, and then the fetch has already been made
- * (api.patchSettings reaches fetch() synchronously), so the assertion needs
- * no wait at all.
+ * The global test setup DISCARDS the pending patch after every test (see
+ * __discardPendingSettingsPatchForTests) — sending it there would make a
+ * real request through whatever `fetch` is installed at that moment, which
+ * after a test's own `vi.unstubAllGlobals()` is the REAL fetch, not the
+ * mock. A test that wants to assert on the PATCH calls this itself, and
+ * then the fetch has already been made (api.patchSettings reaches fetch()
+ * synchronously), so the assertion needs no wait at all.
  */
 export function __flushPendingSettingsPatchForTests(): void {
   pendingSettingsPatchFlusher?.();
+}
+
+/**
+ * Visible for tests: DROP the pending settings PATCH — cancel the debounce
+ * timer and discard the patch WITHOUT sending it.
+ *
+ * This is what the global test teardown uses: a test that left a patch
+ * pending should not make a real HTTP request on the way out. Cancelling
+ * closes the leak exactly as sending does — the point of the teardown is
+ * that nothing is left to fire later, not that the patch is delivered.
+ */
+export function __discardPendingSettingsPatchForTests(): void {
+  pendingSettingsPatchDiscarder?.();
 }
 
 export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set, get) => {
@@ -97,15 +114,21 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     });
   }
 
-  // Settle the pending PATCH now — cancel the debounce timer and send it.
-  // Registered module-scope so a test can reach it; see
-  // __flushPendingSettingsPatchForTests.
-  function flushPendingSettingsPatchNow() {
+  // Settle the pending PATCH now. `send` decides whether it goes out or is
+  // dropped: the global teardown DISCARDS it (a test that left a patch
+  // pending must not make a real request), and a test that wants to assert
+  // on the PATCH SENDS it. Registered module-scope so a test can reach it.
+  function settlePendingSettingsPatch(send: boolean) {
     if (patchTimer) clearTimeout(patchTimer);
     patchTimer = null;
+    if (!send) {
+      pendingPatch = null;
+      return;
+    }
     flushPendingPatch();
   }
-  pendingSettingsPatchFlusher = flushPendingSettingsPatchNow;
+  pendingSettingsPatchFlusher = () => settlePendingSettingsPatch(true);
+  pendingSettingsPatchDiscarder = () => settlePendingSettingsPatch(false);
 
   function applySettings(next: AppSettings) {
     set({

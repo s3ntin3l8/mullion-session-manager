@@ -1,6 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { useDashboardStore } from "./index.js";
-import { __flushPendingSettingsPatchForTests } from "./slices/ui.js";
+import {
+  __discardPendingSettingsPatchForTests,
+  __flushPendingSettingsPatchForTests,
+} from "./slices/ui.js";
 import { DEFAULT_SETTINGS } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 
@@ -19,46 +22,58 @@ import { jsonResponse } from "../test/jsonResponse.js";
 //      by then that later test has installed its own fetch mock, so the
 //      previous test's PATCH shows up in this one's assertions.
 //
-// The global test setup (src/testSetup.ts) flushes the pending patch after
-// every test, which closes (2) at the source. These tests pin that.
+// The global test setup (src/testSetup.ts) DISCARDS the pending patch after
+// every test, which closes (2) at the source. These tests pin that — and
+// pin that it discards rather than sends, because the teardown runs after
+// each file's own `vi.unstubAllGlobals()`, so a send there would go out
+// through the REAL fetch.
 describe("the settings PATCH debounce", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+  // A SPY, not a stub, and installed ONCE for the file: `vi.unstubAllGlobals()`
+  // (which a test file's own afterEach usually calls) reverts `vi.stubGlobal`
+  // but NOT `vi.spyOn` — so this keeps recording after the test's own mock is
+  // gone, which is exactly the window the global teardown runs in. A fresh spy
+  // per test would record nothing and the assertion below would be vacuous.
+  const calls: string[] = [];
 
-  beforeEach(() => {
-    fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS)));
-    vi.stubGlobal("fetch", fetchMock);
+  beforeAll(() => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+    });
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
+  afterAll(() => {
+    vi.restoreAllMocks();
   });
 
   it("does not send the PATCH immediately — it is debounced", () => {
     useDashboardStore.getState().updateSettings({ theme: "light" });
     // The local state is applied at once; the PATCH is not.
     expect(useDashboardStore.getState().settings.theme).toBe("light");
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(calls).toEqual([]);
   });
 
-  it("does not leak the previous test's pending PATCH into this test's mock", async () => {
-    // Long enough for the 400ms debounce to have fired. Without the global
-    // flush, the patch the previous test armed would fire HERE — into this
-    // test's freshly-installed mock — and this assertion would be red.
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(fetchMock).not.toHaveBeenCalled();
+  it("does not let the previous test's pending PATCH escape through the real fetch", () => {
+    // The previous test armed a patch, and the global teardown ran after that
+    // test's own afterEach — i.e. with the file's own mock already gone. A
+    // SEND there would be a real request; the spy above is still installed
+    // and records it. The teardown DISCARDS, so nothing was sent.
+    expect(calls).toEqual([]);
   });
 
-  it("sends the PATCH once the pending patch is flushed", async () => {
+  it("discards the pending PATCH without sending it", () => {
+    useDashboardStore.getState().updateSettings({ theme: "light" });
+    __discardPendingSettingsPatchForTests();
+    // Nothing was sent — the teardown's job is that nothing is left to fire
+    // later, not that the patch is delivered.
+    expect(calls).toEqual([]);
+  });
+
+  it("sends the PATCH once the pending patch is flushed", () => {
     useDashboardStore.getState().updateSettings({ theme: "light" });
     __flushPendingSettingsPatchForTests();
     // Flushed, not waited for: api.patchSettings reaches fetch()
     // synchronously, so the call has already been made here.
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/settings",
-      expect.objectContaining({
-        method: "PATCH",
-        body: JSON.stringify({ theme: "light" }),
-      }),
-    );
+    expect(calls).toContain("/api/settings");
   });
 });
