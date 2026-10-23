@@ -83,6 +83,22 @@ export interface HookAdapterContext {
    * host-level sync already covers a given CLI, the per-session pointer
    * for the plain shipped-bundle case is skipped as redundant. */
   injectMullionBundle: boolean;
+  /** This session's effective temp directory — the value that ends up in
+   * the session env's `TMPDIR`/`TEMP`/`TMP`.
+   *
+   * Normally `<sessionsDir>/<id>.tmp` (launch-plan.ts's per-session temp
+   * dir), but a caller that supplies its own `TMPDIR`/`TEMP`/`TMP` in
+   * `session.env` overrides all three, and NO per-session temp dir is
+   * allocated in that case.
+   *
+   * Only mcode's adapter reads it today, and it needs it because mcode runs
+   * a plugin hook as a child process whose environment is a strict
+   * WHITELIST — `TMPDIR` survives it, but arbitrary `MULLION_*` vars do
+   * NOT. So the per-session hook handoff file has to live at exactly the
+   * path `$TMPDIR` points at, or the shim cannot find it. Optional for the
+   * same reason `cwd` is: the other adapters' tests construct ctx literals
+   * without it. */
+  tmpDir?: string;
   /** This session's working directory. Optional — only agy's and codex's
    * adapters read it today (to pre-trust a fresh worktree, see agy.ts's
    * mergeAgyTrustedWorkspace and codex.ts's buildCodexTrustFlag), so it's

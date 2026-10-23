@@ -13,12 +13,16 @@ import {
   resolveMcodePluginDir,
   resolveMcodeShimPath,
   resolveMcodeGlobalSkillsDir,
-  MCODE_HOOK_FILE_ENV,
 } from "../../../src/services/hook-adapters/mcode.js";
 
 const ctx = {
   sessionId: "sess-1",
   sessionsDir: "/tmp/mullion-sessions",
+  // The session's EFFECTIVE temp dir (launch-plan.ts's per-session
+  // `<sessionsDir>/<id>.tmp` by default). The hook handoff file lives here,
+  // because TMPDIR is the only per-session channel mcode's hook child env
+  // preserves.
+  tmpDir: "/tmp/mullion-sessions/sess-1.tmp",
   hookSocketPath: "/tmp/mullion-sessions/hooks.sock",
   hookToken: "tok-abc",
   controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
@@ -79,14 +83,22 @@ describe("mcodeAdapter.emits", () => {
 });
 
 describe("mcodeAdapter.prepareLaunch", () => {
-  it("writes the per-session hook handoff file and sets the env var", () => {
+  it("writes the per-session hook handoff file under the session's temp dir", () => {
     const plan = mcodeAdapter.prepareLaunch(ctx);
     expect(plan.settingsFiles).toHaveLength(1);
     const file = plan.settingsFiles![0];
-    // Under the session's own tmp dir — TMPDIR survives mcode's hook env
-    // whitelist, which is how the shim finds this file.
+    // Under the session's EFFECTIVE temp dir — TMPDIR survives mcode's hook
+    // env whitelist, and it is the only channel the shim has.
     expect(file.path).toBe(path.join("/tmp/mullion-sessions", "sess-1.tmp", "mullion-hook.json"));
-    expect(plan.envAdditions?.[MCODE_HOOK_FILE_ENV]).toBe(file.path);
+  });
+
+  it("writes the handoff file under the caller's own TMPDIR when one was supplied", () => {
+    // launch-plan.ts honours a caller-supplied TMPDIR/TEMP/TMP and then
+    // allocates NO per-session temp dir, so the effective temp dir is the
+    // caller's — the handoff file must follow it, or the shim would look
+    // in the wrong place and fail open (no hooks at all).
+    const plan = mcodeAdapter.prepareLaunch({ ...ctx, tmpDir: "/caller/tmp" });
+    expect(plan.settingsFiles![0].path).toBe(path.join("/caller/tmp", "mullion-hook.json"));
   });
 
   it("puts the socket, token and forwarder path in the handoff file", () => {

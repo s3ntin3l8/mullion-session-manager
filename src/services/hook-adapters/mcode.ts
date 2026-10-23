@@ -34,15 +34,14 @@
  * `MULLION_HOOK_TOKEN` and `MULLION_FORWARDER_PATH` are all DROPPED, so the
  * forwarder cannot find Mullion's hook socket the way it does for the other
  * agents. The shim closes that gap: Mullion writes this session's socket +
- * token + forwarder path to a per-session JSON file and points the hook
- * command at it via `MULLION_MCODE_HOOK_FILE`.
+ * token + forwarder path to a per-session JSON file, and the shim finds it
+ * through TMPDIR — the one per-session channel mcode's whitelist preserves.
  *
- * That file lives under the session's own temp dir (`<sessionsDir>/<id>.tmp`),
- * which launch-plan.ts already allocates and exports as TMPDIR/TEMP/TMP —
- * and TMPDIR *is* in mcode's whitelist, so it survives into the hook child.
- * The shim reads `$TMPDIR/mullion-hook.json`; `MULLION_MCODE_HOOK_FILE` is
- * honoured as an override for a session whose caller supplied a custom
- * TMPDIR (in which case launch-plan.ts allocates no per-session tmp dir).
+ * That file lives under the session's EFFECTIVE temp dir: the per-session
+ * `<sessionsDir>/<id>.tmp` that launch-plan.ts allocates and exports as
+ * TMPDIR/TEMP/TMP, or the caller's own TMPDIR when they supplied one (in
+ * which case launch-plan.ts allocates no per-session temp dir at all — hence
+ * ctx.tmpDir carrying the real value rather than the adapter guessing).
  * Either way nothing per-session is ever written into the host-global plugin.
  *
  * ## skip-permissions
@@ -96,11 +95,6 @@ export const MCODE_PLUGIN_MARKER_NAME = ".mullion-managed";
  * user-authored file with the same name is never deleted. */
 export const MCODE_PLUGIN_MARKER_CONTENT =
   "This directory is managed by Mullion (hook-adapters/mcode.ts). Remove it with `mullion` uninstall.\n";
-
-/** Env var carrying the per-session hook-handoff path into the shim. mcode
- * strips most env vars from a plugin hook's child process, but NOT this one
- * — see the header's whitelist discussion. */
-export const MCODE_HOOK_FILE_ENV = "MULLION_MCODE_HOOK_FILE";
 
 /** mcode's own default data dir, relative to $HOME. mcode resolves
  * `<dataDir>` from `~/.minimax` (+ an optional profile suffix) — see its
@@ -384,19 +378,17 @@ export const mcodeAdapter = {
   prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     const forwarderPath = ctx.forwarderPath;
 
-    // The per-session hook-handoff file. It lives under the session's own
-    // temp dir (launch-plan.ts allocates `<sessionsDir>/<id>.tmp` and exports
-    // it as TMPDIR/TEMP/TMP, and TMPDIR *is* in mcode's hook env whitelist),
-    // so the socket+token never touch a host-global location and never reach
-    // the plugin. The shim finds it at "$TMPDIR/mullion-hook.json".
-    //
-    // The file NAME is fixed rather than session-keyed because the shim
-    // resolves it from TMPDIR, which is already per-session. The env var
-    // below is the override for a session whose caller supplied a custom
-    // TMPDIR (in which case launch-plan.ts allocates no per-session tmp dir
-    // and the handoff is written next to the caller's tmp instead).
-    const sessionTmpDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.tmp`);
-    const hookFilePath = path.join(sessionTmpDir, "mullion-hook.json");
+    // The per-session hook-handoff file. It MUST live at exactly the path
+    // the session's TMPDIR points at: mcode runs a plugin hook as a child
+    // process whose environment is a strict WHITELIST, and TMPDIR survives
+    // it while arbitrary MULLION_* vars do NOT. So the shim can only find the
+    // file under $TMPDIR, and ctx.tmpDir is the session's EFFECTIVE temp
+    // dir — the per-session `<sessionsDir>/<id>.tmp` by default, or the
+    // caller's own TMPDIR when they supplied one (in which case
+    // launch-plan.ts allocates no per-session temp dir at all).
+    const effectiveTmpDir =
+      ctx.tmpDir ?? path.join(ctx.sessionsDir, `${ctx.sessionId}.tmp`);
+    const hookFilePath = path.join(effectiveTmpDir, "mullion-hook.json");
     const handoff = buildMcodeHookHandoff(ctx, forwarderPath);
 
     // The plugin install happens HERE, synchronously, rather than through the
@@ -425,9 +417,6 @@ export const mcodeAdapter = {
     }
 
     return {
-      envAdditions: {
-        [MCODE_HOOK_FILE_ENV]: hookFilePath,
-      },
       settingsFiles: [
         { path: hookFilePath, contents: handoff },
       ],

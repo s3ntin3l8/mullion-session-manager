@@ -15,9 +15,10 @@
 #   argv:  <shim> <mcode> <event>
 #          e.g. /path/to/mcode-hook-shim.sh mcode PostToolUse
 #   stdin: the hook payload JSON on stdin, passed through untouched.
-#   env:   MULLION_MCODE_HOOK_FILE — absolute path to a per-session JSON file
-#          written by Mullion's mcode adapter, containing the socket path,
-#          the handshake token, and the forwarder path.
+#   env:   TMPDIR — the session's effective temp dir, where the per-session
+#          handoff JSON file (socket path, handshake token, forwarder path)
+#          is written. TMPDIR is the ONLY one of these vars mcode's hook
+#          child env preserves — see the note below.
 #   stdout: whatever the forwarder prints (a hook decision JSON).
 #
 # FAIL-OPEN BY CONTRACT: if the handoff file is missing/unreadable, or the
@@ -30,13 +31,16 @@
 
 set -u
 
-# The handoff file: Mullion's mcode adapter writes it per session, under the
-# session's own temp dir. mcode's hook child env is a whitelist that DROPS
-# unknown MULLION_* vars, so the file is found via TMPDIR (which IS
-# whitelisted and which launch-plan.ts points at <sessionsDir>/<id>.tmp).
-# MULLION_MCODE_HOOK_FILE is honoured as an override for the case where the
-# caller supplied a custom TMPDIR (no per-session tmp dir is then allocated).
-HANDOFF_FILE="${MULLION_MCODE_HOOK_FILE:-${TMPDIR:-}/mullion-hook.json}"
+# The handoff file: Mullion's mcode adapter writes it per session, at
+# exactly the path this session's TMPDIR points at.
+#
+# TMPDIR is the ONLY channel available: mcode runs a plugin hook as a child
+# process whose environment is a strict whitelist (PATH, HOME, LANG, TERM,
+# SHELL, USER, TMPDIR, TEMP, TMP, ...) — every MULLION_* var, including
+# MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN/MULLION_FORWARDER_PATH, is DROPPED.
+# TMPDIR survives it, so the handoff file travels under $TMPDIR and the
+# socket+token never reach the plugin or any host-global file.
+HANDOFF_FILE="${TMPDIR:-}/mullion-hook.json"
 
 if [ -z "$HANDOFF_FILE" ] || [ ! -r "$HANDOFF_FILE" ]; then
   # No handoff for this session (e.g. the hook fired outside a Mullion

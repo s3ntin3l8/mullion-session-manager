@@ -77,13 +77,13 @@ describe("mcode-hook-shim.sh", () => {
       }),
     );
 
-    const result = runShim({ env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: undefined } });
+    const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('"decision":"allow"');
   });
 
   it("fails open with an empty JSON object when the handoff file is missing", () => {
-    const result = runShim({ env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: undefined } });
+    const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("{}");
   });
@@ -98,34 +98,66 @@ describe("mcode-hook-shim.sh", () => {
         nodePath: process.execPath,
       }),
     );
-    const result = runShim({ env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: undefined } });
+    const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("{}");
   });
 
   it("fails open on a malformed handoff file", () => {
     writeFileSync(path.join(tmpDir, "mullion-hook.json"), "not json at all\n");
-    const result = runShim({ env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: undefined } });
+    const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("{}");
   });
 
-  it("prefers MULLION_MCODE_HOOK_FILE over the TMPDIR default", () => {
-    const explicit = path.join(dir, "explicit-hook.json");
+  it("finds the handoff file purely through TMPDIR", () => {
+    // mcode's hook child env is a whitelist that DROPS every MULLION_* var,
+    // so TMPDIR is the ONLY channel the shim has — the file has to be at
+    // $TMPDIR/mullion-hook.json and nothing else may be consulted.
     writeFileSync(
-      explicit,
+      path.join(tmpDir, "mullion-hook.json"),
       JSON.stringify({
-        socket: "/tmp/explicit.sock",
-        token: "tok-explicit",
+        socket: "/tmp/tmpdir.sock",
+        token: "tok-tmpdir",
         forwarderPath,
+        nodePath: process.execPath,
+      }),
+    );
+    const result = runShim({ env: { TMPDIR: tmpDir } });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"decision":"allow"');
+  });
+
+  it("ignores a MULLION_MCODE_HOOK_FILE pointing elsewhere (mcode strips it)", () => {
+    // The env var is NOT a real channel — mcode's hook child env whitelist
+    // drops every MULLION_* var, so it can never point the shim at a
+    // different file. TMPDIR is the only thing consulted.
+    writeFileSync(
+      path.join(tmpDir, "mullion-hook.json"),
+      JSON.stringify({
+        socket: "/tmp/tmpdir.sock",
+        token: "tok-tmpdir",
+        forwarderPath,
+        nodePath: process.execPath,
+      }),
+    );
+    const elsewhere = path.join(dir, "elsewhere-hook.json");
+    writeFileSync(
+      elsewhere,
+      JSON.stringify({
+        socket: "/tmp/elsewhere.sock",
+        token: "tok-elsewhere",
+        forwarderPath: "/nonexistent.mjs",
         nodePath: process.execPath,
       }),
     );
 
     const result = runShim({
-      env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: explicit },
+      env: { TMPDIR: tmpDir, MULLION_MCODE_HOOK_FILE: elsewhere },
     });
     expect(result.status).toBe(0);
+    // The TMPDIR file won — the ignored env var's broken forwarder path was
+    // never consulted.
     expect(result.stdout).toContain('"decision":"allow"');
   });
 });

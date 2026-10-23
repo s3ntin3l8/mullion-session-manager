@@ -17,6 +17,7 @@
 // so that write must already be complete by the time applyHookAdapters
 // runs. Splitting the I/O out would just move that ordering hazard onto
 // every caller instead of keeping it as one documented invariant here.
+import os from "node:os";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
@@ -335,10 +336,19 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // per-session tmp directory. Otherwise, allocate `<sessionsDir>/<id>.tmp` and
   // inject it into TMPDIR, TEMP, and TMP.
   const callerTmp = session.env.TMPDIR || session.env.TEMP || session.env.TMP;
+  // The EFFECTIVE temp dir — what the session env's TMPDIR/TEMP/TMP end up
+  // being. Tracked separately because mcode's hook adapter has to write its
+  // per-session hook handoff file to exactly this path: mcode runs a plugin
+  // hook with a whitelisted environment, and TMPDIR is on that whitelist
+  // while arbitrary MULLION_* vars are not — so a file the shim looks up
+  // under $TMPDIR must sit at the real TMPDIR, not at the per-session
+  // default when the caller overrode it.
+  let effectiveTmpDir: string;
   if (callerTmp) {
     sessionEnv.TMPDIR = session.env.TMPDIR ?? callerTmp;
     sessionEnv.TEMP = session.env.TEMP ?? callerTmp;
     sessionEnv.TMP = session.env.TMP ?? callerTmp;
+    effectiveTmpDir = sessionEnv.TMPDIR;
   } else {
     const tmpDir = sessionTmpDirPath(session.sessionsDir, session.id);
     try {
@@ -346,11 +356,16 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
       sessionEnv.TMPDIR = tmpDir;
       sessionEnv.TEMP = tmpDir;
       sessionEnv.TMP = tmpDir;
+      effectiveTmpDir = tmpDir;
     } catch (err) {
       console.warn(
         `[launch-plan] failed to create session tmp dir for session ${session.id}:`,
         err,
       );
+      // The session env's TMPDIR/TEMP/TMP are left as inherited in this
+      // failure case, so the EFFECTIVE temp dir is the inherited one — not
+      // the per-session dir we failed to create.
+      effectiveTmpDir = sessionEnv.TMPDIR ?? os.tmpdir();
     }
   }
 
@@ -446,6 +461,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     injectProjectBriefing: session.injectProjectBriefing,
     injectMullionBundle: session.injectMullionBundle,
     authEnabled: session.authEnabled,
+    tmpDir: effectiveTmpDir,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,
     seedPrompt: session.seedPrompt,
