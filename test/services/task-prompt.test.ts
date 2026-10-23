@@ -199,7 +199,10 @@ describe("buildTaskMasterPreamble — delegation clause", () => {
     expect(codex).toContain("spawn_agent");
 
     const opencode = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "opencode" }));
-    expect(opencode).toContain("agents.<name>");
+    // v2's subagent tool: an `agent` (the subagent type) and an optional
+    // per-call `model` — not v1's `agents.<name>` config entries.
+    expect(opencode).toContain("`agent`");
+    expect(opencode).toContain("`model`");
 
     const agy = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "agy" }));
     expect(agy).toContain("invoke_subagent");

@@ -535,15 +535,40 @@ export const openCodeAdapter: HookAgentAdapter = {
   matches: (command) => OPENCODE_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: OPENCODE_EMITS,
+  // Verified against the installed opencode v2.1.3 (Mullion requires
+  // >= 2.0.29, so v2's names are the only ones that matter). The subagent
+  // tool's input schema is:
+  //
+  //   agent      — the type of specialized agent to run (v1's
+  //                `subagent_type`; the tool's own migration notice says
+  //                "The `subagent` tool takes `agent` instead of
+  //                `subagent_type` and `sessionID` instead of `task_id`")
+  //   model      — optional, "providerID/modelID" or
+  //                "providerID/modelID#variant"
+  //   description, prompt, sessionID
+  //
+  // So v2 DOES take a per-call model — the same shape as Claude Code's Task
+  // tool, and the lever the worker can actually pull. The previous row
+  // named neither, and pointed instead at `explore` and `general` as
+  // "shipped in" subagents to prefer — but their v2 definitions set only
+  // name/description/mode/permissions and carry no model of their own, so
+  // the advice named a lever that does not exist.
+  //
+  // The clause also repeats the tool's own rule about the model id ("look
+  // the model up with the models tool, filtering to your own provider
+  // first... do not guess the ID"), because a row that told the worker to
+  // pass a cheaper model without saying where to find one would be advice
+  // it cannot follow.
   delegationHint:
     "If this task has parts that could be done independently, delegate them: " +
-    "opencode's subagents are `agents.<name>` config entries, each with " +
-    "its own `model`, and `explore` and `general` ship built in — so " +
-    "prefer a subagent configured with a cheaper model for the mechanical " +
-    "parts, and keep the parts that need your own judgement for yourself. " +
-    "A delegated part may run in its own workspace or fork, so whatever you " +
-    "delegate has to land on this branch — you remain responsible for the " +
-    "final commit here.",
+    "opencode's subagent tool takes an `agent` (which subagent type to run) " +
+    "and an optional `model` for that call, written as `providerID/modelID` " +
+    "or `providerID/modelID#variant` — so route the mechanical parts to a " +
+    "cheaper model, and keep the parts that need your own judgement for " +
+    "yourself. Look that model up with the `models` tool, filtered to your " +
+    "own provider, rather than guessing the id. A delegated part may run in " +
+    "its own workspace or fork, so whatever you delegate has to land on this " +
+    "branch — you remain responsible for the final commit here.",
   // `--prompt <text>` is a top-level option on the DEFAULT `opencode
   // [directory]` command (the TUI, which is what Mullion always spawns — there
   // is no `run`/`exec` subcommand involved), and in v2 it SUBMITS that text
