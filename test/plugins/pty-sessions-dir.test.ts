@@ -13,7 +13,15 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
-import { ensureSessionsDir, maxSunPathBytes, resolveSessionsDirs } from "../../src/plugins/pty.js";
+import Fastify from "fastify";
+import {
+  ensureSessionsDir,
+  maxSunPathBytes,
+  ptyPlugin,
+  resolveSessionsDirs,
+} from "../../src/plugins/pty.js";
+import { envPlugin } from "../../src/plugins/env.js";
+import { dbPlugin } from "../../src/plugins/db.js";
 import { buildApp } from "../../src/app.js";
 
 // A configured dir long enough to push the worst-case socket path past the
@@ -471,6 +479,41 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
       expect(ensureSessionsDir(short)).toBe(path.resolve(short));
       expect(existsSync(fallbackUnder(home))).toBe(false);
     });
+  });
+
+  it("warns at boot when a fallback root was skipped", async () => {
+    // The reporting half: the plugin logs the root it passed over AND why,
+    // so a planted symlink (or an unwritable home) is visible to the
+    // operator instead of quietly relocating the sessions to /tmp.
+    const unwritable = path.join(TEST_TMPDIR, `unwritable-${process.pid}`);
+    mkdirSync(unwritable, { recursive: true });
+    chmodSync(unwritable, 0o500);
+    const prevHome = process.env.HOME;
+    const prevSessions = process.env.SESSIONS_DIR;
+    process.env.HOME = unwritable;
+    process.env.SESSIONS_DIR = configured;
+    try {
+      const app = Fastify({ logger: { level: "warn" } });
+      const warn = vi.spyOn(app.log, "warn");
+      await app.register(envPlugin);
+      await app.register(dbPlugin);
+      await app.register(ptyPlugin);
+      await app.ready();
+      const reported = warn.mock.calls.filter((call) =>
+        /fallback root unusable/.test(String(call[1])),
+      );
+      expect(reported.length).toBeGreaterThan(0);
+      expect(reported[0]?.[0]).toMatchObject({ root: expect.stringContaining("ms-") });
+      await app.close();
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+      if (prevSessions === undefined) delete process.env.SESSIONS_DIR;
+      else process.env.SESSIONS_DIR = prevSessions;
+      chmodSync(unwritable, 0o700);
+      rmSync(unwritable, { recursive: true, force: true });
+      rmSync(path.join("/tmp", `ms-${hash}`), { recursive: true, force: true });
+    }
   });
 
   it("does not delete the fallback dir (live sockets/tokens) on app shutdown", async () => {
