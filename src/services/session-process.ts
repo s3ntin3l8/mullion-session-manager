@@ -705,6 +705,15 @@ export type SessionLiveness = ScopeLiveness;
  *     was in neither `owned` nor `unverifiable` and therefore read
  *     `"dead"`: the reconciler flipped the session's row to "exited" and
  *     tore the session down while the scope kept running.
+ *
+ *     The set covers the dirs this instance has put a socket in THAT IT CAN
+ *     NAME: the current one plus the fallback roots an earlier release
+ *     shipped for the same configured path. A configured SESSIONS_DIR moved
+ *     by an operator — or a TMPDIR whose VALUE changed between two runs —
+ *     leaves a socket in a dir the set cannot name, and that scope still
+ *     reads "dead" here; tracked as issue #1771, which is the remaining
+ *     hole in this rule (it needs a persisted history of the dirs an
+ *     instance has used, which the DB-less agent role cannot provide).
  *   - `listing.unverifiable.has(id)` -> `"unknown"`. A row could name `id`,
  *     but this instance can't confirm ownership, so it must not assert
  *     either answer.

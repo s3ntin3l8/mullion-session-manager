@@ -300,6 +300,15 @@ export interface ResolvedSessionsDirs {
  * never by pattern-matching the resolved dir's basename: a configured dir
  * that happens to be named `ms-<8 hex>` would otherwise make this instance
  * claim ownership of a dir that may belong to a different project.
+ *
+ * On what the owned set may claim: every dir in it is one this instance
+ * itself created — the current one, and the ones an earlier release created
+ * for the same configured path. The only way a dir that is NOT ours lands
+ * under one of those names is the 32-bit md5 collision the fallback name
+ * already accepts (two projects hashing to one dir), and the scope listing
+ * is per-user (`systemctl --user`), so a different user cannot inject a row
+ * into it. That is why the compat dirs need no separate hardening pass the
+ * way the current fallback dir gets one in secureFallbackDir.
  */
 export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   const resolved = path.resolve(configured);

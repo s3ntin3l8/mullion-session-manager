@@ -134,7 +134,11 @@ export function extractDtachSocketPath(description) {
 export function ownsScope(description, ownedDirs) {
   const socketPath = extractDtachSocketPath(description);
   if (socketPath === null) return false;
-  const dirs = ownedDirs instanceof Set ? ownedDirs : new Set(ownedDirs);
+  // The backend resolves the dirs it compares against (resolveOwnedDirs in
+  // session-process.ts) — mirror that, or the two copies drift.
+  const dirs = new Set(
+    [...(ownedDirs instanceof Set ? [...ownedDirs] : ownedDirs)].map((dir) => path.resolve(dir)),
+  );
   return dirs.has(path.dirname(socketPath));
 }
 
