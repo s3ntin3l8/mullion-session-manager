@@ -77,26 +77,35 @@ export function mergeReadiness(pr) {
     return { action: "wait", reason: "no status checks have reported yet" };
   }
 
-  // A rollup entry is one of two shapes. A StatusCheck (an Actions run)
+  // A rollup entry is one of two shapes. A CheckRun (an Actions run)
   // carries `status` and `conclusion`; a StatusContext (a legacy commit
-  // status) carries `state` and no conclusion. Branch on the type rather
-  // than on the fields, or a legacy status reads as "still running" for
-  // the whole timeout — and a FINISHED one as failed with `(undefined)`.
-  const isCheck = (c) => (c.__typename ?? "StatusCheck") === "StatusCheck";
-  const isContext = (c) => c.__typename === "StatusContext";
+  // status) carries `state` and no conclusion. GitHub emits "CheckRun" and
+  // "StatusContext" — there is no "StatusCheck" in that union.
+  //
+  // So branch on the LEGACY shape and treat everything else as a check: an
+  // unknown typename must never be read as "no conclusion", or a queued
+  // check reads as failed and the script stops on a bogus failure report
+  // instead of waiting.
+  const isLegacyStatus = (c) => c.__typename === "StatusContext";
 
-  const running = rollup.filter((c) => isCheck(c) && c.status !== "COMPLETED");
+  // A legacy status still in flight is PENDING; a check still in flight is
+  // anything but COMPLETED. Both are "wait", never "stop".
+  const running = rollup.filter((c) =>
+    isLegacyStatus(c) ? c.state === "PENDING" : c.status !== "COMPLETED",
+  );
   if (running.length > 0) {
     return {
       action: "wait",
-      reason: `${running.length} check(s) still running: ${running.map((c) => c.name).join(", ")}`,
+      reason: `${running.length} check(s) still running: ${running
+        .map((c) => c.name ?? c.context)
+        .join(", ")}`,
     };
   }
 
   const failed = rollup.filter((c) => {
-    if (isContext(c)) {
+    if (isLegacyStatus(c)) {
       // A legacy commit status: SUCCESS, FAILURE, ERROR, PENDING. Anything
-      // but success (or a neutral state) is a failure.
+      // but success (PENDING is already counted as running) is a failure.
       return c.state !== "SUCCESS" && c.state !== "PENDING";
     }
     return !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(c.conclusion ?? "");
@@ -105,7 +114,7 @@ export function mergeReadiness(pr) {
     return {
       action: "stop",
       reason: `${failed.length} check(s) failed: ${failed
-        .map((c) => `${c.name} (${c.conclusion ?? c.state})`)
+        .map((c) => `${c.name ?? c.context} (${c.conclusion ?? c.state})`)
         .join(", ")}`,
     };
   }
@@ -206,11 +215,27 @@ export function parseArgs(argv) {
       }
       timeoutSeconds = seconds;
       i++;
+    } else if (arg.startsWith("--timeout=")) {
+      const raw = arg.slice("--timeout=".length);
+      const seconds = Number(raw);
+      if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new UsageError(`--timeout needs a positive number of seconds, got ${raw}`);
+      }
+      timeoutSeconds = seconds;
     } else if (/^\d+$/.test(arg)) {
       positionals.push(arg);
     } else {
       throw new UsageError(`unknown argument: ${arg}`);
     }
+  }
+
+  // Exactly one PR number, or none (meaning "the current branch's PR").
+  // Silently ignoring a second one would merge a different PR than the
+  // caller named.
+  if (positionals.length > 1) {
+    throw new UsageError(
+      `expected at most one PR number, got ${positionals.length} (${positionals.join(", ")})`,
+    );
   }
 
   return {

@@ -215,6 +215,14 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
 }
 
 /**
+ * The deadline for a wait that FOLLOWS a 3.2s source-side debounce: the
+ * default 5s fires before the debounced event can even arrive, so the
+ * test would fail on the ceiling rather than on the behaviour. The tests
+ * that wait out a debounce pass this explicitly.
+ */
+const DEBOUNCED_WAIT_MS = 20_000;
+
+/**
  * Waits until `check` is true, or the deadline passes.
  *
  * DEADLINE-based, not a fixed number of turns. 50 `setImmediate` turns is
@@ -229,14 +237,6 @@ function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
  * milliseconds, this should have happened". The tests that need longer raise
  * the deadline (or the test's own timeout), not an iteration count.
  */
-/**
- * The deadline for a wait that FOLLOWS a 3.2s source-side debounce: the
- * default 5s fires before the debounced event can even arrive, so the
- * test would fail on the ceiling rather than on the behaviour. The tests
- * that wait out a debounce pass this explicitly.
- */
-const DEBOUNCED_WAIT_MS = 20_000;
-
 async function waitUntil(check: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

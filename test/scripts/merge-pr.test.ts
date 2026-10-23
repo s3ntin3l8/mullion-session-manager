@@ -4,7 +4,12 @@ import { mergeReadiness, parseArgs } from "../../scripts/merge-pr.mjs";
 // The readiness decision is the whole point of the script: the race it
 // exists for is reading a PR's state too early and acting on it.
 describe("mergeReadiness", () => {
-  const green = (name: string) => ({ name, status: "COMPLETED", conclusion: "SUCCESS" });
+  const green = (name: string) => ({
+    __typename: "CheckRun",
+    name,
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+  });
 
   it("waits when the rollup is EMPTY — the race this script exists for", () => {
     // Right after a force-push, the new head's checks have not registered
@@ -31,7 +36,10 @@ describe("mergeReadiness", () => {
 
   it("waits while a check is still running", () => {
     const readiness = mergeReadiness({
-      statusCheckRollup: [green("ci"), { name: "e2e", status: "IN_PROGRESS", conclusion: null }],
+      statusCheckRollup: [
+        green("ci"),
+        { __typename: "CheckRun", name: "e2e", status: "IN_PROGRESS", conclusion: null },
+      ],
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
     });
@@ -134,7 +142,7 @@ describe("mergeReadiness — legacy commit statuses", () => {
     const readiness = mergeReadiness({
       statusCheckRollup: [
         { __typename: "StatusContext", name: "legacy", state: "SUCCESS" },
-        { __typename: "StatusCheck", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
       ],
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
@@ -150,5 +158,68 @@ describe("mergeReadiness — legacy commit statuses", () => {
     });
     expect(readiness.action).toBe("stop");
     expect(readiness.reason).toContain("legacy");
+  });
+});
+
+describe("mergeReadiness — the typenames GitHub actually emits", () => {
+  it("waits for a QUEUED CheckRun", () => {
+    // The regression this pins: a `__typename` guess that is not in
+    // GitHub's union ("StatusCheck" — there is no such type; every Actions
+    // check is a "CheckRun") made every real check fall through to the
+    // FAILED branch, so the script reported a bogus failure while the
+    // checks were still queued. Measured on a real PR: 14/14 entries are
+    // CheckRun.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        {
+          __typename: "CheckRun",
+          name: "test-node / lint-and-test",
+          status: "QUEUED",
+          conclusion: null,
+        },
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    });
+    expect(readiness.action).toBe("wait");
+    expect(readiness.reason).toContain("test-node / lint-and-test");
+  });
+
+  it("waits for a PENDING legacy status rather than merging past it", () => {
+    // A legacy status in flight is PENDING, and PENDING is "wait" — it is
+    // not a failure, and it is not a pass either.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [{ __typename: "StatusContext", context: "legacy", state: "PENDING" }],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    });
+    expect(readiness.action).toBe("wait");
+  });
+
+  it("names a failed legacy status by its `context`", () => {
+    // A real StatusContext carries `context`, not `name` — so the report
+    // must not say "undefined (FAILURE)".
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "StatusContext", context: "legacy-context", state: "FAILURE" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "CLEAN",
+    });
+    expect(readiness.action).toBe("stop");
+    expect(readiness.reason).toContain("legacy-context");
+    expect(readiness.reason).not.toContain("undefined");
+  });
+});
+
+describe("parseArgs — extra positionals and the = form", () => {
+  it("refuses more than one PR number rather than ignoring the extra", () => {
+    expect(() => parseArgs(["100", "200"])).toThrow(/at most one PR number/i);
+  });
+
+  it("accepts --timeout=600", () => {
+    expect(parseArgs(["--timeout=600"]).timeoutMs).toBe(600_000);
+    expect(parseArgs(["--timeout=600"]).prNumber).toBeUndefined();
   });
 });
