@@ -948,7 +948,13 @@ export interface BundleSyncStatusReport {
   clis: BundleSyncCliStatus[];
 }
 
-const STATUS_CLI_ORDER: readonly BundleSyncCli[] = ["claude-code", "codex", "agy", "opencode", "mcode"];
+const STATUS_CLI_ORDER: readonly BundleSyncCli[] = [
+  "claude-code",
+  "codex",
+  "agy",
+  "opencode",
+  "mcode",
+];
 
 /** Every manifest entry under `root` (prefix-matched, same convention as
  * isBundleSyncedFor) whose `kind` matches — the shared building block for

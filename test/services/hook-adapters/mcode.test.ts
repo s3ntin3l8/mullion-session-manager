@@ -120,9 +120,7 @@ describe("mcodeAdapter.prepareLaunch", () => {
     expect(typeof plan.commandTransform).toBe("function");
     expect(plan.commandTransform!("mcode")).toBe("mcode --model 'minimax/MiniMax-M3'");
     expect(plan.commandTransform!("mcode -m other/model")).toBe("mcode -m other/model");
-    expect(plan.commandTransform!("mcode --model other/model")).toBe(
-      "mcode --model other/model",
-    );
+    expect(plan.commandTransform!("mcode --model other/model")).toBe("mcode --model other/model");
   });
 
   it("leaves the command alone when no model resolved", () => {
@@ -132,9 +130,7 @@ describe("mcodeAdapter.prepareLaunch", () => {
 
   it("does not add a second model flag when the command already has one", () => {
     const plan = mcodeAdapter.prepareLaunch({ ...ctx, model: "minimax/MiniMax-M3" });
-    expect(plan.commandTransform!("mcode --model other/model")).toBe(
-      "mcode --model other/model",
-    );
+    expect(plan.commandTransform!("mcode --model other/model")).toBe("mcode --model other/model");
   });
 
   it("installs the host-global plugin synchronously (mcode scans plugins at startup)", () => {
@@ -172,10 +168,35 @@ describe("buildMcodeHooksJson", () => {
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
+        "PermissionRequest",
         "Stop",
         "SessionEnd",
       ]),
     );
+  });
+
+  it("registers the PermissionRequest hook — it IS the skip-permissions channel", () => {
+    // Without this registration mcode's permission prompts never reach
+    // Mullion, so skip-permissions would silently do nothing and no review
+    // gate would ever open for an mcode session.
+    const permissionRequest = parsed.hooks.PermissionRequest;
+    expect(permissionRequest).toBeDefined();
+    expect(permissionRequest).toHaveLength(1);
+    expect(permissionRequest[0].hooks[0].command).toContain("mcode PermissionRequest");
+  });
+
+  it("gives every hook a timeout in SECONDS, at mcode's 10-second ceiling", () => {
+    // mcode's own hook schema documents `timeout` as seconds, and its
+    // conversion caps a declared timeout at 10s — a value OUTSIDE 1..10 is
+    // treated as raw MILLISECONDS, so writing 300 would mean 300ms.
+    for (const entries of Object.values(parsed.hooks) as { hooks: { timeout: number }[] }[][]) {
+      for (const entry of entries) {
+        const timeout = entry.hooks[0].timeout;
+        expect(Number.isInteger(timeout)).toBe(true);
+        expect(timeout).toBeGreaterThanOrEqual(1);
+        expect(timeout).toBeLessThanOrEqual(10);
+      }
+    }
   });
 
   it("invokes the shim with the mcode agent name", () => {
@@ -183,6 +204,22 @@ describe("buildMcodeHooksJson", () => {
     expect(command).toContain("/host/shim.sh");
     expect(command).toContain("mcode");
     expect(command).toContain("/usr/bin/node");
+  });
+
+  it("passes the hook EVENT name as the forwarder's second argument", () => {
+    // The forwarder is invoked as `<agent> <kind>` and it silently drops the
+    // whole hook when either argv is missing (forwarder.mjs's own `kind`
+    // guard). A command that carried only the agent name would therefore
+    // turn EVERY mcode hook into a no-op — so each entry's command must end
+    // with its own event name.
+    for (const [event, entries] of Object.entries(parsed.hooks) as [
+      string,
+      { hooks: { command: string }[] }[],
+    ][]) {
+      for (const entry of entries) {
+        expect(entry.hooks[0].command).toBe(`"/usr/bin/node" "/host/shim.sh" mcode ${event}`);
+      }
+    }
   });
 
   it("matches the file-editing tools for PostToolUse", () => {
@@ -269,6 +306,35 @@ describe("install/remove the host-global plugin", () => {
       const first = readFileSync(hooksPath, "utf8");
       installMcodePlugin();
       expect(readFileSync(hooksPath, "utf8")).toBe(first);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
+
+  it("refreshes a shim left over from an older build, but not one the user replaced", () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      installMcodePlugin();
+      const shimPath = resolveMcodeShimPath();
+
+      // A stale shim from an older build (ours, but out of date) must be
+      // refreshed — the plugin's hooks.json is rewritten on every install, so
+      // a stale shim would keep running old logic against a fresh plugin.
+      writeFileSync(shimPath, "# mcode hook shim — STALE OLD VERSION\n", { mode: 0o755 });
+      installMcodePlugin();
+      expect(readFileSync(shimPath, "utf8")).toContain("HANDOFF_FILE");
+
+      // A shim the user wrote themselves carries no marker, so it is left
+      // exactly as it was.
+      const userShim = "#!/bin/sh\n# my own hook script\nexit 0\n";
+      writeFileSync(shimPath, userShim, { mode: 0o755 });
+      installMcodePlugin();
+      expect(readFileSync(shimPath, "utf8")).toBe(userShim);
     } finally {
       if (realHome === undefined) delete process.env.HOME;
       else process.env.HOME = realHome;

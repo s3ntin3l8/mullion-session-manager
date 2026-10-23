@@ -40,9 +40,15 @@ set -u
 # MULLION_HOOK_SOCKET/MULLION_HOOK_TOKEN/MULLION_FORWARDER_PATH, is DROPPED.
 # TMPDIR survives it, so the handoff file travels under $TMPDIR and the
 # socket+token never reach the plugin or any host-global file.
-HANDOFF_FILE="${TMPDIR:-}/mullion-hook.json"
+if [ -z "${TMPDIR:-}" ]; then
+  # No TMPDIR at all — nothing can point us at the handoff file. Fail open.
+  printf '{}'
+  exit 0
+fi
 
-if [ -z "$HANDOFF_FILE" ] || [ ! -r "$HANDOFF_FILE" ]; then
+HANDOFF_FILE="${TMPDIR}/mullion-hook.json"
+
+if [ ! -r "$HANDOFF_FILE" ]; then
   # No handoff for this session (e.g. the hook fired outside a Mullion
   # session, or the session's data was cleaned up). Fail open.
   printf '{}'

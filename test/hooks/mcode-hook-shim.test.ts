@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -21,33 +21,42 @@ function writeStubForwarder(dir: string): string {
     p,
     [
       'import net from "node:net";',
-      'console.error(`SOCKET=${process.env.MULLION_HOOK_SOCKET}`);',
-      'console.error(`TOKEN=${process.env.MULLION_HOOK_TOKEN}`);',
+      "console.error(`SOCKET=${process.env.MULLION_HOOK_SOCKET}`);",
+      "console.error(`TOKEN=${process.env.MULLION_HOOK_TOKEN}`);",
+      "console.error(`ARGV=${process.argv.slice(2).join(",
+      ")}`);",
       'console.log(JSON.stringify({ decision: "allow" }));',
     ].join("\n"),
   );
   return p;
 }
 
-function runShim(
-  args: { env?: Record<string, string | undefined>; stdin?: string },
-): { stdout: string; stderr: string; status: number } {
+function runShim(args: {
+  env?: Record<string, string | undefined>;
+  stdin?: string;
+  argv?: string[];
+}): {
+  stdout: string;
+  stderr: string;
+  status: number;
+} {
   const env = { ...process.env, ...args.env };
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete env[k];
   }
-  try {
-    const stdout = execFileSync("sh", [SHIM_PATH, ...(args.stdin ? [] : [])], {
-      env,
-      input: args.stdin ?? "",
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return { stdout, stderr: "", status: 0 };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; status?: number };
-    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", status: e.status ?? 1 };
-  }
+  // spawnSync (not execFileSync) so the child's stderr is readable on SUCCESS
+  // too — the stub forwarder reports what it was handed on stderr.
+  const ret = spawnSync("sh", [SHIM_PATH, ...(args.argv ?? [])], {
+    env,
+    input: args.stdin ?? "",
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  return {
+    stdout: ret.stdout ?? "",
+    stderr: ret.stderr ?? "",
+    status: ret.status ?? 1,
+  };
 }
 
 describe("mcode-hook-shim.sh", () => {
@@ -86,6 +95,35 @@ describe("mcode-hook-shim.sh", () => {
     const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("{}");
+  });
+
+  it("fails open when TMPDIR is unset entirely", () => {
+    // No TMPDIR means no channel to the handoff file at all. The shim must
+    // fail open rather than look at some absolute path.
+    const result = runShim({ env: { TMPDIR: undefined } });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("{}");
+  });
+
+  it("passes the agent + event argv through to the forwarder", () => {
+    // The plugin's command line is `<node> <shim> mcode <Event>`. The shim
+    // must forward those trailing arguments verbatim — the forwarder reads
+    // them as `<agent> <kind>` and drops the hook if either is missing.
+    writeFileSync(
+      path.join(tmpDir, "mullion-hook.json"),
+      JSON.stringify({
+        socket: "/tmp/hooks.sock",
+        token: "tok-abc",
+        forwarderPath,
+        nodePath: process.execPath,
+      }),
+    );
+    const result = runShim({ env: { TMPDIR: tmpDir }, argv: ["mcode", "PostToolUse"] });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"decision":"allow"');
+    expect(result.stderr).toContain("ARGV=mcode,PostToolUse");
+    expect(result.stderr).toContain("SOCKET=/tmp/hooks.sock");
+    expect(result.stderr).toContain("TOKEN=tok-abc");
   });
 
   it("fails open when the forwarder path is missing", () => {

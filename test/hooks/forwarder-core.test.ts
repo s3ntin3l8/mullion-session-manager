@@ -2428,6 +2428,7 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
           cwd: "/repo",
         },
       ],
+      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
       Stop: [{}],
       SessionEnd: [{ reason: "clear" }],
     };
@@ -2445,13 +2446,19 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
     // Guards against a hook being added to the plugin without a matching
     // parity payload above — the same "no test payload declared for
     // registered event" failure mode the claude-code case checks for.
-    const registered = Object.keys(
-      JSON.parse(buildMcodeHooksJson("/shim")).hooks,
-    );
+    const registered = Object.keys(JSON.parse(buildMcodeHooksJson("/shim")).hooks);
     expect(registered.length).toBeGreaterThan(0);
     for (const event of registered) {
       expect(
-        ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"],
+        [
+          "SessionStart",
+          "UserPromptSubmit",
+          "PreToolUse",
+          "PostToolUse",
+          "PermissionRequest",
+          "Stop",
+          "SessionEnd",
+        ],
         `no test payload declared for registered mcode event ${event}`,
       ).toContain(event);
     }
@@ -2507,6 +2514,19 @@ describe("mapMcodeEvent (issue: mcode support)", () => {
     expect(buildForwarderMessage("mcode", "Stop", {})).toEqual({ kind: "progress", phase: "done" });
   });
 
+  it("formats mcode's SessionStart reply in the Claude dialect", () => {
+    // mcode reads the CLAUDE CODE plugin format, so its SessionStart result
+    // dialect is Claude Code's: hookSpecificOutput.additionalContext, with
+    // hookEventName matching the event. Without an mcode case here the reply
+    // would be a bare {} and Mullion's briefing would never reach the agent.
+    expect(formatSessionStartOutput("mcode", "Project Briefing")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: "Project Briefing",
+      },
+    });
+  });
+
   it("formats a gate decision for mcode with the Claude Code dialect", () => {
     // mcode's plugin hooks use the Claude Code dialect, so the approval
     // shape is byte-identical to Claude Code's.
@@ -2523,7 +2543,8 @@ describe("mapMcodeEvent (issue: mcode support)", () => {
   });
 });
 
-describe("buildForwarderMessage", () => {  it("dispatches to the claude-code dialect", () => {
+describe("buildForwarderMessage", () => {
+  it("dispatches to the claude-code dialect", () => {
     expect(buildForwarderMessage("claude-code", "Stop", {})).toEqual({
       kind: "progress",
       phase: "done",

@@ -190,16 +190,30 @@ export const MCODE_HOOK_EVENTS = [
  *
  * Exported for tests. Pure, no I/O. */
 export function buildMcodeHooksJson(shimPath: string, execPath: string = process.execPath): string {
-  const command = `${JSON.stringify(execPath)} ${JSON.stringify(shimPath)} ${MCODE_ADAPTER_NAME}`;
-  const entry = (event: string, matcher?: string) => ({
+  // The forwarder is invoked as `<agent> <kind>` (see forwarder.mjs's own
+  // header) — `kind` is the hook EVENT name, and it is NOT optional: the
+  // forwarder bails out (silently, no message) when either argv is missing.
+  // So every entry's command carries its own event name, exactly like
+  // claude-code.ts's hookEntry does.
+  const entry = (event: string, matcher?: string, timeout = 10) => ({
     ...(matcher ? { matcher } : {}),
     hooks: [
       {
         type: "command" as const,
-        command,
-        // Fire-and-forget notifications: nothing downstream waits on these,
-        // so the timeout only exists to stop a wedged forwarder lingering.
-        timeout: 10,
+        command: `${JSON.stringify(execPath)} ${JSON.stringify(shimPath)} ${MCODE_ADAPTER_NAME} ${event}`,
+        // Timeout in SECONDS (mcode's own hook schema says so).
+        //
+        // mcode clamps a DECLARED timeout to at most 10 seconds: its own
+        // conversion turns an integer 1..10 into `seconds * 1000` capped at
+        // 10000ms, and treats anything outside that range as raw MILLISECONDS
+        // (so `timeout: 300` would mean 300ms, not 300s). 10 is therefore the
+        // only value that buys the maximum wait — writing 300 would make it
+        // dramatically SHORTER.
+        //
+        // Fire-and-forget notifications use that 10s ceiling too: nothing
+        // downstream waits on them, so the timeout only exists to stop a
+        // wedged forwarder lingering.
+        timeout,
       },
     ],
   });
@@ -220,8 +234,27 @@ export function buildMcodeHooksJson(shimPath: string, execPath: string = process
         ...entry("PostToolUse"),
       },
     ],
+    // PermissionRequest is the BLOCKING hook: it is the whole reason
+    // skip-permissions works for mcode (Mullion answers "allow" over the hook
+    // socket instead of mcode showing its own permission dialog), and it is
+    // also what carries a real review gate when skip-permissions is OFF.
+    //
+    // It MUST be registered — without it mcode's permission prompts never
+    // reach Mullion at all, and skip-permissions would silently do nothing.
+    // No matcher: PermissionRequest only fires for the tool call that
+    // actually needs a decision, whatever tool that is.
+    //
+    // The 10s ceiling is mcode's own limit (see above), which is why the
+    // skip-permissions path resolves it in milliseconds — Mullion's gate
+    // server auto-approves immediately — while a HUMAN approval that takes
+    // longer than mcode's hook budget falls back to mcode's own native
+    // permission prompt (a timeout is an "ask", never a denial, in mcode's
+    // own hook-result handling).
+    PermissionRequest: [entry("PermissionRequest")],
     Stop: [entry("Stop")],
-    SessionEnd: [entry("SessionEnd")],
+    // SessionEnd gets a short timeout: mcode itself budgets only a few
+    // seconds for it (its own per-event budget), and it is fire-and-forget.
+    SessionEnd: [entry("SessionEnd", undefined, 2)],
   };
 
   return JSON.stringify({ hooks }, null, 2);
@@ -266,6 +299,22 @@ export function buildMcodeHookHandoff(
   );
 }
 
+/** The marker that identifies the installed shim as Mullion's own. The shim
+ * is written from this repo's copy, and its header carries this string — so a
+ * shim a user wrote themselves is never overwritten or deleted. */
+const MCODE_SHIM_MARKER = "mcode hook shim";
+
+/** True when the file at `shimPath` is still Mullion's own shim (as opposed to
+ * one the user replaced with their own script). */
+function isMullionMcodeShim(shimPath: string): boolean {
+  try {
+    if (!existsSync(shimPath)) return false;
+    return readFileSync(shimPath, "utf8").includes(MCODE_SHIM_MARKER);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Installs (or refreshes) the host-global plugin + the host-stable shim.
  *
@@ -281,8 +330,14 @@ export function installMcodePlugin(): void {
 
   // The shim first: the plugin's command line references it by path, so a
   // half-installed plugin would point at a missing script.
+  //
+  // It is REFRESHED, not just written when absent: the plugin's hooks.json is
+  // rewritten on every install, so a shim left over from an older build would
+  // otherwise keep running stale logic against a fresh plugin. A shim the
+  // user replaced with their own script is left alone (we only overwrite one
+  // that still carries our header marker).
   mkdirSync(path.dirname(shimPath), { recursive: true, mode: 0o755 });
-  if (!existsSync(shimPath)) {
+  if (!existsSync(shimPath) || isMullionMcodeShim(shimPath)) {
     writeFileSync(shimPath, readFileSync(shimSource, "utf8"), { mode: 0o755 });
     chmodSync(shimPath, 0o755);
   }
@@ -290,21 +345,15 @@ export function installMcodePlugin(): void {
   mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true, mode: 0o755 });
   mkdirSync(path.join(pluginDir, "hooks"), { recursive: true, mode: 0o755 });
 
-  writeFileSync(
-    path.join(pluginDir, ".claude-plugin", "plugin.json"),
-    buildMcodePluginManifest(),
-    { mode: 0o644 },
-  );
-  writeFileSync(
-    path.join(pluginDir, "hooks", "hooks.json"),
-    buildMcodeHooksJson(shimPath),
-    { mode: 0o644 },
-  );
-  writeFileSync(
-    path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME),
-    MCODE_PLUGIN_MARKER_CONTENT,
-    { mode: 0o644 },
-  );
+  writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), buildMcodePluginManifest(), {
+    mode: 0o644,
+  });
+  writeFileSync(path.join(pluginDir, "hooks", "hooks.json"), buildMcodeHooksJson(shimPath), {
+    mode: 0o644,
+  });
+  writeFileSync(path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME), MCODE_PLUGIN_MARKER_CONTENT, {
+    mode: 0o644,
+  });
 }
 
 /**
@@ -328,13 +377,8 @@ export function removeMcodePlugin(): void {
 
   const shimPath = resolveMcodeShimPath();
   try {
-    if (existsSync(shimPath)) {
-      // The shim is ours by construction (we wrote it), but a user may have
-      // replaced it — only remove it if it still carries our header marker.
-      const contents = readFileSync(shimPath, "utf8");
-      if (contents.includes("mcode hook shim")) {
-        rmSync(shimPath, { force: true });
-      }
+    if (isMullionMcodeShim(shimPath)) {
+      rmSync(shimPath, { force: true });
     }
   } catch {
     // Same posture as above.
@@ -386,8 +430,7 @@ export const mcodeAdapter = {
     // dir — the per-session `<sessionsDir>/<id>.tmp` by default, or the
     // caller's own TMPDIR when they supplied one (in which case
     // launch-plan.ts allocates no per-session temp dir at all).
-    const effectiveTmpDir =
-      ctx.tmpDir ?? path.join(ctx.sessionsDir, `${ctx.sessionId}.tmp`);
+    const effectiveTmpDir = ctx.tmpDir ?? path.join(ctx.sessionsDir, `${ctx.sessionId}.tmp`);
     const hookFilePath = path.join(effectiveTmpDir, "mullion-hook.json");
     const handoff = buildMcodeHookHandoff(ctx, forwarderPath);
 
@@ -417,9 +460,7 @@ export const mcodeAdapter = {
     }
 
     return {
-      settingsFiles: [
-        { path: hookFilePath, contents: handoff },
-      ],
+      settingsFiles: [{ path: hookFilePath, contents: handoff }],
       // mcode's model flag is `-m <provider/model>` (verified against
       // mcode 0.6.12's own `--help`), so the flag is appended the way
       // codex's is — buildModelFlag's shortFlag argument. Without this,

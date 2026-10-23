@@ -1365,6 +1365,18 @@ export function formatSessionStartOutput(agent, additionalContext) {
       // untrusted, Codex silently skips the hook entirely, so this never
       // throws or blocks on that either.
       return formatClaudeCodeSessionStartOutput(additionalContext);
+    case "mcode":
+      // mcode reads the CLAUDE CODE plugin format (`.claude-plugin/plugin.json`),
+      // so its hook-result dialect IS Claude Code's — including SessionStart's
+      // `hookSpecificOutput.additionalContext`. Verified in mcode 0.6.12's own
+      // code: the CLAUDE-format result parser reads the additional context out
+      // of `hookSpecificOutput.additionalContext` (a string) and REQUIRES
+      // `hookSpecificOutput.hookEventName` to equal the event name — which
+      // formatClaudeCodeSessionStartOutput already emits.
+      //
+      // Without this case mcode's SessionStart reply would be a bare `{}` and
+      // Mullion's project briefing would never reach an mcode session.
+      return formatClaudeCodeSessionStartOutput(additionalContext);
     case "agy":
       // CONFIRMED against a live SessionStart firing (issue #715 — this was
       // previously UNVERIFIED, issue #437b, under the same "no CI or local
