@@ -564,6 +564,37 @@ describe("hooksPlugin (issue #172)", () => {
       socket.destroy();
     });
 
+    it("does NOT auto-approve a gate for a NON-mcode session spawned with skip-permissions", async () => {
+      // The auto-approve is mcode's BYPASS MECHANISM, not a general
+      // skip-permissions behaviour (Hermes review, PR #1793). The other
+      // agents' gates never reach here because their own CLI flag already
+      // bypasses them — but if one ever did reach here, it must still wait
+      // for a human. Without the mcode scoping, ANY session spawned with
+      // skipPermissions silently auto-approved every gate.
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+        skipPermissions: true,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      socket.write(
+        `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "Deploy?" })}\n`,
+      );
+
+      for (let i = 0; i < 50 && session.toInfo().gateState !== "waiting"; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(session.toInfo().gateState).toBe("waiting");
+      socket.destroy();
+    });
+
     it("holds two concurrent waiting gates for the same session independently — each has its own connection, its own reply, and resolving one doesn't touch the other (issue: correlate concurrent permission gates, supersedes PR #839's fall-through)", async () => {
       // Deterministic proof at the socket layer (not dependent on any
       // agent actually batching two escalated tool calls in one turn,

@@ -2442,6 +2442,53 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
     }
   });
 
+  it("mcode: every kind in emits is actually REACHABLE from a registered event", () => {
+    // The mirror image of the check above. `emits` feeds pty-manager's
+    // `hookEmits` and `HOOK_ADAPTER_EMITS_BY_BIN` — i.e. it is what the
+    // frontend advertises as reachable for an mcode session. A kind that no
+    // registered event can produce is a false promise (Hermes review,
+    // PR #1793: `notification`, `cwd_changed` and `compact` were claimed
+    // while the events that produce them — Notification, CwdChanged,
+    // PreCompact/PostCompact — were never registered).
+    const payloadsByEvent: Record<string, Record<string, unknown>[]> = {
+      SessionStart: [{ source: "startup" }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PreToolUse: [{ tool_name: "ExitPlanMode", tool_input: { plan: "do it" } }],
+      PostToolUse: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        {
+          tool_name: "Bash",
+          tool_input: { command: "git worktree add -b fix /tmp/wt" },
+          cwd: "/repo",
+        },
+      ],
+      PermissionRequest: [
+        { tool_name: "Bash", tool_input: { command: "npm test" } },
+        { tool_name: "AskUserQuestion", tool_input: { questions: [{ header: "h" }] } },
+        // ExitPlanMode's PermissionRequest is deliberately NOT a review_gate —
+        // it stays on the old fire-and-forget `permission_request` shape.
+        { tool_name: "ExitPlanMode", tool_input: { plan: "do it" } },
+      ],
+      Stop: [{}],
+      SessionEnd: [{ reason: "clear" }],
+    };
+
+    const reachable = new Set<string>();
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        for (const kind of kindsOf(mapMcodeEvent(event, payload))) {
+          reachable.add(kind);
+        }
+      }
+    }
+
+    for (const kind of mcodeAdapter.emits) {
+      expect(reachable.has(kind), `mcode emits "${kind}" but no registered event produces it`).toBe(
+        true,
+      );
+    }
+  });
+
   it("mcode: the registered hook events are exactly the ones the parity payloads cover", () => {
     // Guards against a hook being added to the plugin without a matching
     // parity payload above — the same "no test payload declared for

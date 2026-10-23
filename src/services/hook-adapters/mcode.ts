@@ -70,7 +70,15 @@
  * `"PermissionRequest"?{decision:"allow"` branch.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync, rmSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+  rmSync,
+  renameSync,
+  unlinkSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookLaunchPlan } from "./types.js";
@@ -97,15 +105,30 @@ export const MCODE_PLUGIN_MARKER_CONTENT =
   "This directory is managed by Mullion (hook-adapters/mcode.ts). Remove it with `mullion` uninstall.\n";
 
 /** mcode's own default data dir, relative to $HOME. mcode resolves
- * `<dataDir>` from `~/.minimax` (+ an optional profile suffix) — see its
- * `qa()`/`Ge()` helpers. We resolve the same way so the plugin lands where
- * mcode actually looks for it. */
+ * `<dataDir>` from its own config (falling back to `~/.minimax`) — see its
+ * `cir()` helper, which pairs `config.dataDir` with
+ * `join(homeDir, ".minimax")`. We resolve the same way so the plugin lands
+ * where mcode actually looks for it.
+ *
+ * ONLY mcode's own overrides are honoured (Hermes review, PR #1793):
+ * `MINIMAX_DATA_DIR`, and its legacy alias `MAVIS_DATA_DIR` — both appear
+ * together in mcode's own runtime env allowlist (`chunk-ZITT4GJK.js`).
+ *
+ * A GENERIC env var is deliberately NOT read here. `PROFILE` in particular
+ * looks plausible but belongs to the **embedded Claude Code CLI** inside
+ * mcode's bundle (`chunk-X3PES5WL.js`: `wr("profile") ?? _r("PROFILE")`),
+ * NOT to mcode — mcode's own CLI has no `--profile` flag at all (verified
+ * against `mcode --help` 0.6.12). Honouring it would redirect the plugin to
+ * `~/.minimax-<x>/plugins`, where mcode — launched without that profile —
+ * never looks: hooks silently off, plus files written to a junk dir.
+ * `MCODE_PROFILE` is not honoured either: no such variable exists in mcode
+ * 0.6.12's own source. `MAVIS_PROFILE` is mcode's own, but it only appears
+ * in mcode's env-propagation allowlist, never in the CLI's data-dir
+ * resolution, so honouring it would risk the same silent miss. */
 function resolveMcodeDataDir(): string {
-  const profile = process.env.MCODE_PROFILE?.trim() || process.env.PROFILE?.trim();
   const base = process.env.MINIMAX_DATA_DIR?.trim() || process.env.MAVIS_DATA_DIR?.trim();
   if (base) return base;
-  const home = os.homedir();
-  return profile ? path.join(home, `.minimax-${profile}`) : path.join(home, ".minimax");
+  return path.join(os.homedir(), ".minimax");
 }
 
 /** Absolute path of mcode's local plugin directory (`<dataDir>/plugins`). */
@@ -189,18 +212,27 @@ export const MCODE_HOOK_EVENTS = [
  * handoff file the shim reads at run time.
  *
  * Exported for tests. Pure, no I/O. */
-export function buildMcodeHooksJson(shimPath: string, execPath: string = process.execPath): string {
+export function buildMcodeHooksJson(shimPath: string): string {
   // The forwarder is invoked as `<agent> <kind>` (see forwarder.mjs's own
   // header) — `kind` is the hook EVENT name, and it is NOT optional: the
   // forwarder bails out (silently, no message) when either argv is missing.
   // So every entry's command carries its own event name, exactly like
   // claude-code.ts's hookEntry does.
+  //
+  // The command invokes the SHIM directly — NOT `node <shim>`. The shim is a
+  // POSIX shell script with a `#!/bin/sh` shebang, and mcode runs the command
+  // through `sh -c`, so the shell executes it via its shebang. Prefixing it
+  // with node would ask node to load a `.sh` file and die with
+  // ERR_UNKNOWN_FILE_EXTENSION — which would silently disable every hook
+  // (Hermes review, PR #1793). The shim resolves node ITSELF at run time
+  // (the handoff file's `nodePath`, falling back to PATH), so nothing is
+  // lost by not naming node here.
   const entry = (event: string, matcher?: string, timeout = 10) => ({
     ...(matcher ? { matcher } : {}),
     hooks: [
       {
         type: "command" as const,
-        command: `${JSON.stringify(execPath)} ${JSON.stringify(shimPath)} ${MCODE_ADAPTER_NAME} ${event}`,
+        command: `${JSON.stringify(shimPath)} ${MCODE_ADAPTER_NAME} ${event}`,
         // Timeout in SECONDS (mcode's own hook schema says so).
         //
         // mcode clamps a DECLARED timeout to at most 10 seconds: its own
@@ -304,14 +336,47 @@ export function buildMcodeHookHandoff(
  * shim a user wrote themselves is never overwritten or deleted. */
 const MCODE_SHIM_MARKER = "mcode hook shim";
 
-/** True when the file at `shimPath` is still Mullion's own shim (as opposed to
- * one the user replaced with their own script). */
-function isMullionMcodeShim(shimPath: string): boolean {
+/** Reads a file, returning its contents or null when it is missing or
+ * unreadable. ONE read, no existence check first — an `existsSync` followed by
+ * a `readFileSync` is a file-system race (the file can be swapped between the
+ * two calls), which CodeQL flags as `js/file-system-race` (PR #1793). */
+function readFileOrNull(filePath: string): string | null {
   try {
-    if (!existsSync(shimPath)) return false;
-    return readFileSync(shimPath, "utf8").includes(MCODE_SHIM_MARKER);
+    return readFileSync(filePath, "utf8");
   } catch {
-    return false;
+    return null;
+  }
+}
+
+/** True when the file at `shimPath` is still Mullion's own shim (as opposed to
+ * one the user replaced with their own script). A missing file is NOT ours. */
+function isMullionMcodeShim(shimPath: string): boolean {
+  const contents = readFileOrNull(shimPath);
+  return contents !== null && contents.includes(MCODE_SHIM_MARKER);
+}
+
+/**
+ * Writes `contents` to `targetPath` atomically: a sibling `<target>.<pid>.tmp`
+ * file is written first and then renamed over the target, so a concurrent
+ * reader can never observe a half-written file, and a reader can never see the
+ * file missing between the two steps. Same directory, so the rename is
+ * atomic. Mirrors forwarder-shim.ts's own `ensureForwarderShim` write.
+ */
+function writeFileAtomic(targetPath: string, contents: string, mode: number): void {
+  const tmpPath = `${targetPath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmpPath, contents, { mode });
+    chmodSync(tmpPath, mode);
+    renameSync(tmpPath, targetPath);
+  } catch {
+    // Best-effort scratch-file cleanup — a leftover `.<pid>.tmp` is harmless
+    // (nothing ever reads it) and not worth failing the install over.
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+    throw new Error(`failed to write ${targetPath}`);
   }
 }
 
@@ -322,6 +387,14 @@ function isMullionMcodeShim(shimPath: string): boolean {
  * constants, so re-running this writes byte-identical files. The marker
  * file records that Mullion owns the directory, so cleanup can remove it
  * without touching a user-authored plugin of the same name.
+ *
+ * REFUSES to write into a plugin directory that exists but carries no
+ * ownership marker (Hermes review, PR #1793): that directory belongs to the
+ * user, and clobbering it would destroy their own plugin named `mullion`.
+ * Removal already had this rule; install now has it too, so the two are
+ * symmetric. When that happens the plugin is simply NOT installed — the
+ * session comes up without hooks (hooks are a pure enhancement) and the
+ * user keeps their own plugin.
  */
 export function installMcodePlugin(): void {
   const pluginDir = resolveMcodePluginDir();
@@ -337,9 +410,29 @@ export function installMcodePlugin(): void {
   // user replaced with their own script is left alone (we only overwrite one
   // that still carries our header marker).
   mkdirSync(path.dirname(shimPath), { recursive: true, mode: 0o755 });
-  if (!existsSync(shimPath) || isMullionMcodeShim(shimPath)) {
-    writeFileSync(shimPath, readFileSync(shimSource, "utf8"), { mode: 0o755 });
-    chmodSync(shimPath, 0o755);
+  const existingShim = readFileOrNull(shimPath);
+  if (existingShim === null || existingShim.includes(MCODE_SHIM_MARKER)) {
+    writeFileAtomic(shimPath, readFileSync(shimSource, "utf8"), 0o755);
+  }
+
+  // Ownership check BEFORE any write: a plugin directory that exists without
+  // our marker is the user's own, and must not be touched.
+  const markerPath = path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME);
+  const existingMarker = readFileOrNull(markerPath);
+  if (existingMarker !== null && existingMarker !== MCODE_PLUGIN_MARKER_CONTENT) {
+    console.error(
+      `mcode hook adapter: refusing to install into ${pluginDir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
+    );
+    return;
+  }
+  if (
+    existingMarker === null &&
+    readFileOrNull(path.join(pluginDir, ".claude-plugin", "plugin.json"))
+  ) {
+    console.error(
+      `mcode hook adapter: refusing to install into ${pluginDir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
+    );
+    return;
   }
 
   mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true, mode: 0o755 });
@@ -364,12 +457,13 @@ export function installMcodePlugin(): void {
 export function removeMcodePlugin(): void {
   const pluginDir = resolveMcodePluginDir();
   const marker = path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME);
-  if (existsSync(marker)) {
+  // ONE read, no existence check first — see readFileOrNull's own note (an
+  // existsSync-then-read pair is a file-system race; CodeQL flags it).
+  const markerContents = readFileOrNull(marker);
+  if (markerContents === MCODE_PLUGIN_MARKER_CONTENT) {
     try {
-      if (readFileSync(marker, "utf8") === MCODE_PLUGIN_MARKER_CONTENT) {
-        // rm -rf via node: no shell, no glob surprises.
-        rmSync(pluginDir, { recursive: true, force: true });
-      }
+      // rm -rf via node: no shell, no glob surprises.
+      rmSync(pluginDir, { recursive: true, force: true });
     } catch {
       // A failed removal must never break an uninstall.
     }
@@ -386,28 +480,47 @@ export function removeMcodePlugin(): void {
 }
 
 /**
- * The hook-protocol kinds this agent can ever produce. Mirrors the Claude
- * Code set (mcode's plugin hook dialect IS Claude Code's), minus the
- * conditionally-registered blocking review gate — the gate itself is a
- * `review_gate` kind, which IS always reachable here because
- * PermissionRequest is always registered.
+ * The hook-protocol kinds this agent can ever produce.
+ *
+ * Derived from the events the plugin ACTUALLY registers (SessionStart,
+ * UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Stop,
+ * SessionEnd) mapped through the Claude Code dialect — `emits` feeds
+ * pty-manager's `hookEmits` and `HOOK_ADAPTER_EMITS_BY_BIN`, i.e. it is what
+ * the frontend offers as reachable for an mcode session, so it must not
+ * claim kinds this adapter cannot produce (Hermes review, PR #1793).
+ *
+ * NOT claimed, because the events that produce them are not registered:
+ * `notification` (needs `Notification`), `compact` (needs `PreCompact` /
+ * `PostCompact`), `cwd_changed` (needs `CwdChanged` — mcode's mapping is
+ * the core Claude mapper, which does not piggyback a `cwd_changed` onto
+ * every event the way `mapClaudeCodeEvent` does), `tool_failure` (needs
+ * `PostToolUseFailure`), `stop_failure` (needs `StopFailure`), `subagent`
+ * (needs `SubagentStart` / `SubagentStop`).
  */
 export const MCODE_EMITS: readonly HookMessageKind[] = [
-  "notification",
-  "progress",
-  "file_change",
-  "review_gate",
-  "permission_request",
+  // SessionStart → session_start.
   "session_start",
-  "session_end",
+  // UserPromptSubmit → turn_start.
   "turn_start",
+  // PreToolUse on ExitPlanMode → plan_ready.
+  "plan_ready",
+  // PostToolUse → tool_done, plus file_change for the file-editing tools and
+  // git_branch for the Bash matcher.
   "tool_done",
-  "cwd_changed",
-  "compact",
+  "file_change",
   // The Bash matcher on PostToolUse carries the worktree/branch detection
   // the Claude Code adapter also gets — mapClaudeCodePostToolUse turns a
   // `git worktree add` / `git checkout` Bash call into a git_branch message.
   "git_branch",
+  // PermissionRequest → review_gate (the blocking gate), permission_request
+  // (the ExitPlanMode carve-out) and question (AskUserQuestion).
+  "review_gate",
+  "permission_request",
+  "question",
+  // Stop → progress (done).
+  "progress",
+  // SessionEnd → session_end.
+  "session_end",
 ];
 
 export const mcodeAdapter = {

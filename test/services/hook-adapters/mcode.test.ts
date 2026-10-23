@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   mcodeAdapter,
+  MCODE_PLUGIN_MARKER_NAME,
   buildMcodeHooksJson,
   buildMcodePluginManifest,
   buildMcodeHookHandoff,
@@ -158,7 +159,7 @@ describe("mcodeAdapter.initialPromptArgs / resumeSessionArgs", () => {
 });
 
 describe("buildMcodeHooksJson", () => {
-  const json = buildMcodeHooksJson("/host/shim.sh", "/usr/bin/node");
+  const json = buildMcodeHooksJson("/host/shim.sh");
   const parsed = JSON.parse(json);
 
   it("declares the Claude Code event names Mullion consumes", () => {
@@ -199,11 +200,18 @@ describe("buildMcodeHooksJson", () => {
     }
   });
 
-  it("invokes the shim with the mcode agent name", () => {
+  it("invokes the shim directly — NOT through node", () => {
+    // The shim is a POSIX shell script with a `#!/bin/sh` shebang, and mcode
+    // runs the command through `sh -c`, so the shell executes it via its
+    // shebang. Prefixing the command with node asks node to load a `.sh`
+    // file, which dies with ERR_UNKNOWN_FILE_EXTENSION — silently
+    // disabling every hook (Hermes review, PR #1793). The shim resolves
+    // node itself at run time from the handoff file's `nodePath`.
     const command = parsed.hooks.SessionStart[0].hooks[0].command;
     expect(command).toContain("/host/shim.sh");
     expect(command).toContain("mcode");
-    expect(command).toContain("/usr/bin/node");
+    expect(command).not.toContain("node");
+    expect(command.startsWith('"/host/shim.sh" ')).toBe(true);
   });
 
   it("passes the hook EVENT name as the forwarder's second argument", () => {
@@ -217,7 +225,7 @@ describe("buildMcodeHooksJson", () => {
       { hooks: { command: string }[] }[],
     ][]) {
       for (const entry of entries) {
-        expect(entry.hooks[0].command).toBe(`"/usr/bin/node" "/host/shim.sh" mcode ${event}`);
+        expect(entry.hooks[0].command).toBe(`"/host/shim.sh" mcode ${event}`);
       }
     }
   });
@@ -230,7 +238,7 @@ describe("buildMcodeHooksJson", () => {
   });
 
   it("is byte-identical across calls (no per-session data in the plugin)", () => {
-    expect(buildMcodeHooksJson("/host/shim.sh", "/usr/bin/node")).toBe(json);
+    expect(buildMcodeHooksJson("/host/shim.sh")).toBe(json);
   });
 });
 
@@ -364,6 +372,35 @@ describe("install/remove the host-global plugin", () => {
       else process.env.HOME = realHome;
     }
   });
+
+  it("does not clobber a user-authored plugin of the same name on INSTALL", () => {
+    // Removal already refused to touch an unmarked plugin dir; install must
+    // be symmetric, or every mcode launch would overwrite the user's own
+    // plugin named `mullion` (Hermes review, PR #1793).
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      const pluginDir = resolveMcodePluginDir();
+      mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true });
+      const userManifest = JSON.stringify({ name: "mullion", description: "user's own" });
+      writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), userManifest);
+
+      installMcodePlugin();
+
+      // Untouched: no Mullion manifest, no hooks.json, no ownership marker.
+      expect(readFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf8")).toBe(
+        userManifest,
+      );
+      expect(existsSync(path.join(pluginDir, "hooks", "hooks.json"))).toBe(false);
+      expect(existsSync(path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME))).toBe(false);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
 });
 
 describe("resolveMcodeGlobalSkillsDir", () => {
@@ -376,5 +413,71 @@ describe("resolveMcodeGlobalSkillsDir", () => {
       if (original === undefined) delete process.env.MINIMAX_DATA_DIR;
       else process.env.MINIMAX_DATA_DIR = original;
     }
+  });
+});
+
+describe("resolveMcodePluginDir — the data dir override", () => {
+  const saved = {
+    minimax: process.env.MINIMAX_DATA_DIR,
+    mavis: process.env.MAVIS_DATA_DIR,
+    profile: process.env.PROFILE,
+    mcodeProfile: process.env.MCODE_PROFILE,
+    mavisProfile: process.env.MAVIS_PROFILE,
+    home: process.env.HOME,
+  };
+
+  afterEach(() => {
+    for (const [key, value] of [
+      ["MINIMAX_DATA_DIR", saved.minimax],
+      ["MAVIS_DATA_DIR", saved.mavis],
+      ["PROFILE", saved.profile],
+      ["MCODE_PROFILE", saved.mcodeProfile],
+      ["MAVIS_PROFILE", saved.mavisProfile],
+      ["HOME", saved.home],
+    ] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("honours mcode's own MINIMAX_DATA_DIR", () => {
+    process.env.MINIMAX_DATA_DIR = "/tmp/mcode-own";
+    delete process.env.MAVIS_DATA_DIR;
+    expect(resolveMcodePluginDir()).toBe(path.join("/tmp/mcode-own", "plugins", "mullion"));
+  });
+
+  it("honours mcode's legacy MAVIS_DATA_DIR alias", () => {
+    // Both appear together in mcode's own runtime env allowlist, so this one
+    // IS mcode's — unlike the generic PROFILE below.
+    delete process.env.MINIMAX_DATA_DIR;
+    process.env.MAVIS_DATA_DIR = "/tmp/mcode-legacy";
+    expect(resolveMcodePluginDir()).toBe(path.join("/tmp/mcode-legacy", "plugins", "mullion"));
+  });
+
+  it("does NOT honour the generic PROFILE env var", () => {
+    // PROFILE belongs to the EMBEDDED CLAUDE CODE CLI inside mcode's bundle
+    // (`chunk-X3PES5WL.js`), not to mcode: mcode's own CLI has no
+    // `--profile` flag. Honouring it would redirect the plugin to
+    // `~/.minimax-<x>/plugins`, where mcode never looks — hooks silently
+    // off, and files written to a junk dir (Hermes review, PR #1793).
+    delete process.env.MINIMAX_DATA_DIR;
+    delete process.env.MAVIS_DATA_DIR;
+    process.env.PROFILE = "somebody-elses-profile";
+    process.env.HOME = "/tmp/fake-home";
+    expect(resolveMcodePluginDir()).toBe(
+      path.join("/tmp/fake-home", ".minimax", "plugins", "mullion"),
+    );
+  });
+
+  it("does NOT honour a MCODE_PROFILE that mcode itself does not define", () => {
+    // No such variable exists in mcode 0.6.12's source — only
+    // MINIMAX_DATA_DIR / MAVIS_DATA_DIR / MAVIS_PROFILE.
+    delete process.env.MINIMAX_DATA_DIR;
+    delete process.env.MAVIS_DATA_DIR;
+    process.env.MCODE_PROFILE = "ghost";
+    process.env.HOME = "/tmp/fake-home";
+    expect(resolveMcodePluginDir()).toBe(
+      path.join("/tmp/fake-home", ".minimax", "plugins", "mullion"),
+    );
   });
 });

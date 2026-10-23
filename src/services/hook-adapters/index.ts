@@ -182,6 +182,23 @@ export function commandIsOpencode(command: string): boolean {
   return adapter === openCodeAdapter;
 }
 
+/**
+ * Issue: mcode support — whether `command` would resolve to the mcode adapter
+ * specifically. Distinct from a generic "some adapter matches" check (which
+ * would be true for Claude Code/Codex/agy too), because mcode's
+ * skip-permissions bypass is delivered a way no other agent's is: mcode has
+ * no `--permission` CLI flag, so Mullion's own hook server auto-approves the
+ * agent's `PermissionRequest` instead (see src/plugins/hooks.ts). That
+ * auto-approve must apply to mcode sessions ONLY — an unrelated agent's gate
+ * must still wait for a human, even in a session that was spawned with
+ * skip-permissions. Pure lookup, no I/O. Same shape as commandIsOpencode
+ * above.
+ */
+export function commandIsMcode(command: string): boolean {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter === mcodeAdapter;
+}
+
 export type ModelInjectingCli = "claude-code" | "codex" | "agy" | "mcode";
 
 /**

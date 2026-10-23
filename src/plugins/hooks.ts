@@ -23,6 +23,7 @@ import {
 import { readSessionBriefing } from "../services/project-briefing.js";
 import { readSessionWorkflowConventions } from "../services/workflow-conventions.js";
 import { isAuthEnabled } from "../services/auth.js";
+import { commandIsMcode } from "../services/hook-adapters/index.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
@@ -416,8 +417,17 @@ function handleConnection(
           // Mullion (via mcode's PermissionRequest plugin hook), and Mullion
           // answers "allow" instead of leaving the gate waiting for a human.
           //
-          // This is per-session by construction — the decision is scoped to
-          // the session that asked for the bypass — and it is the only
+          // SCOPED TO mcode (Hermes review, PR #1793): this is mcode's
+          // bypass mechanism, not a general one. The other agents' gates
+          // never reach here in the first place (their own CLI flag already
+          // bypasses them), but an agent that DOES raise a gate — or a
+          // future one whose CLI flag stops covering every case — must not
+          // have its gate silently auto-approved just because the session
+          // was spawned with skip-permissions. So the auto-approve requires
+          // the session to actually BE an mcode session.
+          //
+          // The decision itself is per-session by construction — it is scoped
+          // to the session that asked for the bypass — and it is the only
           // mechanism available: relocating the whole mcode data dir per
           // session (to get a per-session config.yaml) breaks auth
           // entirely, because mcode's OAuth identity is bound to its data
@@ -428,10 +438,11 @@ function handleConnection(
           // learns about this gate there — resolving first would be a no-op
           // against a gate the session does not know about yet, and the
           // session would be left showing "waiting" forever.
-          if (app.pty.get(sid)?.skipPermissions === true) {
+          const session = app.pty.get(sid);
+          if (session?.skipPermissions === true && commandIsMcode(session.command)) {
             app.log.info(
               { sessionId: sid, gateId: gid },
-              "auto-approving review gate — session spawned with skip-permissions",
+              "auto-approving review gate — mcode session spawned with skip-permissions",
             );
             autoApproveGateId = gid;
           }
