@@ -217,9 +217,8 @@ Required status checks for merge:
 - `analyze / Analyze (javascript-typescript)` (CodeQL is mandatory)
 
 Both workspaces shard their test run, so **both** `test-merge` contexts are
-required. Their matching `lint-and-test` contexts keep running
-lint/typecheck/build and report green whether or not any test ran — drop a
-`test-merge` context and a broken suite merges silently.
+required — see the "Test sharding" note above for why dropping one is not
+safe.
 
 Verify the current contexts via:
 
@@ -231,12 +230,6 @@ The protection object also requires **all conversations to be resolved**
 (`required_conversation_resolution`) — a review thread left open blocks the
 merge even when every check is green. `node scripts/review-threads.mjs list
 <pr>` lists the open ones, and `reply`/`resolve` close them.
-
-Verify the current contexts via:
-
-```bash
-gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
-```
 
 **Issue #1360 — this same lookup is a silent no-op for Task Master's own
 CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
