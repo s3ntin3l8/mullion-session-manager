@@ -3638,7 +3638,8 @@ export class PtyManager {
     // through pty.ts's ensureSessionsDir sun_path redirect: that logic
     // protects a *derived* path the operator never chose; an explicit
     // MULLION_SOCKET_PATH override is their own choice of path, and if it
-    // exceeds the 108-byte sun_path limit, control-socket.ts's listen()
+    // exceeds the platform's sun_path limit (108 bytes on Linux, 104 on
+    // macOS), control-socket.ts's listen()
     // fails loudly at boot rather than silently relocating a path the
     // operator asked for by name.
     this.controlUnavailable = opts.controlUnavailable === true;

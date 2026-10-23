@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
@@ -145,11 +146,73 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
   }
 }
 
-// Linux's struct sockaddr_un limits sun_path to 108 bytes. Worktree paths
-// (.mullion-worktrees/<branch>/, .wt/<branch>/, or any deep server CWD) can
-// push the socket path over this limit. When that happens, redirect the
-// entire sessionsDir to a deterministic short path under /tmp/ so Unix
-// socket creation always succeeds regardless of project layout.
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
+ * differs from the default.
+ *
+ * Linux allows 108; macOS allows 104. The four-byte difference is exactly
+ * the size of the window in which a path passes the check on Linux and then
+ * fails at `bind()` on macOS — a failure that is silent until a socket is
+ * actually created, and then is a bare EINVAL with nothing pointing at the
+ * path.
+ *
+ * A Map, not a plain object: an object literal inherits `Object.prototype`'s
+ * keys, so an arbitrary platform string like "constructor" would return a
+ * function rather than the default.
+ */
+export const SUN_PATH_BYTES_BY_PLATFORM: ReadonlyMap<NodeJS.Platform, number> = new Map([
+  ["darwin", 104],
+]);
+
+/** The `sun_path` limit for every platform not listed in the table above. */
+export const DEFAULT_SUN_PATH_BYTES = 108;
+
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
+ *
+ * Exported (and platform-parameterised) so the limit can be exercised for a
+ * platform other than the one the test happens to run on.
+ *
+ * The two exported constants above exist so the demo's own copy of this
+ * rule (scripts/demo/env.mjs, which is .mjs and cannot import this module)
+ * can be asserted against it rather than trusted — see that file's own
+ * comment. Comparing the TABLES is what makes that check total: a platform
+ * added on one side and not the other fails the comparison, where comparing
+ * only today's two platforms would let the divergence through.
+ */
+export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): number {
+  return SUN_PATH_BYTES_BY_PLATFORM.get(platform) ?? DEFAULT_SUN_PATH_BYTES;
+}
+
+/**
+ * The length of the longest socket path a sessions dir will have to hold.
+ *
+ * `hooks.sock`, the control socket `mullion.sock`, and a 12-digit
+ * session-id socket all live in it, and the session-id case is the longest
+ * of the three.
+ *
+ * Exported so the demo's own copy of this rule (scripts/demo/env.mjs, which
+ * is .mjs and cannot import this module) can be asserted against it rather
+ * than trusted — see that file's own comment.
+ */
+export function longestSocketPath(dir: string): number {
+  return Math.max(
+    Buffer.byteLength(path.join(dir, "hooks.sock"), "utf8"),
+    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
+    // directory; its name is longer than hooks.sock but shorter than the
+    // session-id case below, so it can never actually be the max — included
+    // explicitly anyway so this stays correct if either name ever changes.
+    Buffer.byteLength(path.join(dir, "mullion.sock"), "utf8"),
+    Buffer.byteLength(path.join(dir, "999999999999.sock"), "utf8"),
+  );
+}
+
+// The `sockaddr_un.sun_path` limit is platform-specific (see
+// maxSunPathBytes above). Worktree paths (.mullion-worktrees/<branch>/,
+// .wt/<branch>/, or any deep server CWD) can push the socket path over it.
+// When that happens, redirect the entire sessionsDir to a deterministic
+// short path under the platform's temp dir so Unix socket creation always
+// succeeds regardless of project layout.
 // Exported — src/plugins/device.ts calls this with the identical
 // app.config.SESSIONS_DIR input so DeviceManager's scope-ownership
 // namespace (deriveInstanceId, device-process.ts) always agrees with
@@ -158,35 +221,64 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
 // input, so calling it a second time here is safe — no shared state.
 export function ensureSessionsDir(configured: string): string {
   const resolved = path.resolve(configured);
-  // Check worst-case socket path: hooks.sock (10 bytes) or a 12-digit
-  // session-ID socket (15 bytes + ".sock"). If both fit within 1 byte of
-  // the 108-byte sun_path limit, the original path is safe.
-  const longestSocket = Math.max(
-    Buffer.byteLength(path.join(resolved, "hooks.sock"), "utf8"),
-    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
-    // directory; its name is longer than hooks.sock but shorter than the
-    // session-id case below, so it can never actually be the max — included
-    // explicitly anyway so this stays correct if either name ever changes.
-    Buffer.byteLength(path.join(resolved, "mullion.sock"), "utf8"),
-    Buffer.byteLength(path.join(resolved, "999999999999.sock"), "utf8"),
-  );
-  if (longestSocket <= 107) return resolved;
+  const limit = maxSunPathBytes();
+  // The limit counts the NUL terminator, so the usable path is one byte
+  // shorter than it.
+  if (longestSocketPath(resolved) <= limit - 1) return resolved;
 
+  // The fallback's NAME is a fixed 8-hex-char hash of the resolved path, and
+  // it is never shortened to buy bytes. The name is not decoration: it is
+  // what makes the fallback distinct per configured path, and that distinctness
+  // is load-bearing — deriveInstanceId (session-process.ts) hashes the
+  // resolved sessions dir to namespace this instance's systemd scopes, so two
+  // projects sharing one fallback dir would share one scope namespace and
+  // could stop each other's scopes. Shortening the hash to squeeze the path
+  // into a shrinking budget trades that away: at 2 hex chars there are only
+  // 256 buckets, and at 0 the name is the SAME for every configured path —
+  // a certain collision, not a probable one.
+  //
+  // So the name is fixed at the same 32 bits deriveInstanceId itself uses,
+  // and the path shape no longer depends on how long the temp dir happens to
+  // be today: a temp dir that grew by two bytes must not silently move a
+  // project to a different sessions dir, and a different deriveInstanceId
+  // with it.
   const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
-  const fallback = `/tmp/ms-${hash}`;
-  secureFallbackDir(fallback);
-  return fallback;
+  const tmp = os.tmpdir();
+  const candidate = path.join(tmp, `ms-${hash}`);
+  // The fallback has to fit TOO: it lives under the platform's temp dir, and a
+  // temp dir long enough to push the CONFIGURED path over the limit can push
+  // the fallback over it as well — and a fallback that cannot hold a socket
+  // is worse than no fallback at all. When even the full-width name does not
+  // fit, that is a real, operator-actionable failure: name the temp dir and
+  // both levers, rather than silently landing two projects in one directory.
+  if (longestSocketPath(candidate) <= limit - 1) {
+    secureFallbackDir(candidate);
+    return candidate;
+  }
+  throw new Error(
+    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
+      `sun_path limit, and neither does the fallback at ${candidate} — ` +
+      `set SESSIONS_DIR to a shorter path, or point TMPDIR at a shorter ` +
+      `directory (${tmp})`,
+  );
 }
 
-// The fallback lives in world-writable /tmp under a predictable name, and
-// holds live dtach sockets plus hook tokens, so another local user could
-// pre-create it (or plant a symlink) to read or hijack them (H4). Create it
-// 0700, then lstat (never follow a symlink) and refuse a symlink or a
-// directory owned by anyone else. A directory that is ours but looser than
-// 0700 (made by an older release under the umask) is tightened in place
-// rather than refused, so upgrading doesn't break startup. The path itself
-// must stay stable: socket-dir ownership resolution and deriveInstanceId
-// both key off it.
+// The fallback lives under the platform's temp dir under a predictable
+// name, and holds live dtach sockets plus hook tokens, so another local
+// user could pre-create it (or plant a symlink) to read or hijack them
+// (H4). Create it 0700, then lstat (never follow a symlink) and refuse a
+// symlink or a directory owned by anyone else. A directory that is ours but
+// looser than 0700 (made by an older release under the umask) is tightened
+// in place rather than refused, so upgrading doesn't break startup. The path
+// itself must stay stable: socket-dir ownership resolution and
+// deriveInstanceId both key off it.
+//
+// On Linux the temp dir is the world-writable /tmp, which is why the
+// hardening above matters there. On macOS `os.tmpdir()` is a PER-USER
+// directory (`/var/folders/.../T`), so the same pre-creation attack is not
+// available to other users to begin with — the hardening is kept anyway,
+// because it costs nothing and the temp dir is still a shared location
+// within a user account.
 function secureFallbackDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const st = lstatSync(dir);
@@ -209,7 +301,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
-      "sessionsDir socket path approaches 108-byte sun_path limit, using short fallback",
+      `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback`,
     );
   }
   // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full
@@ -521,7 +613,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
     manager.killAll();
-    // Deliberately no rmSync of a /tmp/ms-* fallback sessionsDir here: sessions
+    // Deliberately no rmSync of a fallback sessionsDir here: sessions
     // run in transient systemd scopes precisely so they survive a restart,
     // and removing the directory would delete their live dtach sockets and
     // hook tokens.

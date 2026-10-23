@@ -6,10 +6,14 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   assertDemoEnv,
   assertPortsFree,
+  defaultSunPathBytes as demoDefaultSunPathBytes,
   demoEnv,
   extractDtachSocketPath,
   instanceIdFor,
+  longestSocketName as demoLongestSocketName,
+  maxSunPathBytes as demoMaxSunPathBytes,
   ownsScope,
+  sunPathBytesByPlatform as demoSunPathBytesByPlatform,
 } from "../../scripts/demo/env.mjs";
 import { stopDemoScopes } from "../../scripts/demo/scopes.mjs";
 import {
@@ -17,6 +21,12 @@ import {
   extractDtachSocketPath as backendExtractDtachSocketPath,
   scopeUnitName,
 } from "../../src/services/session-process.js";
+import {
+  DEFAULT_SUN_PATH_BYTES as backendDefaultSunPathBytes,
+  longestSocketPath as backendLongestSocketPath,
+  maxSunPathBytes as backendMaxSunPathBytes,
+  SUN_PATH_BYTES_BY_PLATFORM as backendSunPathBytesByPlatform,
+} from "../../src/plugins/pty.js";
 
 const demoDir = mkdtempSync(path.join(tmpdir(), "mullion-demo-test-"));
 const bin = path.join(demoDir, "bin");
@@ -25,6 +35,17 @@ writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
 afterAll(() => rmSync(demoDir, { recursive: true, force: true }));
 
 const PATH = `${bin}:/usr/bin`;
+
+/** Runs `fn` with `process.platform` reporting as `platform`. */
+function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
+  const original = process.platform;
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    fn();
+  } finally {
+    Object.defineProperty(process, "platform", { value: original, configurable: true });
+  }
+}
 
 describe("demoEnv", () => {
   it("inherits only the allowlist from the parent", () => {
@@ -74,6 +95,69 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
   it("a PATH without the docker shim first", () => refuses({ PATH: "/usr/bin" }));
   it("a SESSIONS_DIR long enough for the backend to relocate it", () =>
     refuses({ SESSIONS_DIR: path.join(demoDir, "x".repeat(100)) }));
+  it("a SESSIONS_DIR long enough to need relocating on macOS but not on Linux", () => {
+    // The guard follows the platform's own sun_path limit (108 on Linux, 104
+    // on macOS), so a path the backend would keep on Linux is one it would
+    // relocate on macOS — and the demo must refuse it on macOS for the same
+    // reason the backend would move it. A guard hardcoded to Linux's number
+    // would let a demo start on a Mac with a sessions dir the backend then
+    // relocates out from under it.
+    //
+    // The longest socket is the 12-digit session id plus ".sock" (18 bytes
+    // with the separator), so a SESSIONS_DIR of N bytes needs N + 18.
+    const socketName = "/999999999999.sock";
+    const sessionsDir = (bytes: number) => {
+      const name = "y".repeat(Math.max(1, bytes - demoDir.length - 1));
+      return path.join(demoDir, name);
+    };
+    // 104 bytes of socket path: inside Linux's 107, outside macOS's 103.
+    const dir = sessionsDir(104 - socketName.length);
+    expect(Buffer.byteLength(path.join(dir, socketName.slice(1)), "utf8")).toBe(104);
+    withPlatform("linux", () => {
+      expect(problems({ SESSIONS_DIR: dir })).not.toContain(
+        "SESSIONS_DIR is too long; the backend would relocate it",
+      );
+    });
+    withPlatform("darwin", () => {
+      expect(problems({ SESSIONS_DIR: dir })).toContain(
+        "SESSIONS_DIR is too long; the backend would relocate it",
+      );
+    });
+  });
+  it("mirrors the backend's own sun_path rule exactly, on every platform either side knows", () => {
+    // The demo script is .mjs and cannot import the backend's TypeScript
+    // module, so it carries its own copy of the rule the backend applies.
+    // A copy nothing ties to the original is a copy that silently goes
+    // stale: changing the backend's limit would leave the demo's guard
+    // refusing (or not refusing) the wrong paths, with the suite still
+    // green. So the copy is asserted against the original here.
+    //
+    // The whole TABLE is compared, not just the platforms that differ
+    // today: a platform added to the backend's table and not to the demo's
+    // would fall through to the default on one side only, and comparing
+    // today's two platforms would not catch it.
+    expect(demoSunPathBytesByPlatform).toEqual(backendSunPathBytesByPlatform);
+    expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
+    for (const platform of backendSunPathBytesByPlatform.keys()) {
+      expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
+    }
+    // A platform neither table lists takes the default on both sides — and
+    // so does an arbitrary string that happens to name an Object.prototype
+    // key, which is why the tables are Maps and not plain objects.
+    const unlisted = "not-a-real-platform" as NodeJS.Platform;
+    expect(demoMaxSunPathBytes(unlisted)).toBe(backendMaxSunPathBytes(unlisted));
+    const prototypeKey = "constructor" as NodeJS.Platform;
+    expect(demoMaxSunPathBytes(prototypeKey)).toBe(backendMaxSunPathBytes(prototypeKey));
+    expect(backendMaxSunPathBytes(prototypeKey)).toBe(backendDefaultSunPathBytes);
+    // Same for the socket name the guard counts against that limit: the
+    // backend takes the max over every socket a sessions dir holds, so a
+    // longer socket added there would leave the demo under-counting and
+    // under-refusing.
+    const dir = path.join(demoDir, "x");
+    expect(Buffer.byteLength(path.join(dir, demoLongestSocketName), "utf8")).toBe(
+      backendLongestSocketPath(dir),
+    );
+  });
   it("a working directory holding a .env", () => {
     const cwd = mkdtempSync(path.join(demoDir, "cwd-"));
     writeFileSync(path.join(cwd, ".env"), "PROJECTS_ROOTS=/home/me/projects\n");

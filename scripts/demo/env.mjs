@@ -53,6 +53,47 @@ const FORBIDDEN = new Set([
 ]);
 
 const SECRET_KEY = /(SECRET|PASSWORD|_KEY|_TOKEN)$|ENCRYPTION/;
+
+/**
+ * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
+ * differs from the default.
+ *
+ * This mirrors `SUN_PATH_BYTES_BY_PLATFORM` in src/plugins/pty.ts — the rule
+ * the backend actually applies — but this file is `.mjs` and cannot import
+ * that TypeScript module, so the copy is structural. The demo's own guard
+ * below depends on the two agreeing, so the copy is ASSERTED against the
+ * backend's (test/scripts/demo-env.test.ts): a change to one that does not
+ * reach the other fails the suite instead of leaving the demo's guard stale.
+ *
+ * The whole TABLE is mirrored, not just the platforms that differ today, so
+ * a platform added to the backend's table and not to this one is caught —
+ * comparing only today's two platforms would let that divergence through.
+ *
+ * A Map, not a plain object: an object literal inherits
+ * `Object.prototype`'s keys, so an arbitrary platform string like
+ * "constructor" would return a function rather than the default.
+ */
+export const sunPathBytesByPlatform = new Map([["darwin", 104]]);
+
+/** The `sun_path` limit for every platform not listed in the table above. */
+export const defaultSunPathBytes = 108;
+
+/** The `sockaddr_un.sun_path` limit, in bytes, for a given platform. */
+export function maxSunPathBytes(platform = process.platform) {
+  return sunPathBytesByPlatform.get(platform) ?? defaultSunPathBytes;
+}
+
+/**
+ * The longest socket name a sessions dir has to hold: a 12-digit session-id
+ * socket.
+ *
+ * The backend takes the max over every socket a sessions dir holds
+ * (`longestSocketPath` in src/plugins/pty.ts), so this mirror is asserted
+ * against that max too — a longer socket added there would otherwise leave
+ * this one under-counting and the demo under-refusing.
+ */
+export const longestSocketName = "999999999999.sock";
+
 /** Keys that must resolve inside the demo dir. */
 const SCRATCH_PATHS = [
   "HOME",
@@ -137,13 +178,19 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
     if (env[key] !== undefined && !(path.isAbsolute(env[key]) && inside(demoDir, env[key])))
       problems.push(`${key} must be an absolute path inside the demo dir`);
   }
-  // ensureSessionsDir() (src/plugins/pty.ts) silently moves SESSIONS_DIR to
-  // /tmp/ms-<hash> when its longest socket path would pass 107 bytes; the
-  // backend's sockets, and so teardown's ownership check, would then point
-  // somewhere else. Refuse a path that long instead.
+  // ensureSessionsDir() (src/plugins/pty.ts) moves SESSIONS_DIR to a short
+  // fallback under the platform's temp dir when its longest socket path would
+  // pass the platform's sun_path limit; the backend's sockets, and so
+  // teardown's ownership check, would then point somewhere else. Refuse a path
+  // that long instead. The limit is the platform's own (108 on Linux, 104 on
+  // macOS), less one for the NUL terminator — the same rule the backend
+  // applies, so a SESSIONS_DIR the backend would keep is not refused here.
+  // Both values are mirrors of the backend's, asserted against it in
+  // test/scripts/demo-env.test.ts.
   if (
     env.SESSIONS_DIR !== undefined &&
-    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), "999999999999.sock")) > 107
+    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), longestSocketName)) >
+      maxSunPathBytes() - 1
   )
     problems.push("SESSIONS_DIR is too long; the backend would relocate it");
   for (const key of ["HOME", "TMPDIR"])

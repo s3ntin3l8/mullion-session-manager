@@ -443,9 +443,9 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // so there's nothing Mullion-owned to report a path for.
   // path.dirname(app.pty.hookSocketPath), not app.config.SESSIONS_DIR:
   // ptyPlugin's own ensureSessionsDir() can redirect a too-long sessionsDir
-  // to a short /tmp/ fallback, and hookSocketPath already reflects whichever
-  // one actually won — the same reasoning plugins/ssh-agent.ts's own
-  // sshAgentSocketPath call already relies on.
+  // to a short fallback under the platform's temp dir, and hookSocketPath
+  // already reflects whichever one actually won — the same reasoning
+  // plugins/ssh-agent.ts's own sshAgentSocketPath call already relies on.
   //
   // Hermes review, PR #877 — `app.sshAuthSockBridgeExpected`
   // (plugins/pty.ts), not `materializesBridgeSocket(app.config.MULLION_ROLE)`

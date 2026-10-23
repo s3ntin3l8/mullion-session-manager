@@ -638,7 +638,7 @@ export const schema = {
     // a fixed `~/.crs/mullion.sock`: SESSIONS_DIR is already the directory a
     // versioned install overrides to an absolute path (see BROWSER_DATA_DIR's
     // comment above and deploy/install.sh) — a literal `~/.crs/` default
-    // would bypass that override and the 108-byte sun_path redirect
+    // would bypass that override and the platform's sun_path redirect
     // SESSIONS_DIR already carries (see commit 79b565c). Set this only to
     // relocate the socket off SESSIONS_DIR entirely.
     MULLION_SOCKET_PATH: {
