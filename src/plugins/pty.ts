@@ -20,6 +20,7 @@ import {
 import { probeSocket } from "../services/unix-socket.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
+import { fitsSunPath, maxSunPathBytes } from "../cli/sun-path.mjs";
 
 const DEFAULT_RECONCILE_INTERVAL_MS = DEFAULT_SETTINGS.sessions.reconcileIntervalSeconds * 1000;
 const MIN_RECONCILE_INTERVAL_MS = 1000;
@@ -147,65 +148,28 @@ function runDevServerDetectionSweep(app: FastifyInstance, manager: PtyManager): 
 }
 
 /**
- * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
- * differs from the default.
+ * The `sockaddr_un.sun_path` limit, in bytes, and the socket paths a
+ * sessions dir has to hold — ONE implementation, shared with
+ * scripts/demo/env.mjs and the test suite's temp-dir helper.
  *
- * Linux allows 108; macOS allows 104. The four-byte difference is exactly
- * the size of the window in which a path passes the check on Linux and then
- * fails at `bind()` on macOS — a failure that is silent until a socket is
- * actually created, and then is a bare EINVAL with nothing pointing at the
- * path.
+ * `src/cli/sun-path.mjs` is plain ESM (src/cli is copied into dist/ verbatim,
+ * see package.json's "build"), so the demo script — which is .mjs and cannot
+ * import this module — and the suite helper can use the same rule instead of
+ * each keeping a copy of the platform table. A copy is a copy that can
+ * drift, and the drift shows up as a bare `listen EINVAL` with nothing
+ * pointing at the path.
  *
- * A Map, not a plain object: an object literal inherits `Object.prototype`'s
- * keys, so an arbitrary platform string like "constructor" would return a
- * function rather than the default.
+ * Re-exported from here because this module is the backend's public surface
+ * for the rule, and the existing importers (test/plugins/pty-sessions-dir.test.ts,
+ * test/scripts/demo-env.test.ts) name it that way.
  */
-export const SUN_PATH_BYTES_BY_PLATFORM: ReadonlyMap<NodeJS.Platform, number> = new Map([
-  ["darwin", 104],
-]);
-
-/** The `sun_path` limit for every platform not listed in the table above. */
-export const DEFAULT_SUN_PATH_BYTES = 108;
-
-/**
- * The `sockaddr_un.sun_path` limit, in bytes, for a given platform.
- *
- * Exported (and platform-parameterised) so the limit can be exercised for a
- * platform other than the one the test happens to run on.
- *
- * The two exported constants above exist so the demo's own copy of this
- * rule (scripts/demo/env.mjs, which is .mjs and cannot import this module)
- * can be asserted against it rather than trusted — see that file's own
- * comment. Comparing the TABLES is what makes that check total: a platform
- * added on one side and not the other fails the comparison, where comparing
- * only today's two platforms would let the divergence through.
- */
-export function maxSunPathBytes(platform: NodeJS.Platform = process.platform): number {
-  return SUN_PATH_BYTES_BY_PLATFORM.get(platform) ?? DEFAULT_SUN_PATH_BYTES;
-}
-
-/**
- * The length of the longest socket path a sessions dir will have to hold.
- *
- * `hooks.sock`, the control socket `mullion.sock`, and a 12-digit
- * session-id socket all live in it, and the session-id case is the longest
- * of the three.
- *
- * Exported so the demo's own copy of this rule (scripts/demo/env.mjs, which
- * is .mjs and cannot import this module) can be asserted against it rather
- * than trusted — see that file's own comment.
- */
-export function longestSocketPath(dir: string): number {
-  return Math.max(
-    Buffer.byteLength(path.join(dir, "hooks.sock"), "utf8"),
-    // Phase 4 (#185) — the control socket (mullion.sock) lives in the same
-    // directory; its name is longer than hooks.sock but shorter than the
-    // session-id case below, so it can never actually be the max — included
-    // explicitly anyway so this stays correct if either name ever changes.
-    Buffer.byteLength(path.join(dir, "mullion.sock"), "utf8"),
-    Buffer.byteLength(path.join(dir, "999999999999.sock"), "utf8"),
-  );
-}
+export {
+  DEFAULT_SUN_PATH_BYTES,
+  fitsSunPath,
+  longestSocketPath,
+  maxSunPathBytes,
+  SUN_PATH_BYTES_BY_PLATFORM,
+} from "../cli/sun-path.mjs";
 
 /**
  * The pre-#1748 fallback root: a hardcoded POSIX `/tmp` — and the LAST
@@ -361,7 +325,6 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   const limit = maxSunPathBytes();
   const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
   const name = `ms-${hash}`;
-
   // The fallback dir each shipped root would hold for THIS configured path.
   // These are the dirs a scope from an earlier release can still live in.
   const compatDirs = shippedFallbackRoots().map((root) => path.join(root, name));
@@ -373,9 +336,9 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   const skipped: Array<{ root: string; reason: string }> = [];
 
   // The limit counts the NUL terminator, so the usable path is one byte
-  // shorter than it.
-  if (longestSocketPath(resolved) <= limit - 1)
-    return { current: resolved, owned: owned(resolved), skipped };
+  // shorter than it — that off-by-one lives in fitsSunPath (src/cli/sun-path.mjs),
+  // once, rather than at each comparison.
+  if (fitsSunPath(resolved)) return { current: resolved, owned: owned(resolved), skipped };
 
   // The fallback has to fit TOO: it lives under one of the roots above, and
   // a root long enough to push the CONFIGURED path over the limit can push
@@ -392,7 +355,7 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   let lastFailure: Error | null = null;
   for (const root of currentFallbackRoots()) {
     const candidate = path.join(root, name);
-    if (longestSocketPath(candidate) > limit - 1) continue;
+    if (!fitsSunPath(candidate)) continue;
     try {
       secureFallbackDir(candidate);
       return { current: candidate, owned: owned(candidate), skipped };

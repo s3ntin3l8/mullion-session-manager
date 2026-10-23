@@ -134,13 +134,19 @@ How this repo applies the conventions above — facts and commands, not rules.
   themselves: `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`)
   and `buildModelFlag` (`hook-adapters/shared.ts`), plus `validateModel`/
   `validateCliModel` (`services/task-model-resolve.ts`) and
-  `commandSupportsSeed` (`services/task-agent-resolve.ts`), and
-  `getAdapterPromptFraming` (`hook-adapters/index.ts`, the pure adapter lookup
-  `sessions.prompt` uses to frame input for the child's agent family) — used by callers
-  like `task-claim.ts`, `task-reconciler.ts`, and `routes/sessions.ts` to
-  branch on a command's agent family, inject a model flag, or decide whether
-  a real first-turn prompt can be delivered, rather than re-deriving that
-  shape with their own ad-hoc parsing. Any `session.command` inspection
+  `commandSupportsSeed` (`services/task-agent-resolve.ts`), and the pure
+  adapter lookups in `hook-adapters/index.ts` — `getAdapterPromptFraming`
+  (the one `sessions.prompt` uses to frame input for the child's agent
+  family), `getAdapterEmits`, `getAdapterInitialPromptArgs`/
+  `adapterHasInitialPromptArgs`, `getAdapterResumeSessionArgs`/
+  `adapterHasResumeSessionArgs`, and `getAdapterDelegationHint` — used by
+  callers like `task-claim.ts`, `task-reconciler.ts` and
+  `routes/sessions.ts` to branch on a command's agent family, inject a model
+  flag, or decide whether a real first-turn prompt can be delivered,
+  rather than re-deriving that shape with their own ad-hoc parsing — and
+  the seam they all go through, `applyHookAdapters` (the entry point that
+  matches a command to its adapter and applies that adapter's transform;
+  `launch-plan.ts` is its caller). Any `session.command` inspection
   outside these sanctioned adapter/helper call sites is the red flag, not a
   call into one of them.
 - **ESM throughout.** Import specifiers end in `.js` even when importing
