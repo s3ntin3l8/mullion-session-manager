@@ -271,16 +271,14 @@ fi
 if is_darwin; then
   # The launchd plist is NOT rewritten by an update (the `current` symlink is
   # what moves), so there is nothing to reload — kickstart is enough.
+  #
+  # The bootout of this job's OWN label happens at the very END of the
+  # script, not here: booting this job out kills this very process, so
+  # anything after it (the release prune, the final status write) would
+  # never run — the UI would poll "restarting" forever and the next
+  # "Update now" would be refused as in-progress.
   launchctl kickstart -k "$(launchd_gui_domain)/$UNIT_NAME" ||
     fail "launchctl kickstart -k $(launchd_gui_domain)/$UNIT_NAME failed"
-  # This job (the one-shot update job src/routes/updates.ts bootstrapped) has
-  # done its work: drop its plist and boot itself out so it does not linger
-  # loaded. The plist goes first — the bootout kills this very process.
-  # `|| true`: the plist may not exist (a manual invocation, or an rm that
-  # refuses the path), and neither is a reason to fail an update that has
-  # already succeeded.
-  rm -f "$MULLION_HOME/logs/com.mullion.update-$VERSION.plist" 2>/dev/null || true
-  launchctl bootout "$(launchd_gui_domain)/com.mullion.update-$VERSION" 2>/dev/null || true
 else
   # Reload the systemd user manager in case the unit on disk was updated or marked dirty.
   systemctl --user daemon-reload 2>/dev/null || true
@@ -317,3 +315,16 @@ EOF
 fi
 
 write_status "done"
+
+# --- the one-shot launchd job cleans up after itself (macOS) ---
+if is_darwin; then
+  # LAST statement on purpose: `launchctl bootout` kills this very process
+  # (this job is the one src/routes/updates.ts bootstrapped), so nothing may
+  # follow it. The plist goes first — the bootout is what stops the job, and
+  # removing the file is what stops it from being loaded again at login.
+  # `|| true`: the plist may not exist (a manual invocation, or an rm that
+  # refuses the path), and neither is a reason to fail an update that has
+  # already succeeded.
+  rm -f "$MULLION_HOME/logs/com.mullion.update-$VERSION.plist" 2>/dev/null || true
+  launchctl bootout "$(launchd_gui_domain)/com.mullion.update-$VERSION" 2>/dev/null || true
+fi

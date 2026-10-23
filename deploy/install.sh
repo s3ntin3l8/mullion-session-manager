@@ -564,8 +564,16 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
     PLIST_TEMPLATE="$SCRIPT_DIR/launchd/com.mullion.agent.plist"
     OTHER_LABEL="com.mullion.primary"
   fi
+  # The PATH the job runs with. The app spawns `dtach` by bare name (and
+  # passes its inherited PATH into every session), but a launchd job's
+  # default PATH is only /usr/bin:/bin:/usr/sbin:/sbin — where a Homebrew
+  # dtach is not. Resolve dtach's real directory (the prereq check above
+  # already proved it exists) and put it, and node's, on the PATH.
+  DTACH_BIN="$(command -v dtach)"
+  SERVICE_PATH="$(dirname "$DTACH_BIN"):$(dirname "$NODE_PATH"):/usr/bin:/bin:/usr/sbin:/sbin"
   sed \
     -e "s|CHANGEME_LAUNCHER|$MULLION_HOME/current/scripts/run-with-env.sh|" \
+    -e "s|CHANGEME_PATH|$SERVICE_PATH|" \
     -e "s|CHANGEME_WORKING_DIRECTORY|$MULLION_HOME/current|" \
     -e "s|CHANGEME_HOME|$MULLION_HOME|" \
     -e "s|CHANGEME_NODE|$NODE_PATH|" \
@@ -587,6 +595,13 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
   fi
   rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" 2>/dev/null || true
 
+  # `launchctl bootstrap` refuses a label that is ALREADY loaded
+  # ("Bootstrap failed: 5: Input/output error"), so a re-run (a repair, a
+  # re-install) would abort here — after the plist was already overwritten,
+  # leaving the old definition loaded. Boot the label out first: that is
+  # what makes this idempotent, the way the systemd branch's
+  # `daemon-reload` + `enable --now` is.
+  launchctl bootout "$(launchd_gui_domain)/$LABEL" 2>/dev/null || true
   launchctl bootstrap "$(launchd_gui_domain)" ~/Library/LaunchAgents/"$LABEL.plist"
   launchctl enable "$(launchd_gui_domain)/$LABEL"
 

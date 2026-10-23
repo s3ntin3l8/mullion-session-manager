@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 
 const INSTALL_SCRIPT = fileURLToPath(new URL("../../deploy/install.sh", import.meta.url));
+const LAUNCHER_SCRIPT = fileURLToPath(new URL("../../scripts/run-with-env.sh", import.meta.url));
 
 const describeOnLinux = process.platform === "linux" ? describe : describe.skip;
 
@@ -484,6 +485,47 @@ describeOnLinux("deploy/install.sh", () => {
     });
   });
 
+  describe("the launchd launcher (scripts/run-with-env.sh)", () => {
+    it("PARSES the .env instead of executing it", async () => {
+      // systemd's EnvironmentFile= parses KEY=VALUE literally; sourcing the
+      // file would EXECUTE it — so `MULLION_AGENT_NAME=Studio Mac` would run
+      // `Mac` and leave the variable unset, and a secret holding `$` or a
+      // backtick would be expanded or executed. The launcher must behave
+      // like EnvironmentFile=, not like `. .env`.
+      const envFile = path.join(fakeHome, ".env");
+      fs.writeFileSync(
+        envFile,
+        // The values are fixtures, not secrets — the point is that a value
+        // with a space, and one holding `$` and a backtick, survive parsing.
+        "MULLION_AGENT_NAME=Studio Mac\nMULLION_TOKEN='a$b`c`d'\n# a comment\n\n", // pragma: allowlist secret
+      );
+      const outFile = path.join(fakeHome, "env.out");
+      writeShim(
+        binDir,
+        "fake-node",
+        `#!/usr/bin/env bash
+env > "$OUT"
+`,
+      );
+
+      await execFileAsync("sh", [LAUNCHER_SCRIPT], {
+        env: {
+          ...baseEnv,
+          HOME: fakeHome,
+          MULLION_HOME: fakeHome,
+          MULLION_NODE_BIN: path.join(binDir, "fake-node"),
+          OUT: outFile,
+        },
+      });
+
+      const printed = fs.readFileSync(outFile, "utf8");
+      expect(printed).toMatch(/^MULLION_AGENT_NAME=Studio Mac$/m);
+      expect(printed).toMatch(/^MULLION_TOKEN=a\$b`c`d$/m);
+      // The comment line and the blank one are not variables.
+      expect(printed).not.toMatch(/^# a comment$/m);
+    });
+  });
+
   describe("systemd unit generation", () => {
     it("substitutes every CHANGEME placeholder in the generated primary unit and links the CLI", async () => {
       const mullionHome = freshMullionHome();
@@ -618,7 +660,46 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
       expect(log.some((line) => line.startsWith(`bootstrap ${domain} `))).toBe(true);
       expect(log).toContainEqual(`enable ${domain}/com.mullion.primary`);
       // The other role's job was never loaded, so it is never booted out.
-      expect(log.some((line) => line.includes("bootout"))).toBe(false);
+      // (This role's OWN label IS booted out first — that is what makes a
+      // re-run work, since `launchctl bootstrap` refuses an already-loaded
+      // label.)
+      expect(
+        log.some((line) => line.includes("bootout") && line.includes("com.mullion.agent")),
+      ).toBe(false);
+    });
+
+    it("gives the job a PATH that can resolve dtach", async () => {
+      // The app spawns `dtach` by bare name (and passes its inherited PATH
+      // into every session), but a launchd job's default PATH is only
+      // /usr/bin:/bin:/usr/sbin:/sbin — where a Homebrew dtach is not. The
+      // install resolves dtach's real directory and writes it into the job.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const plist = fs.readFileSync(
+        path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.primary.plist"),
+        "utf8",
+      );
+      expect(plist).toMatch(/<key>PATH<\/key>/);
+      expect(plist).toContain(binDir);
+    });
+
+    it("boots the label out before bootstrapping it, so a re-run works", async () => {
+      // `launchctl bootstrap` refuses an already-loaded label ("Bootstrap
+      // failed: 5: Input/output error"), so without this the second run
+      // would abort — after the plist was already overwritten, leaving the
+      // old definition loaded.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      const bootout = log.indexOf(`bootout ${domain}/com.mullion.primary`);
+      const bootstrap = log.findIndex((line) => line.startsWith(`bootstrap ${domain} `));
+      expect(bootout).toBeGreaterThanOrEqual(0);
+      expect(bootstrap).toBeGreaterThan(bootout);
     });
 
     it("boots out the other role's job when launchd reports it loaded", async () => {

@@ -31,11 +31,13 @@ applied by anything in this repo or its CI. `install.sh` and
   the macOS counterparts of the two systemd units (issue #1718, roadmap 8.4).
   `install.sh` writes a copy with the `CHANGEME` placeholders substituted
   into `~/Library/LaunchAgents/` and loads it with `launchctl bootstrap`.
-- `scripts/run-with-env.sh` — the launcher the plists run: it sources the
+- `scripts/run-with-env.sh` — the launcher the plists run: it PARSES the
   install's `.env` and `exec`s node, which is the launchd analogue of the
   systemd unit's `EnvironmentFile=` + `ExecStart=` pair (launchd has no
   `EnvironmentFile`, and inlining the `.env` into the plist would freeze it
-  at install time). It lives under `scripts/` because it ships inside every
+  at install time). It parses rather than sources the file, because
+  `EnvironmentFile=` never executes it. It lives under `scripts/` because it
+  ships inside every
   release tarball, so the installed job points at
   `<install root>/current/scripts/run-with-env.sh` and keeps working across
   updates.
@@ -607,11 +609,18 @@ What changes:
 
 - **The job.** `~/Library/LaunchAgents/com.mullion.<role>.plist` is written
   (from `deploy/launchd/*.plist`) and loaded with `launchctl bootstrap
-gui/$UID <plist>` + `launchctl enable`. The other role's job is booted out
-  first — both roles load the same `.env` and bind the same port.
+gui/$UID <plist>` + `launchctl enable`. The job is booted out first (that is
+  what makes a re-run work: `launchctl bootstrap` refuses an already-loaded
+  label), and so is the other role's job — both roles load the same `.env`
+  and bind the same port.
+- **The PATH.** The app spawns `dtach` by bare name, but a launchd job's
+  default PATH is only `/usr/bin:/bin:/usr/sbin:/sbin` — where a Homebrew
+  dtach is not. The installer resolves `dtach`'s real directory and writes a
+  PATH (dtach's, node's, and the system ones) into the job.
 - **The `.env`.** launchd has no `EnvironmentFile`, so the plist runs
-  `deploy/launchd/run-with-env.sh`, which sources the install's `.env` and
-  `exec`s node. Your `.env` stays live-editable: edit it and restart the job.
+  `scripts/run-with-env.sh`, which PARSES the install's `.env` (parsing, not
+  sourcing — `EnvironmentFile=` never executes the file) and `exec`s node.
+  Your `.env` stays live-editable: edit it and restart the job.
 - **The label.** `com.mullion.primary` / `com.mullion.agent` is what the
   self-update restarts. It is written into the job's `MULLION_SERVICE_UNIT`,
   so renaming the job does not need a script edit.

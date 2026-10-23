@@ -51,6 +51,13 @@
 
   <key>EnvironmentVariables</key>
   <dict>
+    <!-- The PATH the app runs with. A launchd job otherwise gets only
+         /usr/bin:/bin:/usr/sbin:/sbin, and the app spawns `dtach` by bare
+         name — so a Homebrew dtach (/opt/homebrew/bin on Apple silicon,
+         /usr/local/bin on Intel) would be ENOENT on a normal Mac. The
+         installer resolves dtach's real path and writes this PATH. -->
+    <key>PATH</key>
+    <string>CHANGEME_PATH</string>
     <key>MULLION_HOME</key>
     <string>CHANGEME_HOME</string>
     <key>MULLION_NODE_BIN</key>
