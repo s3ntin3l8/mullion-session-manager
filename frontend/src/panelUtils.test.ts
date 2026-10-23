@@ -2474,6 +2474,25 @@ describe("openFileEditorPanel", () => {
 });
 
 describe("openExternalFilePanel", () => {
+  it("gives each re-open a strictly larger rev, even within one millisecond", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    try {
+      const api = mockDockviewApi();
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md" });
+      const existing = api.getPanel(`external-file-1-${encodeURIComponent("/x/y.md")}`)!;
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 1 });
+      openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, { path: "/x/y.md", line: 2 });
+      const revs = vi
+        .mocked(existing.api.updateParameters)
+        .mock.calls.map(([p]) => (p as { rev: number }).rev);
+      expect(revs).toHaveLength(2);
+      expect(revs[1]).toBeGreaterThan(revs[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("opens one read-only viewer per path, titled by the file name", () => {
     const api = mockDockviewApi();
     openExternalFilePanel(api, 1, PROJECTS, DESKTOP_LAYOUT, {
