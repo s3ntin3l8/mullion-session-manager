@@ -207,60 +207,161 @@ export function longestSocketPath(dir: string): number {
   );
 }
 
+/**
+ * The pre-#1748 fallback root: a hardcoded POSIX `/tmp`.
+ *
+ * Empty on Windows, where that path does not exist (Windows support is
+ * tracked separately, issue #1728). Empty roots are filtered out of every
+ * root list below, so a root that does not exist on this platform simply
+ * never appears.
+ */
+function legacyTmpRoot(): string {
+  return process.platform === "win32" ? "" : "/tmp";
+}
+
+/**
+ * The roots the fallback may be PLACED under today, in order of
+ * preference. The first one whose `ms-<hash>` dir fits the platform's
+ * sun_path budget is used.
+ *
+ * A fallback root has to satisfy three properties:
+ *
+ *   - **SHORT** — the sessions dir holds the sockets, and every socket path
+ *     in it has to fit the platform's `sun_path` budget (see
+ *     maxSunPathBytes above).
+ *   - **PER-USER and PRIVATE** — it holds live dtach sockets plus hook
+ *     tokens, so another local user must not be able to pre-create it or
+ *     plant a symlink in it (see secureFallbackDir below).
+ *   - **STABLE** — the fallback dir IS this instance's sessions dir, and
+ *     deriveInstanceId (session-process.ts) hashes it to namespace this
+ *     instance's systemd scopes. A root that CHANGES (because TMPDIR
+ *     changed) moves the instance's sockets AND changes its id, which
+ *     orphans every scope the instance already owns — issue #1770.
+ */
+function currentFallbackRoots(): string[] {
+  return [os.tmpdir()];
+}
+
+/**
+ * Every root this repo has ever shipped the fallback under: the current
+ * candidates plus the ones earlier releases used.
+ *
+ * A scope created under one of the OLDER roots stays OWNED (see
+ * resolveSessionsDirs below), so moving the fallback root never orphans a
+ * running session — the old dir is still recognized as this instance's own,
+ * and its scope stays alive and stoppable.
+ */
+function shippedFallbackRoots(): string[] {
+  return [...currentFallbackRoots(), legacyTmpRoot()].filter((root) => root !== "");
+}
+
+/**
+ * Where this instance's sessions live, and every dir it may own sockets in.
+ *
+ * `current` is the dir the sessions actually live in: the configured one
+ * when it fits the platform's sun_path budget, otherwise the fallback.
+ *
+ * `owned` is the set of dirs this instance may own SCOPES in — `current`
+ * plus every fallback root this repo has ever shipped, for the same
+ * configured path. Ownership is resolved by the scope's dtach socket path
+ * (session-process.ts's own doctrine, issue #1140), so a scope whose socket
+ * lives in a dir this instance used EARLIER (a fallback root an earlier
+ * release picked) is still recognized as this instance's own. Without that,
+ * a root change silently re-derives the instance id, the scope stops
+ * matching this instance's ownership rule, and the reconciler reads it as
+ * "dead" and flips the session's row to "exited" while the scope keeps
+ * running (issue #1770).
+ */
+export interface ResolvedSessionsDirs {
+  /** The dir this instance uses NOW — where new sockets are created, and
+   *  what deriveInstanceId is taken over. */
+  current: string;
+  /** Every dir this instance may own sockets in. Always contains
+   *  `current`. */
+  owned: string[];
+}
+
+/**
+ * Resolves the configured sessions dir to the dir this instance actually
+ * uses, plus the set of dirs it may own scopes in.
+ *
+ * The fallback's NAME is a fixed 8-hex-char hash of the resolved configured
+ * path, and it is never shortened to buy bytes. The name is not decoration:
+ * it is what makes the fallback distinct per configured path, and that
+ * distinctness is load-bearing — deriveInstanceId (session-process.ts)
+ * hashes the resolved sessions dir to namespace this instance's systemd
+ * scopes, so two projects sharing one fallback dir would share one scope
+ * namespace and could stop each other's scopes. Shortening the hash to
+ * squeeze the path into a shrinking budget trades that away: at 2 hex chars
+ * there are only 256 buckets, and at 0 the name is the SAME for every
+ * configured path — a certain collision, not a probable one.
+ *
+ * The compat roots are derived from the CONFIGURED path (the hash input),
+ * never by pattern-matching the resolved dir's basename: a configured dir
+ * that happens to be named `ms-<8 hex>` would otherwise make this instance
+ * claim ownership of a dir that may belong to a different project.
+ */
+export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
+  const resolved = path.resolve(configured);
+  const limit = maxSunPathBytes();
+  const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
+  const name = `ms-${hash}`;
+
+  // The fallback dir each shipped root would hold for THIS configured path.
+  // These are the dirs a scope from an earlier release can still live in.
+  const compatDirs = shippedFallbackRoots().map((root) => path.join(root, name));
+
+  const owned = (current: string): string[] => {
+    const all = [current, ...compatDirs];
+    return [...new Set(all.map((dir) => path.resolve(dir)))].sort();
+  };
+
+  // The limit counts the NUL terminator, so the usable path is one byte
+  // shorter than it.
+  if (longestSocketPath(resolved) <= limit - 1)
+    return { current: resolved, owned: owned(resolved) };
+
+  // The fallback has to fit TOO: it lives under one of the roots above, and
+  // a root long enough to push the CONFIGURED path over the limit can push
+  // the fallback over it as well — and a fallback that cannot hold a socket
+  // is worse than no fallback at all. When even the full-width name does not
+  // fit under any root, that is a real, operator-actionable failure: name
+  // the roots and both levers, rather than silently landing two projects in
+  // one directory.
+  for (const root of currentFallbackRoots()) {
+    const candidate = path.join(root, name);
+    if (longestSocketPath(candidate) <= limit - 1) {
+      secureFallbackDir(candidate);
+      return { current: candidate, owned: owned(candidate) };
+    }
+  }
+  const roots = currentFallbackRoots().join(", ");
+  throw new Error(
+    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
+      `sun_path limit, and neither does the fallback under any of the roots ` +
+      `[${roots}] — set SESSIONS_DIR to a shorter path, or point TMPDIR at a ` +
+      `shorter directory (${os.tmpdir()})`,
+  );
+}
+
 // The `sockaddr_un.sun_path` limit is platform-specific (see
 // maxSunPathBytes above). Worktree paths (.mullion-worktrees/<branch>/,
 // .wt/<branch>/, or any deep server CWD) can push the socket path over it.
 // When that happens, redirect the entire sessionsDir to a deterministic
-// short path under the platform's temp dir so Unix socket creation always
-// succeeds regardless of project layout.
+// short path under a fallback root so Unix socket creation always succeeds
+// regardless of project layout.
 // Exported — src/plugins/device.ts calls this with the identical
 // app.config.SESSIONS_DIR input so DeviceManager's scope-ownership
 // namespace (deriveInstanceId, device-process.ts) always agrees with
 // PtyManager's, rather than each plugin risking drift by deriving its own
 // notion of "the real sessionsDir" independently. Pure function of its one
 // input, so calling it a second time here is safe — no shared state.
+//
+// The OWNERSHIP set (resolveSessionsDirs) is what callers that resolve
+// SCOPES need; this wrapper is the "which dir do the sockets live in"
+// question on its own.
 export function ensureSessionsDir(configured: string): string {
-  const resolved = path.resolve(configured);
-  const limit = maxSunPathBytes();
-  // The limit counts the NUL terminator, so the usable path is one byte
-  // shorter than it.
-  if (longestSocketPath(resolved) <= limit - 1) return resolved;
-
-  // The fallback's NAME is a fixed 8-hex-char hash of the resolved path, and
-  // it is never shortened to buy bytes. The name is not decoration: it is
-  // what makes the fallback distinct per configured path, and that distinctness
-  // is load-bearing — deriveInstanceId (session-process.ts) hashes the
-  // resolved sessions dir to namespace this instance's systemd scopes, so two
-  // projects sharing one fallback dir would share one scope namespace and
-  // could stop each other's scopes. Shortening the hash to squeeze the path
-  // into a shrinking budget trades that away: at 2 hex chars there are only
-  // 256 buckets, and at 0 the name is the SAME for every configured path —
-  // a certain collision, not a probable one.
-  //
-  // So the name is fixed at the same 32 bits deriveInstanceId itself uses,
-  // and the path shape no longer depends on how long the temp dir happens to
-  // be today: a temp dir that grew by two bytes must not silently move a
-  // project to a different sessions dir, and a different deriveInstanceId
-  // with it.
-  const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
-  const tmp = os.tmpdir();
-  const candidate = path.join(tmp, `ms-${hash}`);
-  // The fallback has to fit TOO: it lives under the platform's temp dir, and a
-  // temp dir long enough to push the CONFIGURED path over the limit can push
-  // the fallback over it as well — and a fallback that cannot hold a socket
-  // is worse than no fallback at all. When even the full-width name does not
-  // fit, that is a real, operator-actionable failure: name the temp dir and
-  // both levers, rather than silently landing two projects in one directory.
-  if (longestSocketPath(candidate) <= limit - 1) {
-    secureFallbackDir(candidate);
-    return candidate;
-  }
-  throw new Error(
-    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
-      `sun_path limit, and neither does the fallback at ${candidate} — ` +
-      `set SESSIONS_DIR to a shorter path, or point TMPDIR at a shorter ` +
-      `directory (${tmp})`,
-  );
+  return resolveSessionsDirs(configured).current;
 }
 
 // The fallback lives under the platform's temp dir under a predictable
@@ -297,7 +398,13 @@ function secureFallbackDir(dir: string): void {
 // killed on process shutdown here — never on browser disconnect, which is
 // the whole point of the tool.
 export const ptyPlugin = fp(async (app: FastifyInstance) => {
-  const sessionsDir = ensureSessionsDir(app.config.SESSIONS_DIR);
+  // Issue #1770 — the sessions dir is resolved ONCE, here, into both the dir
+  // the sockets live in and the set of dirs this instance may own scopes in
+  // (the current one plus every fallback root an earlier release shipped for
+  // the same configured path). Both are handed to PtyManager, which is the
+  // only thing that resolves scopes on this host.
+  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR);
+  const sessionsDir = sessionsDirs.current;
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
@@ -411,6 +518,14 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
 
   const manager = new PtyManager({
     sessionsDir,
+    // Issue #1770 — every dir this instance may own scopes in, not just the
+    // one it creates sockets in: a scope created before the fallback root
+    // moved keeps its socket in the OLD dir, and ownership is resolved by
+    // the socket path (session-process.ts), so without the old dir in this
+    // set the scope stops being this instance's own — and the reconciler
+    // then reads it as "dead" and flips the session's row to "exited" while
+    // the scope keeps running.
+    ownedSessionsDirs: new Set(sessionsDirs.owned),
     sshAuthSock: resolvedSshAuthSock.path,
     // Issue #949 — read once here, at boot, same posture as sshAuthSock
     // immediately above: PtyManager freezes this into every Session it

@@ -19,9 +19,9 @@ const noUserBus = (err) =>
  * Stops the demo's own session scopes. Every `crs-session-*` scope is checked
  * with the backend's own ownership rule (ownsScope in ./env.mjs, mirroring
  * src/services/session-process.ts): its Description names the dtach socket,
- * which must sit in this demo's SESSIONS_DIR. Only those are stopped, so a real
- * instance's scopes on the same host are never touched, even on an instanceId
- * collision.
+ * which must sit in one of this demo's OWNED sessions dirs. Only those are
+ * stopped, so a real instance's scopes on the same host are never touched,
+ * even on an instanceId collision.
  *
  * Returns the units it could not account for (listing or stop failed, or a
  * unit in the demo's namespace whose socket can't be read), so the caller can
@@ -64,7 +64,11 @@ export async function stopDemoScopes(instanceId, sessionsDir, run = systemctl) {
       const { stdout } = await run(["show", unit, "--property=Description", "--value"]);
       // For a unit that is gone, systemd echoes its name as the Description.
       if (stdout.trim() === unit) continue; // Exited since the listing.
-      if (ownsScope(stdout, sessionsDir)) {
+      // The ownership SET, like the backend's (issue #1770): the demo's own
+      // sessions dir plus every fallback root an earlier release shipped for
+      // the same configured path. The demo's SESSIONS_DIR is short enough to
+      // never need the fallback, so this is that one dir today.
+      if (ownsScope(stdout, new Set([sessionsDir]))) {
         await run(["stop", unit]);
       } else if (unit.startsWith(ownNamespace)) {
         if (extractDtachSocketPath(stdout) === null) {

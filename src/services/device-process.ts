@@ -145,7 +145,7 @@ export interface DeviceScopeOwnershipListing {
 }
 
 export function listOwnedDeviceScopes(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   opts: { states?: string; all?: boolean } = {},
 ): Promise<DeviceScopeOwnershipListing> {
@@ -184,7 +184,7 @@ export function listOwnedDeviceScopes(
         fail();
         return;
       }
-      const resolvedSessionsDir = path.resolve(sessionsDir);
+      const resolvedOwnedDirs = new Set([...ownedDirs].map((dir) => path.resolve(dir)));
       const owned = new Map<string, string>();
       const unverifiable = new Set<string>();
       for (const { unit, description } of parseScopeUnitsListing(stdout)) {
@@ -194,7 +194,10 @@ export function listOwnedDeviceScopes(
           if (candidateId !== null) unverifiable.add(candidateId);
           continue;
         }
-        if (path.dirname(markerPath) === resolvedSessionsDir) {
+        // Issue #1770 — the ownership SET, not one dir: a device scope
+        // created before the sessions dir moved keeps its marker in the OLD
+        // dir, and is still this instance's own.
+        if (resolvedOwnedDirs.has(path.dirname(markerPath))) {
           owned.set(path.basename(markerPath, ".device"), unit);
         }
       }
@@ -204,12 +207,12 @@ export function listOwnedDeviceScopes(
 }
 
 async function resolveOwningDeviceUnit(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
   opts: { fallbackOnListingFailure: boolean },
 ): Promise<string | undefined> {
-  const listing = await listOwnedDeviceScopes(sessionsDir, instanceId, { all: true });
+  const listing = await listOwnedDeviceScopes(ownedDirs, instanceId, { all: true });
   if (listing.failed) {
     return opts.fallbackOnListingFailure
       ? `${deviceScopeUnitName(instanceId, id)}.scope`
@@ -225,11 +228,11 @@ async function resolveOwningDeviceUnit(
  * name a different instance's scope absent an instanceId hash collision, so
  * falling back to it on a listing failure is safe). */
 export async function stopDeviceScope(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
 ): Promise<void> {
-  const unit = await resolveOwningDeviceUnit(sessionsDir, instanceId, id, {
+  const unit = await resolveOwningDeviceUnit(ownedDirs, instanceId, id, {
     fallbackOnListingFailure: true,
   });
   if (unit === undefined) return;
@@ -261,12 +264,12 @@ export async function stopDeviceScope(
  * requested id is always present in the result; "unknown" must never be
  * collapsed to "dead" by a caller taking a destructive action. */
 export async function isDeviceAliveStateBatch(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   ids: string[],
 ): Promise<Record<string, DeviceLiveness>> {
   if (ids.length === 0) return Object.create(null);
-  const listing = await listOwnedDeviceScopes(sessionsDir, instanceId, {
+  const listing = await listOwnedDeviceScopes(ownedDirs, instanceId, {
     states: "active,deactivating",
   });
   const result: Record<string, DeviceLiveness> = Object.create(null);
@@ -285,11 +288,11 @@ export async function isDeviceAliveStateBatch(
 }
 
 export async function isDeviceAliveState(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
 ): Promise<DeviceLiveness> {
-  const result = await isDeviceAliveStateBatch(sessionsDir, instanceId, [id]);
+  const result = await isDeviceAliveStateBatch(ownedDirs, instanceId, [id]);
   return result[id];
 }
 

@@ -142,6 +142,63 @@ describe("reconcileExitedSessions", () => {
     await app.close();
   });
 
+  // Issue #1770 — the END-TO-END assertion, with the real liveness path
+  // (no stubbed isMasterAliveStateBatch): a scope created BEFORE this
+  // instance's sessions dir moved keeps its socket in one of the instance's
+  // COMPAT dirs and carries the OLD instance id in its unit name. It is
+  // neither "owned" by the current dir nor "unverifiable", so before #1770
+  // the liveness read "dead" — and the reconciler's destructive branch
+  // flipped the row to "exited" and tore the session down while the scope
+  // kept running.
+  it("leaves a session alone whose scope lives in a compat dir of the owned set (#1770)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+
+    // The dirs this instance may own scopes in: the current one plus every
+    // compat root an earlier release shipped for the same configured path.
+    const { resolveSessionsDirs } = await import("../../src/plugins/pty.js");
+    const owned = resolveSessionsDirs(app.config.SESSIONS_DIR).owned;
+    const current = path.resolve(app.config.SESSIONS_DIR);
+    const compat = owned.find((dir) => dir !== current);
+    expect(compat).toBeDefined();
+
+    // A scope created before the move: the old instance id in the unit name,
+    // the socket in the OLD dir.
+    listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n ${compat}/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+
+    await reconcileExitedSessions(app);
+
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
+    expect(row?.status).toBe("active");
+
+    await app.close();
+  });
+
+  // The CONTROL for the #1770 test above: the same listing, but with the
+  // scope's socket in a dir this instance does NOT own. The row flips to
+  // "exited" — which proves the previous test is not passing vacuously (that
+  // the real liveness path ran at all, and that the compat dir is what makes
+  // the difference).
+  it("exits a session whose scope is outside every owned dir (the control for #1770)", async () => {
+    const app = await buildApp();
+    const sessionId = await createSession(app);
+
+    listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n /some-other-instance/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+
+    await reconcileExitedSessions(app);
+
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    const row = (res.json() as Array<{ id: number; status: string }>).find(
+      (s) => s.id === sessionId,
+    );
+    expect(row?.status).toBe("exited");
+
+    await app.close();
+  });
+
   // Perf audit finding B8(2), trust-rule regression — isMasterAliveStateBatch
   // resolves "unknown" for every id (not "dead") on a systemctl spawn/parse
   // failure (see its own doc comment in session-process.ts). This pins that

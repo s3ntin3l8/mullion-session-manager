@@ -11,6 +11,18 @@ export interface ScopeBackendOptions {
   sessionsDir: string;
   /** This instance's id — `deriveInstanceId(sessionsDir)`. */
   instanceId: string;
+  /**
+   * Issue #1770 — every dir this instance may own scopes in, not just the
+   * one it creates sockets in: the current sessions dir plus every fallback
+   * root an earlier release shipped for the same configured path. A scope
+   * created before the fallback root moved keeps its socket in the OLD dir,
+   * and ownership is resolved by the socket path — so without that dir in
+   * this set the scope stops being this instance's own, and the reconciler
+   * reads it as "dead" while it keeps running.
+   *
+   * Defaults to the sessions dir alone (the pre-#1770 behavior).
+   */
+  ownedDirs?: ReadonlySet<string>;
   /** Scope-name prefix; defaults to "crs-session". */
   prefix?: string;
 }

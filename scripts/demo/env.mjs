@@ -121,12 +121,21 @@ export function extractDtachSocketPath(description) {
 
 /**
  * The backend's own ownership rule (listOwnedScopes in session-process.ts):
- * a scope belongs to an instance when its dtach socket sits directly in that
- * instance's SESSIONS_DIR. Teardown stops a unit only when this holds.
+ * a scope belongs to an instance when its dtach socket sits directly in one
+ * of that instance's OWNED sessions dirs — the dir it uses today plus every
+ * fallback root an earlier release shipped for the same configured path
+ * (issue #1770). Teardown stops a unit only when this holds.
+ *
+ * The demo runs with a short SESSIONS_DIR inside its own scratch dir, so the
+ * fallback is never in play and the set is that one dir; the rule is mirrored
+ * as a SET anyway, so this copy cannot drift into a one-dir rule the backend
+ * no longer has.
  */
-export function ownsScope(description, sessionsDir) {
+export function ownsScope(description, ownedDirs) {
   const socketPath = extractDtachSocketPath(description);
-  return socketPath !== null && path.dirname(socketPath) === path.resolve(sessionsDir);
+  if (socketPath === null) return false;
+  const dirs = ownedDirs instanceof Set ? ownedDirs : new Set(ownedDirs);
+  return dirs.has(path.dirname(socketPath));
 }
 
 /** Same derivation as src/services/session-process.ts: sha256(resolved sessionsDir)[0:8]. */

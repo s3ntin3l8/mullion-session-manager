@@ -36,6 +36,18 @@ always resolved from the scope's dtach socket path
 construction and handles a pre-rename session's legacy unit name the same
 way as a namespaced one.
 
+**The ownership set (issue #1770).** "This instance's own scope" is resolved
+against a SET of dirs, not a single one: the sessions dir the instance uses
+today, plus every fallback root an earlier release shipped for the same
+configured path (`resolveSessionsDirs` in `src/plugins/pty.ts`). A scope
+created before the sessions dir _moved_ keeps its socket in the OLD dir —
+under a single-dir rule it stopped being this instance's own, was read as
+"dead", and the reconciler flipped the session's row to "exited" (and tore
+the session down) while the scope kept running. The set keeps such a scope
+both alive and stoppable, and it only ever names dirs this instance itself
+created — the "never stop a scope you have not confirmed you own" rule
+(issue #1137) is unchanged.
+
 **The scope seam (`src/services/scope/`, issue #1715).** Everything above
 about `systemd --user` is one _implementation_ of a platform-neutral seam:
 "run a detached long-lived process and track it". `src/services/scope/types.ts`

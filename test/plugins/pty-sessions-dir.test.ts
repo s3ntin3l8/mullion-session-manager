@@ -13,7 +13,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
-import { ensureSessionsDir, maxSunPathBytes } from "../../src/plugins/pty.js";
+import { ensureSessionsDir, maxSunPathBytes, resolveSessionsDirs } from "../../src/plugins/pty.js";
 import { buildApp } from "../../src/app.js";
 
 // A configured dir long enough to push the worst-case socket path past the
@@ -144,6 +144,56 @@ describe("ensureSessionsDir — platform-aware sun_path limit (issue #1717)", ()
         expect(ensureSessionsDir(dir)).not.toBe(path.resolve(dir));
       });
     }
+  });
+});
+
+describe("resolveSessionsDirs — the sessions dir and the OWNERSHIP set (issue #1770)", () => {
+  it("keeps a configured dir that fits, and owns it", () => {
+    const short = path.join(tmpdir(), "ms-short-sessions-test");
+    const dirs = resolveSessionsDirs(short);
+    expect(dirs.current).toBe(path.resolve(short));
+    expect(dirs.owned).toContain(path.resolve(short));
+  });
+
+  it("puts the fallback AND every compat root in the ownership set", () => {
+    // The compat roots are the dirs a scope created before the fallback root
+    // moved still lives in: the same `ms-<hash>` name under every root this
+    // repo has shipped. They stay OWNED so such a scope keeps being this
+    // instance's own (alive, and stoppable) instead of an orphan the
+    // reconciler reads as "dead".
+    withPlatform("linux", () => {
+      const tmp = tmpDirOfLength(maxFittingTmpBytes("linux"), "owned");
+      mkdirSync(tmp, { recursive: true });
+      const prev = process.env.TMPDIR;
+      process.env.TMPDIR = tmp;
+      try {
+        const dirs = resolveSessionsDirs(configured);
+        expect(dirs.current).toBe(path.join(tmp, `ms-${hash}`));
+        expect(dirs.owned).toContain(path.join(tmp, `ms-${hash}`));
+        expect(dirs.owned).toContain(path.join("/tmp", `ms-${hash}`));
+      } finally {
+        if (prev === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = prev;
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("derives the compat roots from the CONFIGURED path's hash, never from the dir's basename", () => {
+    // A configured dir that happens to be NAMED like a fallback dir must not
+    // make this instance claim ownership of that name under another root —
+    // that dir may belong to a different project. The compat roots are keyed
+    // by the configured path's own hash, so they never collide by name.
+    const lookalike = path.join(tmpdir(), "ms-1234abcd");
+    const ownHash = createHash("md5").update(path.resolve(lookalike)).digest("hex").slice(0, 8);
+    const dirs = resolveSessionsDirs(lookalike);
+    expect(dirs.owned).not.toContain(path.join("/tmp", "ms-1234abcd"));
+    expect(dirs.owned).toContain(path.join("/tmp", `ms-${ownHash}`));
+  });
+
+  it("resolves every owned dir to an absolute path", () => {
+    const dirs = resolveSessionsDirs(configured);
+    for (const dir of dirs.owned) expect(path.isAbsolute(dir)).toBe(true);
   });
 });
 

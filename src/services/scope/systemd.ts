@@ -27,6 +27,12 @@ export interface SystemdScopeBackendOptions {
   sessionsDir: string;
   /** This instance's id — `deriveInstanceId(sessionsDir)`. */
   instanceId: string;
+  /**
+   * Issue #1770 — every dir this instance may own scopes in, not just the
+   * one it creates sockets in. Defaults to the sessions dir alone (the
+   * pre-#1770 behavior); see ScopeBackendOptions' own comment.
+   */
+  ownedDirs?: ReadonlySet<string>;
   /** Scope-name prefix; defaults to "crs-session". */
   prefix?: string;
 }
@@ -64,9 +70,19 @@ export class SystemdScopeBackend implements ScopeBackend {
   readonly kind = "systemd";
 
   private readonly prefix: string;
+  /**
+   * Issue #1770 — every dir this instance may own scopes in. Resolved once
+   * here so the three ownership-reading methods below agree on it (and so a
+   * caller that passes none gets exactly the pre-#1770 behavior: the
+   * sessions dir alone).
+   */
+  private readonly ownedDirs: ReadonlySet<string>;
 
   constructor(private readonly opts: SystemdScopeBackendOptions) {
     this.prefix = opts.prefix ?? DEFAULT_SCOPE_PREFIX;
+    this.ownedDirs = new Set(
+      opts.ownedDirs ? [...opts.ownedDirs, opts.sessionsDir] : [opts.sessionsDir],
+    );
   }
 
   /**
@@ -146,15 +162,15 @@ export class SystemdScopeBackend implements ScopeBackend {
   }
 
   isAliveBatch(ids: string[]): Promise<Record<string, ScopeLiveness>> {
-    return isMasterAliveStateBatch(this.opts.sessionsDir, this.opts.instanceId, ids, this.prefix);
+    return isMasterAliveStateBatch(this.ownedDirs, this.opts.instanceId, ids, this.prefix);
   }
 
   stop(id: string): Promise<void> {
-    return stopScope(this.opts.sessionsDir, this.opts.instanceId, id, this.prefix);
+    return stopScope(this.ownedDirs, this.opts.instanceId, id, this.prefix);
   }
 
   listProcesses(id: string): Promise<CgroupProcess[]> {
-    return listSessionProcesses(this.opts.sessionsDir, this.opts.instanceId, id, this.prefix);
+    return listSessionProcesses(this.ownedDirs, this.opts.instanceId, id, this.prefix);
   }
 }
 
