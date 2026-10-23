@@ -18,6 +18,8 @@ import type * as ChildProcess from "node:child_process";
 const spawnCalls: Array<{ command: string; args: string[] }> = [];
 /** The exit status the fake launchctl reports (0 = success). */
 let launchctlExitCode = 0;
+/** When set, the fake launchctl never exits — a hung launchctl. */
+let launchctlHangs = false;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -29,15 +31,26 @@ vi.mock("node:child_process", async (importOriginal) => {
         stdout: EventEmitter;
         stderr: EventEmitter;
         unref: () => void;
+        kill: (signal?: NodeJS.Signals) => boolean;
       };
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.unref = () => undefined;
+      // The production code kills the child on timeout; the fake has to
+      // survive that call (and then stay silent — a killed child never
+      // emits "close").
+      child.kill = () => true;
       setImmediate(() => {
+        if (command === "launchctl" && launchctlHangs) return; // a hung launchctl
         if (command === "launchctl" && launchctlExitCode !== 0) {
           child.stderr.emit("data", Buffer.from("Bootstrap failed: 5: Input/output error\n"));
         }
-        child.emit("exit", command === "launchctl" ? launchctlExitCode : 0);
+        const code = command === "launchctl" ? launchctlExitCode : 0;
+        child.emit("exit", code);
+        // "close" as well as "exit": the production code waits for "close", so
+        // the fake has to emit both (a real child emits "close" once its
+        // stdio has drained).
+        child.emit("close", code);
       });
       return child;
     },
@@ -61,6 +74,8 @@ function fakeApp(config: {
     log: {
       info: (...args: unknown[]) => logs.push(args),
       error: (...args: unknown[]) => logs.push(args),
+      warn: (...args: unknown[]) => logs.push(args),
+      debug: (...args: unknown[]) => logs.push(args),
     },
   } as unknown as FastifyInstance;
 }
@@ -78,6 +93,7 @@ describe("spawnSelfUpdate", async () => {
   beforeEach(() => {
     spawnCalls.length = 0;
     launchctlExitCode = 0;
+    launchctlHangs = false;
   });
 
   afterEach(() => {
@@ -172,6 +188,27 @@ describe("spawnSelfUpdate", async () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("gives up on a hung launchctl instead of hanging the request", async () => {
+    // A hung launchctl would leave the UI's "Update now" button spinning with
+    // no answer: the route waits for the spawn. The wait is bounded.
+    setPlatform("darwin");
+    launchctlHangs = true;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-hung-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(result.message).toMatch(/timed out/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("still uses systemd-run on linux", async () => {
     setPlatform("linux");

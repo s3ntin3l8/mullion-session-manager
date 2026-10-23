@@ -254,18 +254,39 @@ async function launchOneShotUpdateJob(
   }
 
   const domain = `gui/${uid}`;
+  // ONE deadline for the whole sequence: the request that starts an update
+  // must not be able to wait for two launchctl calls.
+  const deadline = Date.now() + LAUNCHCTL_TIMEOUT_MS;
+
   // `launchctl bootstrap` refuses an ALREADY-LOADED label ("Bootstrap
   // failed: 5: Input/output error"). A failed update leaves this job
   // registered (the script exits before its own bootout), so the next apply
   // for the SAME version — the most likely retry — would write the same
   // plist and be refused, silently doing nothing. Boot the label out first,
   // exactly as install.sh does for the app's own label.
-  await runLaunchctl(["bootout", `${domain}/${label}`], { cwd: mullionHome });
+  const bootout = await runLaunchctl(["bootout", `${domain}/${label}`], {
+    cwd: mullionHome,
+    deadline,
+    app,
+  });
+  if (!bootout.ok) {
+    // Not fatal on its own — the bootstrap below may still succeed (the
+    // label was simply not loaded) — but it is not silent either.
+    app.log.warn(
+      { label, reason: bootout.message },
+      "could not boot the previous launchd update job out before bootstrapping the new one",
+    );
+  }
 
   // launchctl's exit status is the answer: a refusal must not be reported
-  // to the caller as a started update. stdio is inherited here (not
-  // ignored) so launchd's own error text reaches the log.
-  const result = await runLaunchctl(["bootstrap", domain, plistPath], { cwd: mullionHome });
+  // to the caller as a started update. Its output is captured so launchd's
+  // own error text ("Bootstrap failed: 5: Input/output error") reaches both
+  // the API response and the app's log.
+  const result = await runLaunchctl(["bootstrap", domain, plistPath], {
+    cwd: mullionHome,
+    deadline,
+    app,
+  });
   if (!result.ok) {
     const message = `launchctl could not start the update job (${label}): ${result.message}`;
     app.log.error({ label, plistPath, message }, "failed to launch the launchd update job");
@@ -292,10 +313,14 @@ const LAUNCHCTL_TIMEOUT_MS = 10_000;
  * (e.g. "Bootstrap failed: 5: Input/output error") is captured here so
  * the caller can put it in an API response, and it is logged so it also
  * reaches the app's log.
+ *
+ * `deadline` is an absolute timestamp shared by the whole launch sequence,
+ * so the request that starts an update waits for at most ONE deadline in
+ * total, not one per call.
  */
 function runLaunchctl(
   args: string[],
-  options: { cwd: string; log?: { message: string } & Record<string, unknown> },
+  options: { cwd: string; deadline: number; app: FastifyInstance },
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return new Promise((resolve) => {
     const child = spawnChild("launchctl", args, {
@@ -311,13 +336,14 @@ function runLaunchctl(
       clearTimeout(timer);
       resolve(result);
     };
+    const remaining = Math.max(0, options.deadline - Date.now());
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({
         ok: false,
         message: `launchctl ${args[0]} timed out after ${LAUNCHCTL_TIMEOUT_MS}ms`,
       });
-    }, LAUNCHCTL_TIMEOUT_MS);
+    }, remaining);
     // The timer must not hold the event loop open on its own.
     timer.unref?.();
 
@@ -330,11 +356,13 @@ function runLaunchctl(
     child.on("error", (err) => {
       finish({ ok: false, message: err.message });
     });
-    child.on("exit", (code) => {
+    // "close" rather than "exit": it fires after the child's stdio has
+    // drained, so launchd's error text is in `output` by then.
+    child.on("close", (code) => {
+      const text = output.trim();
+      if (text) options.app.log.debug({ args, output: text }, "launchctl output");
       finish(
-        code === 0
-          ? { ok: true }
-          : { ok: false, message: `exit ${code}: ${output.trim() || "no output"}` },
+        code === 0 ? { ok: true } : { ok: false, message: `exit ${code}: ${text || "no output"}` },
       );
     });
   });

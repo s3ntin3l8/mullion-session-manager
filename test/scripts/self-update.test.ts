@@ -62,6 +62,13 @@ cp "$src" "$output"
   for (const name of ["npm", "npx"]) {
     writeShim(binDir, name, "#!/usr/bin/env bash\nexit 0\n");
   }
+  // The REAL rm, under the shim dir's name: the harness already puts its own
+  // bin dir first on the PATH so the commands the script runs resolve there,
+  // and `rm` is one of them (the update script removes the update job's plist
+  // and prunes old releases). Pointing it at /bin/rm keeps the script's own
+  // behaviour — and its assertions — independent of whatever `rm` happens to
+  // be on the host's PATH.
+  writeShim(binDir, "rm", '#!/usr/bin/env bash\nexec /bin/rm "$@"\n');
   writeShim(
     binDir,
     "systemctl",
@@ -215,6 +222,12 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
 `,
     );
     const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
+    // The plist the update job runs from. Nothing in the script CREATES it
+    // (the app writes it, when it bootstraps the job), so the "it is gone"
+    // assertion below only means something if it exists before the run.
+    const plistPath = path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist/>\n");
 
     // The script's own bootout kills the script (the shim above models
     // launchd's SIGTERM), so it exits on that signal rather than 0 — which is
@@ -234,9 +247,7 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
     );
     // The job removes its own plist and boots itself out.
     expect(launchctlLog.some((line) => line.includes("bootout"))).toBe(true);
-    expect(fs.existsSync(path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist"))).toBe(
-      false,
-    );
+    expect(fs.existsSync(plistPath)).toBe(false);
     // ...and systemctl was never involved.
     expect(readSystemctlLog().some((line) => line.includes("restart"))).toBe(false);
     // The bootout kills the script, so reaching "done" proves the bootout was
@@ -287,22 +298,29 @@ exit 0
 if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
 `,
     );
-    // A checksum that does not match: the script fails at the verify gate.
-    const { tarballPath } = await buildFakeRelease("9.9.9");
+    // A checksum that does NOT match the tarball: the script fails at the
+    // verify gate (not at the download — the checksum file exists, it just
+    // carries the wrong hash).
+    const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
+    fs.writeFileSync(checksumPath, `${"0".repeat(64)}  ${path.basename(tarballPath)}\n`);
+    // The plist the job runs from — pre-created, so "it is gone" means
+    // something.
+    const plistPath = path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist/>\n");
+
     await expect(
       runScript({
         version: "9.9.9",
         assetUrl: `file://${tarballPath}`,
-        checksumUrl: `file://${tarballPath}.sha256-missing`,
+        checksumUrl: `file://${checksumPath}`,
         unitName: "com.mullion.primary",
       }),
     ).rejects.toThrow();
 
     const log = readLaunchctlLog();
     expect(log.some((line) => line.includes("bootout"))).toBe(true);
-    expect(fs.existsSync(path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist"))).toBe(
-      false,
-    );
+    expect(fs.existsSync(plistPath)).toBe(false);
   });
 
   it("leaves current untouched when checksum verification fails", async () => {
