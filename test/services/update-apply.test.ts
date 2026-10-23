@@ -209,7 +209,9 @@ describe("spawnSelfUpdate", async () => {
       const elapsed = Date.now() - startedAt;
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
-      expect(result.message).toMatch(/timed out/);
+      // The message states the budget the call actually had — not the
+      // constant, which would misreport a call killed at ~0ms.
+      expect(result.message).toMatch(/timed out after (9\d{3}|10000)ms/);
       // The wait is bounded by the deadline, not by the test's own timeout.
       expect(elapsed).toBeLessThan(15_000);
     } finally {
@@ -239,7 +241,13 @@ describe("spawnSelfUpdate", async () => {
       const elapsed = Date.now() - startedAt;
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
-      expect(result.message).toMatch(/exhausted|timed out/);
+      // The SPECIFIC outcome: the budget was gone, so the bootstrap was never
+      // even attempted. (A per-call budget would have started it and killed
+      // it at once — the register-then-report-500 hazard.)
+      expect(result.message).toMatch(/already exhausted/);
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(0);
       // One budget for the pair: not two of them (which would be ~20s).
       expect(elapsed).toBeLessThan(15_000);
     } finally {

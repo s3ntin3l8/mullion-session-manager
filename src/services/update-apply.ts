@@ -307,6 +307,16 @@ async function launchOneShotUpdateJob(
 const LAUNCHCTL_TIMEOUT_MS = 10_000;
 
 /**
+ * The smallest budget worth handing to a launchctl call.
+ *
+ * A bootout that succeeds after ~9.99s leaves the bootstrap a few
+ * milliseconds — not enough for launchctl to register the job, but enough
+ * for us to start it and kill it at once, which is the register-then-
+ * report-500 hazard. Below this floor the budget counts as spent.
+ */
+const LAUNCHCTL_MIN_BUDGET_MS = 1_000;
+
+/**
  * Runs a launchctl subcommand and reports its exit status.
  *
  * The child's output is PIPED, not inherited: launchd's own error text
@@ -324,7 +334,7 @@ function runLaunchctl(
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return new Promise((resolve) => {
     const remaining = Math.max(0, options.deadline - Date.now());
-    if (remaining === 0) {
+    if (remaining < LAUNCHCTL_MIN_BUDGET_MS) {
       // The budget for the WHOLE launch is already spent. Do NOT spawn
       // launchctl at all: killing it at spawn could still let it register
       // the job, which would leave the caller with a 500 for an update that
