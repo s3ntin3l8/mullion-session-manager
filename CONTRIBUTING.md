@@ -110,15 +110,15 @@ changelog.
 
 ## Branch protection
 
-`main` requires a PR (no direct pushes, no admin bypass), these status
+`main` requires a PR (no direct pushes, no admin bypass) — and these status
 checks: `test-node / lint-and-test`, `test-node / test-merge`,
 `test-frontend / lint-and-test`, `test-frontend / test-merge`, and CodeQL's
-`analyze / Analyze (javascript-typescript)` — and every review conversation
-resolved. All of the above (lint, typecheck, test, format-check) map directly
-to what those checks run, so a clean local run should mean a clean CI run. An
-open review thread blocks the merge even when every check is green;
-`node scripts/review-threads.mjs list <pr>` lists them (see "Addressing
-review feedback" below).
+`analyze / Analyze (javascript-typescript)` — plus every review conversation
+resolved. Each of those status checks (lint, typecheck, test, format-check)
+maps directly to what the check runs, so a clean local run should mean a
+clean CI run. An open review thread blocks the merge even when every check
+is green; `node scripts/review-threads.mjs list <pr>` lists them (see
+"Addressing review feedback" below).
 
 Both workspaces shard their test run, so the real tests (and the
 `coverage-fail-under` check) live in the two `test-merge` jobs; the
