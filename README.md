@@ -291,3 +291,7 @@ The session launcher's CLI logos are sourced from
 (MIT) — see
 [`frontend/src/assets/cli-logos/ATTRIBUTION.md`](frontend/src/assets/cli-logos/ATTRIBUTION.md)
 for full attribution and license texts.
+
+## License
+
+Copyright (C) 2026 Björn Hansen — licensed under [AGPL-3.0-or-later](LICENSE).
