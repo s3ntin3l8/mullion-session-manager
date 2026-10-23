@@ -557,11 +557,10 @@ export const openCodeAdapter: HookAgentAdapter = {
   // The row below says "on 2.x" rather than claiming v1 is impossible:
   // OPENCODE_MIN_VERSION only WARNS (opencodeVersionWarning →
   // DetectedAgent.versionWarning → the launcher's "update needed" badge),
-  // it does not refuse the agent, and a 1.x install still launches. This
-  // host has BOTH a 2.1.3 and a 1.17.20 opencode on PATH, so a worker can
-  // land on either. A 1.x tool has no per-call model at all, so the row
-  // hedges with "where the tool offers one" rather than naming a parameter
-  // that may not exist.
+  // it does not refuse the agent, and a 1.x install still launches — and a
+  // 1.x install can still be the one on PATH. A 1.x tool has no per-call
+  // model at all, so the row hedges with "where the tool offers one" rather
+  // than naming a parameter that may not exist.
   //
   // The clause also repeats the tool's own rule about the model id ("look
   // the model up with the models tool, filtering to your own provider

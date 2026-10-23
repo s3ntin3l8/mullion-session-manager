@@ -66,8 +66,10 @@ describe("getAdapterDelegationHint", () => {
     // Verified against the installed opencode v2.1.3's subagent-tool input
     // schema: `agent` (the subagent type), `description`, `prompt`, `model`
     // ("providerID/modelID" or "providerID/modelID#variant") and `sessionID`.
-    // v1's `subagent_type` is gone — Mullion requires opencode >= 2.0.29, so
-    // v2's names are the only ones a worker will meet.
+    // Those are 2.x's names — 1.x calls the first one `subagent_type` and
+    // has no per-call model at all — and Mullion only WARNS about an old
+    // install rather than refusing it, so the row is hedged to the version
+    // that has the lever.
     expect(hint).toContain("`agent`");
     expect(hint).toContain("`model`");
     expect(hint).toContain("providerID/modelID");
