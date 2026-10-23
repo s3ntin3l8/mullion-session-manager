@@ -508,21 +508,38 @@ describe("sessions route", () => {
     });
 
     const info = vi.spyOn(app.log, "info");
-    const killed = await app.inject({
-      method: "DELETE",
-      url: `/api/sessions/${sessionId}`,
-      headers: { "user-agent": "vitest-ua", referer: "http://x/ui" },
-    });
-    expect(info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId,
-        cascade: "detach",
-        userAgent: "vitest-ua",
-        referer: "http://x/ui",
-      }),
-      "session delete requested",
-    );
-    info.mockRestore();
+    let killed;
+    try {
+      killed = await app.inject({
+        method: "DELETE",
+        url: `/api/sessions/${sessionId}`,
+        headers: { "user-agent": "vitest-ua", referer: "http://x/ui" },
+      });
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId,
+          cascade: "detach",
+          found: true,
+          via: "http",
+          userAgent: "vitest-ua",
+          referer: "http://x/ui",
+        }),
+        "session delete requested",
+      );
+      // A miss is recorded as such, and a control-socket proxy is tagged.
+      const miss = await app.inject({
+        method: "DELETE",
+        url: "/api/sessions/999999",
+        headers: { "x-mullion-via": "control-socket" },
+      });
+      expect(miss.statusCode).toBe(404);
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 999999, found: false, via: "control-socket" }),
+        "session delete requested",
+      );
+    } finally {
+      info.mockRestore();
+    }
     expect(killed.statusCode).toBe(204);
 
     const activeOnly = await app.inject({

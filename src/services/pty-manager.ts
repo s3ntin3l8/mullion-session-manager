@@ -162,6 +162,12 @@ export const MIN_TERMINAL_ROWS = 10;
 // every existing backend importer of this module (this file's own
 // clampTerminalSize() included) keeps working unchanged.
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "../shared/constants.js";
+import { constants as osConstants } from "node:os";
+
+/** node-pty reports a killing signal as a number; map it back to its name. */
+const SIGNAL_NAMES = new Map<number, string>(
+  Object.entries(osConstants.signals).map(([name, num]) => [num, name]),
+);
 export { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS };
 
 /** Clamp a client-supplied terminal size to
@@ -1745,16 +1751,19 @@ export class Session {
     ptyProcess.onExit((e) => {
       if (exitHandled) return;
       exitHandled = true;
-      // Attribution for "my session just vanished": `retired` is set only by
-      // kill(), so retired=false means the attach client died on its own.
-      console.log(
-        `[pty-manager] session ${this.id} attach client exited (code=${e?.exitCode ?? "?"}, signal=${e?.signal ?? "none"}, retired=${this.retired})`,
-      );
       // M2 — this handler captures `this`, not the pty instance. If a later
       // respawn has already installed a NEWER attach-client, this is the old
       // one's late exit: nulling ptyProcess / cancelling the nudge / emitting
       // "exited" now would clobber the live client's state.
       if (this.ptyProcess !== null && this.ptyProcess !== ptyProcess) return;
+      // Attribution for "my session just vanished": `retired` is set only by
+      // kill(), so retired=false means the attach client died on its own.
+      // After the stale-client guard so a superseded client's late exit is
+      // not logged as the current one dying.
+      const signalName = e.signal ? (SIGNAL_NAMES.get(e.signal) ?? String(e.signal)) : "none";
+      console.log(
+        `[pty-manager] session ${this.id} attach client exited (code=${e.exitCode}, signal=${signalName}, retired=${this.retired})`,
+      );
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
       // not just for suppressingOutput tidiness, but because a stale

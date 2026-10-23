@@ -665,7 +665,12 @@ export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredR
       const opts = {
         method: resolved.method,
         url: resolved.url,
-        headers: resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app),
+        headers: {
+          ...(resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app)),
+          // Marks a CLI/agent-originated request so routes that audit their
+          // caller (DELETE /api/sessions/:id) can tell it from a browser one.
+          "x-mullion-via": "control-socket",
+        },
         ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
       };
       ctx.reply(
