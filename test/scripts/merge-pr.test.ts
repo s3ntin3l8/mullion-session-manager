@@ -1,5 +1,28 @@
-import { describe, expect, it } from "vitest";
-import { mergeReadiness, parseArgs } from "../../scripts/merge-pr.mjs";
+import { describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
+import { GIT_ENV_KEYS_TO_STRIP } from "../../src/services/git-env.js";
+import {
+  cli,
+  mergeReadiness,
+  parseArgs,
+  rebaseAndPush,
+  waitForReady,
+} from "../../scripts/merge-pr.mjs";
+
+// The spawns are mocked so the script's COMMAND SHAPE can be asserted —
+// which is where the CI-breaking guard violation lived (a git spawn
+// without env: gitEnv(), which test/git-env-guard.test.ts enforces for
+// every git spawn under src/, test/ and scripts/).
+vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
+const execFileSyncMock = vi.mocked(execFileSync);
+
+const greenPr = {
+  statusCheckRollup: [
+    { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+  ],
+  mergeable: "MERGEABLE",
+  mergeStateStatus: "CLEAN",
+};
 
 // The readiness decision is the whole point of the script: the race it
 // exists for is reading a PR's state too early and acting on it.
@@ -221,5 +244,74 @@ describe("parseArgs — extra positionals and the = form", () => {
   it("accepts --timeout=600", () => {
     expect(parseArgs(["--timeout=600"]).timeoutMs).toBe(600_000);
     expect(parseArgs(["--timeout=600"]).prNumber).toBeUndefined();
+  });
+});
+
+describe("rebaseAndPush", () => {
+  it("scrubs the git env on every git spawn, and names the branch on both the rebase and the push", () => {
+    // The guard that CI enforces (test/git-env-guard.test.ts, issue #1602,
+    // extended to scripts/ by #1649): a GIT_DIR leaked from an outer hook
+    // retargets git at a DIFFERENT checkout — the worst possible failure
+    // for a script whose job is to force-push a rebase.
+    execFileSyncMock.mockReset();
+    rebaseAndPush("feat/x");
+
+    const gitCalls = execFileSyncMock.mock.calls.filter((c) => c[0] === "git");
+    expect(gitCalls.map((c) => c[1])).toEqual([
+      ["fetch", "origin"],
+      ["rebase", "origin/main", "feat/x"],
+      ["push", "--force-with-lease", "origin", "feat/x"],
+    ]);
+    for (const call of gitCalls) {
+      const opts = call[2] as { env?: Record<string, string> };
+      expect(opts?.env).toBeTruthy();
+      for (const key of GIT_ENV_KEYS_TO_STRIP) {
+        expect(opts?.env?.[key]).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("waitForReady", () => {
+  it("gives up when the deadline passes instead of polling forever", () => {
+    execFileSyncMock.mockReset();
+    // An empty rollup reads as "wait" — the state right after a force-push.
+    execFileSyncMock.mockReturnValue(JSON.stringify({ ...greenPr, statusCheckRollup: [] }));
+    const res = waitForReady("1", { timeoutMs: 0 });
+    expect(res.readiness.action).toBe("stop");
+    expect(res.readiness.reason).toMatch(/timed out/i);
+  });
+
+  it("returns as soon as the PR is ready", () => {
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockReturnValue(JSON.stringify(greenPr));
+    const res = waitForReady("1", { timeoutMs: 1000 });
+    expect(res.readiness.action).toBe("merge");
+  });
+});
+
+describe("cli", () => {
+  it("squash-merges the named PR once it is ready", () => {
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockReturnValue(JSON.stringify(greenPr));
+    expect(cli(["123"])).toBe(0);
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "gh",
+      ["pr", "merge", "123", "--squash"],
+      expect.anything(),
+    );
+  });
+
+  it("reports a PR that is not ready instead of merging it", () => {
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({ ...greenPr, statusCheckRollup: [], mergeable: "MERGEABLE" }),
+    );
+    expect(cli(["123", "--timeout", "1"])).toBe(1);
+    expect(execFileSyncMock).not.toHaveBeenCalledWith(
+      "gh",
+      ["pr", "merge", "123", "--squash"],
+      expect.anything(),
+    );
   });
 });

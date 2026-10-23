@@ -26,6 +26,7 @@
 //   --no-rebase    do not rebase when the PR is behind the base; report it
 //   --timeout <s>  how long to wait for the checks to settle (default 30m)
 import { execFileSync } from "node:child_process";
+import { gitEnv } from "./git-env.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -150,20 +151,36 @@ export function mergeReadiness(pr) {
   return { action: "merge", reason: "checks are green and the head contains the base" };
 }
 
-export function waitForReady(prNumber, { timeoutMs = 30 * 60_000, intervalMs = 30_000, log } = {}) {
-  const deadline = Date.now() + timeoutMs;
+export function waitForReady(
+  prNumber,
+  { timeoutMs = 30 * 60_000, intervalMs = 30_000, log, deadline = null } = {},
+) {
+  // An explicit `deadline` wins over `timeoutMs`, so a second wait after a
+  // rebase can share ONE budget instead of arming a fresh full one (which
+  // would make the documented worst case double).
+  const until = deadline ?? Date.now() + timeoutMs;
   for (;;) {
     const pr = readPr(prNumber);
     const readiness = mergeReadiness(pr);
     if (readiness.action !== "wait") return { pr, readiness };
-    if (Date.now() >= deadline) {
+    if (Date.now() >= until) {
       return {
         pr,
         readiness: { action: "stop", reason: `timed out waiting: ${readiness.reason}` },
       };
     }
     log?.(`waiting: ${readiness.reason}`);
-    execFileSync("sleep", [String(Math.ceil(intervalMs / 1000))]);
+    // A blocking sleep without a POSIX binary: Atomics.wait parks this
+    // thread for exactly the interval, with no external program to depend
+    // on. It never sleeps PAST the deadline — otherwise a 1s timeout would
+    // still take a full 30s interval to give up.
+    const remaining = until - Date.now();
+    Atomics.wait(
+      new Int32Array(new SharedArrayBuffer(4)),
+      0,
+      0,
+      Math.max(0, Math.min(intervalMs, remaining)),
+    );
   }
 }
 
@@ -171,13 +188,27 @@ export function mergePr(prNumber) {
   gh(["pr", "merge", prNumber, "--squash"]);
 }
 
-/** Rebase the PR's branch onto the latest origin/main and push it. */
+/**
+ * Rebase the PR's branch onto the latest origin/main and push it.
+ *
+ * Every git child process scrubs the ambient git environment (gitEnv()).
+ * That is not a nicety here: a GIT_DIR leaked from an outer hook
+ * retargets `git fetch` / `git rebase` / `git push` at a DIFFERENT
+ * checkout — and for a script whose whole job is to force-push a rebase,
+ * that is the worst possible call site to get it wrong. The repo enforces
+ * it for every git spawn under src/, test/ and scripts/ (issue #1602,
+ * extended to scripts/ by #1649 — see test/git-env-guard.test.ts).
+ */
 export function rebaseAndPush(branch) {
-  execFileSync("git", ["fetch", "origin"], { stdio: "inherit" });
-  // Rebase the named branch explicitly rather than whatever HEAD happens to
-  // be — the script may be run from outside the branch's worktree.
-  execFileSync("git", ["rebase", "origin/main", branch], { stdio: "inherit" });
-  execFileSync("git", ["push", "--force-with-lease"], { stdio: "inherit" });
+  execFileSync("git", ["fetch", "origin"], { stdio: "inherit", env: gitEnv() });
+  // Name the branch explicitly, for BOTH the rebase and the push — the
+  // script may be run from outside the branch's worktree, and pushing
+  // "whatever HEAD happens to be" is not the same thing.
+  execFileSync("git", ["rebase", "origin/main", branch], { stdio: "inherit", env: gitEnv() });
+  execFileSync("git", ["push", "--force-with-lease", "origin", branch], {
+    stdio: "inherit",
+    env: gitEnv(),
+  });
 }
 
 function currentPrNumber() {
@@ -250,12 +281,17 @@ export function cli(argv = process.argv.slice(2)) {
   const prNumber = parsed ?? currentPrNumber();
   const log = (msg) => console.log(`merge-pr: ${msg}`);
 
-  let { readiness } = waitForReady(prNumber, { timeoutMs, log });
+  // ONE budget across both waits: a rebase re-runs the whole gate (the
+  // pre-push hook), so the second wait is part of the same job, not a new
+  // one. Re-arming a full timeout would make the documented worst case 60
+  // minutes rather than 30.
+  const deadline = Date.now() + timeoutMs;
+  let { readiness } = waitForReady(prNumber, { timeoutMs, deadline, log });
   if (readiness.action === "rebase" && allowRebase) {
     log(`${readiness.reason} — rebasing onto origin/main and pushing`);
     rebaseAndPush(readiness.branch);
     log("pushed; waiting for the checks to settle again");
-    ({ readiness } = waitForReady(prNumber, { timeoutMs, log }));
+    ({ readiness } = waitForReady(prNumber, { timeoutMs, deadline, log }));
   }
 
   if (readiness.action !== "merge") {

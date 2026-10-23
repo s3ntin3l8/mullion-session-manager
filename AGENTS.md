@@ -78,9 +78,14 @@ How this repo applies the conventions above — facts and commands, not rules.
   10-30 minutes of duplicated work per push. So run the parts the hooks
   do **not** do for you, and let the hook run the suites:
   ```bash
-  make lint && make typecheck && make format-check
+  make lint
   ```
-  then push. The hook's two suite steps are **path-scoped per workspace**
+  then push. (`make typecheck` and `make format-check` are worth running
+  too, but the hook runs its own — path-scoped — typecheck and format
+  check, so running the repo-wide ones is a second pass over the same
+  ground; `make lint` is the one the hook genuinely does not cover, since
+  lint is a pre-commit hook only, scoped to the workspace you touched.)
+  The hook's two suite steps are **path-scoped per workspace**
   (`^(?!frontend/)…` for the backend, `^frontend/…` for the frontend), so
   the workspace you did **not** touch is not run locally — say so, or run
   that one suite yourself, if you want local parity with CI (which runs
