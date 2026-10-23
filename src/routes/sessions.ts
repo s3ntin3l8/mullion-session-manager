@@ -1369,6 +1369,17 @@ export async function sessionsRoute(app: FastifyInstance) {
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
+      // The access log only has the URL; record who asked so a session that
+      // "exited on its own" can be told apart from a UI/CLI/agent close.
+      request.log.info(
+        {
+          sessionId,
+          cascade: request.query.cascade ?? "detach",
+          userAgent: request.headers["user-agent"],
+          referer: request.headers.referer,
+        },
+        "session delete requested",
+      );
       const updated = await killSession(app, sessionId, request.query.cascade ?? "detach");
       if (!updated) return reply.notFound();
 

@@ -507,7 +507,22 @@ describe("sessions route", () => {
       return list.json()[0]?.alive === true;
     });
 
-    const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
+    const info = vi.spyOn(app.log, "info");
+    const killed = await app.inject({
+      method: "DELETE",
+      url: `/api/sessions/${sessionId}`,
+      headers: { "user-agent": "vitest-ua", referer: "http://x/ui" },
+    });
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId,
+        cascade: "detach",
+        userAgent: "vitest-ua",
+        referer: "http://x/ui",
+      }),
+      "session delete requested",
+    );
+    info.mockRestore();
     expect(killed.statusCode).toBe(204);
 
     const activeOnly = await app.inject({

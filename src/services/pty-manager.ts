@@ -1742,9 +1742,14 @@ export class Session {
     // first exit `this.ptyProcess` is null, which the identity check below
     // lets through, so a duplicate exit callback would otherwise re-emit.
     let exitHandled = false;
-    ptyProcess.onExit(() => {
+    ptyProcess.onExit((e) => {
       if (exitHandled) return;
       exitHandled = true;
+      // Attribution for "my session just vanished": `retired` is set only by
+      // kill(), so retired=false means the attach client died on its own.
+      console.log(
+        `[pty-manager] session ${this.id} attach client exited (code=${e?.exitCode ?? "?"}, signal=${e?.signal ?? "none"}, retired=${this.retired})`,
+      );
       // M2 — this handler captures `this`, not the pty instance. If a later
       // respawn has already installed a NEWER attach-client, this is the old
       // one's late exit: nulling ptyProcess / cancelling the nudge / emitting

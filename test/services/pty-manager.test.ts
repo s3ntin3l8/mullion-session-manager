@@ -9459,6 +9459,17 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
     expect(events).not.toContain("status_change:exited");
   });
 
+  it("logs the exit code, signal and whether kill() retired the session", async () => {
+    const session = manager.getOrCreate(opts());
+    await waitForSpawnAlive(session);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 7 });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringMatching(/attach client exited \(code=7, signal=none, retired=false\)/),
+    );
+    log.mockRestore();
+  });
+
   it("#1529: a duplicate exit callback from the same pty emits status_change:exited once", async () => {
     const session = manager.getOrCreate(opts());
     await waitForSpawnAlive(session);
