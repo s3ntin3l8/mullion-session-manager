@@ -148,7 +148,7 @@ function RecentReviews() {
               }`}
               subtitle={`${run.status} · ${new Date(run.dispatchedAt).toLocaleTimeString()}${
                 run.error ? ` · ${run.error}` : ""
-              }`}
+              }${run.marker && !run.marker.written ? ` · marker not written: ${run.marker.message}` : ""}`}
               trailing={
                 ACTIVE_RUN_STATUSES.has(run.status) ? (
                   <ConfirmButton

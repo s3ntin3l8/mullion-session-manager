@@ -1191,6 +1191,51 @@ describe("runCommand", () => {
         expect(out).toContain("already landed on this commit");
       });
 
+      it("says why the in-flight marker was not written, without failing the request (#1790)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            marker: {
+              written: false,
+              reason: "permission-not-granted",
+              message: "the GitHub App installation has not granted Checks: Read & write",
+            },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("review requested for acme/widgets#42");
+        expect(out).toContain("marker not written: the GitHub App installation has not granted");
+      });
+
+      it("stays quiet about the marker when it was written (#1790)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            ...dispatched,
+            marker: { written: true, checkRunId: 4242 },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review"], { client, io })).toBe(0);
+        expect(io.written.join("")).not.toContain("marker");
+      });
+
+      it("status prints a marker line when the marker was not written (#1790)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_1",
+            repo: "acme/widgets",
+            prNumber: 42,
+            status: "running",
+            marker: { written: false, reason: "not-installed", message: "App not installed" },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["review", "status", "--pr", "42"], { client, io })).toBe(0);
+        expect(io.written.join("")).toContain("marker: not written — App not installed");
+      });
+
       it("gives the request a longer timeout than the 30s default", async () => {
         const client = fakeClient({ request: vi.fn(async () => dispatched) });
         await runCommand(["review"], { client, io: fakeIo() });

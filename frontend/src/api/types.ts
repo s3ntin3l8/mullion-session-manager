@@ -524,7 +524,14 @@ export interface GitHubAppStatus {
   installationCount: number | null;
   keyFingerprint: string | null;
   keyRotatedAt: string | null;
+  // #1790 — the outcome of the last Hermes in-flight marker write through this
+  // App since the server started. Absent before the first review request.
+  checksMarker?: { state: string; owner: string; repo: string; at: number };
 }
+
+/** Whether a Hermes review's in-flight marker was written, and why not (#1790). */
+export type ReviewMarker =
+  { written: true; checkRunId: number } | { written: false; reason: string; message: string };
 
 // #514 — PUT /api/integrations/github/app's response: it now verifies the
 // credential against GitHub (GET /app) before persisting, so a successful
@@ -568,6 +575,7 @@ export interface ReviewRun {
   output?: string;
   error?: string;
   shuttingDown: boolean;
+  marker?: ReviewMarker;
 }
 
 export interface GitHubIntegration {

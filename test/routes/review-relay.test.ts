@@ -14,6 +14,7 @@ import type * as RemoteHostClient from "../../src/services/remote-host-client.js
 const mocks = vi.hoisted(() => ({
   resolveRepoRefResult: vi.fn(),
   resolveGitHubToken: vi.fn(),
+  resolveMarkerTokens: vi.fn(),
   findPullRequestByHead: vi.fn(),
   getPullRequestByNumber: vi.fn(),
   getGitStatus: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("../../src/services/host-git.js", async (orig) => ({
 vi.mock("../../src/services/github-integration.js", async (orig) => ({
   ...(await orig<typeof GithubIntegration>()),
   resolveGitHubToken: mocks.resolveGitHubToken,
+  resolveMarkerTokens: mocks.resolveMarkerTokens,
 }));
 vi.mock("../../src/services/github-write.js", async (orig) => ({
   ...(await orig<typeof GithubWrite>()),
@@ -141,6 +143,10 @@ describe("review-request routes", () => {
       value: { owner: "acme", repo: "widgets" },
     });
     mocks.resolveGitHubToken.mockResolvedValue("ghs_token");
+    mocks.resolveMarkerTokens.mockResolvedValue({
+      markerToken: "ghs_checks",
+      markerReadToken: "ghs_checks",
+    });
     mocks.getGitStatus.mockResolvedValue({ branch: "feat/thing" });
     mocks.findPullRequestByHead.mockResolvedValue({ number: 42 });
     mocks.getPullRequestByNumber.mockImplementation(async (_t, _o, _r, number: number) => ({
@@ -327,15 +333,52 @@ describe("review-request routes", () => {
       // refuses does not pay for the PR's reviews.
       resolveBase: expect.any(Function),
       sessionId,
-      // The token lets the relay read and write the in-flight marker.
-      githubToken: expect.any(String),
+      // Any token that can read check runs finds the remembered session;
+      // only the App's checks token writes the marker (#1790).
+      githubToken: "ghs_checks",
+      markerWriteToken: "ghs_checks",
+      markerUnavailable: undefined,
     });
-    // The marker is a check run: writing one needs `checks: write`, which
-    // the read token does not have. So the marker gets its own token.
-    expect(mocks.resolveGitHubToken).toHaveBeenCalledWith(
+    // The marker is a check run: writing one needs a GitHub App token with
+    // `checks: write`, which the read token does not have.
+    expect(mocks.resolveMarkerTokens).toHaveBeenCalledWith(
       expect.anything(),
       { owner: "acme", repo: "widgets" },
-      "checks",
+      "ghs_token",
+    );
+  });
+
+  it("reports why no marker was written when there is no App checks token (#1790)", async () => {
+    mocks.resolveMarkerTokens.mockResolvedValue({
+      markerToken: null,
+      markerUnavailable: "permission-not-granted",
+      markerReadToken: "pat",
+    });
+    mocks.requestHermesReview.mockResolvedValue({
+      runId: "run_1",
+      status: "queued",
+      replayed: false,
+      marker: {
+        written: false,
+        reason: "permission-not-granted",
+        message: "the GitHub App installation has not granted Checks",
+      },
+    });
+    const res = await post(sessionId, {});
+    expect(res.statusCode).toBe(200);
+    expect(res.json().marker).toEqual({
+      written: false,
+      reason: "permission-not-granted",
+      message: "the GitHub App installation has not granted Checks",
+    });
+    // The user token still reads the remembered session; it never writes.
+    expect(mocks.requestHermesReview).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        githubToken: "pat",
+        markerWriteToken: undefined,
+        markerUnavailable: "permission-not-granted",
+      }),
     );
   });
 
@@ -598,8 +641,9 @@ describe("review-request routes", () => {
       headSha: "sha99",
       resolveBase: expect.any(Function),
       sessionId,
-      // The token lets the relay read and write the in-flight marker.
-      githubToken: expect.any(String),
+      githubToken: "ghs_checks",
+      markerWriteToken: "ghs_checks",
+      markerUnavailable: undefined,
     });
   });
 
@@ -880,12 +924,29 @@ describe("review-request routes", () => {
       const res = await get(sessionId, "");
       expect(res.statusCode).toBe(200);
       expect(mocks.completeReviewMarkerCheckRun).toHaveBeenCalledWith(
-        expect.anything(),
+        "ghs_checks",
         "acme",
         "widgets",
         4242,
         "success",
       );
+    });
+
+    it("does not try to close the marker with a token that cannot write one (#1790)", async () => {
+      mocks.resolveMarkerTokens.mockResolvedValue({
+        markerToken: null,
+        markerUnavailable: "not-installed",
+        markerReadToken: "pat",
+      });
+      mocks.getReviewRunForPr.mockReturnValue({
+        runId: "run_1",
+        dispatchedAt: 1_000_000,
+        headSha: "ccccccc3",
+        markerCheckRunId: 4242,
+      });
+      const res = await get(sessionId, "");
+      expect(res.statusCode).toBe(200);
+      expect(mocks.completeReviewMarkerCheckRun).not.toHaveBeenCalled();
     });
 
     it("returns the run status for the branch's PR plus the landed review", async () => {

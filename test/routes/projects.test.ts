@@ -14,7 +14,11 @@ import type * as GithubIntegration from "../../src/services/github-integration.j
 import type * as HermesReview from "../../src/services/hermes-review.js";
 // The mocked module's own value import (see the vi.mock above) — a test
 // asserts on the run lookup with it.
-import { getReviewRunForPr } from "../../src/services/hermes-review.js";
+import {
+  assertReviewerConfigured,
+  getReviewRunForPr,
+  requestHermesReview,
+} from "../../src/services/hermes-review.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
 import { gitEnv } from "../../src/services/git-env.js";
@@ -58,7 +62,14 @@ vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
 // answer that without dispatching a real run.
 vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
   const actual = await importOriginal<typeof HermesReview>();
-  return { ...actual, getReviewRunForPr: vi.fn(actual.getReviewRunForPr) };
+  return {
+    ...actual,
+    getReviewRunForPr: vi.fn(actual.getReviewRunForPr),
+    // #1790 — the re-review route's dispatch, so a test can hand back a result
+    // without a real Hermes.
+    assertReviewerConfigured: vi.fn(actual.assertReviewerConfigured),
+    requestHermesReview: vi.fn(actual.requestHermesReview),
+  };
 });
 
 // Marker substring a target cwd can contain to make runGitInit's own `git
@@ -2612,6 +2623,37 @@ describe("projects route", () => {
           url: `/api/projects/${id}/github/prs/46/re-review`,
         });
         expect(res.statusCode).toBe(412);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("returns the marker result and hands the relay a read token and no write token", async () => {
+        vi.mocked(assertReviewerConfigured).mockReturnValueOnce("key");
+        vi.mocked(requestHermesReview).mockResolvedValueOnce({
+          runId: "run_9",
+          status: "queued",
+          replayed: false,
+          marker: { written: false, reason: "app-not-configured", message: "no GitHub App" },
+        });
+        mockGithub(gqlPr(47));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/47/re-review`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          status: "dispatched",
+          runId: "run_9",
+          marker: { written: false, reason: "app-not-configured" },
+        });
+        expect(requestHermesReview).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            markerWriteToken: undefined,
+            markerUnavailable: "app-not-configured",
+          }),
+        );
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
     });

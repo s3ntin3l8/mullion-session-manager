@@ -279,6 +279,31 @@ describe("Settings -> Integrations", () => {
       expect(await within(section()).findByText(/Verified — test-app/)).toBeInTheDocument();
     });
 
+    it("shows the last review-marker failure in the status line (#1790)", async () => {
+      integration = {
+        ...integration,
+        githubApp: {
+          configured: true,
+          appId: "555",
+          installationCount: 1,
+          keyFingerprint: "abcdefabcdefabcdef",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+          checksMarker: {
+            state: "permission-not-granted",
+            owner: "acme",
+            repo: "widgets",
+            at: Date.now(),
+          },
+        },
+      };
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      expect(
+        await within(section()).findByText(
+          /Hermes review marker: permission-not-granted \(acme\/widgets/,
+        ),
+      ).toBeInTheDocument();
+    });
+
     it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
       expect(await screen.findByText("Not connected")).toBeInTheDocument();

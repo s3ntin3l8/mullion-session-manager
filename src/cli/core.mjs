@@ -1604,7 +1604,7 @@ async function runReview(client, args, opts, io) {
     // A replay dispatched no new run — but the warning (a bot review for this
     // commit already landed) is still the answer the caller wanted, so it is
     // not thrown away with the rest of the result.
-    const warning = result.warning ? ` — warning: ${result.warning}` : "";
+    const warning = (result.warning ? ` — warning: ${result.warning}` : "") + markerNote(result);
     return {
       json: result,
       text:
@@ -1616,7 +1616,7 @@ async function runReview(client, args, opts, io) {
   // Issue #1705 — the request may carry a warning (a bot review already landed
   // on this commit). It is not an error, but the caller asked for a review and
   // deserves to know a second one is on its way.
-  const warning = result.warning ? ` — warning: ${result.warning}` : "";
+  const warning = (result.warning ? ` — warning: ${result.warning}` : "") + markerNote(result);
   return {
     json: result,
     // The rule, in the place the caller reads it right after asking: asking
@@ -1630,6 +1630,15 @@ async function runReview(client, args, opts, io) {
   };
 }
 
+// Issue #1790 — the in-flight marker is how the repository's own review
+// workflow sees this run. When it could not be written the review still runs,
+// but the workflow may start a second one, so the caller is told why.
+function markerNote(result) {
+  return result.marker && result.marker.written === false
+    ? ` — marker not written: ${result.marker.message}`
+    : "";
+}
+
 function formatReviewStatus(r) {
   if (r.status === "not_found") {
     return `no review run known for ${r.repo}#${r.prNumber} — none requested from this Mullion, or the server restarted`;
@@ -1638,6 +1647,9 @@ function formatReviewStatus(r) {
   if (r.shuttingDown) lines.push("the review gateway is shutting down");
   if (r.error) lines.push(`error: ${r.error}`);
   if (r.output) lines.push(`reply: ${r.output}`);
+  if (r.marker && r.marker.written === false) {
+    lines.push(`marker: not written — ${r.marker.message}`);
+  }
   if (r.github?.checked) {
     lines.push(
       r.github.review

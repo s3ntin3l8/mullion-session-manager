@@ -449,6 +449,12 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   one. The confirmation names the run id. A commit that has already been
   reviewed is refused the same way — there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first).
+  The relay also writes an in-flight **marker** (a check run named
+  `Hermes review`) that the repository's own review workflow reads to see the
+  run; only a GitHub App with Checks: Read & write can write it. When it
+  cannot, the review still runs, and the confirmation ends with
+  `— marker not written: <reason>` (JSON: `marker.written: false` with a
+  `reason` and `message`); `review status` prints a `marker:` line.
 - `review status [--pr <n>] [--repo <owner/name>] [--branch <b>]` — checks a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes

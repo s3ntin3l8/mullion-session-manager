@@ -63,7 +63,7 @@ describe("hermes review relay", () => {
   let runEndpoint: (url: string, init: RequestInit) => Promise<Response>;
   let promptResponse: () => Promise<Response>;
   // The check runs on a commit — the in-flight marker (issue #1751, #1757).
-  let checkRuns: () => Promise<Response>;
+  let checkRuns: (init?: RequestInit) => Promise<Response>;
   let createCheckRun: (init: RequestInit) => Promise<Response>;
 
   beforeAll(async () => {
@@ -104,7 +104,7 @@ describe("hermes review relay", () => {
       if (url === `${API}/health`) return health();
       if (url === `${API}/v1/runs`) return dispatch(init ?? {});
       if (url.startsWith(`${API}/v1/runs/`)) return runEndpoint(url, init ?? {});
-      if (url.includes("/commits/") && url.includes("/check-runs")) return checkRuns();
+      if (url.includes("/commits/") && url.includes("/check-runs")) return checkRuns(init);
       if (url === "https://api.github.com/repos/acme/widgets/check-runs") {
         return createCheckRun(init ?? {});
       }
@@ -660,7 +660,11 @@ describe("hermes review relay", () => {
         written = JSON.parse(init.body as string) as Record<string, unknown>;
         return new Response(JSON.stringify({ id: 4242 }), { status: 201 });
       };
-      await requestHermesReview(app, { ...PR, githubToken: "gh-token" });
+      const result = await requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        markerWriteToken: "app-token",
+      });
       expect(written.name).toBe("Hermes review");
       expect(written.head_sha).toBe("abc1234");
       expect(written.external_id).toBe("run_1");
@@ -668,6 +672,81 @@ describe("hermes review relay", () => {
       expect((written.output as { summary: string }).summary).toBe(
         "session: hermes-review-acme-widgets-7",
       );
+      expect(result.marker).toEqual({ written: true, checkRunId: 4242 });
+    });
+
+    it("writes the marker with the App token, never the read token (#1790)", async () => {
+      let auth = "";
+      createCheckRun = async (init: RequestInit) => {
+        auth = String((init.headers as Record<string, string>).Authorization ?? "");
+        return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+      };
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "user-token",
+        markerWriteToken: "app-token",
+      });
+      expect(auth).toContain("app-token");
+      expect(auth).not.toContain("user-token");
+    });
+
+    it("skips the marker and says why when there is no App checks token (#1790)", async () => {
+      let posted = false;
+      createCheckRun = async () => {
+        posted = true;
+        return new Response("{}", { status: 201 });
+      };
+      const result = await requestHermesReview(app, {
+        ...PR,
+        githubToken: "user-token",
+        markerUnavailable: "permission-not-granted",
+      });
+      expect(posted).toBe(false);
+      expect(result.marker).toMatchObject({ written: false, reason: "permission-not-granted" });
+      expect((result.marker as { message: string }).message).toContain("Checks: Read & write");
+    });
+
+    it("still reads the remembered session with the read token when no marker can be written", async () => {
+      let readAuth = "";
+      checkRuns = async (init?: RequestInit) => {
+        readAuth = String(((init?.headers ?? {}) as Record<string, string>).Authorization ?? "");
+        return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+      };
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "user-token",
+        resolveBase: async () => "base123",
+        markerUnavailable: "not-installed",
+      });
+      expect(readAuth).toContain("user-token");
+    });
+
+    it("reports a refused marker write as write-failed, and the review still dispatches (#1790)", async () => {
+      createCheckRun = async () =>
+        new Response(JSON.stringify({ message: "You must authenticate via a GitHub App" }), {
+          status: 403,
+        });
+      const result = await requestHermesReview(app, {
+        ...PR,
+        githubToken: "user-token",
+        markerWriteToken: "app-token",
+      });
+      expect(result.runId).toBe("run_1");
+      expect(result.marker).toMatchObject({ written: false, reason: "write-failed" });
+    });
+
+    it("exposes the marker result on the run status (#1790)", async () => {
+      await requestHermesReview(app, {
+        ...PR,
+        githubToken: "user-token",
+        markerUnavailable: "mint-failed",
+      });
+      const status = await getHermesReviewStatus(app, {
+        owner: PR.owner,
+        repo: PR.repo,
+        prNumber: PR.prNumber,
+      });
+      expect(status.marker).toMatchObject({ written: false, reason: "mint-failed" });
     });
 
     it("retries a replayed run that completed without landing a review", async () => {

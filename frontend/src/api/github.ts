@@ -15,6 +15,7 @@ import type {
   GitHubIntegration,
   HermesIntegration,
   ReviewRun,
+  ReviewMarker,
   SetGitHubAppResult,
   DeviceFlowStatus,
   ProjectReleaseStatus,
@@ -87,7 +88,7 @@ export const githubApi = {
     request<GitHubPrDetail>(`/api/projects/${projectId}/github/prs/${number}`),
 
   reReviewProjectPr: (projectId: number, number: number) =>
-    request<{ status: string; runId: string; replayed: boolean }>(
+    request<{ status: string; runId: string; replayed: boolean; marker?: ReviewMarker }>(
       `/api/projects/${projectId}/github/prs/${number}/re-review`,
       { method: "POST" },
     ),

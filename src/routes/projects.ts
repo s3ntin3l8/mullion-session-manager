@@ -64,7 +64,12 @@ import {
 } from "../services/git-log.js";
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
-import { getIntegration, getToken, resolveGitHubToken } from "../services/github-integration.js";
+import {
+  getIntegration,
+  getToken,
+  resolveGitHubToken,
+  resolveMarkerTokens,
+} from "../services/github-integration.js";
 import { maybeAutoEnableConventionalTitles } from "../services/project-release-please.js";
 import {
   GitHubApiError,
@@ -2238,17 +2243,26 @@ export async function projectsRoute(app: FastifyInstance) {
           number,
           getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
         );
+        const markerTokens = await resolveMarkerTokens(app, ctx.repoRef, ctx.token);
         const run = await requestHermesReview(app, {
           owner: ctx.repoRef.owner,
           repo: ctx.repoRef.repo,
           prNumber: number,
           headSha: detail.headSha,
           resolveBase: reader.base,
-          // The in-flight marker is a check run: it needs `checks: write`,
-          // which the read token this route resolved does not have.
-          githubToken: (await resolveGitHubToken(app, ctx.repoRef, "checks")) ?? undefined,
+          // The in-flight marker is a check run: it needs a GitHub App token
+          // with `checks: write` (no user-token fallback, #1790). Reading the
+          // remembered session works with any token.
+          githubToken: markerTokens.markerReadToken ?? ctx.token,
+          markerWriteToken: markerTokens.markerToken ?? undefined,
+          markerUnavailable: markerTokens.markerUnavailable,
         });
-        return { status: "dispatched", runId: run.runId, replayed: run.replayed };
+        return {
+          status: "dispatched",
+          runId: run.runId,
+          replayed: run.replayed,
+          ...(run.marker ? { marker: run.marker } : {}),
+        };
       } catch (err) {
         if (err instanceof GitHubApiError) {
           return reply
