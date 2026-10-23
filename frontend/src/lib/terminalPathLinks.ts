@@ -120,6 +120,11 @@ function splitToken(raw: string): SplitToken {
 // glue the last word onto it, and so would a list of complete paths
 // ("• artifacts/plan.md" / "• src/a.ts" → one wrong link). The continuation
 // must itself carry a `/` or an extension dot, and must not open a new path.
+//
+// Accepted exposure: the gate only rejects a producer tail that already IS a
+// complete path, so an incomplete dir-like tail ("artifacts/plan" ahead of a
+// "plan.md" row) still passes `admits`; what stops a wrong link there is the
+// joined string also having to pass `looksLikeFilePath`.
 const PATH_MIDDLE_CHAR_RE = /[^\s"'`()<>[\]{},;|*?$=\\│┃║▏▕]/;
 const PATH_NEW_TOKEN_RE = /^(?:~\/|\/|\.{1,2}\/)/;
 const PATH_PRODUCER_TAIL_RE = /\S*\/\S*$/;
