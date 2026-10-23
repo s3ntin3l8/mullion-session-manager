@@ -511,53 +511,7 @@ describe("sessions route", () => {
       return list.json()[0]?.alive === true;
     });
 
-    const info = vi.spyOn(app.log, "info");
-    let killed;
-    try {
-      killed = await app.inject({
-        method: "DELETE",
-        url: `/api/sessions/${sessionId}`,
-        headers: { "user-agent": "vitest-ua", referer: "http://x/ui" },
-      });
-      expect(info).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionId,
-          cascade: "detach",
-          via: "http",
-          userAgent: "vitest-ua",
-          referer: "http://x/ui",
-        }),
-        "session delete requested",
-      );
-      expect(info).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId, found: true }),
-        "session delete finished",
-      );
-      // A forged x-mullion-via header must not make a plain request look like
-      // a control-socket one; only the per-process token does.
-      const forged = await app.inject({
-        method: "DELETE",
-        url: "/api/sessions/999998",
-        headers: { [CONTROL_SOCKET_VIA_HEADER]: "control-socket" },
-      });
-      expect(forged.statusCode).toBe(404);
-      expect(info).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 999998, via: "http" }),
-        "session delete requested",
-      );
-      const miss = await app.inject({
-        method: "DELETE",
-        url: "/api/sessions/999999",
-        headers: { [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN },
-      });
-      expect(miss.statusCode).toBe(404);
-      expect(info).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 999999, found: false, via: "control-socket" }),
-        "session delete finished",
-      );
-    } finally {
-      info.mockRestore();
-    }
+    const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
     expect(killed.statusCode).toBe(204);
 
     const activeOnly = await app.inject({
@@ -575,6 +529,93 @@ describe("sessions route", () => {
     ]);
 
     await app.close();
+  });
+
+  describe("DELETE /api/sessions/:id audit log", () => {
+    async function withInfoSpy(
+      run: (
+        app: Awaited<ReturnType<typeof buildApp>>,
+        info: ReturnType<typeof vi.spyOn>,
+      ) => Promise<void>,
+    ) {
+      const app = await buildApp();
+      const info = vi.spyOn(app.log, "info");
+      try {
+        await run(app, info);
+      } finally {
+        info.mockRestore();
+        await app.close();
+      }
+    }
+
+    it("records the caller before and the outcome after the kill", async () => {
+      await withInfoSpy(async (app, info) => {
+        const projectId = await createProject(app);
+        const row = app.db
+          .insert(sessions)
+          .values({ projectId, command: "bash", status: "exited" })
+          .returning()
+          .get();
+        const res = await app.inject({
+          method: "DELETE",
+          url: `/api/sessions/${row.id}`,
+          headers: { "user-agent": "vitest-ua", referer: "http://x/ui" },
+        });
+        expect(res.statusCode).toBe(204);
+        expect(info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionId: row.id,
+            cascade: "detach",
+            via: "http",
+            userAgent: "vitest-ua",
+            referer: "http://x/ui",
+          }),
+          "session delete requested",
+        );
+        expect(info).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: row.id, found: true }),
+          "session delete finished",
+        );
+      });
+    });
+
+    it("does not let a forged x-mullion-via header pass as the control socket", async () => {
+      await withInfoSpy(async (app, info) => {
+        // Same length as the real token, so the timingSafeEqual branch runs.
+        const forgedToken = "0".repeat(CONTROL_SOCKET_VIA_TOKEN.length);
+        for (const forged of ["control-socket", forgedToken]) {
+          const res = await app.inject({
+            method: "DELETE",
+            url: "/api/sessions/999998",
+            headers: { [CONTROL_SOCKET_VIA_HEADER]: forged },
+          });
+          expect(res.statusCode).toBe(404);
+        }
+        expect(info).not.toHaveBeenCalledWith(
+          expect.objectContaining({ via: "control-socket" }),
+          expect.anything(),
+        );
+        expect(info).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 999998, via: "http" }),
+          "session delete requested",
+        );
+      });
+    });
+
+    it("tags a request carrying the real token and records a miss as found:false", async () => {
+      await withInfoSpy(async (app, info) => {
+        const res = await app.inject({
+          method: "DELETE",
+          url: "/api/sessions/999999",
+          headers: { [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN },
+        });
+        expect(res.statusCode).toBe(404);
+        expect(info).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: 999999, found: false, via: "control-socket" }),
+          "session delete finished",
+        );
+      });
+    });
   });
 
   it("DELETE on an exited session dismisses it (status becomes killed)", async () => {
