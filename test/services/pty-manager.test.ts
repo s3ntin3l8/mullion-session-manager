@@ -9461,11 +9461,14 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
 
   describe("exit attribution log", () => {
     let log: ReturnType<typeof vi.spyOn>;
+    let debug: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       log = vi.spyOn(console, "log").mockImplementation(() => {});
+      debug = vi.spyOn(console, "debug").mockImplementation(() => {});
     });
     afterEach(() => {
       log.mockRestore();
+      debug.mockRestore();
     });
 
     it("logs code and retired=false when the attach client dies on its own", async () => {
@@ -9477,12 +9480,15 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
       );
     });
 
-    it("names the killing signal", async () => {
+    it.each([
+      [15, "SIGTERM"],
+      [6, "SIGABRT"], // not the SIGIOT alias
+    ])("names the killing signal %i as %s", async (signal, name) => {
       const session = manager.getOrCreate(opts());
       await waitForSpawnAlive(session);
-      for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 0, signal: 15 });
+      for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 0, signal });
       expect(log).toHaveBeenCalledWith(
-        expect.stringMatching(/code=0, signal=SIGTERM, retired=false\)/),
+        expect.stringMatching(new RegExp(`code=0, signal=${name}, retired=false\\)`)),
       );
     });
 
@@ -9499,6 +9505,7 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
       (session as unknown as { ptyProcess: unknown }).ptyProcess = new FakePty(80, 24);
       for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 1 });
       expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/attach client exited/));
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/superseded attach client exited/));
     });
   });
 

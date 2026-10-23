@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import {
+  CONTROL_SOCKET_VIA_HEADER,
+  CONTROL_SOCKET_VIA_TOKEN,
+} from "../../src/services/internal-request.js";
 // Must come before any import below that could itself trigger loading
 // "node-pty"/"node:child_process" (e.g. the `execFileSync`/`spawnChildProcess`
 // import a few lines down) — see mock-pty.ts's header comment for the
@@ -519,23 +523,37 @@ describe("sessions route", () => {
         expect.objectContaining({
           sessionId,
           cascade: "detach",
-          found: true,
           via: "http",
           userAgent: "vitest-ua",
           referer: "http://x/ui",
         }),
         "session delete requested",
       );
-      // A miss is recorded as such, and a control-socket proxy is tagged.
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId, found: true }),
+        "session delete finished",
+      );
+      // A forged x-mullion-via header must not make a plain request look like
+      // a control-socket one; only the per-process token does.
+      const forged = await app.inject({
+        method: "DELETE",
+        url: "/api/sessions/999998",
+        headers: { [CONTROL_SOCKET_VIA_HEADER]: "control-socket" },
+      });
+      expect(forged.statusCode).toBe(404);
+      expect(info).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: 999998, via: "http" }),
+        "session delete requested",
+      );
       const miss = await app.inject({
         method: "DELETE",
         url: "/api/sessions/999999",
-        headers: { "x-mullion-via": "control-socket" },
+        headers: { [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN },
       });
       expect(miss.statusCode).toBe(404);
       expect(info).toHaveBeenCalledWith(
         expect.objectContaining({ sessionId: 999999, found: false, via: "control-socket" }),
-        "session delete requested",
+        "session delete finished",
       );
     } finally {
       info.mockRestore();
