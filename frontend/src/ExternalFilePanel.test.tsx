@@ -16,16 +16,21 @@ vi.mock("./components/CodeEditor.js", () => ({
     readOnly?: boolean;
     revealLine?: { line: number; token: number };
     fileName?: string;
-  }) => (
-    <textarea
-      aria-label={`viewer:${fileName}`}
-      data-readonly={String(!!readOnly)}
-      data-reveal-line={revealLine?.line ?? ""}
-      value={value}
-      readOnly
-    />
-  ),
+  }) => {
+    revealObjects.push(revealLine);
+    return (
+      <textarea
+        aria-label={`viewer:${fileName}`}
+        data-readonly={String(!!readOnly)}
+        data-reveal-line={revealLine?.line ?? ""}
+        value={value}
+        readOnly
+      />
+    );
+  },
 }));
+
+const revealObjects: unknown[] = [];
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -48,6 +53,26 @@ describe("ExternalFilePanel", () => {
     const url = String(fetchMock.mock.calls[0][0]);
     expect(url).toContain("/api/projects/3/external-file?path=");
     expect(decodeURIComponent(url)).toContain("~/.claude/plans/p.md");
+  });
+
+  it("scrolls only the linked file, and not again when the path bar is edited", async () => {
+    revealObjects.length = 0;
+    stubFetch(() => jsonResponse(200, { path: "p.md", content: "x", size: 1, mtimeMs: 1 }));
+    const { rerender } = render(
+      <ExternalFilePanel params={{ projectId: 3, path: "/a/p.md", line: 42, rev: 1 }} />,
+    );
+    const viewer = await screen.findByLabelText("viewer:/a/p.md");
+    expect(viewer.getAttribute("data-reveal-line")).toBe("42");
+    // Typing in the path bar must keep the same reveal target (same object).
+    fireEvent.change(screen.getByLabelText("File path"), { target: { value: "/a/other.md" } });
+    expect(screen.getByLabelText("viewer:/a/p.md").getAttribute("data-reveal-line")).toBe("42");
+    expect(revealObjects.length).toBeGreaterThan(0);
+    expect(new Set(revealObjects.filter(Boolean)).size).toBe(1);
+    // Opening another file in this panel doesn't inherit the stale line.
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    const other = await screen.findByLabelText("viewer:/a/other.md");
+    expect(other.getAttribute("data-reveal-line")).toBe("");
+    rerender(<ExternalFilePanel params={{ projectId: 3, path: "/a/p.md", line: 42, rev: 1 }} />);
   });
 
   it("explains a not_allowlisted refusal", async () => {

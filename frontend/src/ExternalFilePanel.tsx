@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { ProjectFileContent } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
@@ -69,6 +69,17 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
     })();
   }, [open, params.path]);
 
+  // Scroll target for a terminal `file:line` link — only for the file that
+  // link named (params.path), and memoized so typing in the path bar doesn't
+  // re-fire CodeEditor's reveal (its scroll effect is keyed on this object).
+  const revealLine = useMemo(
+    () =>
+      params.line && file?.path === params.path
+        ? { line: params.line, token: params.rev ?? 0 }
+        : undefined,
+    [params.line, params.rev, params.path, file?.path],
+  );
+
   return (
     <div className="agent-rules-panel external-file-panel">
       <div className="agent-rules-panel-editor file-editor-main">
@@ -100,7 +111,7 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
             value={file.content}
             fileName={file.path}
             readOnly
-            revealLine={params.line ? { line: params.line, token: params.rev ?? 0 } : undefined}
+            revealLine={revealLine}
             ariaLabel={`Viewing ${file.path}`}
           />
         ) : (

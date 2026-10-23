@@ -782,6 +782,15 @@ export function openOrFocusProjectPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+// Monotonic `rev` for re-targeting an open panel. Date.now() can repeat within
+// one millisecond, and a repeated rev reads as "no re-target" to a consumer
+// that keys on it (e.g. a memoized reveal-line token).
+let revCounter = 0;
+function nextRev(): number {
+  revCounter = Math.max(revCounter + 1, Date.now());
+  return revCounter;
+}
+
 /** Opens (or focuses and re-targets) the project's tabbed Project panel on
  * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
 export function openProjectHubPanel(
@@ -794,7 +803,7 @@ export function openProjectHubPanel(
   const panelId = `project-hub-${projectId}`;
   const existing = api.getPanel(panelId);
   if (existing) {
-    existing.api.updateParameters({ projectId, tab, rev: Date.now() });
+    existing.api.updateParameters({ projectId, tab, rev: nextRev() });
     existing.api.setActive();
     if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
@@ -828,7 +837,7 @@ export function openFileEditorPanel(
     path: target.path,
     sessionId: target.sessionId,
     line: target.line,
-    rev: Date.now(),
+    rev: nextRev(),
   };
   const existing = api.getPanel(panelId);
   if (existing) {
@@ -871,7 +880,7 @@ export function openFileOnlyPanel(
     id: panelId,
     component: "file-editor",
     title: project ? `${base} — ${project.name}` : base,
-    params: { projectId, path, mode: "editor", rev: Date.now() },
+    params: { projectId, path, mode: "editor", rev: nextRev() },
     ...positioningForTier(api, layout),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
@@ -890,7 +899,7 @@ export function openExternalFilePanel(
 ): void {
   const path = target.path ?? "";
   const panelId = `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`;
-  const params = { projectId, path, line: target.line, rev: Date.now() };
+  const params = { projectId, path, line: target.line, rev: nextRev() };
   const existing = api.getPanel(panelId);
   if (existing) {
     // A fresh rev/line so a second `file:line` link to the same file scrolls.
