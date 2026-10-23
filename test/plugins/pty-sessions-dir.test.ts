@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
 import type * as ChildProcess from "node:child_process";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // ensureSessionsDir only touches the filesystem, but mock child_process so
 // nothing in this file's import graph can ever fire a real systemd-run
@@ -19,12 +19,21 @@ import { buildApp } from "../../src/app.js";
 // A configured dir long enough to push the worst-case socket path past the
 // sun_path limit, forcing the short fallback.
 const configured = path.join(tmpdir(), "x".repeat(110), "sessions");
+// The temp dir as it was when this file loaded — the tests below change
+// TMPDIR to exercise the budget's boundary, and the scratch home must not
+// follow it (a long TMPDIR would push the home root itself over the limit).
+const TEST_TMPDIR = tmpdir();
 const hash = createHash("md5").update(path.resolve(configured)).digest("hex").slice(0, 8);
-// Issue #1717 — the fallback lives under the platform's TEMP DIR now, not a
-// hardcoded /tmp: on macOS `os.tmpdir()` is a per-user directory
-// (/var/folders/.../T), which is both correct there and safer than a
-// world-writable /tmp.
-const fallback = path.join(tmpdir(), `ms-${hash}`);
+// Issue #1762 — the fallback lives under the PER-USER home directory
+// (~/.mullion/sessions), not under the platform's temp dir: the temp dir is
+// a function of TMPDIR, so a fallback rooted there moves — and re-derives
+// this instance's scope namespace — whenever TMPDIR changes.
+const FALLBACK_SUBDIR = path.join(".mullion", "sessions");
+
+/** The fallback dir for the configured path, under a given home directory. */
+function fallbackUnder(home: string): string {
+  return path.join(home, FALLBACK_SUBDIR, `ms-${hash}`);
+}
 
 // The longest socket name a sessions dir has to hold: a 12-digit
 // session-id socket.
@@ -93,8 +102,43 @@ function tmpDirOfLength(bytes: number, tag: string): string {
   return dir;
 }
 
-function cleanup(): void {
-  rmSync(fallback, { recursive: true, force: true });
+/**
+ * Runs `fn` with HOME pointed at a scratch directory.
+ *
+ * `os.homedir()` reads $HOME on POSIX, so this is how the tests steer the
+ * fallback's per-user root without touching the real home directory (which
+ * holds this repo's own ~/.mullion state). The scratch home is removed
+ * afterwards, so a test that creates the fallback dir inside it leaves
+ * nothing behind.
+ */
+function withHome<T>(fn: (home: string) => T): T {
+  // The scratch home's name is short ON PURPOSE: the fallback root is
+  // `<home>/.mullion/sessions/ms-<hash>`, and the whole path has to fit the
+  // platform's sun_path budget for the fallback to land under the home dir
+  // at all — a long scratch name would push the home root itself over the
+  // limit, and the fallback would land in the POSIX last resort instead.
+  const home = path.join(TEST_TMPDIR, `mh-${randomBytes(4).toString("hex")}`);
+  mkdirSync(home, { recursive: true });
+  // A precondition, so an environment with an unusually long TMPDIR reports
+  // as such instead of masquerading as a fallback-resolution failure.
+  const root = path.join(home, FALLBACK_SUBDIR, `ms-${hash}`);
+  expect(Buffer.byteLength(path.join(root, LONGEST_SOCKET), "utf8")).toBeLessThanOrEqual(
+    maxSunPathBytes() - 1,
+  );
+  const prev = process.env.HOME;
+  process.env.HOME = home;
+  const restore = (): void => {
+    if (prev === undefined) delete process.env.HOME;
+    else process.env.HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  };
+  const result = fn(home);
+  // An async callback must keep the scratch home until it is DONE with it —
+  // removing it under a running callback would delete the fallback dir the
+  // callback is asserting about.
+  if (result instanceof Promise) return result.finally(restore) as T;
+  restore();
+  return result;
 }
 
 describe("maxSunPathBytes", () => {
@@ -162,15 +206,21 @@ describe("resolveSessionsDirs — the sessions dir and the OWNERSHIP set (issue 
     // instance's own (alive, and stoppable) instead of an orphan the
     // reconciler reads as "dead".
     withPlatform("linux", () => {
-      const tmp = tmpDirOfLength(maxFittingTmpBytes("linux"), "owned");
+      // A TMPDIR of its own, so the #1748 compat root and the pre-#1748 one
+      // are two DIFFERENT paths and the assertions below cannot pass by
+      // accident.
+      const tmp = path.join(tmpdir(), `compat-${randomBytes(4).toString("hex")}`);
       mkdirSync(tmp, { recursive: true });
       const prev = process.env.TMPDIR;
       process.env.TMPDIR = tmp;
       try {
-        const dirs = resolveSessionsDirs(configured);
-        expect(dirs.current).toBe(path.join(tmp, `ms-${hash}`));
-        expect(dirs.owned).toContain(path.join(tmp, `ms-${hash}`));
-        expect(dirs.owned).toContain(path.join("/tmp", `ms-${hash}`));
+        withHome((home) => {
+          const dirs = resolveSessionsDirs(configured);
+          expect(dirs.current).toBe(fallbackUnder(home));
+          expect(dirs.owned).toContain(fallbackUnder(home));
+          expect(dirs.owned).toContain(path.join(tmp, `ms-${hash}`));
+          expect(dirs.owned).toContain(path.join("/tmp", `ms-${hash}`));
+        });
       } finally {
         if (prev === undefined) delete process.env.TMPDIR;
         else process.env.TMPDIR = prev;
@@ -198,18 +248,25 @@ describe("resolveSessionsDirs — the sessions dir and the OWNERSHIP set (issue 
 });
 
 describe("ensureSessionsDir fallback hardening (finding H4)", () => {
-  beforeEach(cleanup);
-  afterEach(cleanup);
-
-  it("keeps the stable <tmpdir>/ms-<hash> path and creates it 0700", () => {
-    expect(ensureSessionsDir(configured)).toBe(fallback);
-    expect(statSync(fallback).mode & 0o777).toBe(0o700);
+  it("creates the per-user fallback dir 0700", () => {
+    withHome((home) => {
+      const fallback = fallbackUnder(home);
+      expect(ensureSessionsDir(configured)).toBe(fallback);
+      expect(statSync(fallback).mode & 0o777).toBe(0o700);
+    });
   });
 
-  it("puts the fallback under the platform's temp dir, not a hardcoded /tmp", () => {
-    // Issue #1717 — on macOS os.tmpdir() is a per-user directory, so the
-    // fallback inherits that instead of the world-writable /tmp.
-    expect(ensureSessionsDir(configured).startsWith(tmpdir())).toBe(true);
+  it("puts the fallback under the per-user home dir, not under the temp dir", () => {
+    // Issue #1762 — the temp dir is a function of TMPDIR, so a fallback
+    // rooted there moves (and re-derives this instance's scope namespace)
+    // whenever TMPDIR changes; the per-user home dir does not move. This is
+    // also what makes the fallback fit on a host whose TMPDIR is too long
+    // to hold it (#1762).
+    withHome((home) => {
+      const result = ensureSessionsDir(configured);
+      expect(result).toBe(fallbackUnder(home));
+      expect(result).not.toBe(path.join(tmpdir(), `ms-${hash}`));
+    });
   });
 
   it("uses the FULL 8-hex-char hash for the fallback name, never a shortened one", () => {
@@ -226,24 +283,14 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     // and the path shape does not depend on how long the temp dir is.
     for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
       withPlatform(platform, () => {
-        // The longest temp dir whose fallback still fits: at exactly the
-        // boundary, the name still has to come out whole.
-        const tmp = tmpDirOfLength(maxFittingTmpBytes(platform), "fit");
-        mkdirSync(tmp, { recursive: true });
-        const prev = process.env.TMPDIR;
-        process.env.TMPDIR = tmp;
-        try {
+        withHome((home) => {
           const result = ensureSessionsDir(configured);
           // The name is the FULL hash of the resolved configured path — exactly
           // 8 hex chars, no truncation, on BOTH platforms.
-          expect(result).toBe(path.join(tmp, `ms-${hash}`));
+          expect(result).toBe(fallbackUnder(home));
           const longest = Buffer.byteLength(path.join(result, LONGEST_SOCKET), "utf8");
-          expect(longest).toBe(maxSunPathBytes(platform) - 1);
-        } finally {
-          if (prev === undefined) delete process.env.TMPDIR;
-          else process.env.TMPDIR = prev;
-          rmSync(tmp, { recursive: true, force: true });
-        }
+          expect(longest).toBeLessThanOrEqual(maxSunPathBytes(platform) - 1);
+        });
       });
     }
   });
@@ -257,12 +304,8 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     // truncation fails loudly rather than merely "differing".
     for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
       withPlatform(platform, () => {
-        const tmp = tmpDirOfLength(maxFittingTmpBytes(platform), "dist");
-        mkdirSync(tmp, { recursive: true });
-        const prev = process.env.TMPDIR;
-        process.env.TMPDIR = tmp;
-        try {
-          const other = path.join(tmp, "u".repeat(110), "sessions");
+        withHome((home) => {
+          const other = path.join(home, "u".repeat(110), "sessions");
           const otherHash = createHash("md5").update(path.resolve(other)).digest("hex").slice(0, 8);
           // A precondition, so a fixture collision reports as such instead of
           // masquerading as a distinctness failure.
@@ -270,35 +313,32 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
           const a = ensureSessionsDir(configured);
           const b = ensureSessionsDir(other);
           expect(a).not.toBe(b);
-          expect(a).toBe(path.join(tmp, `ms-${hash}`));
-          expect(b).toBe(path.join(tmp, `ms-${otherHash}`));
-        } finally {
-          if (prev === undefined) delete process.env.TMPDIR;
-          else process.env.TMPDIR = prev;
-          rmSync(tmp, { recursive: true, force: true });
-        }
+          expect(a).toBe(fallbackUnder(home));
+          expect(b).toBe(path.join(home, FALLBACK_SUBDIR, `ms-${otherHash}`));
+        });
       });
     }
   });
 
-  it("fails with a clear error when the fallback itself does not fit", () => {
-    // The fallback has to fit the limit TOO: it lives under the platform's
-    // temp dir, and a temp dir long enough to push the CONFIGURED path over
-    // the limit can push the fallback over it as well — and a fallback that
-    // cannot hold a socket is worse than none. The error has to say what to
-    // do about it — a bare EINVAL at bind() time is what this whole check
-    // exists to prevent — and to name BOTH levers: the temp dir is what
-    // overflowed here, not just SESSIONS_DIR.
+  it("does not fail when the temp dir is too long to hold the fallback (#1762)", () => {
+    // The regression #1762 was filed for: with the fallback under the temp
+    // dir, a TMPDIR long enough to overflow the sun_path budget pushed the
+    // FALLBACK over it as well — and the app then refused to start, on a
+    // host that had been running fine before the limit was made
+    // platform-aware. The per-user root does not depend on TMPDIR at all, so
+    // this is now a non-event: the same TMPDIR that used to be fatal
+    // resolves to the same fallback as any other.
     for (const platform of ["linux", "darwin"] as NodeJS.Platform[]) {
       withPlatform(platform, () => {
-        // One byte past the longest temp dir that still fits.
+        // One byte past the longest temp dir whose fallback used to fit.
         const tmp = tmpDirOfLength(maxFittingTmpBytes(platform) + 1, "over");
         mkdirSync(tmp, { recursive: true });
         const prev = process.env.TMPDIR;
         process.env.TMPDIR = tmp;
         try {
-          expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
-          expect(() => ensureSessionsDir(configured)).toThrow(/point TMPDIR at a shorter/);
+          withHome((home) => {
+            expect(ensureSessionsDir(configured)).toBe(fallbackUnder(home));
+          });
         } finally {
           if (prev === undefined) delete process.env.TMPDIR;
           else process.env.TMPDIR = prev;
@@ -308,55 +348,107 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     }
   });
 
-  it("tightens an existing looser directory we own to 0700 instead of refusing", () => {
-    mkdirSync(fallback, { mode: 0o755 });
-    chmodSync(fallback, 0o755);
-    expect(ensureSessionsDir(configured)).toBe(fallback);
-    expect(statSync(fallback).mode & 0o777).toBe(0o700);
-  });
-
-  it("fails loudly when the fallback is a symlink", () => {
-    const target = path.join(tmpdir(), `ms-symlink-target-${process.pid}`);
-    mkdirSync(target, { recursive: true });
+  it("falls back to the POSIX last resort when the home dir cannot be determined", () => {
+    // The per-user root is the rule; /tmp is the safety net for the
+    // pathological case where the home directory cannot be determined at all.
+    // The fallback STILL has to fit, or the app would not start — which is
+    // the whole point of the net.
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("");
+    const lastResort = path.join("/tmp", `ms-${hash}`);
     try {
-      symlinkSync(target, fallback);
-      expect(() => ensureSessionsDir(configured)).toThrow(/not a plain directory/);
+      expect(ensureSessionsDir(configured)).toBe(lastResort);
+      const longest = Buffer.byteLength(path.join(lastResort, LONGEST_SOCKET), "utf8");
+      expect(longest).toBeLessThanOrEqual(maxSunPathBytes() - 1);
     } finally {
-      rmSync(target, { recursive: true, force: true });
+      spy.mockRestore();
+      rmSync(lastResort, { recursive: true, force: true });
     }
   });
 
-  it("fails loudly when the directory is owned by another uid", () => {
-    mkdirSync(fallback, { mode: 0o700 });
-    const real = process.getuid!;
-    const spy = vi.spyOn(process, "getuid").mockImplementation(() => real.call(process) + 1);
+  it("fails with a clear error when no root can hold the fallback", () => {
+    // The fallback has to fit the limit TOO, and a fallback that cannot hold
+    // a socket is worse than none. The error has to say what to do about it
+    // — a bare EINVAL at bind() time is what this whole check exists to
+    // prevent — and to name the levers that are actually available.
+    //
+    // Reachable only where neither root exists: on Windows there is no
+    // POSIX /tmp, so an undeterminable home directory leaves no root at all.
+    const spy = vi.spyOn(os, "homedir").mockReturnValue("");
     try {
-      expect(() => ensureSessionsDir(configured)).toThrow(/owned by uid/);
+      withPlatform("win32", () => {
+        expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
+        expect(() => ensureSessionsDir(configured)).toThrow(/point HOME at a shorter/);
+      });
     } finally {
       spy.mockRestore();
     }
   });
 
+  it("tightens an existing looser directory we own to 0700 instead of refusing", () => {
+    withHome((home) => {
+      const fallback = fallbackUnder(home);
+      mkdirSync(path.dirname(fallback), { recursive: true });
+      mkdirSync(fallback, { mode: 0o755 });
+      chmodSync(fallback, 0o755);
+      expect(ensureSessionsDir(configured)).toBe(fallback);
+      expect(statSync(fallback).mode & 0o777).toBe(0o700);
+    });
+  });
+
+  it("fails loudly when the fallback is a symlink", () => {
+    withHome((home) => {
+      const fallback = fallbackUnder(home);
+      const target = path.join(TEST_TMPDIR, `ms-symlink-target-${process.pid}`);
+      mkdirSync(target, { recursive: true });
+      mkdirSync(path.dirname(fallback), { recursive: true });
+      try {
+        symlinkSync(target, fallback);
+        expect(() => ensureSessionsDir(configured)).toThrow(/not a plain directory/);
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("fails loudly when the directory is owned by another uid", () => {
+    withHome((home) => {
+      mkdirSync(path.dirname(fallbackUnder(home)), { recursive: true });
+      mkdirSync(fallbackUnder(home), { mode: 0o700 });
+      const real = process.getuid!;
+      const spy = vi.spyOn(process, "getuid").mockImplementation(() => real.call(process) + 1);
+      try {
+        expect(() => ensureSessionsDir(configured)).toThrow(/owned by uid/);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+
   it("returns a short configured path untouched and creates nothing", () => {
-    const short = "/tmp/ms-short-sessions-test";
-    expect(ensureSessionsDir(short)).toBe(path.resolve(short));
-    expect(existsSync(fallback)).toBe(false);
+    withHome((home) => {
+      const short = "/tmp/ms-short-sessions-test";
+      expect(ensureSessionsDir(short)).toBe(path.resolve(short));
+      expect(existsSync(fallbackUnder(home))).toBe(false);
+    });
   });
 
   it("does not delete the fallback dir (live sockets/tokens) on app shutdown", async () => {
-    const prev = process.env.SESSIONS_DIR;
-    process.env.SESSIONS_DIR = configured;
-    try {
-      const app = await buildApp();
-      // buildApp's ptyPlugin created the fallback dir; the old onClose
-      // rmSync'd it. Nothing is written into it here — existence alone proves
-      // the shutdown no longer deletes it.
-      expect(existsSync(fallback)).toBe(true);
-      await app.close();
-      expect(existsSync(fallback)).toBe(true);
-    } finally {
-      if (prev === undefined) delete process.env.SESSIONS_DIR;
-      else process.env.SESSIONS_DIR = prev;
-    }
+    await withHome(async (home) => {
+      const fallback = fallbackUnder(home);
+      const prev = process.env.SESSIONS_DIR;
+      process.env.SESSIONS_DIR = configured;
+      try {
+        const app = await buildApp();
+        // buildApp's ptyPlugin created the fallback dir; the old onClose
+        // rmSync'd it. Nothing is written into it here — existence alone proves
+        // the shutdown no longer deletes it.
+        expect(existsSync(fallback)).toBe(true);
+        await app.close();
+        expect(existsSync(fallback)).toBe(true);
+      } finally {
+        if (prev === undefined) delete process.env.SESSIONS_DIR;
+        else process.env.SESSIONS_DIR = prev;
+      }
+    });
   });
 });

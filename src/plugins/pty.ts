@@ -208,7 +208,8 @@ export function longestSocketPath(dir: string): number {
 }
 
 /**
- * The pre-#1748 fallback root: a hardcoded POSIX `/tmp`.
+ * The pre-#1748 fallback root: a hardcoded POSIX `/tmp` — and the LAST
+ * RESORT the fallback falls back to when the per-user root is unavailable.
  *
  * Empty on Windows, where that path does not exist (Windows support is
  * tracked separately, issue #1728). Empty roots are filtered out of every
@@ -217,6 +218,24 @@ export function longestSocketPath(dir: string): number {
  */
 function legacyTmpRoot(): string {
   return process.platform === "win32" ? "" : "/tmp";
+}
+
+/**
+ * The per-user directory the fallback lives under: `~/.mullion/sessions`.
+ *
+ * A per-user HOME directory — the repo's existing `~/.mullion/` convention
+ * (the hooks shim and the bundle-sync manifest live there). It is PRIVATE
+ * by construction (no world-writable shared parent), STABLE across app
+ * restarts, reboots and TMPDIR changes (which is what keeps this instance's
+ * id stable — see currentFallbackRoots' own comment), and short enough to
+ * hold the sockets on every realistic HOME length.
+ *
+ * Empty when the home directory cannot be determined (no HOME and no passwd
+ * entry) — the caller then falls back to the POSIX last resort.
+ */
+function homeSessionsRoot(): string {
+  const home = os.homedir();
+  return home === "" ? "" : path.join(home, ".mullion", "sessions");
 }
 
 /**
@@ -234,12 +253,20 @@ function legacyTmpRoot(): string {
  *     plant a symlink in it (see secureFallbackDir below).
  *   - **STABLE** — the fallback dir IS this instance's sessions dir, and
  *     deriveInstanceId (session-process.ts) hashes it to namespace this
- *     instance's systemd scopes. A root that CHANGES (because TMPDIR
- *     changed) moves the instance's sockets AND changes its id, which
- *     orphans every scope the instance already owns — issue #1770.
+ *     instance's systemd scopes. A root that CHANGES moves the instance's
+ *     sockets AND changes its id, which orphans every scope the instance
+ *     already owns — issue #1770. That is why the root is the per-user home
+ *     directory and not the platform's temp dir: the temp dir is a function
+ *     of TMPDIR, so it changes with the environment, while the home
+ *     directory does not.
+ *
+ * The POSIX `/tmp` is the last resort — for the pathological case where the
+ * home directory cannot be determined, or is itself too long to hold the
+ * sockets. It is a world-writable dir, so it gets the same hardening
+ * (secureFallbackDir) as every other root.
  */
 function currentFallbackRoots(): string[] {
-  return [os.tmpdir()];
+  return [homeSessionsRoot(), legacyTmpRoot()].filter((root) => root !== "");
 }
 
 /**
@@ -252,7 +279,11 @@ function currentFallbackRoots(): string[] {
  * and its scope stays alive and stoppable.
  */
 function shippedFallbackRoots(): string[] {
-  return [...currentFallbackRoots(), legacyTmpRoot()].filter((root) => root !== "");
+  // The platform's temp dir is #1748's root: compat-only now (it is
+  // environment-dependent — TMPDIR — which is what made this instance's id
+  // unstable, issue #1770), but it stays in the set so the scopes created
+  // under it survive the move to the per-user root.
+  return [...currentFallbackRoots(), os.tmpdir()].filter((root) => root !== "");
 }
 
 /**
@@ -348,8 +379,8 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   throw new Error(
     `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
       `sun_path limit, and neither does the fallback under any of the roots ` +
-      `[${roots}] — set SESSIONS_DIR to a shorter path, or point TMPDIR at a ` +
-      `shorter directory (${os.tmpdir()})`,
+      `[${roots}] — set SESSIONS_DIR to a shorter path, or point HOME at a ` +
+      `shorter directory (${os.homedir()})`,
   );
 }
 
