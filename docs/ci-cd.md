@@ -232,6 +232,12 @@ The protection object also requires **all conversations to be resolved**
 merge even when every check is green. `node scripts/review-threads.mjs list
 <pr>` lists the open ones, and `reply`/`resolve` close them.
 
+If you add or remove a required context, read the current protection object
+first and preserve every other field (`strict`, `enforce_admins`,
+`required_pull_request_reviews`, `restrictions`,
+`required_conversation_resolution`, ...) — a PUT replaces the whole object,
+so a PUT that sends only the contexts silently drops the rest.
+
 **Issue #1360 — this same lookup is a silent no-op for Task Master's own
 CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
 with no operator-side fix.** That feature needs to read exactly this
