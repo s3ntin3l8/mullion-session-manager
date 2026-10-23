@@ -124,31 +124,39 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
       );
     });
   });
-  it("mirrors the backend's own sun_path rule exactly, on every platform either side knows", () => {
-    // The demo script is .mjs and cannot import the backend's TypeScript
-    // module, so it carries its own copy of the rule the backend applies.
-    // A copy nothing ties to the original is a copy that silently goes
-    // stale: changing the backend's limit would leave the demo's guard
-    // refusing (or not refusing) the wrong paths, with the suite still
-    // green. So the copy is asserted against the original here.
+  it("reads the backend's own sun_path rule, on every platform it knows", () => {
+    // The demo script used to carry its own COPY of the rule the backend
+    // applies, and this test compared the two so a change to one could not
+    // leave the other stale. There is no copy any more: the rule lives in
+    // src/cli/sun-path.mjs (plain ESM, so the .mjs demo script CAN import
+    // it) and the backend, the demo and the test suite's temp-dir helper all
+    // read that one implementation. A shared module cannot drift from
+    // itself — a stronger guarantee than comparing two copies could give.
     //
-    // The whole TABLE is compared, not just the platforms that differ
-    // today: a platform added to the backend's table and not to the demo's
-    // would fall through to the default on one side only, and comparing
-    // today's two platforms would not catch it.
+    // What still needs testing is the RULE itself, because every consumer
+    // now depends on it: the whole TABLE (not just the platforms that differ
+    // today, so a platform added to it is exercised), the default for a
+    // platform it does not list, and the Object.prototype-key case that is
+    // why the table is a Map and not a plain object.
     expect(demoSunPathBytesByPlatform).toEqual(backendSunPathBytesByPlatform);
     expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
     for (const platform of backendSunPathBytesByPlatform.keys()) {
       expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
     }
-    // A platform neither table lists takes the default on both sides — and
-    // so does an arbitrary string that happens to name an Object.prototype
-    // key, which is why the tables are Maps and not plain objects.
+    // A platform the table does not list takes the default — and so does an
+    // arbitrary string that happens to name an Object.prototype key, which
+    // is why the tables are Maps and not plain objects.
     const unlisted = "not-a-real-platform" as NodeJS.Platform;
     expect(demoMaxSunPathBytes(unlisted)).toBe(backendMaxSunPathBytes(unlisted));
     const prototypeKey = "constructor" as NodeJS.Platform;
     expect(demoMaxSunPathBytes(prototypeKey)).toBe(backendMaxSunPathBytes(prototypeKey));
     expect(backendMaxSunPathBytes(prototypeKey)).toBe(backendDefaultSunPathBytes);
+    // The platform limit is the one the backend applies: 108 on Linux, 104 on
+    // macOS. A demo that refused a path the backend would keep (or kept one
+    // the backend would relocate) would disagree with the backend it is
+    // demoing.
+    expect(backendMaxSunPathBytes("linux")).toBe(108);
+    expect(backendMaxSunPathBytes("darwin")).toBe(104);
     // Same for the socket name the guard counts against that limit: the
     // backend takes the max over every socket a sessions dir holds, so a
     // longer socket added there would leave the demo under-counting and
