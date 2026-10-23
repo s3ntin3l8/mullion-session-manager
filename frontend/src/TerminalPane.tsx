@@ -865,7 +865,7 @@ export function TerminalPane(props: {
                   hoverLink(
                     event,
                     isCoarsePointerRef.current ? link.text : `Ctrl+click to edit ${link.text}`,
-                    1,
+                    link.rowCount,
                   ),
                 leave: leaveLink,
               })),

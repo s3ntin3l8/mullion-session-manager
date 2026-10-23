@@ -1,9 +1,15 @@
-import type { LinkBufferSource } from "./terminalLinks.js";
+import {
+  buildWindow,
+  mapOffsetsToRows,
+  PATH_PROFILE,
+  type LinkBufferSource,
+} from "./terminalLinks.js";
 
 // Terminal links for file PATHS (`src/foo.ts`, `./.env`, `src/foo.ts:42:7`) —
-// a sibling of terminalLinks.ts's URL provider, deliberately simpler: single
-// buffer row only (an agent's path output is short and rarely hard-wrapped),
-// and conservative — a token only links when it plainly names a FILE, because
+// a sibling of terminalLinks.ts's URL provider. It shares that module's
+// wrap-aware window builder (PATH_PROFILE), so a path a TUI hard-wraps across
+// rows (minimax's Plan Review box) links as ONE path, never as a truncated
+// first row or a wrong relative second row. Conservative — a token only links when it plainly names a FILE, because
 // an underline on every `a/b` in build output would be noise, and activating
 // one opens an editor pane. Existence is not checked here (the buffer can't
 // know); the editor panel reports a missing file itself.
@@ -19,6 +25,8 @@ export interface PathLink {
   path: string;
   line?: number;
   col?: number;
+  /** How many buffer rows this link's full match was reconstructed from. */
+  rowCount: number;
 }
 
 // Characters that end a token. Quotes/brackets are separators so
@@ -82,18 +90,15 @@ export function looksLikeFilePath(candidate: string): boolean {
   return ext !== null || isDotfile || isKnownBare;
 }
 
-/** Path links on buffer row `y` (0-indexed). */
+/** Path links on buffer row `y` (0-indexed), clipped to that row. */
 export function computePathLinksForRow(buf: LinkBufferSource, y: number): PathLink[] {
-  const line = buf.getLine(y);
-  if (!line) return [];
-  const text = line.translateToString(true);
+  const { text, segments } = buildWindow(buf, y, PATH_PROFILE);
   if (!text) return [];
 
   const links: PathLink[] = [];
-  TOKEN_RE.lastIndex = 0;
+  const tokenRe = new RegExp(TOKEN_RE.source, "g");
   let match: RegExpExecArray | null;
-  while ((match = TOKEN_RE.exec(text))) {
-    const startCol = match.index;
+  while ((match = tokenRe.exec(text))) {
     // Sentence punctuation after the token ("see src/a.ts." / "src/a.ts:")
     // is not part of it; a `:line` suffix ends in digits so it survives.
     const printed = match[0].replace(TRAILING_PUNCT_RE, "");
@@ -107,13 +112,17 @@ export function computePathLinksForRow(buf: LinkBufferSource, y: number): PathLi
       candidate = candidate.slice(0, suffix.index);
     }
     if (!looksLikeFilePath(candidate)) continue;
+    const rowRanges = mapOffsetsToRows(buf, segments, match.index, match.index + printed.length);
+    const forThisRow = rowRanges.find((r) => r.row === y);
+    if (!forThisRow) continue;
     links.push({
-      startCol,
-      endCol: startCol + printed.length,
+      startCol: forThisRow.startCol,
+      endCol: forThisRow.endCol,
       text: printed,
       path: candidate,
       line: lineNo,
       col: colNo,
+      rowCount: rowRanges.length,
     });
   }
   return links;
