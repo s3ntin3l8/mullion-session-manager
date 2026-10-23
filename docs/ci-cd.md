@@ -220,7 +220,8 @@ Both workspaces shard their test run, so **both** `test-merge` contexts are
 required — see the "Test sharding" note above for why dropping one is not
 safe.
 
-Verify the current contexts via:
+Verify the current contexts via (a repo-scoped PAT can read this endpoint; an
+App-installation token cannot — see Issue #1360 below):
 
 ```bash
 gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
