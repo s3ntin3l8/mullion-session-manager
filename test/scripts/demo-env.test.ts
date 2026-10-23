@@ -134,29 +134,30 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
     // itself — a stronger guarantee than comparing two copies could give.
     //
     // What still needs testing is the RULE itself, because every consumer
-    // now depends on it: the whole TABLE (not just the platforms that differ
-    // today, so a platform added to it is exercised), the default for a
-    // platform it does not list, and the Object.prototype-key case that is
-    // why the table is a Map and not a plain object.
-    expect(demoSunPathBytesByPlatform).toEqual(backendSunPathBytesByPlatform);
-    expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
-    for (const platform of backendSunPathBytesByPlatform.keys()) {
-      expect(demoMaxSunPathBytes(platform)).toBe(backendMaxSunPathBytes(platform));
-    }
-    // A platform the table does not list takes the default — and so does an
-    // arbitrary string that happens to name an Object.prototype key, which
-    // is why the tables are Maps and not plain objects.
-    const unlisted = "not-a-real-platform" as NodeJS.Platform;
-    expect(demoMaxSunPathBytes(unlisted)).toBe(backendMaxSunPathBytes(unlisted));
-    const prototypeKey = "constructor" as NodeJS.Platform;
-    expect(demoMaxSunPathBytes(prototypeKey)).toBe(backendMaxSunPathBytes(prototypeKey));
-    expect(backendMaxSunPathBytes(prototypeKey)).toBe(backendDefaultSunPathBytes);
+    // now depends on it: the platform limit, the default for a platform it
+    // does not list, and the Object.prototype-key case that is why the
+    // table is a Map and not a plain object.
+    //
     // The platform limit is the one the backend applies: 108 on Linux, 104 on
     // macOS. A demo that refused a path the backend would keep (or kept one
     // the backend would relocate) would disagree with the backend it is
     // demoing.
     expect(backendMaxSunPathBytes("linux")).toBe(108);
     expect(backendMaxSunPathBytes("darwin")).toBe(104);
+    // A platform the table does not list takes the default — and so does an
+    // arbitrary string that happens to name an Object.prototype key, which
+    // is why the tables are Maps and not plain objects.
+    const unlisted = "not-a-real-platform" as NodeJS.Platform;
+    expect(backendMaxSunPathBytes(unlisted)).toBe(backendDefaultSunPathBytes);
+    const prototypeKey = "constructor" as NodeJS.Platform;
+    expect(backendMaxSunPathBytes(prototypeKey)).toBe(backendDefaultSunPathBytes);
+    // And the demo's own export IS the shared function, not a copy of it —
+    // identity, not equality. Comparing the two tables used to be how the
+    // copy was kept honest; there is nothing left to compare, because there
+    // is one table.
+    expect(demoMaxSunPathBytes).toBe(backendMaxSunPathBytes);
+    expect(demoSunPathBytesByPlatform).toBe(backendSunPathBytesByPlatform);
+    expect(demoDefaultSunPathBytes).toBe(backendDefaultSunPathBytes);
     // Same for the socket name the guard counts against that limit: the
     // backend takes the max over every socket a sessions dir holds, so a
     // longer socket added there would leave the demo under-counting and

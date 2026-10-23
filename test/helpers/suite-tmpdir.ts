@@ -30,21 +30,28 @@ import { maxSunPathBytes } from "../../src/cli/sun-path.mjs";
 const TIGHTEST_PLATFORM = "darwin";
 
 /**
- * The deepest socket path the suite builds BENEATH its temp root: a temp dir
- * the test creates under os.tmpdir() (which global-setup points at the suite
- * root), plus the socket it binds inside it.
+ * The bytes the deepest socket path adds BELOW the suite's temp root: the
+ * path separator, plus the temp dir the test creates under the root, plus
+ * the socket it binds inside that.
  *
- * The deepest one the suite builds today is
- * "mullion-opencode-workflow-conventions-XXXXXX/mullion.sock"
- * (test/services/hook-adapters/opencode.test.ts) — 38 + 6 + 1 + 12 = 57
- * bytes. A test that builds a deeper socket path beneath the root has to
- * raise this constant, and the "deepest socket path fits" test in
+ * The separator is part of it. The root and the path below it are joined
+ * with one "/", so a root of N bytes and a relative path of 57 bytes make a
+ * socket path of N + 1 + 57 — counting only the relative path is how the
+ * budget came to be one byte too generous, which is the very window this
+ * rule exists to close.
+ *
+ * The deepest socket the suite actually BINDS today is
+ * "mullion-mcp-client-malformed-XXXXXX/hooks.sock"
+ * (test/mcp/client.test.ts:215) — 29 + 6 + 1 + 10 = 46 below the root, 47
+ * with the separator. (The opencode adapter's own suite puts a socket PATH
+ * into a context object; it opens no socket, so it is not a bound path.)
+ *
+ * A test that binds a deeper socket path beneath the root has to raise
+ * this constant, and the "deepest socket path fits" test in
  * suite-tmpdir.test.ts is what proves the two still agree.
  */
-export const SUITE_DEEPEST_SOCKET_PATH_BYTES = Buffer.byteLength(
-  path.join("mullion-opencode-workflow-conventions-XXXXXX", "mullion.sock"),
-  "utf8",
-);
+export const SUITE_DEEPEST_SOCKET_PATH_BYTES =
+  1 + Buffer.byteLength(path.join("mullion-mcp-client-malformed-XXXXXX", "hooks.sock"), "utf8");
 
 /**
  * The most bytes the suite's temp ROOT may take.

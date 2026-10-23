@@ -139,7 +139,10 @@ How this repo applies the conventions above — facts and commands, not rules.
   (the one `sessions.prompt` uses to frame input for the child's agent
   family), `getAdapterEmits`, `getAdapterInitialPromptArgs`/
   `adapterHasInitialPromptArgs`, `getAdapterResumeSessionArgs`/
-  `adapterHasResumeSessionArgs`, and `getAdapterDelegationHint` — used by callers
+  `adapterHasResumeSessionArgs`, and `getAdapterDelegationHint` — and the
+  seam they all go through, `applyHookAdapters` (the entry point that
+  matches a command to its adapter and applies that adapter's transform) —
+  used by callers
   like `task-claim.ts`, `task-reconciler.ts`, and `routes/sessions.ts` to
   branch on a command's agent family, inject a model flag, or decide whether
   a real first-turn prompt can be delivered, rather than re-deriving that

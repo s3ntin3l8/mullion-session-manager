@@ -51,14 +51,48 @@ describe("createSuiteTmpDir", () => {
     made.push(longBase);
     const suite = createSuiteTmpDir(longBase);
     made.push(suite);
-    // The deepest socket path the suite builds beneath its root today — the
+    // The deepest socket path the suite binds beneath its root today — the
     // one SUITE_DEEPEST_SOCKET_PATH_BYTES names. If a test grows a deeper
     // one, this is the test that says so.
-    const deepest = path.join(
-      suite,
-      "mullion-opencode-workflow-conventions-XXXXXX",
-      "mullion.sock",
+    const deepest = path.join(suite, "mullion-mcp-client-malformed-XXXXXX", "hooks.sock");
+    expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
+  });
+
+  it("leaves room for the deepest socket path at the LONGEST root it allows", () => {
+    // The case the derivation can get wrong: the budget is a bound on the
+    // ROOT, and the socket path is the root JOINED to the path below it. A
+    // budget derived from the path below the root alone forgets the
+    // separator, and the error only shows at a root of exactly the maximum
+    // length — which is why the /tmp-fallback case above cannot catch it.
+    //
+    // So build a base whose projected root is EXACTLY the budget, and check
+    // the deepest socket path still fits.
+    const prefix = "mullion-test-suite-";
+    const mkdtempSuffixBytes = 6;
+    // byteLength(base) + separator + prefix + mkdtemp suffix == the budget.
+    const wantBaseBytes =
+      SUITE_TMP_MAX_BYTES - 1 - Buffer.byteLength(prefix, "utf8") - mkdtempSuffixBytes;
+    // A SHORT base root, not os.tmpdir(): global-setup points os.tmpdir() at
+    // the suite's own temp root, which is already most of the budget, so a
+    // base built under it could not be long enough to reach the maximum.
+    const baseRoot = "/tmp";
+    const nameBytes = wantBaseBytes - Buffer.byteLength(baseRoot, "utf8") - 1;
+    const base = path.join(baseRoot, "b".repeat(Math.max(nameBytes, 1)));
+    fs.mkdirSync(base, { recursive: true });
+    made.push(base);
+    // The base really is the length the budget is derived against.
+    expect(Buffer.byteLength(path.join(base, prefix)) + mkdtempSuffixBytes).toBe(
+      SUITE_TMP_MAX_BYTES,
     );
+
+    const suite = createSuiteTmpDir(base);
+    made.push(suite);
+    // The root really is at the maximum the budget allows — and it was NOT
+    // the /tmp fallback (which is short and would hide the arithmetic).
+    expect(path.dirname(suite)).toBe(base);
+    expect(Buffer.byteLength(suite)).toBe(SUITE_TMP_MAX_BYTES);
+    // And the deepest socket path beneath it still fits macOS's sun_path.
+    const deepest = path.join(suite, "mullion-mcp-client-malformed-XXXXXX", "hooks.sock");
     expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
   });
 
