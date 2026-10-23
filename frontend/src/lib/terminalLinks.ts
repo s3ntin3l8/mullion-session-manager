@@ -113,7 +113,7 @@
 // chooses not to click.
 //
 // The same window builder also serves file-path links
-// (terminalPathLinks.ts) through `PATH_PROFILE`: only the token-shape checks
+// (terminalPathLinks.ts) through its own `WrapTokenProfile`: only the token-shape checks
 // differ, the edge/corroboration safety check is shared.
 //
 // Depends only on this narrow structural slice of xterm's buffer API (not
@@ -357,21 +357,6 @@ const URL_PROFILE: WrapTokenProfile = {
     // strong evidence, and the module header for the accepted exposure).
     return MID_TOKEN_BREAK_RE.test(producerStripped) && SOFT_STRUCTURAL_CHAR_RE.test(prefix);
   },
-};
-
-// File paths (terminalPathLinks.ts): the producer row must already END in a
-// path-shaped token — otherwise prose followed by a path on the next row
-// ("see the docs at" / "src/a.ts") would glue the last word onto it — and
-// the continuation must itself carry a `/` or an extension dot.
-const PATH_MIDDLE_CHAR_RE = /[^\s"'`()<>[\]{},;|*?$=\\│┃║▏▕]/;
-const PATH_NEW_TOKEN_RE = /^(?:~\/|\/|\.{1,2}\/)/;
-const PATH_PRODUCER_TAIL_RE = /\S*\/\S*$/;
-
-export const PATH_PROFILE: WrapTokenProfile = {
-  middleCharRe: PATH_MIDDLE_CHAR_RE,
-  startsNewToken: (body) => PATH_NEW_TOKEN_RE.test(body),
-  admits: (producerStripped, prefix) =>
-    PATH_PRODUCER_TAIL_RE.test(producerStripped) && /\/|\.\w/.test(prefix),
 };
 
 interface ExtendCheck {

@@ -172,4 +172,22 @@ describe("computePathLinksForRow across wrapped rows", () => {
       rowCount: 2,
     });
   });
+
+  it("keeps a list of complete paths separate at a normal width", () => {
+    const buf = wrapped(120, ["  • artifacts/plan.md", "  • src/terminalLinks.ts"]);
+    expect(computePathLinksForRow(buf, 0)).toMatchObject([
+      { path: "artifacts/plan.md", rowCount: 1 },
+    ]);
+    expect(computePathLinksForRow(buf, 1)).toMatchObject([
+      { path: "src/terminalLinks.ts", rowCount: 1 },
+    ]);
+  });
+
+  it("joins via a corroborating neighbour row when the margin is far away", () => {
+    // An inset panel: a nearby row's edge lands just past this row's edge.
+    const neighbour = "x".repeat(row1.length + 1);
+    const buf = wrapped(200, [row1, row2, neighbour]);
+    expect(computePathLinksForRow(buf, 0)[0]).toMatchObject({ path: FULL, rowCount: 2 });
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ path: FULL, rowCount: 2 });
+  });
 });

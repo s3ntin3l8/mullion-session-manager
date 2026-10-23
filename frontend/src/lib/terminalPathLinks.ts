@@ -1,8 +1,8 @@
 import {
   buildWindow,
   mapOffsetsToRows,
-  PATH_PROFILE,
   type LinkBufferSource,
+  type WrapTokenProfile,
 } from "./terminalLinks.js";
 
 // Terminal links for file PATHS (`src/foo.ts`, `./.env`, `src/foo.ts:42:7`) —
@@ -31,7 +31,7 @@ export interface PathLink {
 
 // Characters that end a token. Quotes/brackets are separators so
 // `"src/a.ts"` and `(src/a.ts:3)` link just the path.
-const TOKEN_RE = /[^\s"'`()<>[\]{},;|*?$=\\]+/g;
+const TOKEN_RE = /[^\s"'`()<>[\]{},;|*?$=\\]+/;
 const SUFFIX_RE = /:(\d+)(?::(\d+))?$/;
 const TRAILING_PUNCT_RE = /[.:!]+$/;
 
@@ -90,27 +90,61 @@ export function looksLikeFilePath(candidate: string): boolean {
   return ext !== null || isDotfile || isKnownBare;
 }
 
+interface SplitToken {
+  /** The token as printed, minus trailing sentence punctuation. */
+  printed: string;
+  /** The path part only (`:line[:col]` suffix removed). */
+  candidate: string;
+  lineNo?: number;
+  colNo?: number;
+}
+
+function splitToken(raw: string): SplitToken {
+  // Sentence punctuation after the token ("see src/a.ts." / "src/a.ts:")
+  // is not part of it; a `:line` suffix ends in digits so it survives.
+  const printed = raw.replace(TRAILING_PUNCT_RE, "");
+  const suffix = SUFFIX_RE.exec(printed);
+  if (!suffix) return { printed, candidate: printed };
+  return {
+    printed,
+    candidate: printed.slice(0, suffix.index),
+    lineNo: Number(suffix[1]),
+    colNo: suffix[2] ? Number(suffix[2]) : undefined,
+  };
+}
+
+// Wrap profile for the shared window builder (terminalLinks.ts). Lives here,
+// not there, because it needs `looksLikeFilePath`. The producer row must END
+// in a path-shaped token that is NOT already a complete file path —
+// otherwise prose followed by a path ("see the docs at" / "src/a.ts") would
+// glue the last word onto it, and so would a list of complete paths
+// ("• artifacts/plan.md" / "• src/a.ts" → one wrong link). The continuation
+// must itself carry a `/` or an extension dot, and must not open a new path.
+const PATH_MIDDLE_CHAR_RE = /[^\s"'`()<>[\]{},;|*?$=\\│┃║▏▕]/;
+const PATH_NEW_TOKEN_RE = /^(?:~\/|\/|\.{1,2}\/)/;
+const PATH_PRODUCER_TAIL_RE = /\S*\/\S*$/;
+
+export const PATH_PROFILE: WrapTokenProfile = {
+  middleCharRe: PATH_MIDDLE_CHAR_RE,
+  startsNewToken: (body) => PATH_NEW_TOKEN_RE.test(body),
+  admits(producerStripped, prefix) {
+    const tail = PATH_PRODUCER_TAIL_RE.exec(producerStripped);
+    if (!tail) return false;
+    if (looksLikeFilePath(splitToken(tail[0]).candidate)) return false;
+    return /\/|\.\w/.test(prefix);
+  },
+};
+
 /** Path links on buffer row `y` (0-indexed), clipped to that row. */
 export function computePathLinksForRow(buf: LinkBufferSource, y: number): PathLink[] {
   const { text, segments } = buildWindow(buf, y, PATH_PROFILE);
   if (!text) return [];
 
   const links: PathLink[] = [];
-  const tokenRe = new RegExp(TOKEN_RE.source, "g");
+  const tokenRe = new RegExp(TOKEN_RE.source, "g"); // fresh `lastIndex` per call
   let match: RegExpExecArray | null;
   while ((match = tokenRe.exec(text))) {
-    // Sentence punctuation after the token ("see src/a.ts." / "src/a.ts:")
-    // is not part of it; a `:line` suffix ends in digits so it survives.
-    const printed = match[0].replace(TRAILING_PUNCT_RE, "");
-    let candidate = printed;
-    let lineNo: number | undefined;
-    let colNo: number | undefined;
-    const suffix = SUFFIX_RE.exec(candidate);
-    if (suffix) {
-      lineNo = Number(suffix[1]);
-      colNo = suffix[2] ? Number(suffix[2]) : undefined;
-      candidate = candidate.slice(0, suffix.index);
-    }
+    const { printed, candidate, lineNo, colNo } = splitToken(match[0]);
     if (!looksLikeFilePath(candidate)) continue;
     const rowRanges = mapOffsetsToRows(buf, segments, match.index, match.index + printed.length);
     const forThisRow = rowRanges.find((r) => r.row === y);
