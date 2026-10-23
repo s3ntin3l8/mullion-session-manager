@@ -48,7 +48,18 @@ function gh(args) {
 }
 
 /** The PR fields this script reads. */
-const PR_FIELDS = ["number", "headRefName", "mergeable", "mergeStateStatus", "statusCheckRollup"];
+const PR_FIELDS = [
+  "number",
+  "headRefName",
+  "mergeable",
+  "mergeStateStatus",
+  "statusCheckRollup",
+  // Why the PR is blocked is not always a check: GitHub uses the same
+  // BLOCKED state for an unmet review requirement, for UNRESOLVED
+  // REQUIRED CONVERSATIONS, and for a required check that never got
+  // scheduled. reviewDecision names the first of those.
+  "reviewDecision",
+];
 
 export function readPr(prNumber) {
   const args = ["pr", "view", prNumber, "--json", PR_FIELDS.join(",")];
@@ -149,7 +160,12 @@ export function mergeReadiness(pr) {
     // already caught above, by the rollup itself.
     return {
       action: "wait",
-      reason: "a required check has not reported on this head yet",
+      reason:
+        `blocked, and no check has failed — review decision is ` +
+        `"${pr.reviewDecision ?? "unknown"}". This state also covers ` +
+        `unresolved required conversations and a required check that never ` +
+        `got scheduled, so a wait here is not necessarily a check that has ` +
+        `not reported.`,
     };
   }
 

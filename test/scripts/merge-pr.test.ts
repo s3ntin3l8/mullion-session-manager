@@ -343,3 +343,22 @@ describe("mergeReadiness — a head whose checks have not reported yet", () => {
     expect(readiness.action).toBe("stop");
   });
 });
+
+describe("mergeReadiness — naming why a PR is blocked", () => {
+  it("names the review decision, so a blocked wait is diagnosable", () => {
+    // BLOCKED is not only about checks: it also covers an unmet review
+    // requirement and UNRESOLVED REQUIRED CONVERSATIONS. A wait that
+    // cannot say which one it is waiting for costs the whole timeout.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "REVIEW_REQUIRED",
+    });
+    expect(readiness.action).toBe("wait");
+    expect(readiness.reason).toContain("REVIEW_REQUIRED");
+    expect(readiness.reason).toMatch(/unresolved required conversations/i);
+  });
+});
