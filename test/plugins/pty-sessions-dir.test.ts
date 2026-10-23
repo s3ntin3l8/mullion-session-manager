@@ -493,6 +493,10 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     process.env.HOME = unwritable;
     process.env.SESSIONS_DIR = configured;
     try {
+      // A bare Fastify rather than buildApp(): the warning is emitted while
+      // the pty plugin REGISTERS, so the spy has to be in place before that —
+      // and registering the three plugins by hand keeps the test light (no
+      // server, no control socket) while still booting the real plugin.
       const app = Fastify({ logger: { level: "warn" } });
       const warn = vi.spyOn(app.log, "warn");
       await app.register(envPlugin);
@@ -503,7 +507,12 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
         /fallback root unusable/.test(String(call[1])),
       );
       expect(reported.length).toBeGreaterThan(0);
-      expect(reported[0]?.[0]).toMatchObject({ root: expect.stringContaining("ms-") });
+      // WHICH root was skipped (not the last resort, which was used) and WHY
+      // — root alone does not tell an operator why the sessions moved.
+      expect(reported[0]?.[0]).toMatchObject({
+        root: path.join(unwritable, ".mullion", "sessions", `ms-${hash}`),
+        reason: expect.stringMatching(/EACCES|permission denied/i),
+      });
       await app.close();
     } finally {
       if (prevHome === undefined) delete process.env.HOME;
