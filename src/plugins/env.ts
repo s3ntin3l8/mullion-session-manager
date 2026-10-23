@@ -440,7 +440,7 @@ export const schema = {
       default: "s3ntin3l8/mullion-session-manager",
     },
     // Explicit override for the systemd --user unit self-update.sh restarts
-    // (src/routes/updates.ts, src/services/systemd-unit.ts). Empty (the
+    // (src/routes/updates.ts, src/services/service-unit.ts). Empty (the
     // default) means "autodetect": resolve it from this process's own
     // /proc/self/cgroup at apply time, falling back to
     // resolveServiceUnit's DEFAULT_SERVICE_UNIT if that fails. Set this only
@@ -448,6 +448,12 @@ export const schema = {
     // deploy/install.sh install (or a rename of that unit) needs no override,
     // since detection reads whatever unit is actually running.
     MULLION_SERVICE_UNIT: {
+      // The service this instance runs as, for the self-update's restart
+      // step: a systemd --user unit name on Linux, a launchd agent LABEL
+      // on macOS (issue #1718). Empty means "detect it" — from
+      // /proc/self/cgroup on Linux, from the role on macOS (see
+      // src/services/service-unit.ts). The installer writes it into the
+      // service definition, so a renamed service still restarts correctly.
       type: "string",
       default: "",
     },

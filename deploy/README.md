@@ -27,6 +27,18 @@ applied by anything in this repo or its CI. `install.sh` and
 - `mullion-agent.service` — the agent-role equivalent, installed by
   `install.sh --role agent`; identical binary, `MULLION_ROLE=agent` in its
   `.env` instead.
+- `launchd/com.mullion.primary.plist`, `launchd/com.mullion.agent.plist` —
+  the macOS counterparts of the two systemd units (issue #1718, roadmap 8.4).
+  `install.sh` writes a copy with the `CHANGEME` placeholders substituted
+  into `~/Library/LaunchAgents/` and loads it with `launchctl bootstrap`.
+- `scripts/run-with-env.sh` — the launcher the plists run: it sources the
+  install's `.env` and `exec`s node, which is the launchd analogue of the
+  systemd unit's `EnvironmentFile=` + `ExecStart=` pair (launchd has no
+  `EnvironmentFile`, and inlining the `.env` into the plist would freeze it
+  at install time). It lives under `scripts/` because it ships inside every
+  release tarball, so the installed job points at
+  `<install root>/current/scripts/run-with-env.sh` and keeps working across
+  updates.
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port. Also includes a commented-out webhook
   router for GitHub webhook delivery — see
@@ -119,8 +131,18 @@ Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only
 at install/update time, to compile `better-sqlite3`/`node-pty`'s native
 bindings against this host's exact Node build — a C build toolchain
 (`python3 make g++`). `install.sh` checks for `node`, `npm`, `dtach`,
-`systemd-run`, `systemctl`, `curl`, `tar`, `timeout`, and `sha256sum` up
-front and fails fast with a clear message if any are missing.
+`systemd-run`, `systemctl`, `curl`, and `tar` up front and fails fast with a
+clear message if any are missing.
+
+**On macOS** (issue #1718, roadmap 8.4) the systemd requirements do not
+apply: the job is a **launchd agent**, so `install.sh` checks for `launchctl`
+instead of `systemd-run`/`systemctl`, and `dtach` stays required (the macOS
+scope backend runs `dtach -n` — see
+[`docs/multi-host.md`](../docs/multi-host.md)). No GNU coreutils are needed
+either: the checksum verification, the command timeout, and the release
+pruning all use the portable spellings in `scripts/portable.sh` (`shasum -a
+256`, a background watchdog, a numeric version sort), so a stock Mac works
+without `brew install coreutils`.
 
 **`bwrap` (bubblewrap) — OPTIONAL (issue #1081):** not checked as a hard
 requirement, unlike the binaries above. When `bwrap` is present AND
@@ -568,7 +590,50 @@ If you run inside containers, test scratchpads, or manage the systemd service in
 ./deploy/install.sh --no-systemd ~/opt/mullion
 ```
 
-This installs the release package, node_modules, and `.env`, but skips writing `~/.config/systemd/user/` and invoking `systemctl`.
+This installs the release package, node_modules, and `.env`, but skips writing `~/.config/systemd/user/` and invoking `systemctl`. On macOS the same flag skips writing `~/Library/LaunchAgents/` and invoking `launchctl`.
+
+## macOS: the launchd deployment (issue #1718 / roadmap 8.4)
+
+On macOS the app runs as a **launchd agent** instead of a `systemd --user`
+unit. The install is the same command as on Linux — `install.sh` detects the
+platform:
+
+```sh
+./deploy/install.sh --role primary ~/opt/mullion      # primary
+./deploy/install.sh --role agent   ~/opt/mullion      # agent
+```
+
+What changes:
+
+- **The job.** `~/Library/LaunchAgents/com.mullion.<role>.plist` is written
+  (from `deploy/launchd/*.plist`) and loaded with `launchctl bootstrap
+gui/$UID <plist>` + `launchctl enable`. The other role's job is booted out
+  first — both roles load the same `.env` and bind the same port.
+- **The `.env`.** launchd has no `EnvironmentFile`, so the plist runs
+  `deploy/launchd/run-with-env.sh`, which sources the install's `.env` and
+  `exec`s node. Your `.env` stays live-editable: edit it and restart the job.
+- **The label.** `com.mullion.primary` / `com.mullion.agent` is what the
+  self-update restarts. It is written into the job's `MULLION_SERVICE_UNIT`,
+  so renaming the job does not need a script edit.
+- **Logs.** `<install root>/logs/com.mullion.<role>.{out,err}.log` — the
+  launchd analogue of the journal (`journalctl --user -u mullion.service -f`).
+- **Updates.** The in-app "Update now" button works the same way: the updater
+  runs as its own **one-shot launchd job** (the app's own job is killed by
+  the restart the update triggers, so the updater cannot be a child of it),
+  and finishes with `launchctl kickstart -k gui/$UID/<label>`.
+
+**The one property to know about:** the plists set `AbandonProcessGroup`.
+launchd otherwise SIGTERMs "all child processes of the job" when the job
+stops, which would take every live `dtach` master — and with it every live
+session — down on each restart. With the key set, the session masters survive
+their parent, exactly as they do on Linux (where they live in their own
+transient systemd scopes).
+
+`scripts/macos-launchd-check.sh` validates the parts of this a Mac can check
+without an install: that the plists are valid property lists, that they carry
+the keys above, that the installer refuses cleanly without `launchctl`, and —
+the load-bearing one — that a `dtach` master really does survive its launchd
+job being stopped.
 
 ## Automating agent deploys (issue #245 / roadmap 7.1 + 7.7)
 

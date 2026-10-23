@@ -152,6 +152,12 @@ describeOnLinux("scripts/self-update.sh", () => {
     return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
   }
 
+  function readLaunchctlLog(): string[] {
+    const p = path.join(binDir, "launchctl.log");
+    if (!fs.existsSync(p)) return [];
+    return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
+  }
+
   function runScript(opts: {
     version: string;
     assetUrl: string;
@@ -176,6 +182,49 @@ describeOnLinux("scripts/self-update.sh", () => {
       },
     );
   }
+
+  // The macOS restart (issue #1718): launchctl kickstart replaces
+  // systemctl --user restart, and the one-shot update job boots itself out
+  // afterwards.
+  it("restarts through launchctl on macOS, and never through systemctl", async () => {
+    writeShim(
+      binDir,
+      "launchctl",
+      `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+exit 0
+`,
+    );
+    // The platform detection goes through `uname -s`.
+    writeShim(
+      binDir,
+      "uname",
+      `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
+`,
+    );
+    const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
+
+    await runScript({
+      version: "9.9.9",
+      assetUrl: `file://${tarballPath}`,
+      checksumUrl: `file://${checksumPath}`,
+      unitName: "com.mullion.primary",
+    });
+
+    const launchctlLog = readLaunchctlLog();
+    expect(launchctlLog).toContainEqual(
+      `kickstart -k gui/${process.getuid?.() ?? 501}/com.mullion.primary`,
+    );
+    // The job removes its own plist and boots itself out.
+    expect(launchctlLog.some((line) => line.includes("bootout"))).toBe(true);
+    expect(fs.existsSync(path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist"))).toBe(
+      false,
+    );
+    // ...and systemctl was never involved.
+    expect(readSystemctlLog().some((line) => line.includes("restart"))).toBe(false);
+  });
 
   it("downloads, verifies, installs, and flips current on a successful update", async () => {
     const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");

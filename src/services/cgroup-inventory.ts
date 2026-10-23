@@ -34,7 +34,7 @@ export function parseCgroupProcs(contents: string): number[] {
  * parens (a process can rename itself to arbitrary bytes), so both fields
  * must be located from the *last* ')' rather than by naive
  * whitespace-splitting the whole line — mirrors the same leaf-vs-ancestor
- * caution as systemd-unit.ts's SERVICE_LEAF_PATTERN.
+ * caution as service-unit.ts's SERVICE_LEAF_PATTERN.
  */
 export function parseStat(statContents: string): { comm: string; ppid: number } | null {
   const openParen = statContents.indexOf("(");

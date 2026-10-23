@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent — the macOS counterpart of deploy/mullion.service (issue
+  #1718, roadmap 8.4). NOT INSTALLED BY ANYTHING IN THIS REPO DIRECTLY —
+  deploy/install.sh writes a copy of this file with the CHANGEME
+  placeholders below substituted for real paths, then installs it. To do so
+  by hand instead:
+    mkdir -p ~/Library/LaunchAgents
+    cp deploy/launchd/com.mullion.primary.plist ~/Library/LaunchAgents/
+    # edit the placeholders below first — see deploy/README.md
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mullion.primary.plist
+    launchctl enable gui/$(id -u)/com.mullion.primary
+
+  The role's env (MULLION_ROLE, the frontend and the auth vars) lives in the
+  install's .env, which the launcher script sources on every start — the
+  launchd analogue of the systemd unit's EnvironmentFile=. Keeping it in the
+  .env (rather than inlining it here) is what lets an operator edit it
+  without re-installing. The launcher itself ships inside every release
+  tarball (scripts/run-with-env.sh), so the installed job points at
+  <install root>/current/scripts/run-with-env.sh and survives updates.
+
+  AbandonProcessGroup is LOAD-BEARING: launchd normally SIGTERMs "all
+  child processes of the job" when the job stops, which would take every
+  live dtach master — and with it every live session — down on each app
+  restart, including the self-update's own restart. Setting it stops that
+  propagation and lets the child processes survive their parent, which is
+  the same property the systemd unit gets from KillMode=control-group plus
+  the dtach masters being bootstrapped into their own transient scope.
+
+  WorkingDirectory MUST be the versioned-release layout's `current` symlink
+  (see deploy/install.sh), not the install root itself: DATABASE_URL and
+  SESSIONS_DIR in .env are absolute paths outside any release (so an update
+  never orphans the DB or live dtach sockets — see deploy/README.md), but
+  drizzle/ and FRONTEND_DIST are resolved relative to this cwd
+  deliberately, so they always come from whichever release `current`
+  currently points at.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mullion.primary</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>CHANGEME_LAUNCHER</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>CHANGEME_WORKING_DIRECTORY</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MULLION_HOME</key>
+    <string>CHANGEME_HOME</string>
+    <key>MULLION_NODE_BIN</key>
+    <string>CHANGEME_NODE</string>
+    <!-- The launchd analogue of the systemd unit's Environment=MULLION_SERVICE_UNIT=%n:
+         the update path reads this to learn which job to restart. On Linux the
+         same variable carries the systemd unit's name. -->
+    <key>MULLION_SERVICE_UNIT</key>
+    <string>com.mullion.primary</string>
+    <key>MULLION_ROLE</key>
+    <string>primary</string>
+  </dict>
+
+  <!-- Start at login. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- The restart-on-failure equivalent of the systemd unit's
+       Restart=on-failure + RestartSec=2: restart only when the job exits
+       non-zero, and not more often than every 2 seconds. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>2</integer>
+
+  <!-- Keep the dtach masters (and their live sessions) alive when this job
+       is stopped. See the comment at the top of this file. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>CHANGEME_LOG_DIR/com.mullion.primary.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>CHANGEME_LOG_DIR/com.mullion.primary.err.log</string>
+</dict>
+</plist>
