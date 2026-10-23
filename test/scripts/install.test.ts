@@ -580,8 +580,10 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
       const plist = fs.readFileSync(plistPath, "utf8");
       // The plist's own header comment mentions the CHANGEME placeholders
       // (like the systemd unit's header comment mentions its own) — the
-      // assertion is about the VALUES, so the comment is stripped first.
-      const withoutComments = plist.replace(/<!--[\s\S]*?-->/g, "");
+      // assertion is about the VALUES, so the comment is stripped first. The
+      // comment is the file's FIRST element, so everything after its closing
+      // "-->" is the part under test.
+      const withoutComments = plist.slice(plist.indexOf("-->") + 3);
       expect(withoutComments).not.toContain("CHANGEME");
 
       const homeReal = fs.realpathSync(mullionHome);
@@ -652,7 +654,7 @@ exit 0
       });
       const plistPath = path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.agent.plist");
       const plist = fs.readFileSync(plistPath, "utf8");
-      expect(plist.replace(/<!--[\s\S]*?-->/g, "")).not.toContain("CHANGEME");
+      expect(plist.slice(plist.indexOf("-->") + 3)).not.toContain("CHANGEME");
       expect(plist).toContain("com.mullion.agent");
       expect(plist).toContain("<string>agent</string>");
     });

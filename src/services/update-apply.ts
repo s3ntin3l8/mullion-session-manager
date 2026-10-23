@@ -134,6 +134,18 @@ export function spawnSelfUpdate(
   }
 
   const { version, assetUrl, checksumUrl } = body;
+  // The version ends up in a FILENAME (the launchd update job's plist) and in
+  // a launchd LABEL, so it is validated here rather than trusted from the
+  // route's schema alone: the routes already constrain it, and this keeps the
+  // guarantee where the path is actually built (defence in depth for a
+  // caller that reaches this function another way).
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    return {
+      ok: false,
+      status: 400,
+      message: `invalid version "${version}" — expected MAJOR.MINOR.PATCH`,
+    };
+  }
   // Ships inside every release tarball — always invoke *this running
   // release's own* copy (current/scripts/self-update.sh), not some other
   // version's, so the update logic in flight matches the app that decided

@@ -132,6 +132,27 @@ describe("spawnSelfUpdate", () => {
     }
   });
 
+  it("refuses a version that is not MAJOR.MINOR.PATCH", () => {
+    // The version ends up in a FILENAME (the update job's plist) and in a
+    // launchd LABEL, so it is validated where the path is built rather than
+    // trusted from the route's schema alone.
+    setPlatform("darwin");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-version-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "../../etc/passwd",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(spawnCalls).toHaveLength(0);
+      expect(fs.existsSync(path.join(home, "logs"))).toBe(false);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("refuses when MULLION_HOME is not configured", () => {
     setPlatform("darwin");
     const result = spawnSelfUpdate(fakeApp({ MULLION_HOME: "  " }), {
