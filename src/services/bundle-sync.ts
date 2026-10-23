@@ -53,6 +53,7 @@ import {
   removeAgyMcpMullionEntry,
 } from "./hook-adapters/agy.js";
 import { resolveOpenCodeConfigHome } from "./hook-adapters/opencode-skills.js";
+import { resolveMcodeGlobalSkillsDir, removeMcodePlugin } from "./hook-adapters/mcode.js";
 import {
   resolveMullionBundleDir,
   collectBundleFiles,
@@ -68,7 +69,7 @@ import {
   INSTALLED_MARKER_CONTENT,
 } from "./hook-adapters/mullion-bundle.js";
 
-export type BundleSyncCli = "claude-code" | "codex" | "agy" | "opencode";
+export type BundleSyncCli = "claude-code" | "codex" | "agy" | "opencode" | "mcode";
 
 // Exported (issue #944) — getBundleSyncStatus's per-CLI rows below expose
 // entry-level detail (count, staleness) that a status-surface caller needs
@@ -226,6 +227,12 @@ const SKILL_TARGETS: SkillTarget[] = [
   { cli: "codex", root: () => resolveCodexAgentsSkillsDir() },
   { cli: "agy", root: () => resolveAgyGlobalSkillsDir() },
   { cli: "opencode", root: () => path.join(resolveOpenCodeConfigHome(), "skills") },
+  // Issue: mcode support — mcode's own always-scanned user skills root is
+  // `<dataDir>/skills` (mcode also reads ~/.claude/skills, ~/.codex/skills
+  // and ~/.agents/skills, but those are opt-in behind mcode's
+  // `skills.external.enabled`, so the mcode-native root is the one Mullion
+  // can install into and KNOW mcode will read).
+  { cli: "mcode", root: () => resolveMcodeGlobalSkillsDir() },
 ];
 
 interface AgentTarget {
@@ -759,6 +766,22 @@ export function uninstallBundleContent(): Promise<BundleContentRemovalResult> {
       legacySwept += uninstallBundleSkills(target.root());
     }
     if (removeAgyMcpMullionEntry()) legacySwept++;
+    // Issue: mcode support — Mullion's mcode integration is a HOST-GLOBAL
+    // plugin (~/.minimax/plugins/mullion/) plus a host-stable shim script,
+    // because mcode retired standalone user hooks (custom hooks must belong
+    // to a Plugin) and its plugin directory has no per-session overlay.
+    // Removing it belongs here for the same reason removeAgyMcpMullionEntry
+    // does — it is Mullion's own integration content on the host, and
+    // `mullion bundle remove` is the operator-facing "undo Mullion's
+    // host-global writes" action.
+    //
+    // removeMcodePlugin only removes what carries Mullion's ownership
+    // marker, so a user-authored plugin of the same name is left alone.
+    try {
+      removeMcodePlugin();
+    } catch {
+      // Best-effort — a failed removal must never break an uninstall.
+    }
     return { removed, legacySwept };
   });
 }
@@ -925,7 +948,7 @@ export interface BundleSyncStatusReport {
   clis: BundleSyncCliStatus[];
 }
 
-const STATUS_CLI_ORDER: readonly BundleSyncCli[] = ["claude-code", "codex", "agy", "opencode"];
+const STATUS_CLI_ORDER: readonly BundleSyncCli[] = ["claude-code", "codex", "agy", "opencode", "mcode"];
 
 /** Every manifest entry under `root` (prefix-matched, same convention as
  * isBundleSyncedFor) whose `kind` matches — the shared building block for

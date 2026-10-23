@@ -540,6 +540,9 @@ export interface AppSettings {
   };
   codex: { defaultModel: string | null; reviewerModel: string | null };
   agy: { defaultModel: string | null; reviewerModel: string | null };
+  // Issue: mcode support — mcode takes `-m <provider/model>`, the same shape
+  // the other CLI-model agents take.
+  mcode: { defaultModel: string | null; reviewerModel: string | null };
   taskMaster: {
     autoClaimPaused: boolean;
     // GitHub logins trusted in addition to OWNER/MEMBER/COLLABORATOR
@@ -681,6 +684,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
   codex: { defaultModel: null, reviewerModel: null },
   agy: { defaultModel: null, reviewerModel: null },
+  mcode: { defaultModel: null, reviewerModel: null },
   notifications: {
     channels: {
       browser: true,

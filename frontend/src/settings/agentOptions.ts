@@ -13,6 +13,10 @@ export const AGENT_OPTIONS = [
   // even though agent-detect.ts's KNOWN_AGENTS and its own hook adapter have
   // supported it since PR #301.
   { value: "agy", label: "Antigravity" },
+  // Issue: mcode support — MiniMax Code's CLI binary is `mcode`, and it has
+  // its own hook adapter (hook-adapters/mcode.ts), so it reaches the same
+  // hook-confirmed statuses the other instrumented agents do.
+  { value: "mcode", label: "MiniMax Code" },
 ];
 
 // Review-agent pickers additionally offer "none" — the explicit "no review

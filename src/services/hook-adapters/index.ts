@@ -6,6 +6,7 @@ import { claudeCodeAdapter } from "./claude-code.js";
 import { openCodeAdapter } from "./opencode.js";
 import { codexAdapter } from "./codex.js";
 import { agyAdapter } from "./agy.js";
+import { mcodeAdapter } from "./mcode.js";
 
 export type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
@@ -16,7 +17,17 @@ export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
 // matters in that the first match wins — each adapter's `matches()` is
 // conservative enough that two adapters matching the same command is not
 // expected to happen in practice.
-const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter, openCodeAdapter, codexAdapter, agyAdapter];
+//
+// Issue: mcode support — mcode (MiniMax Code) is added last. Its `matches()`
+// is anchored to the program token `mcode` and it never matches any of the
+// other four agents' binaries, so ordering is irrelevant for it in practice.
+const ADAPTERS: HookAgentAdapter[] = [
+  claudeCodeAdapter,
+  openCodeAdapter,
+  codexAdapter,
+  agyAdapter,
+  mcodeAdapter,
+];
 
 export interface AppliedHooks {
   /** The command to actually spawn — unchanged unless an adapter's
@@ -171,7 +182,7 @@ export function commandIsOpencode(command: string): boolean {
   return adapter === openCodeAdapter;
 }
 
-export type ModelInjectingCli = "claude-code" | "codex" | "agy";
+export type ModelInjectingCli = "claude-code" | "codex" | "agy" | "mcode";
 
 /**
  * Which non-opencode CLI (if any) `command` resolves to, for the CLIs whose
@@ -183,6 +194,8 @@ export function commandModelCli(command: string): ModelInjectingCli | null {
   if (adapter === claudeCodeAdapter) return "claude-code";
   if (adapter === codexAdapter) return "codex";
   if (adapter === agyAdapter) return "agy";
+  // Issue: mcode support — mcode takes `-m <provider/model>` too.
+  if (adapter === mcodeAdapter) return "mcode";
   return null;
 }
 

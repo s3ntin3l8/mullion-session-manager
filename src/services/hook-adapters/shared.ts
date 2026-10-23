@@ -27,7 +27,7 @@ import { fileURLToPath } from "node:url";
 // Fastify app instance in scope. Dev checkouts (`make dev`) and any
 // non-versioned install never set MULLION_HOME, so they keep today's
 // import.meta.url resolution unchanged.
-function resolveHooksDir(): string {
+export function resolveHooksDir(): string {
   const mullionHome = process.env.MULLION_HOME?.trim();
   if (mullionHome) {
     return path.join(mullionHome, "current", "dist", "hooks");

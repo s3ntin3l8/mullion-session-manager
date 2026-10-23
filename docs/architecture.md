@@ -149,8 +149,8 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   with and verifying signed requests from its primary. `bundle-sync` is the
   one plugin that runs on both roles (issue #941 — a boot-time `onReady`
   hook, registered on both the primary and an `agent`-role host, that syncs
-  the shipped `src/bundle/skills/` bundle into **all four CLIs'** (Claude
-  Code, codex, agy, opencode) own global skill/agent directory once per
+  the shipped `src/bundle/skills/` bundle into **all five CLIs'** (Claude
+  Code, codex, agy, opencode, mcode) own global skill/agent directory once per
   process start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
   `src/services/bundle-sync.ts` and
   [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
@@ -161,7 +161,8 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   opencode got a zero-copy per-session pointer instead
   (`hook-adapters/claude-code.ts`'s `--plugin-dir`,
   `hook-adapters/opencode.ts`'s `skills` config entry); `bundle-sync` aligned all
-  four onto the one boot-time mechanism. Claude Code's `--plugin-dir` is
+  four onto the one boot-time mechanism (mcode joined that set later, landing
+  on the boot-time mechanism directly). Claude Code's `--plugin-dir` is
   **not** fully retired by this, though: it's still emitted per-session
   whenever a project has its own DB-authored skill/reviewer content to
   compose alongside the shipped bundle (`composeClaudeSessionBundle`), and

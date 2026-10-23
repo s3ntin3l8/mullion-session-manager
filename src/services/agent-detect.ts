@@ -10,6 +10,7 @@ import {
   parseOpencodeVersion,
 } from "./hook-adapters/opencode.js";
 import { agyAdapter } from "./hook-adapters/agy.js";
+import { mcodeAdapter } from "./hook-adapters/mcode.js";
 
 // Detects which shells and AI-CLI agents are actually usable on this host —
 // vision item #6 ("autodetect AI CLIs, similar to claude cloudcli"). Probes
@@ -56,7 +57,19 @@ const KNOWN_SHELLS = ["bash", "zsh", "fish"];
 // targets; project-level .crs/actions.json covers anything else. Exported
 // (Phase 6, 6.2/#215) so task-agent-resolve.ts's issue-body `Agent:` line
 // validates against the same list rather than a second, driftable copy.
-export const KNOWN_AGENTS = ["claude", "codex", "opencode", "aider", "gemini", "agy", "pi"];
+export const KNOWN_AGENTS = [
+  "claude",
+  "codex",
+  "opencode",
+  "aider",
+  "gemini",
+  "agy",
+  "pi",
+  // Issue: mcode support — MiniMax Code's CLI binary is `mcode`. It HAS a
+  // hook adapter (see hook-adapters/mcode.ts), so it reaches hook-confirmed
+  // status states rather than only the byte heuristics.
+  "mcode",
+];
 
 // Issue: extend surfaced session statuses — maps a KNOWN_AGENTS binary name
 // to the hook adapter that actually instruments it (see
@@ -70,6 +83,7 @@ const HOOK_ADAPTER_EMITS_BY_BIN: Partial<Record<string, readonly HookMessageKind
   codex: codexAdapter.emits,
   opencode: openCodeAdapter.emits,
   agy: agyAdapter.emits,
+  mcode: mcodeAdapter.emits,
 };
 
 // B7 — this was the one shell-out in this repo with no timeout at all

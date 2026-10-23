@@ -254,6 +254,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
   codex: { defaultModel: null, reviewerModel: null },
   agy: { defaultModel: null, reviewerModel: null },
+  // Issue: mcode support — mcode takes `-m <provider/model>`.
+  mcode: { defaultModel: null, reviewerModel: null },
   opencode: {
     implementerModel: null,
     reviewerModel: null,

@@ -500,6 +500,70 @@ describe("hooksPlugin (issue #172)", () => {
       expect(app.resolveHookGate("1", undefined, "approved")).toBe(false);
     });
 
+    // Issue: mcode support — skip-permissions auto-approve.
+    //
+    // The other four agents get their bypass from their own CLI flag
+    // (getSkipPermissionFlag), so their gates never reach Mullion. mcode's
+    // TUI has no such flag and its `permissionMode` lives in the HOST-GLOBAL
+    // ~/.minimax/config.yaml, which Mullion must never mutate. So for mcode
+    // the bypass is delivered here: a session spawned with
+    // skipPermissions gets its review gates auto-approved, per session.
+    it("auto-approves a review gate for a session spawned with skip-permissions", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "mcode",
+        cols: 80,
+        rows: 24,
+        skipPermissions: true,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      socket.write(
+        `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "rm -rf /tmp/scratch" })}\n`,
+      );
+
+      // The gate resolves on its own — no human decision, no waiting.
+      const reply = await waitForLine(socket);
+      expect(JSON.parse(reply)).toEqual({
+        decision: "approved",
+        reason: "Mullion session spawned with skip-permissions",
+      });
+
+      for (let i = 0; i < 50 && session.toInfo().gateState !== "approved"; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(session.toInfo().gateState).toBe("approved");
+      socket.destroy();
+    });
+
+    it("leaves a review gate waiting for a session WITHOUT skip-permissions", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      socket.write(
+        `${JSON.stringify({ kind: "review_gate", state: "waiting", prompt: "Deploy?" })}\n`,
+      );
+
+      for (let i = 0; i < 50 && session.toInfo().gateState !== "waiting"; i++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(session.toInfo().gateState).toBe("waiting");
+      socket.destroy();
+    });
+
     it("holds two concurrent waiting gates for the same session independently — each has its own connection, its own reply, and resolving one doesn't touch the other (issue: correlate concurrent permission gates, supersedes PR #839's fall-through)", async () => {
       // Deterministic proof at the socket layer (not dependent on any
       // agent actually batching two escalated tool calls in one turn,

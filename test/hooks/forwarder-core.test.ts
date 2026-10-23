@@ -5,6 +5,7 @@ import {
 } from "../../src/services/hook-adapters/claude-code.js";
 import { codexAdapter } from "../../src/services/hook-adapters/codex.js";
 import { agyAdapter } from "../../src/services/hook-adapters/agy.js";
+import { mcodeAdapter, buildMcodeHooksJson } from "../../src/services/hook-adapters/mcode.js";
 import {
   buildForwarderMessage,
   detectGitCheckout,
@@ -42,6 +43,7 @@ import {
   mapCodexSubagentStop,
   mapCodexStop,
   mapCodexUserPromptSubmit,
+  mapMcodeEvent,
   parseHookStdin,
   siblingsFor,
 } from "../../src/hooks/forwarder-core.mjs";
@@ -2408,10 +2410,120 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
       }
     }
   });
+
+  it("mcode: every registered hook event's mapped kind(s) are declared in emits", () => {
+    // mcode's plugin hooks use the CLAUDE CODE dialect (mcode reads the
+    // Claude plugin format), so the payload shapes below are Claude Code's.
+    // The registered events are the ones mcode.ts's buildMcodeHooksJson
+    // declares.
+    const payloadsByEvent = {
+      SessionStart: [{ source: "startup" }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PreToolUse: [{ tool_name: "Bash", tool_input: { command: "ls" } }],
+      PostToolUse: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        {
+          tool_name: "Bash",
+          tool_input: { command: "git worktree add -b fix /tmp/wt" },
+          cwd: "/repo",
+        },
+      ],
+      Stop: [{}],
+      SessionEnd: [{ reason: "clear" }],
+    };
+
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        for (const kind of kindsOf(mapMcodeEvent(event, payload))) {
+          expect(mcodeAdapter.emits).toContain(kind);
+        }
+      }
+    }
+  });
+
+  it("mcode: the registered hook events are exactly the ones the parity payloads cover", () => {
+    // Guards against a hook being added to the plugin without a matching
+    // parity payload above — the same "no test payload declared for
+    // registered event" failure mode the claude-code case checks for.
+    const registered = Object.keys(
+      JSON.parse(buildMcodeHooksJson("/shim")).hooks,
+    );
+    expect(registered.length).toBeGreaterThan(0);
+    for (const event of registered) {
+      expect(
+        ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"],
+        `no test payload declared for registered mcode event ${event}`,
+      ).toContain(event);
+    }
+  });
 });
 
-describe("buildForwarderMessage", () => {
-  it("dispatches to the claude-code dialect", () => {
+describe("mapMcodeEvent (issue: mcode support)", () => {
+  it("maps a Stop event to the same progress/done kind Claude Code's Stop does", () => {
+    expect(mapMcodeEvent("Stop", {})).toEqual(mapClaudeCodeEvent("Stop", {}));
+  });
+
+  it("maps a PostToolUse on a file-editing tool to a file_change", () => {
+    const kinds = mapMcodeEvent("PostToolUse", {
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x" },
+    });
+    const list = Array.isArray(kinds) ? kinds : [kinds];
+    expect(list.some((m) => m.kind === "file_change")).toBe(true);
+  });
+
+  it("maps a PermissionRequest to a review_gate (the blocking gate)", () => {
+    const mapped = mapMcodeEvent("PermissionRequest", {
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    });
+    expect(mapped).toEqual({ kind: "review_gate", state: "waiting", prompt: expect.any(String) });
+  });
+
+  it("maps a SessionStart to session_start", () => {
+    expect(mapMcodeEvent("SessionStart", { source: "startup" })).toEqual(
+      mapClaudeCodeEvent("SessionStart", { source: "startup" }),
+    );
+  });
+
+  it("maps a UserPromptSubmit to turn_start (not a notification)", () => {
+    expect(mapMcodeEvent("UserPromptSubmit", { prompt: "hi" })).toEqual({ kind: "turn_start" });
+  });
+
+  it("stamps the agent envelope like the Claude Code mapper does", () => {
+    const mapped = mapMcodeEvent("PostToolUse", {
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x" },
+      agent_id: "sub-1",
+      agent_type: "review",
+    });
+    const list = Array.isArray(mapped) ? mapped : [mapped];
+    const withEnvelope = list.find((m) => m.kind === "file_change");
+    expect(withEnvelope).toBeDefined();
+    expect((withEnvelope as { agentId?: string }).agentId).toBe("sub-1");
+  });
+
+  it("dispatches to the mcode branch from buildForwarderMessage", () => {
+    expect(buildForwarderMessage("mcode", "Stop", {})).toEqual({ kind: "progress", phase: "done" });
+  });
+
+  it("formats a gate decision for mcode with the Claude Code dialect", () => {
+    // mcode's plugin hooks use the Claude Code dialect, so the approval
+    // shape is byte-identical to Claude Code's.
+    expect(formatGateDecision("mcode", "approved", undefined)).toEqual(
+      formatGateDecision("claude-code", "approved", undefined),
+    );
+    expect(formatGateDecision("mcode", "denied", "no")).toEqual(
+      formatGateDecision("claude-code", "denied", "no"),
+    );
+  });
+
+  it("formats a no_response gate decision as a bare {} (fall through to the agent's own prompt)", () => {
+    expect(formatGateDecision("mcode", "no_response", undefined)).toEqual({});
+  });
+});
+
+describe("buildForwarderMessage", () => {  it("dispatches to the claude-code dialect", () => {
     expect(buildForwarderMessage("claude-code", "Stop", {})).toEqual({
       kind: "progress",
       phase: "done",

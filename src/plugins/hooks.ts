@@ -255,6 +255,11 @@ function handleConnection(
   // handler below — this connection already knows its own gateId the
   // moment it registers one.
   let gateIdOnThisConnection: string | null = null;
+  // Issue: mcode support — the gate id to auto-approve once the session has
+  // registered it (see the skip-permissions auto-approve block below). Set
+  // when the gate message arrives; acted on AFTER emitHookEvent, because the
+  // session-level gate registry only learns about the gate there.
+  let autoApproveGateId: string | null = null;
 
   socket.on("data", async (chunk: Buffer) => {
     socket.pause();
@@ -396,6 +401,40 @@ function handleConnection(
           }
           forSession.set(gid, { socket, timer, prompt: gateMessage.prompt });
           gateIdOnThisConnection = gid;
+
+          // Issue: mcode support — skip-permissions auto-approve.
+          //
+          // The other four agents get their permission bypass from their own
+          // CLI flag (getSkipPermissionFlag in launch-plan.ts appends e.g.
+          // `--dangerously-skip-permissions`), so their gates never even
+          // reach Mullion. mcode's TUI has NO `--permission` option
+          // (verified empirically against mcode 0.6.12), and its
+          // `permissionMode` lives in the HOST-GLOBAL
+          // ~/.minimax/config.yaml — which Mullion must never mutate, or the
+          // bypass would leak into every non-Mullion mcode on the host. So
+          // for mcode the bypass is delivered HERE instead: the agent asks
+          // Mullion (via mcode's PermissionRequest plugin hook), and Mullion
+          // answers "allow" instead of leaving the gate waiting for a human.
+          //
+          // This is per-session by construction — the decision is scoped to
+          // the session that asked for the bypass — and it is the only
+          // mechanism available: relocating the whole mcode data dir per
+          // session (to get a per-session config.yaml) breaks auth
+          // entirely, because mcode's OAuth identity is bound to its data
+          // dir. See the mcode adapter's header for the full spike record.
+          //
+          // The actual resolve happens AFTER emitHookEvent below (see
+          // autoApproveGateId), because the session-level gate registry only
+          // learns about this gate there — resolving first would be a no-op
+          // against a gate the session does not know about yet, and the
+          // session would be left showing "waiting" forever.
+          if (app.pty.get(sid)?.skipPermissions === true) {
+            app.log.info(
+              { sessionId: sid, gateId: gid },
+              "auto-approving review gate — session spawned with skip-permissions",
+            );
+            autoApproveGateId = gid;
+          }
         }
 
         // Issue #271 — a `session_start` message is answered immediately, on
@@ -624,6 +663,22 @@ function handleConnection(
         }
 
         app.pty.emitHookEvent(sessionId, result.message);
+
+        // Issue: mcode support — skip-permissions auto-approve, applied now
+        // that the session has registered the gate (emitHookEvent above is
+        // what adds it to the session's live gate registry). Resolving here
+        // rather than at message-arrival time is what makes the session's
+        // gateState flip to "approved" instead of staying stuck on
+        // "waiting" — the exact end state a human approval produces, minus
+        // the wait.
+        if (autoApproveGateId !== null && sessionId !== null) {
+          const gidToApprove = autoApproveGateId;
+          autoApproveGateId = null;
+          resolvePendingGate(app, pendingGates, sessionId, gidToApprove, {
+            decision: "approved",
+            reason: "Mullion session spawned with skip-permissions",
+          });
+        }
       }
     } finally {
       socket.resume();

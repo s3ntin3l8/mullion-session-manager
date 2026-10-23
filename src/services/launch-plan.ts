@@ -69,6 +69,29 @@ export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
   // user's own global `agentMode` default.
   agy: "--dangerously-skip-permissions --mode accept-edits",
   aider: "--yes",
+  // Issue: mcode support — DELIBERATELY ABSENT.
+  //
+  // mcode's TUI has NO permission flag at all (verified empirically against
+  // mcode 0.6.12: `mcode --permission off` fails with "error: unknown option
+  // '--permission'"; only the one-shot `mcode exec` subcommand accepts
+  // `--permission`). Adding a bogus entry here would append an invalid flag
+  // to the launch command and fail the session outright.
+  //
+  // mcode's skip-permissions is delivered a different way instead: its
+  // `permissionMode` lives in the HOST-GLOBAL ~/.minimax/config.yaml, which
+  // Mullion must never mutate (it would leak the bypass into every
+  // non-Mullion mcode on the host), and relocating the whole mcode data dir
+  // per session breaks auth entirely (mcode's OAuth identity is bound to its
+  // data dir — verified live: every MINIMAX_DATA_DIR relocation, including a
+  // full `cp -a` copy with its own physical sqlite, fails with "Sign in to
+  // MiniMax to use Agent features").
+  //
+  // So mcode's bypass is implemented where it can be genuinely per-session:
+  // Mullion's own hook server auto-approves the agent's PermissionRequest
+  // instead of raising a review gate (see plugins/hooks.ts's skip-permissions
+  // auto-approve, and hook-adapters/mcode.ts's header). The `skipPermissions`
+  // flag still reaches that code path unchanged — it is the SAME spawn option
+  // every other agent uses, just consumed by a different mechanism.
 };
 
 /** Exported for tests (and re-exported via pty-manager.ts). */

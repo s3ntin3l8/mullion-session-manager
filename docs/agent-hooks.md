@@ -14,18 +14,18 @@ before.
 
 ## Capability matrix
 
-The four integrations below are independently wired per CLI and drift
+The five integrations below are independently wired per CLI and drift
 independently — this table is the single summary; "Auto-injected agents"
 further down carries the full per-CLI detail each row links back to.
 
-| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                                           | codex                                                                                                                                          | agy                                                                                                                                         |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 17 hook kinds (`OPENCODE_EMITS`); no blocking hook — a `review_gate` opens beside opencode's own permission dock and answers it via `ctx.permission.reply` (#1594) | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           |
-| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                                                       | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       |
-| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills` pointer for project-specific overrides                                | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          |
-| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model` (not `buildModelFlag` — a config key, not a CLI flag); the small model rides `agents.title.model` — v2 has no `small_model` key    | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 |
-| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn                                      | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      |
-| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                                             | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills |
+| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                                           | codex                                                                                                                                          | agy                                                                                                                                         | mcode |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 17 hook kinds (`OPENCODE_EMITS`); no blocking hook — a `review_gate` opens beside opencode's own permission dock and answers it via `ctx.permission.reply` (#1594) | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           | 13 hook-protocol kinds (`MCODE_EMITS`); `PermissionRequest` is the one blocking hook — registered through a host-global mcode **plugin** (mcode retired standalone user hooks) and read via a per-session handoff file (mcode's hook child env is a whitelist that drops `MULLION_*`) |
+| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                                                       | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       | **not wired** — mcode's MCP stdio servers get a fixed env allowlist (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so the session token cannot reach Mullion's MCP server without writing a literal per-session token into a host-global file (which would leak it across sessions). Tracked as a follow-up; the hook channel is unaffected. |
+| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills` pointer for project-specific overrides                                | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          | boot-time global sync (`bundle-sync.ts`) into `<mcode data dir>/skills`, plus a per-launch `installBundleSkills` fallback |
+| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model` (not `buildModelFlag` — a config key, not a CLI flag); the small model rides `agents.title.model` — v2 has no `small_model` key    | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 | `buildModelFlag(command, ctx.model)` via `commandTransform` |
+| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn                                      | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      | not possible — mcode's skill data model has no per-skill disable bit |
+| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                                             | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills | hand-edit `~/.minimax/plugins/mullion/` (mullion's plugin dir is host-global and carries a `.mullion-managed` marker); `bundle remove` removes the bundle skills |
 
 ## What's injected
 
@@ -731,6 +731,65 @@ file, not a directory — `--add-dir .git` makes that pointer writable but does
 not grant write access to the real object store under the main repo's
 `.git/worktrees`. This still helps normal checkouts but may not fully resolve
 escalations for worktree sessions.
+
+**mcode** (MiniMax Code — the `@minimax-ai/code` CLI, binary `mcode`) reuses
+the shared forwarder too, but its plumbing differs from the other four in two
+ways that both follow from mcode's own design.
+
+First, mcode **retired standalone user hooks** — custom hooks must belong to a
+Plugin (mcode's own wording: "Standalone user hooks are no longer supported.
+Custom hooks belong to Plugins."). Mullion therefore installs **one
+host-global plugin** at `~/.minimax/plugins/mullion/` (a `.claude-plugin/
+plugin.json` plus `hooks/hooks.json`), because mcode reads the **Claude Code
+plugin format**: the event names (`SessionStart`, `UserPromptSubmit`,
+`PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`) and the payload shape
+(`hook_event_name`, `tool_name`, `tool_input`, `cwd`, `session_id`) are
+Claude Code's. The registered events map through `mapMcodeEvent`
+(`forwarder-core.mjs`), which is the Claude Code mapping — reused rather than
+reimplemented, since the dialect is identical. `PostToolUse` is registered
+twice: once with a `Write|Edit|MultiEdit|NotebookEdit` matcher (→
+`file_change`) and once on `Bash` (→ `git_branch`/`cwd_changed`).
+
+Second, mcode runs a plugin hook as a **child process whose environment is a
+strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
+`TEMP`, `TMP`, …) — `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and
+`MULLION_FORWARDER_PATH` are all **dropped**. So the shared forwarder cannot
+find Mullion's hook socket the way it does for Claude Code / Codex / agy. A
+dedicated shim (`src/hooks/mcode-hook-shim.sh`, installed at a host-stable
+`~/.mullion/hooks/` path so a `git worktree remove` can never dangle it) reads
+the session's socket + token + forwarder path from a **per-session handoff
+file** and re-exports them as the `MULLION_*` env vars the forwarder expects.
+The handoff file lives in the session's own temp dir
+(`<sessionsDir>/<id>.tmp/mullion-hook.json`), which `launch-plan.ts` already
+allocates and exports as `TMPDIR` — and `TMPDIR` *is* on mcode's whitelist, so
+it survives into the hook child. `MULLION_MCODE_HOOK_FILE` is honoured as an
+override for a session whose caller supplied a custom `TMPDIR` (in which case
+no per-session temp dir is allocated). The plugin itself therefore contains
+**no per-session data** — it is byte-identical for every session and every
+Mullion instance, exactly like `forwarder-shim.sh`.
+
+**mcode and skip-permissions.** The other four agents get their permission
+bypass from their own CLI flag (`getSkipPermissionFlag` appends e.g.
+`--dangerously-skip-permissions`), so their gates never reach Mullion. mcode's
+TUI has **no `--permission` option** (verified: `mcode --permission off` fails
+with "error: unknown option '--permission'"; only the one-shot `mcode exec`
+subcommand accepts it), and its `permissionMode` lives in the **host-global**
+`~/.minimax/config.yaml`, which Mullion must never mutate — that would leak
+the bypass into every non-Mullion mcode on the host. Relocating the whole mcode
+data dir per session (to get a per-session `config.yaml`) does **not** work
+either: mcode's OAuth identity is bound to its data dir, so a relocated data
+dir cannot authenticate (verified live — every `MINIMAX_DATA_DIR` relocation,
+including a full `cp -a` copy with its own physical sqlite, fails with "Sign
+in to MiniMax to use Agent features"; mcode also refuses symlinked plugin roots
+and migration dirs).
+
+So mcode's bypass is delivered where it can be genuinely per-session: **Mullion's
+own hook server auto-approves the agent's `PermissionRequest`** instead of
+raising a review gate (`src/plugins/hooks.ts`). The gate still flows through the
+ordinary path — it is registered, then resolved with `approved` — so the
+session's `gateState` ends in `"approved"` exactly as a human approval would,
+minus the wait. The `skipPermissions` spawn option is the same one every other
+agent uses; only the mechanism differs.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when

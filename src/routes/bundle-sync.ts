@@ -52,6 +52,9 @@ export async function bundleSyncRoute(app: FastifyInstance) {
       codex: "agent:codex",
       agy: "agent:agy",
       opencode: "agent:opencode",
+      // Issue: mcode support — mcode's agent id, as reported by
+      // agent-detect.ts's probe.
+      mcode: "agent:mcode",
     };
     const result = new Set<BundleSyncCli>();
     for (const cli of Object.keys(byCli) as BundleSyncCli[]) {

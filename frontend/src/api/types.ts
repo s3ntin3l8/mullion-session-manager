@@ -1233,6 +1233,11 @@ export interface RemoveWorktreeResult {
 // wins (currently only Codex's AGENTS.override.md over AGENTS.md) — it says
 // nothing about another agent sharing the same absolutePath.
 export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
+// Issue: mcode support — the CLIs the bundle sync can install skills into.
+// A SUPERSET of AgentRuleAgent: mcode gets the bundle's skills (into its own
+// `<dataDir>/skills`) but has no agent-rule concept, so it is deliberately
+// absent from AgentRuleAgent while present here.
+export type BundleSyncCli = "claude-code" | "codex" | "opencode" | "agy" | "mcode";
 export type AgentRuleScope = "project" | "global";
 export type AgentRuleStatus = "active" | "shadowed";
 
@@ -1281,7 +1286,7 @@ export interface BundleSyncCliAgentsStatus {
 }
 
 export interface BundleSyncCliStatus {
-  cli: AgentRuleAgent;
+  cli: BundleSyncCli;
   detected: boolean;
   skills: BundleSyncCliFieldStatus;
   agents: BundleSyncCliAgentsStatus;
@@ -2049,6 +2054,8 @@ export interface AppSettings {
   };
   codex: { defaultModel: string | null; reviewerModel: string | null };
   agy: { defaultModel: string | null; reviewerModel: string | null };
+  // Issue: mcode support — mcode takes `-m <provider/model>`.
+  mcode: { defaultModel: string | null; reviewerModel: string | null };
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
