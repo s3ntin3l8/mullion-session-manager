@@ -76,14 +76,14 @@ describe("Settings -> Sessions -> Stale error timeout", () => {
     await user.clear(input);
     await user.type(input, "3600");
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { staleErrorSeconds: 3600 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { staleErrorSeconds: 3600 } }),
+      }),
+    );
   });
 });
 
@@ -149,14 +149,14 @@ describe("Settings -> Sessions -> Stale busy timeout", () => {
     await user.clear(input);
     await user.type(input, "10800");
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { staleBusySeconds: 10800 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { staleBusySeconds: 10800 } }),
+      }),
+    );
   });
 });
 
@@ -210,14 +210,14 @@ describe("Settings -> Sessions -> Persist session event history", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.sessions.eventPersistence).toBe(true);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { eventPersistence: true } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { eventPersistence: true } }),
+      }),
+    );
   });
 });
 
@@ -301,14 +301,14 @@ describe("Settings -> Sessions -> Event history retention", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.sessions.eventRetentionDays).toBe(90);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { eventRetentionDays: 90 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { eventRetentionDays: 90 } }),
+      }),
+    );
   });
 });
 
@@ -386,14 +386,14 @@ describe("Settings -> Sessions -> Event history cap per session", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.sessions.eventRetentionPerSession).toBe(500);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { eventRetentionPerSession: 500 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { eventRetentionPerSession: 500 } }),
+      }),
+    );
   });
 });
 
@@ -447,14 +447,14 @@ describe("Settings -> Sessions -> Inject agent guide", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.sessions.injectAgentGuide).toBe(false);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { injectAgentGuide: false } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { injectAgentGuide: false } }),
+      }),
+    );
   });
 });
 
@@ -507,14 +507,14 @@ describe("Settings -> Sessions -> Inject Mullion tooling bundle", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.sessions.injectMullionBundle).toBe(false);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { injectMullionBundle: false } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { injectMullionBundle: false } }),
+      }),
+    );
   });
 });
 
@@ -571,14 +571,14 @@ describe("Settings -> Sessions -> Inject project briefing", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.sessions.injectProjectBriefing).toBe(false);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { injectProjectBriefing: false } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { injectProjectBriefing: false } }),
+      }),
+    );
   });
 });
 
@@ -633,14 +633,14 @@ describe("Settings -> Sessions -> Auto-open child session panels", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.sessions.autoOpenChildPanels).toBe(true);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { autoOpenChildPanels: true } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { autoOpenChildPanels: true } }),
+      }),
+    );
   });
 });
 
@@ -701,13 +701,13 @@ describe("Settings -> Sessions -> Max child sessions per parent", () => {
     await user.clear(input);
     await user.type(input, "12");
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { maxChildSessionsPerParent: 12 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { maxChildSessionsPerParent: 12 } }),
+      }),
+    );
   });
 });

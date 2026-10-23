@@ -120,20 +120,20 @@ describe("Settings -> Notifications", () => {
     // The onChange handler spreads the full { notify, sound, autoFocus }
     // triple for the changed status (see Settings.tsx), not just the
     // toggled field.
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({
-            notifications: {
-              notificationMatrix: {
-                api_error: { notify: false, sound: false, autoFocus: false },
-              },
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          notifications: {
+            notificationMatrix: {
+              api_error: { notify: false, sound: false, autoFocus: false },
             },
-          }),
+          },
         }),
-      );;
+      }),
+    );
   });
 
   it("renders an awaiting_question row and round-trips its notify toggle (#551)", async () => {
@@ -164,20 +164,20 @@ describe("Settings -> Notifications", () => {
         ?.notify,
     ).toBe(false);
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-          "/api/settings",
-          expect.objectContaining({
-            method: "PATCH",
-            body: JSON.stringify({
-              notifications: {
-                notificationMatrix: {
-                  awaiting_question: { notify: false, sound: false, autoFocus: false },
-                },
-              },
-            }),
-          }),
-        );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          notifications: {
+            notificationMatrix: {
+              awaiting_question: { notify: false, sound: false, autoFocus: false },
+            },
+          },
+        }),
+      }),
+    );
   });
 
   it("renders a background row under Busy (found alongside #551, same gap for a different status)", async () => {

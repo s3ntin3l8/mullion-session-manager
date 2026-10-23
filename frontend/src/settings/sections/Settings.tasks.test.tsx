@@ -82,14 +82,14 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.enabled).toBe("on");
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { enabled: "on" } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { enabled: "on" } }),
+      }),
+    );
   });
 
   it("disables Pause auto-claim while Task Master resolves to off, with an explanatory hint", async () => {
@@ -118,14 +118,14 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.autoClaimPaused).toBe(true);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { autoClaimPaused: true } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { autoClaimPaused: true } }),
+      }),
+    );
   });
 
   it("edits Max concurrent claims and PATCHes the concrete override, not the sentinel, once the field is committed", async () => {
@@ -141,14 +141,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(5);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
+      }),
+    );
   });
 
   it("edits the rate-limit grace period and shows its server default", async () => {
@@ -166,14 +166,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.rateLimitGraceMinutes).toBe(0);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
+      }),
+    );
   });
 
   it("clamps Max concurrent claims to its upper bound while typing, so the displayed value never exceeds what's effective", async () => {
@@ -196,11 +196,11 @@ describe("Settings -> Task Master", () => {
     // Flush the debounced PATCH before this test ends — otherwise its
     // pending patch leaks into (and corrupts the asserted body of) the
     // next test's own PATCH via the store's shared debounce/merge state.
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({ method: "PATCH" }),
-      );;
+      "/api/settings",
+      expect.objectContaining({ method: "PATCH" }),
+    );
   });
 
   it("clamps a cleared Max concurrent claims field up to 1 on commit, not down to 0 (Hermes review, PR #480, second pass)", async () => {
@@ -219,14 +219,14 @@ describe("Settings -> Task Master", () => {
     // "inherit" sentinel server-side rather than a fixed default — clamp
     // it up to the field's own min on commit instead.
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(1);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
+      }),
+    );
   });
 
   it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel, once the field is committed", async () => {
@@ -241,14 +241,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(0);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
+      }),
+    );
   });
 
   it("does not persist a cleared budget field's transient 0 until the field is committed (blur/Enter)", async () => {
@@ -280,14 +280,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(45);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
+      }),
+    );
   });
 
   it("commits the trusted logins list as a trimmed array on blur", async () => {
@@ -302,14 +302,14 @@ describe("Settings -> Task Master", () => {
       "octocat",
       "my-bot",
     ]);
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
+      }),
+    );
   });
 
   it("Reset writes every sentinel back in one patch, from an install with every field overridden", async () => {
@@ -351,23 +351,23 @@ describe("Settings -> Task Master", () => {
     expect(tm.autoClaimPaused).toBe(true);
     expect(tm.reviewCiWaitMinutes).toBe(30);
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({
-            taskMaster: {
-              enabled: "inherit",
-              maxConcurrent: -1,
-              budgetMinutes: -1,
-              progressCommentMinutes: -1,
-              rateLimitGraceMinutes: -1,
-              skipPermissions: "inherit",
-            },
-          }),
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          taskMaster: {
+            enabled: "inherit",
+            maxConcurrent: -1,
+            budgetMinutes: -1,
+            progressCommentMinutes: -1,
+            rateLimitGraceMinutes: -1,
+            skipPermissions: "inherit",
+          },
         }),
-      );;
+      }),
+    );
   });
 
   it("surfaces Task Master's own install-wide agent defaults as the lowest resolution tier", async () => {

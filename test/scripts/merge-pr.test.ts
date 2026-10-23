@@ -41,7 +41,10 @@ describe("mergeReadiness", () => {
 
   it("stops when a check FAILED, rather than waiting for a green that will not come", () => {
     const readiness = mergeReadiness({
-      statusCheckRollup: [green("ci"), { name: "lint", status: "COMPLETED", conclusion: "FAILURE" }],
+      statusCheckRollup: [
+        green("ci"),
+        { name: "lint", status: "COMPLETED", conclusion: "FAILURE" },
+      ],
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
     });
@@ -71,7 +74,10 @@ describe("mergeReadiness", () => {
 
   it("merges when the checks are green and the head contains the base", () => {
     const readiness = mergeReadiness({
-      statusCheckRollup: [green("ci"), { name: "skipped", status: "COMPLETED", conclusion: "SKIPPED" }],
+      statusCheckRollup: [
+        green("ci"),
+        { name: "skipped", status: "COMPLETED", conclusion: "SKIPPED" },
+      ],
       mergeable: "MERGEABLE",
       mergeStateStatus: "CLEAN",
     });

@@ -29,8 +29,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-const isMain =
-  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 // Every gh call goes through here so a bad PR number, an unauthenticated
 // `gh`, or a missing PR surfaces as a short readable message instead of a

@@ -65,14 +65,14 @@ describe("Settings -> Sessions -> Workflow conventions textarea", () => {
     const textarea = await screen.findByPlaceholderText(/No workflow conventions configured yet/);
     await user.type(textarea, "x");
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { workflowConventionsText: "x" } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { workflowConventionsText: "x" } }),
+      }),
+    );
   });
 });
 

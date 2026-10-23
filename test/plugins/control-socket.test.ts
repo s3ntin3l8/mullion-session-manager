@@ -3481,9 +3481,9 @@ describe("controlSocketPlugin (issue #185)", () => {
           frames.slice(ackIndex + 1).some((f) => f.kind === "title_change" && f.seq === 2),
         );
         socket.destroy();
-      // 30s, not 10s: this test waits out a 3s source-side title-change
-      // debounce, and on a loaded host the app setup plus that wait does
-      // not fit in 10 — the ceiling was the flake, not the code.
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
       }, 30_000);
 
       it("events.subscribe (session scope): filtered to only the connection's own pinned session", async () => {
@@ -3513,9 +3513,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(titleChanges.every((f) => f.sessionId === sessionA)).toBe(true);
         expect(titleChanges.some((f) => f.sessionId === sessionB)).toBe(false);
         socket.destroy();
-      // 30s, not 10s: this test waits out a 3s source-side title-change
-      // debounce, and on a loaded host the app setup plus that wait does
-      // not fit in 10 — the ceiling was the flake, not the code.
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
       }, 30_000);
 
       it("400s re-subscribing on the same id without unsubscribing first", async () => {
@@ -3814,9 +3814,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         await waitUntil(() => frames.some((f) => f.id === 1 && f.kind === "title_change"));
         expect(frames.some((f) => f.id === 2 && f.kind === "title_change")).toBe(false);
         socket.destroy();
-      // 30s, not 10s: this test waits out a 3s source-side title-change
-      // debounce, and on a loaded host the app setup plus that wait does
-      // not fit in 10 — the ceiling was the flake, not the code.
+        // 30s, not 10s: this test waits out a 3s source-side title-change
+        // debounce, and on a loaded host the app setup plus that wait does
+        // not fit in 10 — the ceiling was the flake, not the code.
       }, 30_000);
     });
 

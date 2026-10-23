@@ -51,14 +51,14 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
     expect(useDashboardStore.getState().settings.terminal.voice.enabled).toBe(false);
 
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { enabled: false } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { enabled: false } } }),
+      }),
+    );
   });
 
   it("toggling the hotkey off leaves 'Enable dictation' untouched", async () => {
@@ -78,14 +78,14 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     // (store/slices/ui.ts) merges an in-flight pendingPatch across calls,
     // so an unflushed patch left behind here would otherwise bleed into
     // the next test's own PATCH body assertion.
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { hotkeyEnabled: false } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { hotkeyEnabled: false } } }),
+      }),
+    );
   });
 
   it("renders the current hotkey chord and captures a new one into a PATCH (#1119)", async () => {
@@ -101,14 +101,14 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     fireEvent.keyDown(window, { code: "Comma", ctrlKey: true, shiftKey: true, key: "," });
 
     expect(useDashboardStore.getState().settings.terminal.voice.hotkey).toBe("Ctrl+Shift+Comma");
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { hotkey: "Ctrl+Shift+Comma" } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { hotkey: "Ctrl+Shift+Comma" } } }),
+      }),
+    );
   });
 
   it("clicking away while armed cancels capture instead of leaving it swallowing keys modal-wide", async () => {
@@ -136,14 +136,14 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     // Waited out, same reason as the other toggle tests in this file — an
     // unflushed debounced PATCH here would otherwise bleed into the next
     // test's own PATCH body assertion.
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { enabled: false } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { enabled: false } } }),
+      }),
+    );
   });
 
   it("rejects a chord already claimed by the find bar and shows why, without patching", async () => {
@@ -196,14 +196,14 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     // Waited out, same reason as the "toggling the hotkey off" test above —
     // an unflushed debounced PATCH here would otherwise bleed into the next
     // test's own PATCH body assertion.
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { hotkeyEnabled: false } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { hotkeyEnabled: false } } }),
+      }),
+    );
   });
 
   it("changing the dictation language patches terminal.voice.lang", async () => {
@@ -214,13 +214,13 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     await user.selectOptions(screen.getByRole("combobox"), "de-DE");
 
     expect(useDashboardStore.getState().settings.terminal.voice.lang).toBe("de-DE");
-        __flushPendingSettingsPatchForTests();
+    __flushPendingSettingsPatchForTests();
     expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ terminal: { voice: { lang: "de-DE" } } }),
-        }),
-      );;
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ terminal: { voice: { lang: "de-DE" } } }),
+      }),
+    );
   });
 });
