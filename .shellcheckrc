@@ -8,4 +8,9 @@
 # vs. printf-escaped content is split the way it is); a style rewrite here
 # is out of scope for this feature and risks re-litigating already-reviewed
 # hardening.
-disable=SC2129
+# SC1091 (info: "not following: <file> was not specified as input") — the
+# installer sources scripts/portable.sh (issue #1718), and the hook runs
+# shellcheck without -x, so it cannot follow a sourced file and says so.
+# The sourced file is itself shellcheck-clean (it is checked as its own
+# .sh file), so the info is noise here.
+disable=SC2129,SC1091

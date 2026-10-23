@@ -62,6 +62,13 @@ cp "$src" "$output"
   for (const name of ["npm", "npx"]) {
     writeShim(binDir, name, "#!/usr/bin/env bash\nexit 0\n");
   }
+  // The REAL rm, under the shim dir's name: the harness already puts its own
+  // bin dir first on the PATH so the commands the script runs resolve there,
+  // and `rm` is one of them (the update script removes the update job's plist
+  // and prunes old releases). Pointing it at /bin/rm keeps the script's own
+  // behaviour — and its assertions — independent of whatever `rm` happens to
+  // be on the host's PATH.
+  writeShim(binDir, "rm", '#!/usr/bin/env bash\nexec /bin/rm "$@"\n');
   writeShim(
     binDir,
     "systemctl",
@@ -152,6 +159,12 @@ describeOnLinux("scripts/self-update.sh", () => {
     return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
   }
 
+  function readLaunchctlLog(): string[] {
+    const p = path.join(binDir, "launchctl.log");
+    if (!fs.existsSync(p)) return [];
+    return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
+  }
+
   function runScript(opts: {
     version: string;
     assetUrl: string;
@@ -177,6 +190,72 @@ describeOnLinux("scripts/self-update.sh", () => {
     );
   }
 
+  // The macOS restart (issue #1718): launchctl kickstart replaces
+  // systemctl --user restart, and the one-shot update job boots itself out
+  // afterwards.
+  it("restarts through launchctl on macOS, and never through systemctl", async () => {
+    writeShim(
+      binDir,
+      "launchctl",
+      `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+# Booting this job out kills the process that ran it — which is exactly why
+# the script's own bootout has to be its LAST statement. Modelling that here
+# is what keeps the ordering honest: a script that booted itself out early
+# would never reach its release prune or its final status write, and this
+# shim would kill it where it stood.
+case "$*" in
+  *bootout*)
+    kill -TERM $PPID
+    ;;
+esac
+exit 0
+`,
+    );
+    // The platform detection goes through `uname -s`.
+    writeShim(
+      binDir,
+      "uname",
+      `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
+`,
+    );
+    const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
+    // The plist the update job runs from. Nothing in the script CREATES it
+    // (the app writes it, when it bootstraps the job), so the "it is gone"
+    // assertion below only means something if it exists before the run.
+    const plistPath = path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist/>\n");
+
+    // The script's own bootout kills the script (the shim above models
+    // launchd's SIGTERM), so it exits on that signal rather than 0 — which is
+    // exactly what happens on a real Mac. The assertions below are what
+    // matter: the kickstart happened, the bootout happened, the plist is
+    // gone, and the run reached "done".
+    await runScript({
+      version: "9.9.9",
+      assetUrl: `file://${tarballPath}`,
+      checksumUrl: `file://${checksumPath}`,
+      unitName: "com.mullion.primary",
+    }).catch(() => undefined);
+
+    const launchctlLog = readLaunchctlLog();
+    expect(launchctlLog).toContainEqual(
+      `kickstart -k gui/${process.getuid?.() ?? 501}/com.mullion.primary`,
+    );
+    // The job removes its own plist and boots itself out.
+    expect(launchctlLog.some((line) => line.includes("bootout"))).toBe(true);
+    expect(fs.existsSync(plistPath)).toBe(false);
+    // ...and systemctl was never involved.
+    expect(readSystemctlLog().some((line) => line.includes("restart"))).toBe(false);
+    // The bootout kills the script, so reaching "done" proves the bootout was
+    // the LAST thing it did: the release prune and this status write are both
+    // after it.
+    expect(readStatus().phase).toBe("done");
+  });
+
   it("downloads, verifies, installs, and flips current on a successful update", async () => {
     const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
 
@@ -197,6 +276,51 @@ describeOnLinux("scripts/self-update.sh", () => {
       "--user daemon-reload",
       "--user restart fake-mullion.service",
     ]);
+  });
+
+  // The darwin branch of fail(): a failed update must not leave its launchd
+  // job (or its plist) behind — the next apply for the same version would
+  // then be refused by `launchctl bootstrap` (an already-loaded label).
+  it("boots the update job out and drops its plist when an update fails on macOS", async () => {
+    writeShim(
+      binDir,
+      "launchctl",
+      `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+exit 0
+`,
+    );
+    writeShim(
+      binDir,
+      "uname",
+      `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
+`,
+    );
+    // A checksum that does NOT match the tarball: the script fails at the
+    // verify gate (not at the download — the checksum file exists, it just
+    // carries the wrong hash).
+    const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
+    fs.writeFileSync(checksumPath, `${"0".repeat(64)}  ${path.basename(tarballPath)}\n`);
+    // The plist the job runs from — pre-created, so "it is gone" means
+    // something.
+    const plistPath = path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist");
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, "<plist/>\n");
+
+    await expect(
+      runScript({
+        version: "9.9.9",
+        assetUrl: `file://${tarballPath}`,
+        checksumUrl: `file://${checksumPath}`,
+        unitName: "com.mullion.primary",
+      }),
+    ).rejects.toThrow();
+
+    const log = readLaunchctlLog();
+    expect(log.some((line) => line.includes("bootout"))).toBe(true);
+    expect(fs.existsSync(plistPath)).toBe(false);
   });
 
   it("leaves current untouched when checksum verification fails", async () => {

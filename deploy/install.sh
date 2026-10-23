@@ -34,14 +34,26 @@
 
 set -euo pipefail
 
+# Issue #1718 (roadmap 8.4) — the installer runs on macOS too, where the job
+# is a launchd agent instead of a systemd --user unit, and where a stock Mac
+# has neither GNU coreutils nor bash 4. The portable spellings of the handful
+# of GNU-isms this script used live in scripts/portable.sh, which is sourced
+# here (and shipped inside every release tarball for the updater's own use).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../scripts/portable.sh
+. "$SCRIPT_DIR/../scripts/portable.sh"
+
 usage() {
   echo "usage: deploy/install.sh [--role primary|agent] [--no-systemd] <mullion-home> [owner/repo]" >&2
 }
 
 ROLE="primary"
-SKIP_SYSTEMD=false
+# The flag keeps its name for compatibility (and so does the env var), but
+# what it skips is now "the service": the systemd --user unit on Linux, the
+# launchd agent job on macOS (issue #1718).
+SKIP_SERVICE=false
 if [ "${MULLION_SKIP_SYSTEMD:-}" = "1" ] || [ "${MULLION_SKIP_SYSTEMD:-}" = "true" ]; then
-  SKIP_SYSTEMD=true
+  SKIP_SERVICE=true
 fi
 POSITIONAL=()
 while [ $# -gt 0 ]; do
@@ -71,7 +83,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     --no-systemd)
-      SKIP_SYSTEMD=true
+      SKIP_SERVICE=true
       shift
       ;;
     --*)
@@ -97,21 +109,45 @@ fi
 
 MULLION_HOME_INPUT="${1:?usage: deploy/install.sh [--role primary|agent] [--no-systemd] <mullion-home> [owner/repo]}"
 REPO="${2:-s3ntin3l8/mullion-session-manager}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "==> Role: $ROLE"
+
+# The platform decides which job type this host gets: a launchd agent plist
+# on macOS, a systemd --user unit on Linux (issue #1718).
+PLATFORM="$(uname -s)"
+if [ "$PLATFORM" = "Darwin" ]; then
+  PLATFORM_KIND="launchd"
+else
+  PLATFORM_KIND="systemd"
+fi
+echo "==> Platform: $PLATFORM ($PLATFORM_KIND)"
 
 echo "==> Checking host prerequisites"
 missing=()
-for bin in node npm dtach systemd-run curl tar timeout sha256sum; do
+# `timeout` and `sha256sum` used to be listed here; both are GNU coreutils and
+# neither exists on a stock macOS — the portable spellings now live in
+# scripts/portable.sh (a watchdog and `shasum`), so they are no longer
+# prerequisites at all.
+for bin in node npm dtach curl tar; do
   command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
 done
-if [ "$SKIP_SYSTEMD" = false ]; then
-  command -v systemctl >/dev/null 2>&1 || missing+=("systemctl")
+if [ "$SKIP_SERVICE" = false ]; then
+  if [ "$PLATFORM_KIND" = "launchd" ]; then
+    command -v launchctl >/dev/null 2>&1 || missing+=("launchctl")
+  else
+    for bin in systemd-run systemctl; do
+      command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
+    done
+  fi
 fi
 if [ "${#missing[@]}" -gt 0 ]; then
   echo "Missing required host binaries: ${missing[*]}" >&2
-  echo "See deploy/README.md's prerequisites (Node 26, dtach, a systemd --user" >&2
-  echo "session, and — for the native-module compile step below — python3/make/g++)." >&2
+  if [ "$PLATFORM_KIND" = "launchd" ]; then
+    echo "See deploy/README.md's prerequisites (Node 26, dtach, launchctl, and —" >&2
+    echo "for the native-module compile step below — python3/make/g++)." >&2
+  else
+    echo "See deploy/README.md's prerequisites (Node 26, dtach, a systemd --user" >&2
+    echo "session, and — for the native-module compile step below — python3/make/g++)." >&2
+  fi
   exit 1
 fi
 
@@ -188,7 +224,7 @@ if [ -f "$MULLION_HOME/.env" ]; then
   EXISTING_ROLE="${EXISTING_ROLE:-primary}"
   if [ "$EXISTING_ROLE" != "$ROLE" ]; then
     echo "$MULLION_HOME/.env already has MULLION_ROLE=$EXISTING_ROLE, but --role $ROLE was requested." >&2
-    echo "Refusing to install the $ROLE systemd unit over a $EXISTING_ROLE .env — fix one or the other first." >&2
+    echo "Refusing to install the $ROLE service over a $EXISTING_ROLE .env — fix one or the other first." >&2
     exit 1
   fi
 fi
@@ -224,15 +260,16 @@ else
   # Same verification self-update.sh performs before every later update —
   # see its own comment on why both files must share $TMP_DIR (Hermes
   # review, PR #54).
-  (cd "$TMP_DIR" && sha256sum -c "$TARBALL_NAME.sha256") ||
+  verify_sha256 "$TMP_DIR" "$TARBALL_NAME.sha256" ||
     { echo "checksum verification failed for $TARBALL_NAME" >&2; exit 1; }
   mkdir -p "$RELEASE_DIR"
   tar -xzf "$TMP_DIR/$TARBALL_NAME" -C "$RELEASE_DIR"
   # Same PATH fix self-update.sh applies — a bare `npm ci` needs `npm`
   # resolvable, which isn't guaranteed by every shell this script might run
   # under (though usually fine interactively, unlike the systemd unit).
-  PATH="$(dirname "$NODE_PATH"):$PATH" \
-    bash -c "cd '$RELEASE_DIR' && timeout $NPM_CI_TIMEOUT_SECONDS npm ci --omit=dev"
+  ( cd "$RELEASE_DIR" \
+    && PATH="$(dirname "$NODE_PATH"):$PATH" \
+       run_with_timeout "$NPM_CI_TIMEOUT_SECONDS" npm ci --omit=dev )
 
   # Phase 3 (#179): `playwright` is a runtime dependency (see package.json),
   # but `npm ci` alone never downloads its Chromium binary — that only
@@ -248,13 +285,19 @@ else
   # next update's `current` symlink flip instead of being orphaned with this
   # release.
   echo "==> Installing Playwright's Chromium browser"
-  PATH="$(dirname "$NODE_PATH"):$PATH" \
-    bash -c "cd '$RELEASE_DIR' && PLAYWRIGHT_BROWSERS_PATH='$MULLION_HOME/browsers' timeout $NPM_CI_TIMEOUT_SECONDS npx playwright install chromium"
+  ( cd "$RELEASE_DIR" \
+    && PATH="$(dirname "$NODE_PATH"):$PATH" \
+       PLAYWRIGHT_BROWSERS_PATH="$MULLION_HOME/browsers" \
+       run_with_timeout "$NPM_CI_TIMEOUT_SECONDS" npx playwright install chromium )
 fi
 
 echo "==> Pointing current -> $VERSION"
-ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
-mv -T "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
+# `ln -sfn`/`mv -T` are GNU spellings; BSD ln has no -n and BSD mv has no -T
+# (and plain mv would move the temp link INTO the directory `current` points
+# at). The helper replaces the symlink itself on both platforms.
+rm -f "$MULLION_HOME/current.tmp" 2>/dev/null || true
+ln -s "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
+replace_symlink "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
 
 # Phase 4 (#134, PR7) — points at $MULLION_HOME/current (the symlink just
 # flipped above), not its realpath, so a later release flip (including
@@ -269,7 +312,8 @@ MULLION_CLI_LINKED=false
 if [ -f "$MULLION_HOME/current/dist/cli/mullion.mjs" ]; then
   echo "==> Linking mullion CLI to ~/.local/bin/mullion"
   mkdir -p ~/.local/bin
-  ln -sfn "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  rm -f ~/.local/bin/mullion 2>/dev/null || true
+  ln -s "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/.local/bin/mullion
   MULLION_CLI_LINKED=true
 else
   echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/.local/bin/mullion link"
@@ -486,8 +530,83 @@ EOF
   chmod 600 "$MULLION_HOME/.env"
 fi
 
-if [ "$SKIP_SYSTEMD" = true ]; then
-  echo "==> Skipping systemd user unit installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
+# How the operator tails this host's service logs — platform-specific, and
+# set before the install branch so it is defined even when the install is
+# skipped.
+if [ "$PLATFORM_KIND" = "launchd" ]; then
+  SERVICE_LOG_HINT="tail -f $MULLION_HOME/logs/com.mullion.$ROLE.err.log"
+else
+  if [ "$ROLE" = "primary" ]; then
+    SERVICE_LOG_HINT="journalctl --user -u mullion.service -f"
+  else
+    SERVICE_LOG_HINT="journalctl --user -u mullion-agent.service -f"
+  fi
+fi
+
+if [ "$SKIP_SERVICE" = true ]; then
+  if [ "$PLATFORM_KIND" = "launchd" ]; then
+    echo "==> Skipping launchd job installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
+  else
+    echo "==> Skipping systemd user unit installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
+  fi
+elif [ "$PLATFORM_KIND" = "launchd" ]; then
+  # macOS: a launchd agent job (issue #1718, roadmap 8.4). The plist is the
+  # launchd counterpart of deploy/mullion.service — same WorkingDirectory,
+  # same absolute paths, the same "one role per install root" invariant.
+  echo "==> Installing the launchd agent job"
+  mkdir -p ~/Library/LaunchAgents "$MULLION_HOME/logs"
+  if [ "$ROLE" = "primary" ]; then
+    LABEL="com.mullion.primary"
+    PLIST_TEMPLATE="$SCRIPT_DIR/launchd/com.mullion.primary.plist"
+    OTHER_LABEL="com.mullion.agent"
+  else
+    LABEL="com.mullion.agent"
+    PLIST_TEMPLATE="$SCRIPT_DIR/launchd/com.mullion.agent.plist"
+    OTHER_LABEL="com.mullion.primary"
+  fi
+  # The PATH the job runs with. The app spawns `dtach` by bare name (and
+  # passes its inherited PATH into every session), but a launchd job's
+  # default PATH is only /usr/bin:/bin:/usr/sbin:/sbin — where a Homebrew
+  # dtach is not. Resolve dtach's real directory (the prereq check above
+  # already proved it exists) and put it, and node's, on the PATH.
+  DTACH_BIN="$(command -v dtach)"
+  SERVICE_PATH="$(dirname "$DTACH_BIN"):$(dirname "$NODE_PATH"):/usr/bin:/bin:/usr/sbin:/sbin"
+  sed \
+    -e "s|CHANGEME_LAUNCHER|$MULLION_HOME/current/scripts/run-with-env.sh|" \
+    -e "s|CHANGEME_PATH|$SERVICE_PATH|" \
+    -e "s|CHANGEME_WORKING_DIRECTORY|$MULLION_HOME/current|" \
+    -e "s|CHANGEME_HOME|$MULLION_HOME|" \
+    -e "s|CHANGEME_NODE|$NODE_PATH|" \
+    -e "s|CHANGEME_LOG_DIR|$MULLION_HOME/logs|" \
+    "$PLIST_TEMPLATE" \
+    > ~/Library/LaunchAgents/"$LABEL.plist"
+  # launchd refuses a group- or world-writable job definition, and 644 is what
+  # it expects for a user's own LaunchAgent.
+  chmod 644 ~/Library/LaunchAgents/"$LABEL.plist"
+
+  # The OTHER role's job must not stay loaded: both roles load the same .env
+  # and bind the same PORT — a crash loop, not just a mismatch (the same
+  # reasoning as the systemd path's `disable --now` below). Best-effort: the
+  # other job may simply never have existed on this host.
+  if launchctl print "$(launchd_gui_domain)/$OTHER_LABEL" >/dev/null 2>&1; then
+    echo "==> Booting out $OTHER_LABEL (this host is now role: $ROLE)"
+    launchctl bootout "$(launchd_gui_domain)/$OTHER_LABEL" ||
+      echo "WARNING: failed to boot out $OTHER_LABEL — it may still be running and could collide on PORT until stopped by hand (launchctl bootout $(launchd_gui_domain)/$OTHER_LABEL)." >&2
+  fi
+  rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" 2>/dev/null || true
+
+  # `launchctl bootstrap` refuses a label that is ALREADY loaded
+  # ("Bootstrap failed: 5: Input/output error"), so a re-run (a repair, a
+  # re-install) would abort here — after the plist was already overwritten,
+  # leaving the old definition loaded. Boot the label out first: that is
+  # what makes this idempotent, the way the systemd branch's
+  # `daemon-reload` + `enable --now` is.
+  launchctl bootout "$(launchd_gui_domain)/$LABEL" 2>/dev/null || true
+  launchctl bootstrap "$(launchd_gui_domain)" ~/Library/LaunchAgents/"$LABEL.plist"
+  launchctl enable "$(launchd_gui_domain)/$LABEL"
+
+  echo "==> Done. Status:"
+  launchctl print "$(launchd_gui_domain)/$LABEL" || true
 else
   echo "==> Installing the systemd --user unit"
   mkdir -p ~/.config/systemd/user
@@ -557,7 +676,7 @@ Next steps (see docs/multi-host.md):
   - If you used self-registration (Path 1 in $MULLION_HOME/.env), this
     agent should already be self-registering with the primary — check
     Settings -> Hosts on the primary for a new "enrolled" host, or watch
-    this unit's logs: journalctl --user -u $UNIT_NAME -f
+    this service's logs: $SERVICE_LOG_HINT
   - If you used a manual token (Path 2), register this host by hand on
     the primary: Settings -> Hosts -> Add host, with this host's reachable
     base URL and the MULLION_AGENT_TOKEN value from $MULLION_HOME/.env.

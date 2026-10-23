@@ -8,7 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { spawn as spawnChild } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveServiceUnit } from "./systemd-unit.js";
+import { resolveServiceUnit } from "./service-unit.js";
 
 // In-flight phases self-update.sh writes to $MULLION_HOME/.update-status.json
 // while an update is running — see scripts/self-update.sh's write_status().
@@ -90,16 +90,19 @@ export type SpawnSelfUpdateResult =
 
 /**
  * Spawns scripts/self-update.sh detached, exactly the way pty-manager.ts
- * bootstraps a dtach master: a transient `systemd-run --user --scope`,
- * outside this process's own cgroup, so it survives the restart its own
- * last step triggers. Shared by both /api/updates/apply (primary) and
+ * bootstraps a dtach master: outside this process's own service, so it
+ * survives the restart its own last step triggers. On Linux that is a
+ * transient `systemd-run --user --scope`; on macOS it is a one-shot launchd
+ * job (issue #1718) — see launchOneShotUpdateJob below.
+ *
+ * Shared by both /api/updates/apply (primary) and
  * /internal/updates/apply (agent, issue #647) — see this module's own
  * top-of-file comment for why.
  */
-export function spawnSelfUpdate(
+export async function spawnSelfUpdate(
   app: FastifyInstance,
   body: ApplyUpdateBody,
-): SpawnSelfUpdateResult {
+): Promise<SpawnSelfUpdateResult> {
   const mullionHome = app.config.MULLION_HOME;
   if (mullionHome.trim() === "") {
     return {
@@ -131,6 +134,18 @@ export function spawnSelfUpdate(
   }
 
   const { version, assetUrl, checksumUrl } = body;
+  // The version ends up in a FILENAME (the launchd update job's plist) and in
+  // a launchd LABEL, so it is validated here rather than trusted from the
+  // route's schema alone: the routes already constrain it, and this keeps the
+  // guarantee where the path is actually built (defence in depth for a
+  // caller that reaches this function another way).
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    return {
+      ok: false,
+      status: 400,
+      message: `invalid version "${version}" — expected MAJOR.MINOR.PATCH`,
+    };
+  }
   // Ships inside every release tarball — always invoke *this running
   // release's own* copy (current/scripts/self-update.sh), not some other
   // version's, so the update logic in flight matches the app that decided
@@ -146,36 +161,49 @@ export function spawnSelfUpdate(
 
   // Resolved from *this* long-lived process's own cgroup (or an explicit
   // MULLION_SERVICE_UNIT override) — self-update.sh can't do this detection
-  // itself, since it runs inside the wrapperUnitName scope below, not the
-  // app's own unit. This is what makes the final `systemctl --user restart`
-  // target the unit actually installed on this host, even if it was renamed
-  // after install (see src/services/systemd-unit.ts).
-  const serviceUnit = resolveServiceUnit({ override: app.config.MULLION_SERVICE_UNIT });
-  app.log.info({ serviceUnit, version }, "resolved systemd unit for self-update restart");
+  // itself, since it runs inside the wrapper scope/job below, not the app's
+  // own service. This is what makes the final restart target the service
+  // actually installed on this host, even if it was renamed after install
+  // (see src/services/service-unit.ts). On macOS this is the launchd LABEL
+  // rather than a systemd unit name (issue #1718).
+  const serviceUnit = resolveServiceUnit({
+    override: app.config.MULLION_SERVICE_UNIT,
+    role: app.config.MULLION_ROLE,
+  });
+  app.log.info({ serviceUnit, version }, "resolved service for self-update restart");
 
   // Detached exactly like pty-manager.ts's bootstrapMaster spawns a dtach
-  // master: a transient systemd --user scope, collected automatically on
-  // exit, outside this process's own cgroup. Required because the script's
-  // own last step restarts *this* process's systemd unit — a plain child
-  // spawned from here would die with it.
+  // master: outside this process's own service, so it survives the restart
+  // its own last step triggers. Required because the script's last step
+  // restarts *this* process's service — a plain child spawned from here
+  // would die with it.
+  //
+  // On Linux that is a transient `systemd-run --user --scope`, collected
+  // automatically on exit. On macOS the equivalent is a one-shot launchd
+  // job: the app's own job is killed by the restart the update triggers,
+  // so the updater has to be a job of its own (issue #1718).
+  const scriptArgs = [
+    scriptPath,
+    version,
+    assetUrl,
+    checksumUrl,
+    mullionHome,
+    process.execPath,
+    serviceUnit,
+  ];
+
+  if (process.platform === "darwin") {
+    const launched = await launchOneShotUpdateJob(app, mullionHome, version, scriptArgs);
+    if (!launched.ok) {
+      return { ok: false, status: 500, message: launched.message };
+    }
+    return { ok: true, status: 202, body: { phase: "downloading", version } };
+  }
+
   const wrapperUnitName = `mullion-update-${version}`;
   const child = spawnChild(
     "systemd-run",
-    [
-      "--user",
-      "--scope",
-      "--collect",
-      "-u",
-      wrapperUnitName,
-      "--",
-      scriptPath,
-      version,
-      assetUrl,
-      checksumUrl,
-      mullionHome,
-      process.execPath,
-      serviceUnit,
-    ],
+    ["--user", "--scope", "--collect", "-u", wrapperUnitName, "--", ...scriptArgs],
     { cwd: mullionHome, env: process.env, stdio: "ignore" },
   );
   child.on("error", (err) => {
@@ -184,4 +212,212 @@ export function spawnSelfUpdate(
   child.unref();
 
   return { ok: true, status: 202, body: { phase: "downloading", version } };
+}
+
+/**
+ * The macOS counterpart of the transient `systemd-run --user --scope`: a
+ * one-shot launchd job (issue #1718, roadmap 8.4).
+ *
+ * The job is its OWN launchd job, not a child of this process's: the app's
+ * job is killed by the restart the update triggers, so an updater running
+ * inside it would die mid-flight — exactly what the transient scope prevents
+ * on Linux.
+ *
+ * The plist is written under the install root's logs/ dir (not
+ * ~/Library/LaunchAgents) because it is not a persistent job: the script
+ * removes it and boots itself out when it finishes.
+ */
+async function launchOneShotUpdateJob(
+  app: FastifyInstance,
+  mullionHome: string,
+  version: string,
+  scriptArgs: string[],
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const label = `com.mullion.update-${version}`;
+  const logDir = path.join(mullionHome, "logs");
+  const plistPath = path.join(logDir, `${label}.plist`);
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+    fs.writeFileSync(plistPath, renderUpdateJobPlist(label, scriptArgs, logDir), "utf8");
+  } catch (err) {
+    const message = `could not write the update job plist at ${plistPath}: ${err instanceof Error ? err.message : String(err)}`;
+    app.log.error({ err, plistPath }, "failed to prepare the launchd update job");
+    return { ok: false, message };
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (uid === null) {
+    return {
+      ok: false,
+      message: "cannot determine this user's uid — launchd's per-user domain needs it",
+    };
+  }
+
+  const domain = `gui/${uid}`;
+  // ONE deadline for the whole sequence: the request that starts an update
+  // must not be able to wait for two launchctl calls.
+  const deadline = Date.now() + LAUNCHCTL_TIMEOUT_MS;
+
+  // `launchctl bootstrap` refuses an ALREADY-LOADED label ("Bootstrap
+  // failed: 5: Input/output error"). A failed update leaves this job
+  // registered (the script exits before its own bootout), so the next apply
+  // for the SAME version — the most likely retry — would write the same
+  // plist and be refused, silently doing nothing. Boot the label out first,
+  // exactly as install.sh does for the app's own label.
+  const bootout = await runLaunchctl(["bootout", `${domain}/${label}`], {
+    cwd: mullionHome,
+    deadline,
+    app,
+  });
+  if (!bootout.ok) {
+    // Not fatal on its own — the bootstrap below may still succeed (the
+    // label was simply not loaded) — but it is not silent either.
+    app.log.warn(
+      { label, reason: bootout.message },
+      "could not boot the previous launchd update job out before bootstrapping the new one",
+    );
+  }
+
+  // launchctl's exit status is the answer: a refusal must not be reported
+  // to the caller as a started update. Its output is captured so launchd's
+  // own error text ("Bootstrap failed: 5: Input/output error") reaches both
+  // the API response and the app's log.
+  const result = await runLaunchctl(["bootstrap", domain, plistPath], {
+    cwd: mullionHome,
+    deadline,
+    app,
+  });
+  if (!result.ok) {
+    const message = `launchctl could not start the update job (${label}): ${result.message}`;
+    app.log.error({ label, plistPath, message }, "failed to launch the launchd update job");
+    return { ok: false, message };
+  }
+  app.log.info({ label, plistPath }, "launched the launchd update job");
+  return { ok: true };
+}
+
+/**
+ * How long a launchctl subcommand may take before we give up on it.
+ *
+ * launchctl is a local, immediate operation — the bootstrap of a job
+ * returns as soon as the job is registered. A hung launchctl would hang
+ * the HTTP request that started the update, leaving the UI's "Update now"
+ * button spinning with no answer, so the wait is bounded.
+ */
+const LAUNCHCTL_TIMEOUT_MS = 10_000;
+
+/**
+ * The smallest budget worth handing to a launchctl call.
+ *
+ * A bootout that succeeds after ~9.99s leaves the bootstrap a few
+ * milliseconds — not enough for launchctl to register the job, but enough
+ * for us to start it and kill it at once, which is the register-then-
+ * report-500 hazard. Below this floor the budget counts as spent.
+ */
+const LAUNCHCTL_MIN_BUDGET_MS = 1_000;
+
+/**
+ * Runs a launchctl subcommand and reports its exit status.
+ *
+ * The child's output is PIPED, not inherited: launchd's own error text
+ * (e.g. "Bootstrap failed: 5: Input/output error") is captured here so
+ * the caller can put it in an API response, and it is logged so it also
+ * reaches the app's log.
+ *
+ * `deadline` is an absolute timestamp shared by the whole launch sequence,
+ * so the request that starts an update waits for at most ONE deadline in
+ * total, not one per call.
+ */
+function runLaunchctl(
+  args: string[],
+  options: { cwd: string; deadline: number; app: FastifyInstance },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  return new Promise((resolve) => {
+    const remaining = Math.max(0, options.deadline - Date.now());
+    if (remaining < LAUNCHCTL_MIN_BUDGET_MS) {
+      // The budget for the WHOLE launch is already spent. Do NOT spawn
+      // launchctl at all: killing it at spawn could still let it register
+      // the job, which would leave the caller with a 500 for an update that
+      // is actually running — and the retry would then hit the
+      // already-loaded label.
+      resolve({
+        ok: false,
+        message: `the launchctl deadline (${LAUNCHCTL_TIMEOUT_MS}ms) was already exhausted before launchctl ${args[0]}`,
+      });
+      return;
+    }
+    const child = spawnChild("launchctl", args, {
+      cwd: options.cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    let settled = false;
+    const finish = (result: { ok: true } | { ok: false; message: string }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({
+        ok: false,
+        message: `launchctl ${args[0]} timed out after ${remaining}ms`,
+      });
+    }, remaining);
+    // The timer must not hold the event loop open on its own.
+    timer.unref?.();
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.on("error", (err) => {
+      finish({ ok: false, message: err.message });
+    });
+    // "close" rather than "exit": it fires after the child's stdio has
+    // drained, so launchd's error text is in `output` by then.
+    child.on("close", (code) => {
+      const text = output.trim();
+      if (text) options.app.log.debug({ args, output: text }, "launchctl output");
+      finish(
+        code === 0 ? { ok: true } : { ok: false, message: `exit ${code}: ${text || "no output"}` },
+      );
+    });
+  });
+}
+
+/**
+ * The one-shot job's plist. AbandonProcessGroup is set for the same reason
+ * the app's own job sets it (see deploy/launchd/*.plist): the updater must
+ * survive the restart it triggers.
+ */
+function renderUpdateJobPlist(label: string, scriptArgs: string[], logDir: string): string {
+  const escape = (value: string): string =>
+    value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const args = scriptArgs.map((arg) => `    <string>${escape(arg)}</string>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${escape(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${args}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${escape(path.join(logDir, `${label}.out.log`))}</string>
+  <key>StandardErrorPath</key>
+  <string>${escape(path.join(logDir, `${label}.err.log`))}</string>
+</dict>
+</plist>
+`;
 }

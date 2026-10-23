@@ -796,7 +796,7 @@ export async function internalRoutes(app: FastifyInstance) {
       config: { rateLimit: { max: 5, timeWindow: "1 minute" } },
     },
     async (request, reply) => {
-      const result = spawnSelfUpdate(app, request.body);
+      const result = await spawnSelfUpdate(app, request.body);
       if (!result.ok) {
         reply.code(result.status);
         return { message: result.message };

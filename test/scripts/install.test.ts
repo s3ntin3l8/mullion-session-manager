@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 const execFileAsync = promisify(execFile);
 
 const INSTALL_SCRIPT = fileURLToPath(new URL("../../deploy/install.sh", import.meta.url));
+const LAUNCHER_SCRIPT = fileURLToPath(new URL("../../scripts/run-with-env.sh", import.meta.url));
 
 const describeOnLinux = process.platform === "linux" ? describe : describe.skip;
 
@@ -107,6 +108,28 @@ DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 echo "$*" >> "$DIR/systemctl.log"
 case "$*" in
   *is-enabled*|*is-active*)
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+  );
+  // launchctl — the macOS counterpart of the systemctl shim above (issue
+  // #1718). Every invocation is appended to launchctl.log so the darwin
+  // branch's exact sequence can be asserted without ever touching a real
+  // launchd. `print` is the "is this job loaded?" probe — it reports "not
+  // found" (exit 1) by default, which keeps the bootout-the-other-role
+  // branch out of every test that isn't specifically exercising it.
+  writeShim(
+    binDir,
+    "launchctl",
+    `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+case "$*" in
+  *print*)
     exit 1
     ;;
   *)
@@ -221,7 +244,7 @@ describeOnLinux("deploy/install.sh", () => {
   // binaries live. Also asserted as its own test below, per this issue's
   // own "verify this works before trusting any test result" requirement.
   async function assertSandboxed(env: NodeJS.ProcessEnv) {
-    const dangerous = ["systemctl", "systemd-run", "curl", "npm", "npx", "dtach"];
+    const dangerous = ["systemctl", "systemd-run", "curl", "npm", "npx", "dtach", "launchctl"];
     const { stdout } = await execFileAsync(
       "bash",
       ["-c", dangerous.map((cmd) => `command -v ${cmd}`).join("; ")],
@@ -462,6 +485,47 @@ describeOnLinux("deploy/install.sh", () => {
     });
   });
 
+  describe("the launchd launcher (scripts/run-with-env.sh)", () => {
+    it("PARSES the .env instead of executing it", async () => {
+      // systemd's EnvironmentFile= parses KEY=VALUE literally; sourcing the
+      // file would EXECUTE it — so `MULLION_AGENT_NAME=Studio Mac` would run
+      // `Mac` and leave the variable unset, and a secret holding `$` or a
+      // backtick would be expanded or executed. The launcher must behave
+      // like EnvironmentFile=, not like `. .env`.
+      const envFile = path.join(fakeHome, ".env");
+      fs.writeFileSync(
+        envFile,
+        // The values are fixtures, not secrets — the point is that a value
+        // with a space, and one holding `$` and a backtick, survive parsing.
+        "MULLION_AGENT_NAME=Studio Mac\nMULLION_TOKEN='a$b`c`d'\n# a comment\n\n", // pragma: allowlist secret
+      );
+      const outFile = path.join(fakeHome, "env.out");
+      writeShim(
+        binDir,
+        "fake-node",
+        `#!/usr/bin/env bash
+env > "$OUT"
+`,
+      );
+
+      await execFileAsync("sh", [LAUNCHER_SCRIPT], {
+        env: {
+          ...baseEnv,
+          HOME: fakeHome,
+          MULLION_HOME: fakeHome,
+          MULLION_NODE_BIN: path.join(binDir, "fake-node"),
+          OUT: outFile,
+        },
+      });
+
+      const printed = fs.readFileSync(outFile, "utf8");
+      expect(printed).toMatch(/^MULLION_AGENT_NAME=Studio Mac$/m);
+      expect(printed).toMatch(/^MULLION_TOKEN=a\$b`c`d$/m);
+      // The comment line and the blank one are not variables.
+      expect(printed).not.toMatch(/^# a comment$/m);
+    });
+  });
+
   describe("systemd unit generation", () => {
     it("substitutes every CHANGEME placeholder in the generated primary unit and links the CLI", async () => {
       const mullionHome = freshMullionHome();
@@ -510,6 +574,170 @@ describeOnLinux("deploy/install.sh", () => {
       for (const line of nonCommentLines) {
         expect(line).not.toContain("CHANGEME");
       }
+    });
+  });
+
+  // The macOS branch (issue #1718, roadmap 8.4). The platform detection goes
+  // through `uname -s`, so a shimmed `uname` exercises the launchd branch on
+  // a Linux runner — the same trick the systemctl shim plays for the
+  // systemd branch. The shim is removed after each test, so the Linux tests
+  // above still see the real platform.
+  describe("macOS launchd branch", () => {
+    function writeDarwinShim(): void {
+      writeShim(
+        binDir,
+        "uname",
+        `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
+`,
+      );
+    }
+
+    function readLaunchctlLog(): string[] {
+      const p = path.join(binDir, "launchctl.log");
+      if (!fs.existsSync(p)) return [];
+      return fs
+        .readFileSync(p, "utf8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0);
+    }
+
+    afterEach(() => {
+      fs.rmSync(path.join(binDir, "uname"), { force: true });
+    });
+
+    it("writes a launchd plist (not a systemd unit) with every CHANGEME substituted", async () => {
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome, { withCli: true });
+      await runScript(["--role", "primary", mullionHome]);
+
+      // No systemd unit on darwin.
+      expect(
+        fs.existsSync(path.join(fakeHome, ".config", "systemd", "user", "mullion.service")),
+      ).toBe(false);
+
+      const plistPath = path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.primary.plist");
+      const plist = fs.readFileSync(plistPath, "utf8");
+      // The plist's own header comment mentions the CHANGEME placeholders
+      // (like the systemd unit's header comment mentions its own) — the
+      // assertion is about the VALUES, so the comment is stripped first. The
+      // comment is the file's FIRST element, so everything after its closing
+      // "-->" is the part under test.
+      const withoutComments = plist.slice(plist.indexOf("-->") + 3);
+      expect(withoutComments).not.toContain("CHANGEME");
+
+      const homeReal = fs.realpathSync(mullionHome);
+      expect(plist).toContain(path.join(homeReal, "current"));
+      expect(plist).toContain(path.join(binDir, "node"));
+      expect(plist).toContain("com.mullion.primary");
+      expect(plist).toContain("run-with-env.sh");
+    });
+
+    it("keeps the dtach masters alive across a restart (AbandonProcessGroup)", async () => {
+      // Load-bearing: launchd otherwise SIGTERMs "all child processes of the
+      // job" when the job stops, which would take every live dtach master —
+      // and every live session — down with it on each app restart.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const plist = fs.readFileSync(
+        path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.primary.plist"),
+        "utf8",
+      );
+      expect(plist).toMatch(/<key>AbandonProcessGroup<\/key>\s*<true\/>/);
+    });
+
+    it("bootstraps and enables the job, and leaves the other role's job alone", async () => {
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      expect(log.some((line) => line.startsWith(`bootstrap ${domain} `))).toBe(true);
+      expect(log).toContainEqual(`enable ${domain}/com.mullion.primary`);
+      // The other role's job was never loaded, so it is never booted out.
+      // (This role's OWN label IS booted out first — that is what makes a
+      // re-run work, since `launchctl bootstrap` refuses an already-loaded
+      // label.)
+      expect(
+        log.some((line) => line.includes("bootout") && line.includes("com.mullion.agent")),
+      ).toBe(false);
+    });
+
+    it("gives the job a PATH that can resolve dtach", async () => {
+      // The app spawns `dtach` by bare name (and passes its inherited PATH
+      // into every session), but a launchd job's default PATH is only
+      // /usr/bin:/bin:/usr/sbin:/sbin — where a Homebrew dtach is not. The
+      // install resolves dtach's real directory and writes it into the job.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const plist = fs.readFileSync(
+        path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.primary.plist"),
+        "utf8",
+      );
+      expect(plist).toMatch(/<key>PATH<\/key>/);
+      expect(plist).toContain(binDir);
+    });
+
+    it("boots the label out before bootstrapping it, so a re-run works", async () => {
+      // `launchctl bootstrap` refuses an already-loaded label ("Bootstrap
+      // failed: 5: Input/output error"), so without this the second run
+      // would abort — after the plist was already overwritten, leaving the
+      // old definition loaded.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      const bootout = log.indexOf(`bootout ${domain}/com.mullion.primary`);
+      const bootstrap = log.findIndex((line) => line.startsWith(`bootstrap ${domain} `));
+      expect(bootout).toBeGreaterThanOrEqual(0);
+      expect(bootstrap).toBeGreaterThan(bootout);
+    });
+
+    it("boots out the other role's job when launchd reports it loaded", async () => {
+      writeDarwinShim();
+      // Overrides the default shim (which reports `print` as "not found") so
+      // the bootout-the-other-role branch is exercised specifically.
+      writeShim(
+        binDir,
+        "launchctl",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+exit 0
+`,
+      );
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
+    });
+
+    it("writes the agent plist for --role agent", async () => {
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome], {
+        env: {
+          MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
+          MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
+        },
+      });
+      const plistPath = path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.agent.plist");
+      const plist = fs.readFileSync(plistPath, "utf8");
+      expect(plist.slice(plist.indexOf("-->") + 3)).not.toContain("CHANGEME");
+      expect(plist).toContain("com.mullion.agent");
+      expect(plist).toContain("<string>agent</string>");
     });
   });
 

@@ -37,6 +37,16 @@
 
 set -euo pipefail
 
+# Issue #1718 (roadmap 8.4) — this script runs on macOS too, where a stock
+# Mac has neither GNU coreutils (sha256sum, timeout, stat -c, find -printf,
+# sort -V, readlink -f) nor bash 4 (mapfile). The portable spellings live in
+# scripts/portable.sh, which ships inside every release tarball alongside
+# this script (see the build-tarball job in
+# .github/workflows/release-please.yml), so it is always right here.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/portable.sh
+. "$SCRIPT_DIR/portable.sh"
+
 VERSION="${1:?version required}"
 ASSET_URL="${2:?asset URL required}"
 CHECKSUM_URL="${3:?checksum URL required}"
@@ -44,10 +54,14 @@ MULLION_HOME="${4:?MULLION_HOME required}"
 NODE_EXEC_PATH="${5:?node exec path required}"
 
 # Resolved by the caller (src/routes/updates.ts, via
-# src/services/systemd-unit.ts) from this host's actual running unit, so a
+# src/services/service-unit.ts) from this host's actual running unit, so a
 # renamed unit still restarts correctly without editing this constant.
 # Falls back to deploy/mullion.service's name for a manual invocation with
 # no 6th arg.
+#
+# On macOS this is the LAUNCHD LABEL, not a systemd unit name (issue #1718):
+# the same argument slot carries whichever the host's platform uses, and the
+# restart step below branches on the platform.
 UNIT_NAME="${6:-mullion.service}"
 
 # A lock older than this is treated as abandoned rather than "an update is
@@ -85,7 +99,10 @@ LOCK_DIR="$MULLION_HOME/.update.lock"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
-  rm -rf "$TMP_DIR"
+  # Both removals are best-effort: the temp dir may already be gone, and a
+  # rm that refuses the path (a trash-style wrapper) must not turn a
+  # successful update into a failed one.
+  rm -rf "$TMP_DIR" 2>/dev/null || true
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -104,7 +121,7 @@ acquire_lock() {
     return 0
   fi
   local lock_age
-  lock_age=$(($(date +%s) - $(stat -c %Y "$LOCK_DIR" 2>/dev/null || echo 0)))
+  lock_age=$(($(date +%s) - $(file_mtime "$LOCK_DIR")))
   if [ "$lock_age" -gt "$STALE_LOCK_SECONDS" ]; then
     echo "clearing stale update lock (${lock_age}s old, threshold ${STALE_LOCK_SECONDS}s)" >&2
     rm -rf "$LOCK_DIR"
@@ -147,6 +164,17 @@ fail() {
   # Leave any partial release dir behind for `installing`/`verifying`
   # failures removed explicitly below — current is never touched on any
   # failure path, so the running app keeps serving regardless.
+  #
+  # On macOS this job is a launchd job of its own, and it is about to exit
+  # without reaching its own bootout at the end of the script: the label
+  # would stay registered, and the next apply for the SAME version would be
+  # refused by `launchctl bootstrap` (an already-loaded label). Boot it out
+  # and drop its plist here, so a failed update leaves nothing behind and
+  # the retry can start cleanly.
+  if is_darwin; then
+    rm -f "$MULLION_HOME/logs/com.mullion.update-$VERSION.plist" 2>/dev/null || true
+    launchctl bootout "$(launchd_gui_domain)/com.mullion.update-$VERSION" 2>/dev/null || true
+  fi
   exit 1
 }
 
@@ -164,7 +192,7 @@ curl -fsSL --max-time 60 -o "$CHECKSUM_FILE" "$CHECKSUM_URL" ||
 # directory under that exact name — hence cd into $TMP_DIR rather than
 # passing absolute paths. A mismatch here means either a corrupted
 # download or a tampered/substituted asset; either way, don't extract it.
-(cd "$TMP_DIR" && sha256sum -c "$TARBALL_NAME.sha256") ||
+verify_sha256 "$TMP_DIR" "$TARBALL_NAME.sha256" ||
   fail "checksum verification failed for $TARBALL_NAME"
 
 # --- installing ---
@@ -174,7 +202,7 @@ tar -xzf "$TARBALL" -C "$RELEASE_DIR" || {
   rm -rf "$RELEASE_DIR"
   fail "could not extract release tarball"
 }
-(cd "$RELEASE_DIR" && timeout "$NPM_CI_TIMEOUT_SECONDS" npm ci --omit=dev) || {
+(cd "$RELEASE_DIR" && run_with_timeout "$NPM_CI_TIMEOUT_SECONDS" npm ci --omit=dev) || {
   rm -rf "$RELEASE_DIR"
   fail "npm ci --omit=dev failed or timed out after ${NPM_CI_TIMEOUT_SECONDS}s in $RELEASE_DIR"
 }
@@ -186,7 +214,7 @@ tar -xzf "$TARBALL" -C "$RELEASE_DIR" || {
 # host that already has it cached (unchanged version) makes this a fast
 # no-op rather than a re-download.
 (cd "$RELEASE_DIR" && PLAYWRIGHT_BROWSERS_PATH="$MULLION_HOME/browsers" \
-  timeout "$NPM_CI_TIMEOUT_SECONDS" npx playwright install chromium) || {
+  run_with_timeout "$NPM_CI_TIMEOUT_SECONDS" npx playwright install chromium) || {
   rm -rf "$RELEASE_DIR"
   fail "playwright install chromium failed or timed out after ${NPM_CI_TIMEOUT_SECONDS}s in $RELEASE_DIR"
 }
@@ -224,8 +252,9 @@ write_status "restarting"
 # Atomic symlink flip: build the new link next to the old one, then rename
 # over it — readers (including a systemd unit mid-restart) never observe a
 # missing/half-written `current`.
-ln -sfn "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
-mv -T "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
+rm -f "$MULLION_HOME/current.tmp"
+ln -s "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
+replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
 # Phase 4 (#134, PR7) — (re)links ~/.local/bin/mullion here too, not just in
 # install.sh: every host already provisioned before this CLI existed ran
 # install.sh long before this step existed and only ever updates via THIS
@@ -238,32 +267,75 @@ mv -T "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
 # never needs to run again on a future update once the target exists.
 if [ -f "$CURRENT_LINK/dist/cli/mullion.mjs" ]; then
   mkdir -p ~/.local/bin
-  ln -sfn "$CURRENT_LINK/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  rm -f ~/.local/bin/mullion
+  ln -s "$CURRENT_LINK/dist/cli/mullion.mjs" ~/.local/bin/mullion
 fi
 # Sessions survive: dtach masters run in their own transient systemd --user
 # scopes (pty-manager.ts's bootstrapMaster), outside this unit's cgroup, so
 # KillMode=control-group only stops the app process itself. The DB migrates
 # forward automatically on the new process's startup (ensureDb()).
-# Reload the systemd user manager in case the unit on disk was updated or marked dirty.
-systemctl --user daemon-reload 2>/dev/null || true
-systemctl --user restart "$UNIT_NAME" || fail "systemctl --user restart $UNIT_NAME failed"
+#
+# On macOS the same property comes from the launchd job's AbandonProcessGroup
+# key (see deploy/launchd/*.plist): launchd otherwise SIGTERMs every child of
+# the job, which would take the dtach masters — and every live session —
+# down with it.
+if is_darwin; then
+  # The launchd plist is NOT rewritten by an update (the `current` symlink is
+  # what moves), so there is nothing to reload — kickstart is enough.
+  #
+  # The bootout of this job's OWN label happens at the very END of the
+  # script, not here: booting this job out kills this very process, so
+  # anything after it (the release prune, the final status write) would
+  # never run — the UI would poll "restarting" forever and the next
+  # "Update now" would be refused as in-progress.
+  launchctl kickstart -k "$(launchd_gui_domain)/$UNIT_NAME" ||
+    fail "launchctl kickstart -k $(launchd_gui_domain)/$UNIT_NAME failed"
+else
+  # Reload the systemd user manager in case the unit on disk was updated or marked dirty.
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user restart "$UNIT_NAME" || fail "systemctl --user restart $UNIT_NAME failed"
+fi
 
 # --- prune old releases, keep the 3 most recent (by version) ---
 # Protect whatever `current` resolves to regardless of sort position, on
 # top of the newest-3 rule, so an out-of-order manual rollback never gets
 # pruned out from under itself.
-KEEP_DIR="$(readlink -f "$CURRENT_LINK")"
-mapfile -t ALL_RELEASES < <(find "$RELEASES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V)
+KEEP_DIR="$(readlink_target "$CURRENT_LINK" || echo "$CURRENT_LINK")"
+# Oldest first (the order the prune below expects). `find -printf` and
+# `sort -V` are GNU-only, and `mapfile` is bash 4 — the portable spellings
+# are dir_names/sort_versions (GNU-free) and a plain read loop (bash 3.2-safe).
+ALL_RELEASES="$(dir_names "$RELEASES_DIR" | sort_versions)"
 KEEP_COUNT=3
-TOTAL=${#ALL_RELEASES[@]}
+TOTAL="$(printf '%s\n' "$ALL_RELEASES" | grep -c . || true)"
 if [ "$TOTAL" -gt "$KEEP_COUNT" ]; then
   PRUNE_UPTO=$((TOTAL - KEEP_COUNT))
-  for ((i = 0; i < PRUNE_UPTO; i++)); do
-    candidate="$RELEASES_DIR/${ALL_RELEASES[$i]}"
+  INDEX=0
+  while IFS= read -r release_name; do
+    [ -n "$release_name" ] || continue
+    if [ "$INDEX" -ge "$PRUNE_UPTO" ]; then
+      break
+    fi
+    candidate="$RELEASES_DIR/$release_name"
     if [ "$candidate" != "$KEEP_DIR" ]; then
       rm -rf "$candidate"
     fi
-  done
+    INDEX=$((INDEX + 1))
+  done <<EOF
+$ALL_RELEASES
+EOF
 fi
 
 write_status "done"
+
+# --- the one-shot launchd job cleans up after itself (macOS) ---
+if is_darwin; then
+  # LAST statement on purpose: `launchctl bootout` kills this very process
+  # (this job is the one src/routes/updates.ts bootstrapped), so nothing may
+  # follow it. The plist goes first — the bootout is what stops the job, and
+  # removing the file is what stops it from being loaded again at login.
+  # `|| true`: the plist may not exist (a manual invocation, or an rm that
+  # refuses the path), and neither is a reason to fail an update that has
+  # already succeeded.
+  rm -f "$MULLION_HOME/logs/com.mullion.update-$VERSION.plist" 2>/dev/null || true
+  launchctl bootout "$(launchd_gui_domain)/com.mullion.update-$VERSION" 2>/dev/null || true
+fi
