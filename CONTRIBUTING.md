@@ -112,19 +112,16 @@ changelog.
 
 `main` requires a PR (no direct pushes, no admin bypass) and these status
 checks: `test-node / lint-and-test`, `test-node / test-merge`,
-`test-frontend / lint-and-test`, and CodeQL's
+`test-frontend / lint-and-test`, `test-frontend / test-merge`, and CodeQL's
 `analyze / Analyze (javascript-typescript)`. All of the above (lint,
 typecheck, test, format-check) map directly to what those checks run, so a
 clean local run should mean a clean CI run.
 
-**Pending follow-up:** the frontend shards its test run, which moves the
-frontend's tests **and** its `coverage-fail-under: 70` gate out of
-`test-frontend / lint-and-test` into a new `test-frontend / test-merge`
-job. That context has to be added to this list (see `docs/ci-cd.md` for the
-command) — until it is, `test-frontend / lint-and-test` reports green while
-running no tests at all, and a broken frontend suite would merge silently.
-The two `test-merge` entries are the coverage gates for the two sharded
-workspaces; `lint-and-test` keeps running lint/typecheck/build.
+Both workspaces shard their test run, so the real tests (and the
+`coverage-fail-under` check) live in the two `test-merge` jobs; the
+matching `lint-and-test` jobs keep running lint/typecheck/build and report
+green whether or not any test ran. **Both `test-merge` contexts are
+required for that reason** — drop one and a broken suite merges silently.
 
 ## Automated review
 

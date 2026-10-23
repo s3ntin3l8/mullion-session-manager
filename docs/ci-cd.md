@@ -208,35 +208,29 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
 
 ## Branch protection
 
-Required status checks for merge **today**:
+Required status checks for merge:
 
 - `test-node / lint-and-test`
 - `test-node / test-merge` (sharded backend coverage gate)
 - `test-frontend / lint-and-test`
+- `test-frontend / test-merge` (sharded frontend coverage gate)
 - `analyze / Analyze (javascript-typescript)` (CodeQL is mandatory)
 
-**Pending follow-up — `test-frontend / test-merge` is NOT yet required.**
-The frontend shards its test run, which moves the frontend's tests **and**
-its `coverage-fail-under: 70` gate out of `test-frontend / lint-and-test`
-into a new `test-frontend / test-merge` job. Until that context is added
-to this list, `test-frontend / lint-and-test` reports green while running
-no tests at all, and a broken frontend suite would merge silently. Add it
-right after the sharding change lands (adding it earlier would block the
-open PRs on a context that does not exist yet):
+Both workspaces shard their test run, so **both** `test-merge` contexts are
+required. Their matching `lint-and-test` contexts keep running
+lint/typecheck/build and report green whether or not any test ran — drop a
+`test-merge` context and a broken suite merges silently.
+
+Verify the current contexts via:
 
 ```bash
-gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection \
-  --jq '.required_status_checks.contexts'
+gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
 ```
 
-Read the current protection object first and preserve every other field
-(`strict`, `enforce_admins`, `required_pull_request_reviews`,
-`restrictions`, ...) — a PUT replaces the whole object.
-
-Both workspaces shard their test run, so **both** `test-merge` contexts
-must eventually be required. Their matching `lint-and-test` contexts keep
-running lint/typecheck/build and report green whether or not any test ran —
-drop a `test-merge` context and a broken suite merges silently.
+The protection object also requires **all conversations to be resolved**
+(`required_conversation_resolution`) — a review thread left open blocks the
+merge even when every check is green. `node scripts/review-threads.mjs list
+<pr>` lists the open ones, and `reply`/`resolve` close them.
 
 Verify the current contexts via:
 
