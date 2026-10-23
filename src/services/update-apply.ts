@@ -99,10 +99,10 @@ export type SpawnSelfUpdateResult =
  * /internal/updates/apply (agent, issue #647) — see this module's own
  * top-of-file comment for why.
  */
-export function spawnSelfUpdate(
+export async function spawnSelfUpdate(
   app: FastifyInstance,
   body: ApplyUpdateBody,
-): SpawnSelfUpdateResult {
+): Promise<SpawnSelfUpdateResult> {
   const mullionHome = app.config.MULLION_HOME;
   if (mullionHome.trim() === "") {
     return {
@@ -193,7 +193,7 @@ export function spawnSelfUpdate(
   ];
 
   if (process.platform === "darwin") {
-    const launched = launchOneShotUpdateJob(app, mullionHome, version, scriptArgs);
+    const launched = await launchOneShotUpdateJob(app, mullionHome, version, scriptArgs);
     if (!launched.ok) {
       return { ok: false, status: 500, message: launched.message };
     }
@@ -227,12 +227,12 @@ export function spawnSelfUpdate(
  * ~/Library/LaunchAgents) because it is not a persistent job: the script
  * removes it and boots itself out when it finishes.
  */
-function launchOneShotUpdateJob(
+async function launchOneShotUpdateJob(
   app: FastifyInstance,
   mullionHome: string,
   version: string,
   scriptArgs: string[],
-): { ok: true } | { ok: false; message: string } {
+): Promise<{ ok: true } | { ok: false; message: string }> {
   const label = `com.mullion.update-${version}`;
   const logDir = path.join(mullionHome, "logs");
   const plistPath = path.join(logDir, `${label}.plist`);
@@ -253,17 +253,63 @@ function launchOneShotUpdateJob(
     };
   }
 
-  const child = spawnChild("launchctl", ["bootstrap", `gui/${uid}`, plistPath], {
-    cwd: mullionHome,
-    env: process.env,
-    stdio: "ignore",
-  });
-  child.on("error", (err) => {
-    app.log.error({ err, label }, "failed to launch the launchd update job");
-  });
-  child.unref();
+  const domain = `gui/${uid}`;
+  // `launchctl bootstrap` refuses an ALREADY-LOADED label ("Bootstrap
+  // failed: 5: Input/output error"). A failed update leaves this job
+  // registered (the script exits before its own bootout), so the next apply
+  // for the SAME version — the most likely retry — would write the same
+  // plist and be refused, silently doing nothing. Boot the label out first,
+  // exactly as install.sh does for the app's own label.
+  await runLaunchctl(["bootout", `${domain}/${label}`], { cwd: mullionHome });
+
+  // launchctl's exit status is the answer: a refusal must not be reported
+  // to the caller as a started update. stdio is inherited here (not
+  // ignored) so launchd's own error text reaches the log.
+  const result = await runLaunchctl(["bootstrap", domain, plistPath], { cwd: mullionHome });
+  if (!result.ok) {
+    const message = `launchctl could not start the update job (${label}): ${result.message}`;
+    app.log.error({ label, plistPath, message }, "failed to launch the launchd update job");
+    return { ok: false, message };
+  }
   app.log.info({ label, plistPath }, "launched the launchd update job");
   return { ok: true };
+}
+
+/**
+ * Runs a launchctl subcommand and reports its exit status.
+ *
+ * The child's stdio is inherited so launchd's own error text (e.g. "Bootstrap
+ * failed: 5: Input/output error") lands in the app's log; the text is also
+ * captured here so the caller can put it in an API response.
+ */
+function runLaunchctl(
+  args: string[],
+  options: { cwd: string },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  return new Promise((resolve) => {
+    const child = spawnChild("launchctl", args, {
+      cwd: options.cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.on("error", (err) => {
+      resolve({ ok: false, message: err.message });
+    });
+    child.on("exit", (code) => {
+      resolve(
+        code === 0
+          ? { ok: true }
+          : { ok: false, message: `exit ${code}: ${output.trim() || "no output"}` },
+      );
+    });
+  });
 }
 
 /**

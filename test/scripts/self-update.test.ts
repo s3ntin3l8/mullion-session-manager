@@ -193,6 +193,16 @@ describeOnLinux("scripts/self-update.sh", () => {
       `#!/usr/bin/env bash
 DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 echo "$*" >> "$DIR/launchctl.log"
+# Booting this job out kills the process that ran it — which is exactly why
+# the script's own bootout has to be its LAST statement. Modelling that here
+# is what keeps the ordering honest: a script that booted itself out early
+# would never reach its release prune or its final status write, and this
+# shim would kill it where it stood.
+case "$*" in
+  *bootout*)
+    kill -TERM $PPID
+    ;;
+esac
 exit 0
 `,
     );
@@ -206,12 +216,17 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
     );
     const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9");
 
+    // The script's own bootout kills the script (the shim above models
+    // launchd's SIGTERM), so it exits on that signal rather than 0 — which is
+    // exactly what happens on a real Mac. The assertions below are what
+    // matter: the kickstart happened, the bootout happened, the plist is
+    // gone, and the run reached "done".
     await runScript({
       version: "9.9.9",
       assetUrl: `file://${tarballPath}`,
       checksumUrl: `file://${checksumPath}`,
       unitName: "com.mullion.primary",
-    });
+    }).catch(() => undefined);
 
     const launchctlLog = readLaunchctlLog();
     expect(launchctlLog).toContainEqual(
@@ -224,6 +239,10 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
     );
     // ...and systemctl was never involved.
     expect(readSystemctlLog().some((line) => line.includes("restart"))).toBe(false);
+    // The bootout kills the script, so reaching "done" proves the bootout was
+    // the LAST thing it did: the release prune and this status write are both
+    // after it.
+    expect(readStatus().phase).toBe("done");
   });
 
   it("downloads, verifies, installs, and flips current on a successful update", async () => {

@@ -164,6 +164,17 @@ fail() {
   # Leave any partial release dir behind for `installing`/`verifying`
   # failures removed explicitly below — current is never touched on any
   # failure path, so the running app keeps serving regardless.
+  #
+  # On macOS this job is a launchd job of its own, and it is about to exit
+  # without reaching its own bootout at the end of the script: the label
+  # would stay registered, and the next apply for the SAME version would be
+  # refused by `launchctl bootstrap` (an already-loaded label). Boot it out
+  # and drop its plist here, so a failed update leaves nothing behind and
+  # the retry can start cleanly.
+  if is_darwin; then
+    rm -f "$MULLION_HOME/logs/com.mullion.update-$VERSION.plist" 2>/dev/null || true
+    launchctl bootout "$(launchd_gui_domain)/com.mullion.update-$VERSION" 2>/dev/null || true
+  fi
   exit 1
 }
 

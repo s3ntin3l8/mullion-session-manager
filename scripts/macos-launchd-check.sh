@@ -96,15 +96,11 @@ done
 
 echo
 echo "=== 3. the installer picks the launchd branch on darwin ==="
-INSTALL_OUT="$("$REPO_DIR/deploy/install.sh" --help 2>&1)"
-if grep -q "Platform: Darwin" <<<"$INSTALL_OUT"; then
-  pass "the installer reports the Darwin platform"
-else
-  # --help exits before the platform banner; the branch is asserted by the
-  # Linux CI suite instead (test/scripts/install.test.ts). Say so plainly
-  # rather than pretending the check ran.
-  pass "the platform banner is printed after --help returns; the branch itself is covered by test/scripts/install.test.ts"
-fi
+# The installer's platform branch is asserted by the Linux CI suite instead
+# (test/scripts/install.test.ts drives it through a shimmed `uname`), so there
+# is nothing to check here — say so rather than reporting a PASS that cannot
+# fail.
+echo "SKIP  the installer's platform branch (covered by test/scripts/install.test.ts on Linux CI)"
 
 echo
 echo "=== 4. the installer refuses cleanly when launchctl is missing ==="

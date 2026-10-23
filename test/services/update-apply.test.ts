@@ -7,6 +7,7 @@
 //
 // These tests pin that shape: the plist that is written, the label it carries,
 // and the `launchctl bootstrap` that loads it — plus the unchanged Linux path.
+import { EventEmitter } from "node:events";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
@@ -15,6 +16,8 @@ import path from "node:path";
 import type * as ChildProcess from "node:child_process";
 
 const spawnCalls: Array<{ command: string; args: string[] }> = [];
+/** The exit status the fake launchctl reports (0 = success). */
+let launchctlExitCode = 0;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -22,10 +25,21 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (command: string, args: string[]) => {
       spawnCalls.push({ command, args });
-      return {
-        on: () => undefined,
-        unref: () => undefined,
+      const child = new EventEmitter() as EventEmitter & {
+        stdout: EventEmitter;
+        stderr: EventEmitter;
+        unref: () => void;
       };
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.unref = () => undefined;
+      setImmediate(() => {
+        if (command === "launchctl" && launchctlExitCode !== 0) {
+          child.stderr.emit("data", Buffer.from("Bootstrap failed: 5: Input/output error\n"));
+        }
+        child.emit("exit", command === "launchctl" ? launchctlExitCode : 0);
+      });
+      return child;
     },
   };
 });
@@ -58,11 +72,12 @@ function stubSelfUpdateScript(mullionHome: string): void {
   fs.writeFileSync(scriptPath, "#!/usr/bin/env bash\nexit 0\n");
 }
 
-describe("spawnSelfUpdate", () => {
+describe("spawnSelfUpdate", async () => {
   const originalPlatform = process.platform;
 
   beforeEach(() => {
     spawnCalls.length = 0;
+    launchctlExitCode = 0;
   });
 
   afterEach(() => {
@@ -73,12 +88,12 @@ describe("spawnSelfUpdate", () => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
   }
 
-  it("bootstraps a one-shot launchd job on macOS", () => {
+  it("bootstraps a one-shot launchd job on macOS", async () => {
     setPlatform("darwin");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-macos-"));
     try {
       stubSelfUpdateScript(home);
-      const result = spawnSelfUpdate(
+      const result = await spawnSelfUpdate(
         fakeApp({ MULLION_HOME: home, MULLION_SERVICE_UNIT: "com.mullion.primary" }),
         {
           version: "9.9.9",
@@ -88,9 +103,12 @@ describe("spawnSelfUpdate", () => {
       );
       expect(result.ok).toBe(true);
 
-      // One launchctl call: the bootstrap of the update job.
-      expect(spawnCalls).toHaveLength(1);
-      const call = spawnCalls[0]!;
+      // Two launchctl calls: the bootout of a label a failed previous update
+      // left registered, then the bootstrap of this one.
+      expect(spawnCalls).toHaveLength(2);
+      expect(spawnCalls[0]!.command).toBe("launchctl");
+      expect(spawnCalls[0]!.args[0]).toBe("bootout");
+      const call = spawnCalls[1]!;
       expect(call.command).toBe("launchctl");
       expect(call.args[0]).toBe("bootstrap");
       expect(call.args[1]).toBe(`gui/${process.getuid?.() ?? 501}`);
@@ -111,12 +129,56 @@ describe("spawnSelfUpdate", () => {
     }
   });
 
-  it("still uses systemd-run on linux", () => {
+  it("boots the update job's label out before bootstrapping it", async () => {
+    // `launchctl bootstrap` refuses an ALREADY-LOADED label, and a failed
+    // update leaves this job registered — so the most likely retry (the same
+    // version again) would be refused, silently doing nothing.
+    setPlatform("darwin");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-bootout-"));
+    try {
+      stubSelfUpdateScript(home);
+      await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      const calls = spawnCalls.filter((call) => call.command === "launchctl");
+      expect(calls).toHaveLength(2);
+      expect(calls[0]!.args[0]).toBe("bootout");
+      expect(calls[0]!.args[1]).toMatch(/com\.mullion\.update-9\.9\.9$/);
+      expect(calls[1]!.args[0]).toBe("bootstrap");
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a launchctl refusal instead of claiming the update started", async () => {
+    // A refusal that is swallowed would be a 202 and a UI that says
+    // "downloading" for a job that never started.
+    setPlatform("darwin");
+    launchctlExitCode = 5;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-refused-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(result.message).toMatch(/Bootstrap failed/);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("still uses systemd-run on linux", async () => {
     setPlatform("linux");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-linux-"));
     try {
       stubSelfUpdateScript(home);
-      const result = spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
         version: "9.9.9",
         assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
         checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
@@ -132,7 +194,7 @@ describe("spawnSelfUpdate", () => {
     }
   });
 
-  it("refuses a version that is not MAJOR.MINOR.PATCH", () => {
+  it("refuses a version that is not MAJOR.MINOR.PATCH", async () => {
     // The version ends up in a FILENAME (the update job's plist) and in a
     // launchd LABEL, so it is validated where the path is built rather than
     // trusted from the route's schema alone.
@@ -140,7 +202,7 @@ describe("spawnSelfUpdate", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-version-"));
     try {
       stubSelfUpdateScript(home);
-      const result = spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
         version: "../../etc/passwd",
         assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
         checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
@@ -153,9 +215,9 @@ describe("spawnSelfUpdate", () => {
     }
   });
 
-  it("refuses when MULLION_HOME is not configured", () => {
+  it("refuses when MULLION_HOME is not configured", async () => {
     setPlatform("darwin");
-    const result = spawnSelfUpdate(fakeApp({ MULLION_HOME: "  " }), {
+    const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: "  " }), {
       version: "9.9.9",
       assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
       checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
