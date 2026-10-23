@@ -449,6 +449,13 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     process.env.HOME = unwritable;
     try {
       expect(ensureSessionsDir(configured)).toBe(lastResort);
+      // And the skip is never silent: the caller logs the root it passed
+      // over and why, so the operator learns the sessions moved.
+      const dirs = resolveSessionsDirs(configured);
+      expect(dirs.skipped.map((skip) => skip.root)).toContain(
+        path.join(unwritable, ".mullion", "sessions", `ms-${hash}`),
+      );
+      expect(dirs.skipped[0]?.reason).toMatch(/EACCES|permission denied/i);
     } finally {
       if (prev === undefined) delete process.env.HOME;
       else process.env.HOME = prev;

@@ -318,6 +318,13 @@ export interface ResolvedSessionsDirs {
   /** Every dir this instance may own sockets in. Always contains
    *  `current`. */
   owned: string[];
+  /** The fallback roots that were SKIPPED, with the reason each one was
+   *  unusable — so the caller can say so. A root is skipped when it cannot
+   *  hold the fallback: the mkdir failed (an unwritable or stale home
+   *  directory), or the hardening refused it (a symlink, a dir owned by
+   *  another user). The refusal is never silent: the dir is not followed
+   *  and not used, but the operator is told. */
+  skipped: ReadonlyArray<{ root: string; reason: string }>;
 }
 
 /**
@@ -363,11 +370,12 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
     const all = [current, ...compatDirs];
     return [...new Set(all.map((dir) => path.resolve(dir)))].sort();
   };
+  const skipped: Array<{ root: string; reason: string }> = [];
 
   // The limit counts the NUL terminator, so the usable path is one byte
   // shorter than it.
   if (longestSocketPath(resolved) <= limit - 1)
-    return { current: resolved, owned: owned(resolved) };
+    return { current: resolved, owned: owned(resolved), skipped };
 
   // The fallback has to fit TOO: it lives under one of the roots above, and
   // a root long enough to push the CONFIGURED path over the limit can push
@@ -387,17 +395,23 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
     if (longestSocketPath(candidate) > limit - 1) continue;
     try {
       secureFallbackDir(candidate);
-      return { current: candidate, owned: owned(candidate) };
+      return { current: candidate, owned: owned(candidate), skipped };
     } catch (err) {
+      // This root cannot hold the fallback — the mkdir failed (an unwritable
+      // or stale home directory), or the hardening refused it (a symlink, a
+      // dir owned by another user). Either way the dir is not followed and
+      // not used; the reason is kept so the caller can report it.
       lastFailure = err instanceof Error ? err : new Error(String(err));
+      skipped.push({ root: candidate, reason: lastFailure.message });
     }
   }
   const roots = currentFallbackRoots().join(", ");
   throw new Error(
-    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
-      `sun_path limit, and neither does the fallback under any of the roots ` +
-      `[${roots}] — set SESSIONS_DIR to a shorter path, or point HOME at a ` +
-      `shorter, writable directory (${homeDir() || "unset"})` +
+    `the sessions dir ${resolved} is unusable: the longest socket path in it ` +
+      `does not fit this platform's ${limit}-byte sun_path limit, and the ` +
+      `fallback could not be created under any of the roots [${roots}] — set ` +
+      `SESSIONS_DIR to a shorter path, or point HOME at a shorter, writable ` +
+      `directory (${homeDir() || "unset"})` +
       (lastFailure === null ? "" : ` (the last attempt failed: ${lastFailure.message})`),
   );
 }
@@ -467,6 +481,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
       `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback`,
+    );
+  }
+  // A fallback root that could not hold the sessions dir (unwritable, stale,
+  // a symlink, owned by another user) is skipped, not used — but that is
+  // never silent: the operator is told which root was passed over and why.
+  for (const skip of sessionsDirs.skipped) {
+    app.log.warn(
+      { root: skip.root, reason: skip.reason },
+      "sessionsDir fallback root unusable, using the next one",
     );
   }
   // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full
