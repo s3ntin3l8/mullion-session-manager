@@ -208,7 +208,8 @@ export function longestSocketPath(dir: string): number {
 }
 
 /**
- * The pre-#1748 fallback root: a hardcoded POSIX `/tmp`.
+ * The pre-#1748 fallback root: a hardcoded POSIX `/tmp` — and the LAST
+ * RESORT the fallback falls back to when the per-user root is unavailable.
  *
  * Empty on Windows, where that path does not exist (Windows support is
  * tracked separately, issue #1728). Empty roots are filtered out of every
@@ -217,6 +218,32 @@ export function longestSocketPath(dir: string): number {
  */
 function legacyTmpRoot(): string {
   return process.platform === "win32" ? "" : "/tmp";
+}
+
+/**
+ * The per-user directory the fallback lives under: `~/.mullion/sessions`.
+ *
+ * A per-user HOME directory — the repo's existing `~/.mullion/` convention
+ * (the hooks shim and the bundle-sync manifest live there). It is PRIVATE
+ * by construction (no world-writable shared parent), STABLE across app
+ * restarts, reboots and TMPDIR changes (which is what keeps this instance's
+ * id stable — see currentFallbackRoots' own comment), and short enough to
+ * hold the sockets on every realistic HOME length.
+ *
+ * Empty when the home directory cannot be determined (no HOME and no passwd
+ * entry) — the caller then falls back to the POSIX last resort.
+ */
+function homeSessionsRoot(): string {
+  const home = os.homedir();
+  return home === "" ? "" : path.join(home, ".mullion", "sessions");
+}
+
+/**
+ * The home directory itself — the operator-facing lever when the per-user
+ * root is the problem (too long, or not writable).
+ */
+function homeDir(): string {
+  return os.homedir();
 }
 
 /**
@@ -234,12 +261,20 @@ function legacyTmpRoot(): string {
  *     plant a symlink in it (see secureFallbackDir below).
  *   - **STABLE** — the fallback dir IS this instance's sessions dir, and
  *     deriveInstanceId (session-process.ts) hashes it to namespace this
- *     instance's systemd scopes. A root that CHANGES (because TMPDIR
- *     changed) moves the instance's sockets AND changes its id, which
- *     orphans every scope the instance already owns — issue #1770.
+ *     instance's systemd scopes. A root that CHANGES moves the instance's
+ *     sockets AND changes its id, which orphans every scope the instance
+ *     already owns — issue #1770. That is why the root is the per-user home
+ *     directory and not the platform's temp dir: the temp dir is a function
+ *     of TMPDIR, so it changes with the environment, while the home
+ *     directory does not.
+ *
+ * The POSIX `/tmp` is the last resort — for the pathological case where the
+ * home directory cannot be determined, or is itself too long to hold the
+ * sockets. It is a world-writable dir, so it gets the same hardening
+ * (secureFallbackDir) as every other root.
  */
 function currentFallbackRoots(): string[] {
-  return [os.tmpdir()];
+  return [homeSessionsRoot(), legacyTmpRoot()].filter((root) => root !== "");
 }
 
 /**
@@ -252,7 +287,11 @@ function currentFallbackRoots(): string[] {
  * and its scope stays alive and stoppable.
  */
 function shippedFallbackRoots(): string[] {
-  return [...currentFallbackRoots(), legacyTmpRoot()].filter((root) => root !== "");
+  // The platform's temp dir is #1748's root: compat-only now (it is
+  // environment-dependent — TMPDIR — which is what made this instance's id
+  // unstable, issue #1770), but it stays in the set so the scopes created
+  // under it survive the move to the per-user root.
+  return [...currentFallbackRoots(), os.tmpdir()].filter((root) => root !== "");
 }
 
 /**
@@ -279,6 +318,13 @@ export interface ResolvedSessionsDirs {
   /** Every dir this instance may own sockets in. Always contains
    *  `current`. */
   owned: string[];
+  /** The fallback roots that were SKIPPED, with the reason each one was
+   *  unusable — so the caller can say so. A root is skipped when it cannot
+   *  hold the fallback: the mkdir failed (an unwritable or stale home
+   *  directory), or the hardening refused it (a symlink, a dir owned by
+   *  another user). The refusal is never silent: the dir is not followed
+   *  and not used, but the operator is told. */
+  skipped: ReadonlyArray<{ root: string; reason: string }>;
 }
 
 /**
@@ -324,11 +370,12 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
     const all = [current, ...compatDirs];
     return [...new Set(all.map((dir) => path.resolve(dir)))].sort();
   };
+  const skipped: Array<{ root: string; reason: string }> = [];
 
   // The limit counts the NUL terminator, so the usable path is one byte
   // shorter than it.
   if (longestSocketPath(resolved) <= limit - 1)
-    return { current: resolved, owned: owned(resolved) };
+    return { current: resolved, owned: owned(resolved), skipped };
 
   // The fallback has to fit TOO: it lives under one of the roots above, and
   // a root long enough to push the CONFIGURED path over the limit can push
@@ -337,19 +384,35 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   // fit under any root, that is a real, operator-actionable failure: name
   // the roots and both levers, rather than silently landing two projects in
   // one directory.
+  // Every root is TRIED, not just the first one that fits the budget: a root
+  // that fits on length can still be unusable (an unwritable or stale home
+  // directory, a symlink, a dir owned by another user), and that is a reason
+  // to move on to the next root — not a reason to refuse to start. The last
+  // failure is kept so that "no root worked" can say WHY.
+  let lastFailure: Error | null = null;
   for (const root of currentFallbackRoots()) {
     const candidate = path.join(root, name);
-    if (longestSocketPath(candidate) <= limit - 1) {
+    if (longestSocketPath(candidate) > limit - 1) continue;
+    try {
       secureFallbackDir(candidate);
-      return { current: candidate, owned: owned(candidate) };
+      return { current: candidate, owned: owned(candidate), skipped };
+    } catch (err) {
+      // This root cannot hold the fallback — the mkdir failed (an unwritable
+      // or stale home directory), or the hardening refused it (a symlink, a
+      // dir owned by another user). Either way the dir is not followed and
+      // not used; the reason is kept so the caller can report it.
+      lastFailure = err instanceof Error ? err : new Error(String(err));
+      skipped.push({ root: candidate, reason: lastFailure.message });
     }
   }
   const roots = currentFallbackRoots().join(", ");
   throw new Error(
-    `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
-      `sun_path limit, and neither does the fallback under any of the roots ` +
-      `[${roots}] — set SESSIONS_DIR to a shorter path, or point TMPDIR at a ` +
-      `shorter directory (${os.tmpdir()})`,
+    `the sessions dir ${resolved} is unusable: the longest socket path in it ` +
+      `does not fit this platform's ${limit}-byte sun_path limit, and the ` +
+      `fallback could not be created under any of the roots [${roots}] — set ` +
+      `SESSIONS_DIR to a shorter path, or point HOME at a shorter, writable ` +
+      `directory (${homeDir() || "unset"})` +
+      (lastFailure === null ? "" : ` (the last attempt failed: ${lastFailure.message})`),
   );
 }
 
@@ -418,6 +481,15 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     app.log.info(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
       `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback`,
+    );
+  }
+  // A fallback root that could not hold the sessions dir (unwritable, stale,
+  // a symlink, owned by another user) is skipped, not used — but that is
+  // never silent: the operator is told which root was passed over and why.
+  for (const skip of sessionsDirs.skipped) {
+    app.log.warn(
+      { root: skip.root, reason: skip.reason },
+      "sessionsDir fallback root unusable, using the next one",
     );
   }
   // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full

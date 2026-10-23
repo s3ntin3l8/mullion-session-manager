@@ -36,7 +36,7 @@ a way that doesn't coerce to `false`).
 | ------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`                  | `file:./data/app.db` | SQLite `file:` URL                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `DB_ENCRYPTION_KEY`             | _(empty)_            | base64url 32-byte key; enables encryption-at-rest                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `SESSIONS_DIR`                  | `./data/sessions`    | dir holding one dtach socket per terminal session                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `SESSIONS_DIR`                  | `./data/sessions`    | dir holding one dtach socket per terminal session; a path too long for a socket name is redirected to a short per-user fallback — see [the sessions dir fallback](#the-sessions-dir-fallback)                                                                                                                                                                                                                                                                                                                                                                                          |
 | `MULLION_SESSION_CPU_QUOTA`     | _(empty)_            | optional cgroup v2 `CPUQuota` override applied to manual session scopes (e.g. `400%`); empty preserves 100% burst capacity on manual sessions, while background Task Master sessions are capped dynamically based on host cores                                                                                                                                                                                                                                                                                                                                                        |
 | `MULLION_SOCKET_PATH`           | _(empty)_            | path for the control socket (the `mullion` CLI's transport); empty derives it from `SESSIONS_DIR` — see [`socket-api.md`](socket-api.md)                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `MULLION_SSH_AUTH_SOCK`         | _(empty)_            | path to a unix socket implementing the SSH agent protocol (typically a manual `ssh -R` tunnel), injected as `SSH_AUTH_SOCK` into every session; empty falls through to an inherited ambient `SSH_AUTH_SOCK`, then to the SSH-agent bridge's own materialized socket (`<SESSIONS_DIR>/ssh-agent.sock`) — the bridge socket is materialized regardless of whether a laptop has ever paired, so an unpaired host still resolves to that path (the socket just refuses connections until one does) — see [`ssh-agent.md`](ssh-agent.md)'s Precedence section for the full three-tier order |
@@ -47,6 +47,45 @@ Generate an encryption key:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
+
+### The sessions dir fallback
+
+`SESSIONS_DIR` holds one Unix socket per terminal session, and a Unix socket path
+has a hard length limit — **104 bytes on macOS, 108 on Linux** (the limit counts
+the terminating NUL, so the usable path is one byte shorter). When the
+configured path is too long for the socket names Mullion puts in it
+(`<id>.sock`, `hooks.sock`, `mullion.sock`), the sessions dir moves to a short
+fallback:
+
+```
+~/.mullion/sessions/ms-<8 hex chars>
+```
+
+The name is a hash of the **configured** path, so every project gets its own
+fallback dir and never shares one with another project. The root is a per-user
+directory under `HOME` — private (no world-writable shared parent), stable
+across restarts, reboots and `TMPDIR` changes, and short enough to hold the
+sockets on any realistic home path.
+
+Two levers, in order of preference:
+
+- **shorten `SESSIONS_DIR`** — the fallback exists because the configured path
+  is too long for a socket name, and a shorter path is the real fix;
+- **shorten `HOME`** — only relevant if the home path itself is too long to
+  hold the sockets;
+- **make `HOME` writable** — a home directory the app cannot write (a
+  container running as a UID that does not own it, an unmounted NFS home, a
+  read-only home) is skipped, and the POSIX `/tmp` is used instead; when no
+  root works at all, the start-up error names the reason.
+
+The fallback dir is created `0700`, and a dir that already exists is tightened
+to `0700` — but a symlink or a directory owned by another user is refused
+outright rather than used.
+
+**Older locations stay owned.** A session started before the fallback moved
+keeps its socket in the old dir (`$TMPDIR/ms-<8 hex>`, `/tmp/ms-<8 hex>`), and
+Mullion still recognizes it as its own: it stays alive, and it can still be
+stopped. Moving the fallback root therefore never orphans a running session.
 
 ## Auth (optional, off by default)
 

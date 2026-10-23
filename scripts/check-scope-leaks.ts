@@ -98,8 +98,13 @@ const rows = parseScopeUnitsListing(listing);
 //      caught issue #1137's own leaked `pty-manager-filechange-test-*`
 //      unit).
 //   2. Its socket path is under the OS tmp dir — a real install's
-//      SESSIONS_DIR is a persistent, checked-in-config path; only a
-//      test/scratch instance's own throwaway tmpdir lands there.
+//      SESSIONS_DIR is a persistent, checked-in-config path, and the
+//      sessions-dir FALLBACK lives under the per-user home directory
+//      (~/.mullion/sessions), not the temp dir; only a test/scratch
+//      instance's own throwaway tmpdir lands there. (A scope from a
+//      release older than the per-user fallback still sits under the temp
+//      dir, so this rule also flags those — it is a heuristic, and rule 1
+//      is the definitive one.)
 //
 // A scope whose Description doesn't parse as either a dtach invocation or a
 // device marker at all (both extractors return null — some other app's own
