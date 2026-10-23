@@ -112,6 +112,10 @@
 // navigates anywhere; the worst case is a wrong-looking link the user
 // chooses not to click.
 //
+// The same window builder also serves file-path links
+// (terminalPathLinks.ts) through its own `WrapTokenProfile`: only the token-shape checks
+// differ, the edge/corroboration safety check is shared.
+//
 // Depends only on this narrow structural slice of xterm's buffer API (not
 // on `Terminal` itself) so the joining/matching logic can be unit-tested
 // with hand-built fake buffers under the default `node` vitest environment,
@@ -286,9 +290,9 @@ function stripGutter(rawText: string): { stripped: string; skipped: number } {
   return { stripped: rawText.slice(skipped), skipped };
 }
 
-function urlEligiblePrefix(text: string): string {
+function eligiblePrefix(text: string, middleCharRe: RegExp): string {
   let i = 0;
-  while (i < text.length && URL_MIDDLE_CHAR_RE.test(text[i]!)) i += 1;
+  while (i < text.length && middleCharRe.test(text[i]!)) i += 1;
   return text.slice(0, i);
 }
 
@@ -325,6 +329,36 @@ function isEligibleWrapRow(
   return false;
 }
 
+/** What distinguishes one kind of wrapped token (a URL, a file path) from
+ * another in the window builder: which characters a continuation may
+ * contain, the structural evidence that a continuation belongs to the
+ * producer row's token, and what marks a continuation as a new token. The
+ * edge/corroboration check (`isEligibleWrapRow`) is shared unchanged. */
+export interface WrapTokenProfile {
+  /** Characters a continuation row's leading token may consist of. */
+  middleCharRe: RegExp;
+  /** Whether the continuation's leading token (`prefix`) is plausibly the
+   * rest of the producer row's token. `producerStripped` is the producer
+   * row's text with trailing whitespace/border removed. */
+  admits(producerStripped: string, prefix: string): boolean;
+  /** Whether `body` starts a brand new token rather than continuing one. */
+  startsNewToken(body: string): boolean;
+}
+
+const URL_PROFILE: WrapTokenProfile = {
+  middleCharRe: URL_MIDDLE_CHAR_RE,
+  startsNewToken: (body) => NEW_SCHEME_RE.test(body),
+  admits(producerStripped, prefix) {
+    if (STRUCTURAL_CHAR_RE.test(prefix)) return true;
+    // Guarded exception: a hostname/path segment like "tracker.git" or
+    // "some-repo" that carries only `.`/`-`, admitted only when the
+    // producer row's own text was visibly cut mid-token (see
+    // MID_TOKEN_BREAK_RE's comment for why `-` and `/` aren't equally
+    // strong evidence, and the module header for the accepted exposure).
+    return MID_TOKEN_BREAK_RE.test(producerStripped) && SOFT_STRUCTURAL_CHAR_RE.test(prefix);
+  },
+};
+
 interface ExtendCheck {
   ok: boolean;
   /** Continuation row's body text with its gutter already stripped —
@@ -346,29 +380,21 @@ function canExtend(
   producerY: number,
   producerRaw: string,
   nextRaw: string,
+  profile: WrapTokenProfile,
 ): ExtendCheck {
   const fail: ExtendCheck = { ok: false, strippedNext: "", skipped: 0 };
   const producerEdge = contentEdge(producerRaw);
 
   const { stripped: nextBody, skipped } = stripGutter(nextRaw);
   if (nextBody.length === 0) return fail;
-  if (NEW_SCHEME_RE.test(nextBody)) return fail;
+  if (profile.startsNewToken(nextBody)) return fail;
 
-  const prefix = urlEligiblePrefix(nextBody);
+  const prefix = eligiblePrefix(nextBody, profile.middleCharRe);
   if (prefix.length === 0) return fail;
+  if (!profile.admits(producerEdge.stripped, prefix)) return fail;
 
-  if (!STRUCTURAL_CHAR_RE.test(prefix)) {
-    // Guarded exception: a hostname/path segment like "tracker.git" or
-    // "some-repo" that carries only `.`/`-`, admitted only when the
-    // producer row's own text was visibly cut mid-token (see
-    // MID_TOKEN_BREAK_RE's comment for why `-` and `/` aren't equally
-    // strong evidence, and the module header for the accepted exposure).
-    if (!MID_TOKEN_BREAK_RE.test(producerEdge.stripped)) return fail;
-    if (!SOFT_STRUCTURAL_CHAR_RE.test(prefix)) return fail;
-  }
-
-  // Invariant: every continuation admitted above (either STRUCTURAL_CHAR_RE
-  // or the SOFT_STRUCTURAL_CHAR_RE guarded exception) contains a character
+  // Invariant: every continuation admitted above (a URL's STRUCTURAL_CHAR_RE
+  // or SOFT_STRUCTURAL_CHAR_RE exception, a path's `/` or extension dot) contains a character
   // WRAP_BREAK_CHAR_RE also matches — both are subsets of it by construction
   // (see WRAP_BREAK_CHAR_RE's own comment), so this should never be -1. Fail
   // CLOSED rather than falling back to `prefix.length` as the span if that
@@ -395,7 +421,7 @@ function canExtend(
  * hard-wrap *continuation* row (never touching the row the URL visually
  * starts on) must still resolve to the full joined link, not nothing.
  */
-function findWindowStart(buf: LinkBufferSource, y: number): number {
+function findWindowStart(buf: LinkBufferSource, y: number, profile: WrapTokenProfile): number {
   let startY = y;
   let guardLen = 0;
   let hardWrapCount = 0;
@@ -415,7 +441,7 @@ function findWindowStart(buf: LinkBufferSource, y: number): number {
     if (hardWrapCount >= MAX_HARD_WRAP_ROWS) break;
     const prevRaw = prev.translateToString(true);
     const curRaw = cur.translateToString(true);
-    const ext = canExtend(buf, startY - 1, prevRaw, curRaw);
+    const ext = canExtend(buf, startY - 1, prevRaw, curRaw, profile);
     if (!ext.ok) break;
 
     startY -= 1;
@@ -438,11 +464,12 @@ function findWindowStart(buf: LinkBufferSource, y: number): number {
 export function buildWindow(
   buf: LinkBufferSource,
   y: number,
+  profile: WrapTokenProfile = URL_PROFILE,
 ): { text: string; segments: LinkSegment[] } {
   const anchor = buf.getLine(y);
   if (!anchor) return { text: "", segments: [] };
 
-  const startY = findWindowStart(buf, y);
+  const startY = findWindowStart(buf, y, profile);
   const segments: LinkSegment[] = [];
   let text = "";
   let curY = startY;
@@ -479,7 +506,7 @@ export function buildWindow(
       // `body`), since a leading gutter strip doesn't move the row's
       // trailing content edge or the true buffer column other rows are
       // compared against.
-      const ext = canExtend(buf, curY, raw, nextLine.translateToString(true));
+      const ext = canExtend(buf, curY, raw, nextLine.translateToString(true), profile);
       if (ext.ok) {
         const { stripped } = contentEdge(body);
         segments.push({ row: curY, startCol: gutterSkip, text: stripped });

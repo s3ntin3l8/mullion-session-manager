@@ -13,7 +13,7 @@ function bufferOf(...rows: string[]): LinkBufferSource {
         isWrapped: false,
         length: text.length,
         translateToString: () => text,
-        getCell: () => undefined,
+        getCell: (x: number) => ({ getChars: () => text[x] ?? "" }),
       };
     },
   };
@@ -104,5 +104,90 @@ describe("computePathLinksForRow", () => {
     expect(linksIn("src/a.ts:")[0].text).toBe("src/a.ts");
     expect(linksIn("")).toEqual([]);
     expect(computePathLinksForRow(bufferOf("x"), 5)).toEqual([]);
+  });
+});
+
+describe("computePathLinksForRow across wrapped rows", () => {
+  const PLAN = "~/.minimax/v2/sessions/2026/10/22/20-13-37-973-session_bXZzX2JkMz";
+  const REST = "FkNTE1OGUzNzQwNWFiOTU5YjMwODY5ODY3ZjA2/artifacts/plan.md";
+  const FULL = PLAN + REST;
+  const row1 = `Plan  ${PLAN}`;
+  const row2 = `      ${REST}`;
+
+  function wrapped(cols: number, rows: string[], softFrom?: number): LinkBufferSource {
+    return {
+      cols,
+      getLine: (y: number) => {
+        const text = rows[y];
+        if (text === undefined) return undefined;
+        return {
+          isWrapped: softFrom !== undefined && y >= softFrom,
+          length: text.length,
+          translateToString: () => text,
+          getCell: (x: number) => ({ getChars: () => text[x] ?? "" }),
+        };
+      },
+    };
+  }
+
+  it("joins a hard-wrapped path hovered on either row", () => {
+    const buf = wrapped(row1.length + 1, [row1, row2]);
+    const first = computePathLinksForRow(buf, 0);
+    const second = computePathLinksForRow(buf, 1);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ path: FULL, rowCount: 2, startCol: 6, endCol: row1.length });
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ path: FULL, rowCount: 2, startCol: 6, endCol: row2.length });
+  });
+
+  it("joins a soft-wrapped path", () => {
+    const buf = wrapped(200, [row1, REST], 1);
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ rowCount: 2 });
+  });
+
+  it("does not join when the first row is nowhere near the margin", () => {
+    const buf = wrapped(200, [row1, row2]);
+    expect(computePathLinksForRow(buf, 0)).toEqual([]);
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ path: REST, rowCount: 1 });
+  });
+
+  it("does not glue a trailing prose word onto a path on the next row", () => {
+    const prose = "see the docs at";
+    const buf = wrapped(prose.length + 1, [prose, "src/a.ts"]);
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ path: "src/a.ts", rowCount: 1 });
+  });
+
+  it("does not join a continuation that starts a new path", () => {
+    const buf = wrapped(row1.length + 1, [row1, "/var/log/syslog.txt"]);
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ rowCount: 1 });
+  });
+
+  it("keeps a :line:col suffix that lands on the continuation row", () => {
+    const head = "see ~/projects/some/deep/dir/nested/sub";
+    const buf = wrapped(head.length + 1, [head, "dir/file.ts:12:3"]);
+    expect(computePathLinksForRow(buf, 0)[0]).toMatchObject({
+      path: "~/projects/some/deep/dir/nested/subdir/file.ts",
+      line: 12,
+      col: 3,
+      rowCount: 2,
+    });
+  });
+
+  it("keeps a list of complete paths separate at a normal width", () => {
+    const buf = wrapped(120, ["  • artifacts/plan.md", "  • src/terminalLinks.ts"]);
+    expect(computePathLinksForRow(buf, 0)).toMatchObject([
+      { path: "artifacts/plan.md", rowCount: 1 },
+    ]);
+    expect(computePathLinksForRow(buf, 1)).toMatchObject([
+      { path: "src/terminalLinks.ts", rowCount: 1 },
+    ]);
+  });
+
+  it("joins via a corroborating neighbour row when the margin is far away", () => {
+    // An inset panel: a nearby row's edge lands just past this row's edge.
+    const neighbour = "x".repeat(row1.length + 1);
+    const buf = wrapped(200, [row1, row2, neighbour]);
+    expect(computePathLinksForRow(buf, 0)[0]).toMatchObject({ path: FULL, rowCount: 2 });
+    expect(computePathLinksForRow(buf, 1)[0]).toMatchObject({ path: FULL, rowCount: 2 });
   });
 });
