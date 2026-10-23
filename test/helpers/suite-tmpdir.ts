@@ -31,27 +31,44 @@ const TIGHTEST_PLATFORM = "darwin";
 
 /**
  * The bytes the deepest socket path adds BELOW the suite's temp root: the
- * path separator, plus the temp dir the test creates under the root, plus
- * the socket it binds inside that.
+ * path separator, plus the path below the root.
  *
  * The separator is part of it. The root and the path below it are joined
- * with one "/", so a root of N bytes and a relative path of 57 bytes make a
- * socket path of N + 1 + 57 — counting only the relative path is how the
- * budget came to be one byte too generous, which is the very window this
+ * with one "/", so a root of N bytes and a relative path of R bytes make a
+ * socket path of N + 1 + R — counting only the relative path is how the
+ * budget came to be a byte too generous, which is the very window this
  * rule exists to close.
  *
- * The deepest socket the suite actually BINDS today is
- * "mullion-mcp-client-malformed-XXXXXX/hooks.sock"
- * (test/mcp/client.test.ts:215) — 29 + 6 + 1 + 10 = 46 below the root, 47
- * with the separator. (The opencode adapter's own suite puts a socket PATH
- * into a context object; it opens no socket, so it is not a bound path.)
+ * There are TWO shapes, and the deeper one is the socket bound **directly**
+ * under the root — not one inside a temp dir the test creates:
+ *
+ *   1. `<root>/<name>.sock` — the longest is ssh-agent-socket.test.ts's
+ *      `ssh-agent-socket-test-<pid>-deadline-cleared.sock`.
+ *   2. `<root>/<prefix>-XXXXXX/<name>.sock` — the longest bound one is
+ *      mcp/client.test.ts's `mullion-mcp-client-malformed-XXXXXX/hooks.sock`.
+ *      (opencode.test.ts's `agents.<name>` path is LONGER but is never
+ *      bound — it only puts a socket path into a context object.)
+ *
+ * The pid is counted at seven digits — Linux's default `pid_max` is
+ * 4194304, so a pid is up to seven characters — and the mkdtemp suffix at
+ * six. Both shapes are computed here rather than hand-counted, so the
+ * constant cannot drift from either one.
  *
  * A test that binds a deeper socket path beneath the root has to raise
  * this constant, and the "deepest socket path fits" test in
  * suite-tmpdir.test.ts is what proves the two still agree.
  */
-export const SUITE_DEEPEST_SOCKET_PATH_BYTES =
-  1 + Buffer.byteLength(path.join("mullion-mcp-client-malformed-XXXXXX", "hooks.sock"), "utf8");
+const SEVEN_DIGIT_PID = "1234567";
+
+const DIRECT_SOCKET_NAME = `ssh-agent-socket-test-${SEVEN_DIGIT_PID}-deadline-cleared.sock`;
+
+const NESTED_SOCKET_PATH = path.join("mullion-mcp-client-malformed-XXXXXX", "hooks.sock");
+
+export const SUITE_DEEPEST_SOCKET_PATH_BYTES = Math.max(
+  // The separator between the root and the path below it.
+  1 + Buffer.byteLength(DIRECT_SOCKET_NAME, "utf8"),
+  1 + Buffer.byteLength(NESTED_SOCKET_PATH, "utf8"),
+);
 
 /**
  * The most bytes the suite's temp ROOT may take.

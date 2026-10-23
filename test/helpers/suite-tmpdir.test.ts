@@ -54,7 +54,7 @@ describe("createSuiteTmpDir", () => {
     // The deepest socket path the suite binds beneath its root today — the
     // one SUITE_DEEPEST_SOCKET_PATH_BYTES names. If a test grows a deeper
     // one, this is the test that says so.
-    const deepest = path.join(suite, "mullion-mcp-client-malformed-XXXXXX", "hooks.sock");
+    const deepest = path.join(suite, "ssh-agent-socket-test-1234567-deadline-cleared.sock");
     expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
   });
 
@@ -92,7 +92,7 @@ describe("createSuiteTmpDir", () => {
     expect(path.dirname(suite)).toBe(base);
     expect(Buffer.byteLength(suite)).toBe(SUITE_TMP_MAX_BYTES);
     // And the deepest socket path beneath it still fits macOS's sun_path.
-    const deepest = path.join(suite, "mullion-mcp-client-malformed-XXXXXX", "hooks.sock");
+    const deepest = path.join(suite, "ssh-agent-socket-test-1234567-deadline-cleared.sock");
     expect(Buffer.byteLength(deepest)).toBeLessThanOrEqual(SUN_PATH_MAX - 1);
   });
 
