@@ -323,6 +323,19 @@ function runLaunchctl(
   options: { cwd: string; deadline: number; app: FastifyInstance },
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return new Promise((resolve) => {
+    const remaining = Math.max(0, options.deadline - Date.now());
+    if (remaining === 0) {
+      // The budget for the WHOLE launch is already spent. Do NOT spawn
+      // launchctl at all: killing it at spawn could still let it register
+      // the job, which would leave the caller with a 500 for an update that
+      // is actually running — and the retry would then hit the
+      // already-loaded label.
+      resolve({
+        ok: false,
+        message: `the launchctl deadline (${LAUNCHCTL_TIMEOUT_MS}ms) was already exhausted before launchctl ${args[0]}`,
+      });
+      return;
+    }
     const child = spawnChild("launchctl", args, {
       cwd: options.cwd,
       env: process.env,
@@ -336,12 +349,11 @@ function runLaunchctl(
       clearTimeout(timer);
       resolve(result);
     };
-    const remaining = Math.max(0, options.deadline - Date.now());
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       finish({
         ok: false,
-        message: `launchctl ${args[0]} timed out after ${LAUNCHCTL_TIMEOUT_MS}ms`,
+        message: `launchctl ${args[0]} timed out after ${remaining}ms`,
       });
     }, remaining);
     // The timer must not hold the event loop open on its own.

@@ -18,8 +18,8 @@ import type * as ChildProcess from "node:child_process";
 const spawnCalls: Array<{ command: string; args: string[] }> = [];
 /** The exit status the fake launchctl reports (0 = success). */
 let launchctlExitCode = 0;
-/** When set, the fake launchctl never exits — a hung launchctl. */
-let launchctlHangs = false;
+/** Which launchctl calls, if any, never exit — a hung launchctl. */
+let launchctlHangsOn: string[] = [];
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -41,7 +41,10 @@ vi.mock("node:child_process", async (importOriginal) => {
       // emits "close").
       child.kill = () => true;
       setImmediate(() => {
-        if (command === "launchctl" && launchctlHangs) return; // a hung launchctl
+        // A hung launchctl: the calls we were told to hang never exit.
+        if (command === "launchctl" && launchctlHangsOn.includes(args[0] ?? "")) {
+          return;
+        }
         if (command === "launchctl" && launchctlExitCode !== 0) {
           child.stderr.emit("data", Buffer.from("Bootstrap failed: 5: Input/output error\n"));
         }
@@ -93,7 +96,7 @@ describe("spawnSelfUpdate", async () => {
   beforeEach(() => {
     spawnCalls.length = 0;
     launchctlExitCode = 0;
-    launchctlHangs = false;
+    launchctlHangsOn = [];
   });
 
   afterEach(() => {
@@ -193,22 +196,56 @@ describe("spawnSelfUpdate", async () => {
     // A hung launchctl would leave the UI's "Update now" button spinning with
     // no answer: the route waits for the spawn. The wait is bounded.
     setPlatform("darwin");
-    launchctlHangs = true;
+    launchctlHangsOn = ["bootstrap"];
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-hung-"));
     try {
       stubSelfUpdateScript(home);
+      const startedAt = Date.now();
       const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
         version: "9.9.9",
         assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
         checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
       });
+      const elapsed = Date.now() - startedAt;
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
       expect(result.message).toMatch(/timed out/);
+      // The wait is bounded by the deadline, not by the test's own timeout.
+      expect(elapsed).toBeLessThan(15_000);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 30_000);
+
+  it("spends ONE deadline on the whole launch, not one per launchctl call", async () => {
+    // The bootout hangs and eats the whole budget: the bootstrap must then be
+    // short-circuited ("the deadline was already exhausted") rather than
+    // given a fresh 10s of its own — and rather than being spawned and
+    // killed at once, which could still register the job.
+    setPlatform("darwin");
+    // BOTH calls hang: with a shared budget the pair waits ONE deadline
+    // (~10s); with a per-call budget it would wait two (~20s). The elapsed
+    // time is what states the requirement — the message is incidental.
+    launchctlHangsOn = ["bootout", "bootstrap"];
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-budget-"));
+    try {
+      stubSelfUpdateScript(home);
+      const startedAt = Date.now();
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      const elapsed = Date.now() - startedAt;
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(result.message).toMatch(/exhausted|timed out/);
+      // One budget for the pair: not two of them (which would be ~20s).
+      expect(elapsed).toBeLessThan(15_000);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("still uses systemd-run on linux", async () => {
     setPlatform("linux");
