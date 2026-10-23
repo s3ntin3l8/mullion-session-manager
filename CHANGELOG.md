@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.3.43](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.42...v0.3.43) (2026-10-23)
+
+
+### Features
+
+* add the macOS detached scope backend ([#1716](https://github.com/s3ntin3l8/mullion-session-manager/issues/1716)) ([#1732](https://github.com/s3ntin3l8/mullion-session-manager/issues/1732)) ([3ce7f6d](https://github.com/s3ntin3l8/mullion-session-manager/commit/3ce7f6d4db953537ca574e8fd83181ffc839aa32))
+* extract a platform-neutral ScopeBackend seam for session scopes ([#1729](https://github.com/s3ntin3l8/mullion-session-manager/issues/1729)) ([7c44ea4](https://github.com/s3ntin3l8/mullion-session-manager/commit/7c44ea46a26d1cdfbffb0857243a87641038cd15))
+* **files:** open allowlisted files outside the project read-only ([#1765](https://github.com/s3ntin3l8/mullion-session-manager/issues/1765)) ([bcb19d7](https://github.com/s3ntin3l8/mullion-session-manager/commit/bcb19d7a6489bef222dc26d507594691c06994d0))
+* improve git sidebar and panel diffs, styling, and worktree actions ([#1696](https://github.com/s3ntin3l8/mullion-session-manager/issues/1696)) ([fd3669f](https://github.com/s3ntin3l8/mullion-session-manager/commit/fd3669fed59529fdb06602b386167d3873a02256))
+* **opencode:** classify provider failures as stop_failure so api_error and the rate-limit grace apply ([fccf88a](https://github.com/s3ntin3l8/mullion-session-manager/commit/fccf88ae0a50ac2276dcc181782ceed40e5e0191)), closes [#1700](https://github.com/s3ntin3l8/mullion-session-manager/issues/1700) [#1702](https://github.com/s3ntin3l8/mullion-session-manager/issues/1702)
+* **review-relay:** one review in flight per pull request ([#1752](https://github.com/s3ntin3l8/mullion-session-manager/issues/1752)) ([9d56c62](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d56c627b528f9a5ea5fa71903cb240065f6a474))
+* **review:** add a Hermes issue-triage relay ([#1710](https://github.com/s3ntin3l8/mullion-session-manager/issues/1710)) ([217514e](https://github.com/s3ntin3l8/mullion-session-manager/commit/217514eb6fce5b46d5d4e7a79e9309d1f547a2ec))
+* **review:** support remote-host projects and harden the review relay ([#1708](https://github.com/s3ntin3l8/mullion-session-manager/issues/1708)) ([40df22d](https://github.com/s3ntin3l8/mullion-session-manager/commit/40df22df28129b89fe24bd6d4e06b8be75ea7698))
+* set emulator launch flags and AVD hardware sizes ([#1707](https://github.com/s3ntin3l8/mullion-session-manager/issues/1707)) ([34a6ec2](https://github.com/s3ntin3l8/mullion-session-manager/commit/34a6ec2c963c21eb1372d664fc3eb0fbd41344d8))
+* **settings:** warn when the reviewer model collapses onto the implementer's ([#1738](https://github.com/s3ntin3l8/mullion-session-manager/issues/1738)) ([b946272](https://github.com/s3ntin3l8/mullion-session-manager/commit/b946272d875520c86c371286b706d052670ddbae))
+* **tablet:** notice when an explicit split exceeds the pane cap ([#1699](https://github.com/s3ntin3l8/mullion-session-manager/issues/1699)) ([685eff7](https://github.com/s3ntin3l8/mullion-session-manager/commit/685eff75e391ce9b56bda1bf6f29df55f11f88ec))
+* **task-master:** let workers delegate mechanical parts to a cheaper model ([#1737](https://github.com/s3ntin3l8/mullion-session-manager/issues/1737)) ([9f344c4](https://github.com/s3ntin3l8/mullion-session-manager/commit/9f344c484acec4d029e442235c3ff210ae5e93f0))
+* **task-master:** make `Manual: true` the exception, not the default ([#1739](https://github.com/s3ntin3l8/mullion-session-manager/issues/1739)) ([f4abf8a](https://github.com/s3ntin3l8/mullion-session-manager/commit/f4abf8a9aa5bed40cc33207290411937571315e5))
+* **ui:** show the review relay's state for a pull request ([#1712](https://github.com/s3ntin3l8/mullion-session-manager/issues/1712)) ([bb65fcd](https://github.com/s3ntin3l8/mullion-session-manager/commit/bb65fcdc869b199b7e8c3de0038ea9cee6f69e7c))
+
+
+### Bug Fixes
+
+* **conventions:** one relay path for reviews, workflow rules only in conventions ([#1759](https://github.com/s3ntin3l8/mullion-session-manager/issues/1759)) ([8f2c6c3](https://github.com/s3ntin3l8/mullion-session-manager/commit/8f2c6c3791b76006ecbbfe719a8a79f367081a56))
+* **demo:** check the terminal's cell geometry before each terminal shot ([#1693](https://github.com/s3ntin3l8/mullion-session-manager/issues/1693)) ([d765ca0](https://github.com/s3ntin3l8/mullion-session-manager/commit/d765ca06952b4a25c77f069ec2ff747377627011))
+* **demo:** keep screenshot agents from going quiet and print into a live terminal ([#1688](https://github.com/s3ntin3l8/mullion-session-manager/issues/1688)) ([6fbc2fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/6fbc2fdc5bd6e9598239537fa07469ee92e1618f))
+* **demo:** require one laid-out terminal and gate the mobile shot on it ([#1690](https://github.com/s3ntin3l8/mullion-session-manager/issues/1690)) ([d293571](https://github.com/s3ntin3l8/mullion-session-manager/commit/d2935716b4d7eb66e09bb4c5a06606c27e22610c))
+* **demo:** tear the screenshot demo down on a failed launch or Ctrl-C ([#1691](https://github.com/s3ntin3l8/mullion-session-manager/issues/1691)) ([e23dd77](https://github.com/s3ntin3l8/mullion-session-manager/commit/e23dd7725deebdee537fd4038c09c1646a859b7b))
+* **layout:** follow layoutMode in tier CSS ([#1695](https://github.com/s3ntin3l8/mullion-session-manager/issues/1695)) ([38bc72c](https://github.com/s3ntin3l8/mullion-session-manager/commit/38bc72c25d0a844bb528064cb2ebedf6b8aeb912))
+* make the sun_path limit platform-aware, and the fallback tmpdir-derived ([#1748](https://github.com/s3ntin3l8/mullion-session-manager/issues/1748)) ([65b0d56](https://github.com/s3ntin3l8/mullion-session-manager/commit/65b0d568e4546ad9a6576be22522e934a4c2e8cd))
+* **review-relay:** let a session ask about a PR in another registered repo ([#1760](https://github.com/s3ntin3l8/mullion-session-manager/issues/1760)) ([83efba9](https://github.com/s3ntin3l8/mullion-session-manager/commit/83efba9f0a2d2e21b7a6151f7463da8d8ef92012))
+* **review:** answer 503 for an unreachable project host, and test the CLI's cut ([#1713](https://github.com/s3ntin3l8/mullion-session-manager/issues/1713)) ([98c3f05](https://github.com/s3ntin3l8/mullion-session-manager/commit/98c3f051caeb4eaa3601f4cea1cf39555c34226f))
+* **test:** keep the suite tmp dir short enough for unix socket paths ([#1740](https://github.com/s3ntin3l8/mullion-session-manager/issues/1740)) ([ab1bb46](https://github.com/s3ntin3l8/mullion-session-manager/commit/ab1bb46b073f265c239fcd863b8459447a4e7dfd))
+* **test:** scrub the pre-push hook's git env so tests can't rewrite the real checkout ([#1692](https://github.com/s3ntin3l8/mullion-session-manager/issues/1692)) ([e6518d2](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6518d284c3bf6ebdc882ef45fee96f3fe9391d8))
+* **test:** stop the scrollback eviction test timing out under host load ([#1736](https://github.com/s3ntin3l8/mullion-session-manager/issues/1736)) ([f9689c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/f9689c17d02e630baa3d3125fa9557a01258cec0))
+* **ui:** size menus against the visible viewport ([#1697](https://github.com/s3ntin3l8/mullion-session-manager/issues/1697)) ([e1cfadb](https://github.com/s3ntin3l8/mullion-session-manager/commit/e1cfadb1498ecd6de2f4597cf6d9ee152b23eea1))
+* **workspaces:** show a banner when the initial load gives up ([#1698](https://github.com/s3ntin3l8/mullion-session-manager/issues/1698)) ([df2c0dd](https://github.com/s3ntin3l8/mullion-session-manager/commit/df2c0dda47e7df48b9c4f06ea690a1f997cd8b35))
+
 ## [0.3.42](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.41...v0.3.42) (2026-10-18)
 
 
