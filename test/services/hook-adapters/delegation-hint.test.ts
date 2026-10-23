@@ -81,10 +81,22 @@ describe("getAdapterDelegationHint", () => {
     // `explore` ship with opencode, but their v2 definitions set only
     // name/description/mode/permissions and carry no model of their own — so
     // "prefer a subagent configured with a cheaper model" has to point at
-    // the per-call `model`, not at them. Naming them here would send the
-    // worker after a lever that does not exist.
-    expect(hint).not.toContain("explore");
-    expect(hint).not.toContain("general");
+    // the per-call `model`, not at them. Asserted against the REMOVED
+    // preference clause rather than the whole hint, so an unrelated future
+    // phrasing ("in general", "the general case") cannot fail a test that
+    // is not about those two agents.
+    expect(hint).not.toContain("agents.<name>");
+    expect(hint).not.toMatch(/ship built in/i);
+    expect(hint).not.toMatch(/configured with a cheaper model/i);
+    // The v1 tool has no per-call model, and Mullion only warns about a 1.x
+    // install rather than refusing it — so the row has to be true on both
+    // versions, and the hint must not claim the parameter is always there.
+    expect(hint).toMatch(/on 2\.x/);
+    expect(hint).toMatch(/where the tool offers one/i);
+    // The tool's own note tells the model not to set `model` unasked. The
+    // row has to resolve that, or a worker that reads the tool's schema
+    // will skip the one argument the whole row depends on.
+    expect(hint).toMatch(/this task is that ask/i);
   });
 
   it("names agy's invoke_subagent and its model/modelTier", () => {

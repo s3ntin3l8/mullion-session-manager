@@ -132,9 +132,10 @@ export function getAdapterResumeSessionArgs(
  * Claude Code's Task tool takes a `subagent_type` and an optional per-call
  * `model` that overrides the subagent definition's own `model:` frontmatter;
  * Codex's `spawn_agent` takes a per-child model and reasoning effort;
- * opencode's subagent tool takes an `agent` (the subagent type) and an
- * optional per-call `model` ("providerID/modelID"); agy's `invoke_subagent`
- * takes a spec with a model and a modelTier.
+ * opencode's subagent tool takes an `agent` (the subagent type) and, on
+ * 2.x, an optional per-call `model` ("providerID/modelID" or
+ * "providerID/modelID#variant"); agy's `invoke_subagent` takes a spec with
+ * a model and a modelTier.
  */
 export function getAdapterDelegationHint(command: string): string | null {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));

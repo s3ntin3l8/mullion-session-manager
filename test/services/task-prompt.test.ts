@@ -199,8 +199,10 @@ describe("buildTaskMasterPreamble — delegation clause", () => {
     expect(codex).toContain("spawn_agent");
 
     const opencode = flatten(buildTaskMasterPreamble({ ...BASE, agentCommand: "opencode" }));
-    // v2's subagent tool: an `agent` (the subagent type) and an optional
-    // per-call `model` — not v1's `agents.<name>` config entries.
+    // v2's subagent tool: an `agent` (the subagent type) and, on 2.x, an
+    // optional per-call `model` — not v1's `agents.<name>` config entries.
+    // The row is hedged ("on 2.x", "where the tool offers one") because
+    // Mullion only warns about a 1.x install rather than refusing it.
     expect(opencode).toContain("`agent`");
     expect(opencode).toContain("`model`");
 

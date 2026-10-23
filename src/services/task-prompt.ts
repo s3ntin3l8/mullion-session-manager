@@ -303,10 +303,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   // `subagent_type` and an optional per-call `model` that overrides the
   // subagent definition's own `model:` frontmatter; Codex's `spawn_agent`
   // takes a per-child model and reasoning effort where the install exposes
-  // them; opencode's subagent tool takes an `agent` (the subagent type) and
-  // an optional per-call `model` ("providerID/modelID"); agy's
-  // `invoke_subagent` takes a spec with a model and a
-  // modelTier). One generic sentence would be wrong for three of the four.
+  // them; opencode's subagent tool takes an `agent` (the subagent type) and,
+  // on 2.x, an optional per-call `model` ("providerID/modelID" or
+  // "providerID/modelID#variant"); agy's `invoke_subagent` takes a spec
+  // with a model and a modelTier). One generic sentence would be wrong for
+  // three of the four.
   //
   // Emitted only when the worker's command resolves to an agent that has one:
   // a plain shell gets nothing, because there is no subagent to delegate to.
