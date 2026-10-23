@@ -230,6 +230,19 @@ describe("scope ownership", () => {
     ).toBe(true);
   });
 
+  // The mirror resolves the owned dirs before comparing, exactly like the
+  // backend's resolveOwnedDirs — without that, a RELATIVE entry in the set
+  // would never match the absolute socket path.
+  it("resolves the owned dirs before comparing, like the backend does", () => {
+    const relative = "./sessions";
+    const absolute = path.resolve(relative);
+    expect(ownsScope(describeScope(path.join(absolute, "7.sock")), new Set([relative]))).toBe(true);
+    // ...and a relative entry that resolves elsewhere is not.
+    expect(ownsScope(describeScope(path.join(absolute, "7.sock")), new Set(["./other"]))).toBe(
+      false,
+    );
+  });
+
   it("does not own a scope whose socket is elsewhere, or unparseable", () => {
     const real = "/home/me/opt/mullion/data/sessions";
     expect(ownsScope(describeScope(path.join(real, "7.sock")), new Set([sessionsDir]))).toBe(false);
