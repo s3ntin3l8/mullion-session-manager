@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -119,8 +120,8 @@ describe("Settings -> Notifications", () => {
     // The onChange handler spreads the full { notify, sound, autoFocus }
     // triple for the changed status (see Settings.tsx), not just the
     // toggled field.
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
@@ -132,8 +133,7 @@ describe("Settings -> Notifications", () => {
             },
           }),
         }),
-      ),
-    );
+      );;
   });
 
   it("renders an awaiting_question row and round-trips its notify toggle (#551)", async () => {
@@ -164,9 +164,8 @@ describe("Settings -> Notifications", () => {
         ?.notify,
     ).toBe(false);
 
-    await waitFor(
-      () =>
-        expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
           "/api/settings",
           expect.objectContaining({
             method: "PATCH",
@@ -178,10 +177,7 @@ describe("Settings -> Notifications", () => {
               },
             }),
           }),
-        ),
-      // SETTINGS_PATCH_DEBOUNCE_MS (400ms) + headroom for CI load.
-      { timeout: 2000 },
-    );
+        );;
   });
 
   it("renders a background row under Busy (found alongside #551, same gap for a different status)", async () => {

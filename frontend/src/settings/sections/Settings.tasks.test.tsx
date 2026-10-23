@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -81,15 +82,14 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.enabled).toBe("on");
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { enabled: "on" } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("disables Pause auto-claim while Task Master resolves to off, with an explanatory hint", async () => {
@@ -118,15 +118,14 @@ describe("Settings -> Task Master", () => {
     await user.click(toggle);
 
     expect(useDashboardStore.getState().settings.taskMaster.autoClaimPaused).toBe(true);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { autoClaimPaused: true } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("edits Max concurrent claims and PATCHes the concrete override, not the sentinel, once the field is committed", async () => {
@@ -142,15 +141,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(5);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { maxConcurrent: 5 } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("edits the rate-limit grace period and shows its server default", async () => {
@@ -168,15 +166,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.rateLimitGraceMinutes).toBe(0);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { rateLimitGraceMinutes: 0 } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("clamps Max concurrent claims to its upper bound while typing, so the displayed value never exceeds what's effective", async () => {
@@ -199,12 +196,11 @@ describe("Settings -> Task Master", () => {
     // Flush the debounced PATCH before this test ends — otherwise its
     // pending patch leaks into (and corrupts the asserted body of) the
     // next test's own PATCH via the store's shared debounce/merge state.
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({ method: "PATCH" }),
-      ),
-    );
+      );;
   });
 
   it("clamps a cleared Max concurrent claims field up to 1 on commit, not down to 0 (Hermes review, PR #480, second pass)", async () => {
@@ -223,15 +219,14 @@ describe("Settings -> Task Master", () => {
     // "inherit" sentinel server-side rather than a fixed default — clamp
     // it up to the field's own min on commit instead.
     expect(useDashboardStore.getState().settings.taskMaster.maxConcurrent).toBe(1);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { maxConcurrent: 1 } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("edits Per-task budget down to 0 (unlimited) and PATCHes 0, not the -1 sentinel, once the field is committed", async () => {
@@ -246,15 +241,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(0);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { budgetMinutes: 0 } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("does not persist a cleared budget field's transient 0 until the field is committed (blur/Enter)", async () => {
@@ -286,15 +280,14 @@ describe("Settings -> Task Master", () => {
     await user.tab();
 
     expect(useDashboardStore.getState().settings.taskMaster.budgetMinutes).toBe(45);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { budgetMinutes: 45 } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("commits the trusted logins list as a trimmed array on blur", async () => {
@@ -309,15 +302,14 @@ describe("Settings -> Task Master", () => {
       "octocat",
       "my-bot",
     ]);
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({ taskMaster: { trustedLogins: ["octocat", "my-bot"] } }),
         }),
-      ),
-    );
+      );;
   });
 
   it("Reset writes every sentinel back in one patch, from an install with every field overridden", async () => {
@@ -359,8 +351,8 @@ describe("Settings -> Task Master", () => {
     expect(tm.autoClaimPaused).toBe(true);
     expect(tm.reviewCiWaitMinutes).toBe(30);
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
+        __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
         "/api/settings",
         expect.objectContaining({
           method: "PATCH",
@@ -375,8 +367,7 @@ describe("Settings -> Task Master", () => {
             },
           }),
         }),
-      ),
-    );
+      );;
   });
 
   it("surfaces Task Master's own install-wide agent defaults as the lowest resolution tier", async () => {

@@ -40,6 +40,41 @@ function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
   };
 }
 
+// Module-scoped handle on the CURRENT slice's pending-patch flusher, so a
+// test can settle the settings debounce without waiting it out — see
+// __flushPendingSettingsPatchForTests below.
+//
+// The pending patch itself is closure state (below), not store state, so the
+// store's own resetStore() cannot reach it: a patch armed by one test can
+// still be pending when the NEXT test in the same file installs its own
+// fetch mock, and the debounce timer then fires into that mock — a PATCH
+// from the previous test showing up in this one's assertions.
+let pendingSettingsPatchFlusher: (() => void) | null = null;
+
+/**
+ * Visible for tests: settle the pending settings PATCH now — cancel the
+ * debounce timer and send it — instead of waiting out
+ * SETTINGS_PATCH_DEBOUNCE_MS.
+ *
+ * Two things this fixes, both of which only show up under full-suite load:
+ *
+ * 1. A test that waits for the PATCH with `waitFor` is racing a 400ms
+ *    debounce against the runner's own load. When the runner is slow the
+ *    PATCH lands after the wait's timeout and the failure reads like a
+ *    product bug rather than a slow machine.
+ * 2. A patch left PENDING by one test can fire during a LATER test in the
+ *    same file, because the debounce timer outlives the test that armed it.
+ *
+ * The global test setup flushes after EVERY test (src/testSetup.ts), so
+ * nothing is ever left pending to fire later; a test that wants to assert
+ * on the PATCH calls this itself, and then the fetch has already been made
+ * (api.patchSettings reaches fetch() synchronously), so the assertion needs
+ * no wait at all.
+ */
+export function __flushPendingSettingsPatchForTests(): void {
+  pendingSettingsPatchFlusher?.();
+}
+
 export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set, get) => {
   // Closure-scoped (not React/store state) — accumulates across rapid
   // updateSettings() calls between debounce windows, same pattern
@@ -61,6 +96,16 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       console.error("Failed to persist settings", err);
     });
   }
+
+  // Settle the pending PATCH now — cancel the debounce timer and send it.
+  // Registered module-scope so a test can reach it; see
+  // __flushPendingSettingsPatchForTests.
+  function flushPendingSettingsPatchNow() {
+    if (patchTimer) clearTimeout(patchTimer);
+    patchTimer = null;
+    flushPendingPatch();
+  }
+  pendingSettingsPatchFlusher = flushPendingSettingsPatchNow;
 
   function applySettings(next: AppSettings) {
     set({
