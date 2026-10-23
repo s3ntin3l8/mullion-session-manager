@@ -100,6 +100,9 @@ a completion protocol the worker follows.
 **Defer instead of footnoting.** If part of the work should be its own
 issue — a follow-up, a deferred edge case — file it and link it, rather
 than describing it in a paragraph the worker has no obligation to notice.
+File it as a spec, not a note: it is work someone has to do, and a
+well-specified deferral is exactly the kind of issue Task Master picks up
+and implements on its own.
 
 ## Body directives
 
@@ -147,6 +150,33 @@ Matching rules, all six:
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.
 
+### `Manual: true` is the exception, not the default
+
+**Leave `Manual: true` off unless a human genuinely has to weigh in
+BEFORE work starts.** Without it, the issue is claimable: Task Master picks
+it up, a worker implements it, and a reviewer judges the diff, if one is
+configured. That is the point of filing the issue.
+
+Add it only for an issue where starting work would be wrong or wasteful
+without a human's answer — an unsettled design decision, a spec whose
+scope is genuinely ambiguous, a change that needs sign-off on direction.
+Those are rare. "This is a follow-up" and "this was deferred" are **not**
+reasons: a deferral is work someone has to do, and if it is specified
+well enough to be worth filing, it is specified well enough to be
+implemented.
+
+Getting this backwards is expensive and quiet. An issue marked
+`Manual: true` is ingested to `backlog` instead of `ready`, so it is never
+auto-claimed; it sits there until a human claims it by hand. An issue
+marked `Manual: true` that a human then closes after doing the work
+by hand looks, from Task Master's side, like a failure — which is why a
+backlog full of `Manual: true` issues reads as "Task Master isn't picking
+anything up" when in fact it was told not to.
+
+If you are filing an issue because your plan deferred part of the work,
+file it **without** `Manual: true` — unless a human has to weigh in on it
+first, in which case that is exactly what the directive is for.
+
 ## Worked example
 
 `references/worked-example.md` in this skill is one complete, filled-in
@@ -167,6 +197,10 @@ worker's Scope.
 - Scope items telling the worker to open the PR, request a review, merge,
   or clean up the branch/worktree — Mullion owns all of that, and the
   worker is told not to touch it.
+- Adding `Manual: true` to an issue that is simply deferred work, and
+  watching it sit in `backlog` forever — `Manual: true` means "a human
+  must weigh in before this starts", not "this is a follow-up". See
+  "`Manual: true` is the exception, not the default" above.
 - Forgetting `Manual: true` on something that genuinely needs a human to
   weigh in before work starts, and being surprised when it auto-claims.
 - Sequencing a roadmap with parent/sub-issue nesting instead of

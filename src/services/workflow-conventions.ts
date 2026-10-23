@@ -265,8 +265,21 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
       {
         id: "tracked-issue",
         label: "File a tracked issue for every deferred item, linked from the PR",
+        // THIS is the canonical, cross-project surface for the deferred-work
+        // rule: the wizard renders it (buildWorkflowConventionsText), the
+        // install's stored conventions text is re-derived from it, and
+        // every scaffolded repo's AGENTS.md region carries it
+        // (mullion-scaffold.ts's workflowConventionsSection).
+        //
+        // The stored text on an EXISTING install is a snapshot, so it picks
+        // this wording up when the workflow-conventions wizard is re-run —
+        // which is also what refreshes a project's AGENTS.md region, since
+        // the setup apply replaces that region wholesale. So a repo does
+        // NOT hand-edit its own AGENTS.md region to carry this sentence:
+        // the region is rendered from the install's text, and the fragment
+        // here is the one place this rule is written down.
         fragment:
-          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record.",
+          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record. Write each one as a spec an agent can implement on its own (scope, acceptance criteria), not as a note.",
       },
     ],
   },

@@ -129,6 +129,53 @@ describe("taskmaster-issues skill — SKILL.md's own prose never doubles as a di
   }
 });
 
+describe("taskmaster-issues skill — `Manual: true` is documented as the exception", () => {
+  // The failure this guards against is quiet and expensive: an issue marked
+  // `Manual: true` is ingested to `backlog` instead of `ready`, so it is
+  // never auto-claimed. An install whose agents mark everything manual
+  // sees a queue that looks like "Task Master isn't picking anything up"
+  // when in fact it was told not to. The skill is where that default is
+  // set, so its framing is worth pinning.
+  it("frames `Manual: true` as the exception rather than the default", () => {
+    // Anchored to the SECTION HEADING, not to the phrase. The "Common
+    // mistakes" bullet cross-references this section by name ("See
+    // "`Manual: true` is the exception, not the default" above"), so a
+    // looser pattern matches that bullet too — and stays green with the
+    // section itself deleted.
+    expect(skillBody).toMatch(/^###\s+`Manual: true` is the exception, not the default$/m);
+  });
+
+  it("says to leave it off by default", () => {
+    expect(skillBody).toMatch(/leave\s+`Manual: true`\s+off/i);
+  });
+
+  it("still names the narrow case where it belongs — a human weighing in first", () => {
+    // Anchored to the NEW section's own wording ("a human genuinely has to
+    // weigh in"), not to the "Common mistakes" bullet — that bullet says
+    // "needs a human to weigh in", so a test written against the looser
+    // phrase would pass on the bullet alone and keep passing even if the
+    // positive guidance above were deleted.
+    expect(skillBody).toMatch(/a human\s+genuinely has to\s+weigh in/i);
+  });
+
+  it("says a deferral is filed as a spec, not a note", () => {
+    // The "Defer instead of footnoting" paragraph tells the author to file
+    // a deferred item AS A SPEC. The portable half of that sentence is
+    // pinned by workflow-conventions.test.ts, but this half had no
+    // assertion: deleting it left every test in this file green.
+    expect(skillBody).toMatch(/File it as a spec, not a note/);
+  });
+
+  it("warns against marking deferred work as manual", () => {
+    // "This is a follow-up" and "this was deferred" are not reasons: a
+    // deferral is work someone has to do, and a well-specified one is
+    // exactly what Task Master picks up.
+    expect(skillBody).toMatch(
+      /Adding\s+`Manual: true`\s+to an issue that is simply deferred work/i,
+    );
+  });
+});
+
 describe("taskmaster-issues skill — worked-example.md carries exactly its two directives", () => {
   // Hermes review on #1031: the resolver-driven assertions above only ever
   // read the FIRST Agent:/ReviewAgent: line (exec with no /g — "first match

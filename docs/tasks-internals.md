@@ -289,7 +289,30 @@ progress. The labeling buys the chip without the auto-claim risk, and
 open sub-issues is an additive safety net (catches the case where the human
 forgot `Manual: true`), not the only path.
 
-Note on the parent-context flow: a worker's prompt **does** receive the
+### `Manual: true` is the exception, not the default
+
+The directive's mechanics are unchanged — a body carrying it is parked in
+`backlog` by `isManualOnly` and never auto-claimed — but the shipped
+`taskmaster-issues` skill now steers authors AWAY from it unless a human
+genuinely has to weigh in before work starts. It used to document
+`Manual: true` as one of six ordinary options and list "forgetting it" as
+a mistake, which an agent filing a deferral reads as _deferred ⇒
+therefore manual_. On a real install that misreading had parked 65 of the
+66 issues the watcher ever ingested, so the queue looked empty of
+auto-claimable work while the bodies themselves were perfectly good
+specs.
+
+The failure is quiet in both directions, which is why it is worth stating
+plainly: a backlog full of `Manual: true` issues reads as "Task Master
+isn't picking anything up" when in fact it was told not to, and an issue
+that a human later closes after doing the work by hand is recorded as a
+task failure — through the poll's read-back, since the `closed` webhook
+path is gated on `canTransition(status, "done")` and so never fires for a
+`backlog` task.
+
+### The parent-context flow
+
+A worker's prompt **does** receive the
 parent epic's body, framed explicitly as "context only, not your task" via
 `renderParent` (`task-prompt.ts`) and routed through `TaskPromptTask.parent`
 / `TaskPromptSibling[]` (`task-prompt.ts`, resolved by
