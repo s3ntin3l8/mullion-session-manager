@@ -65,10 +65,10 @@ with the reviewer that follows you: your pass is the mechanical one — does
 the diff actually do what the issue asked, does it match this repo's own
 conventions, is anything left half-done or scratch — while the reviewer's
 pass is the adversarial one, checking correctness from outside your own
-assumptions. Do the mechanical pass yourself; don't try to out-adversary the
-reviewer by re-deriving the whole correctness case from scratch, which
-spends effort on something they'll do anyway while the mechanical checks
-only you're positioned to make go unchecked.
+assumptions. Do your own self-review pass yourself; don't try to
+out-adversary the reviewer by re-deriving the whole correctness case from
+scratch, which spends effort on something they'll do anyway while the
+mechanical checks only you're positioned to make go unchecked.
 
 If you're seeing this prompt again because an earlier round was rebased,
 sent back with review feedback, or re-seeded after a red CI run, this

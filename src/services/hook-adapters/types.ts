@@ -325,4 +325,23 @@ export interface HookAgentAdapter {
    * `--prompt <text>` is unambiguously the resumed session's next turn, not
    * a fresh one. */
   resumeSessionArgs?(agentSessionId: string): string;
+  /**
+   * The CLI-specific sentence telling a Task Master worker that it may
+   * decompose this task and delegate the mechanical parts to a cheaper
+   * subagent — see hook-adapters/index.ts's getAdapterDelegationHint, the
+   * only sanctioned reader of this field.
+   *
+   * Pure string, no I/O. Absent for an agent whose CLI exposes no
+   * subagent primitive at all; the caller then emits nothing rather than
+   * naming a tool the CLI lacks. Every sentence must end by keeping the
+   * worker responsible for the final commit ON THIS BRANCH — that is
+   * load-bearing, not boilerplate: a delegated implementation must not be
+   * able to satisfy Task Master's "commits ahead of base" gate on its own,
+   * or the reviewer would judge a diff the worker never read. The clause
+   * has to name the LANDING requirement, because a child can work in its
+   * own workspace or fork (Claude Code's Task tool has
+   * `isolation: "worktree"`; codex's `spawn_agent` forks the workspace) —
+   * edits made there never reach this branch unless the worker lands them.
+   */
+  delegationHint?: string;
 }

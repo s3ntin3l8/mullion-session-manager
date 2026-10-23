@@ -491,6 +491,7 @@ export async function tasksRoute(app: FastifyInstance) {
       worktreePath: task.worktreePath,
       budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
       feedback,
+      agentCommand: task.agentCommand,
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles

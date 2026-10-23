@@ -115,6 +115,32 @@ export function getAdapterResumeSessionArgs(
 }
 
 /**
+ * The CLI-specific sentence telling a Task Master worker that it may
+ * decompose this task and delegate the mechanical parts to a cheaper
+ * subagent, or `null` when no adapter matches (a plain shell) or the
+ * matched adapter has no `delegationHint`.
+ *
+ * Same pure lookup shape as getAdapterPromptFraming above, and the
+ * SANCTIONED way for callers to branch on the agent family without parsing
+ * `command` themselves — the repo's "sessions.command is an opaque blob"
+ * invariant (see AGENTS.md) lists this file's helpers as the only place
+ * that inspection is allowed outside the adapters themselves.
+ *
+ * Why a per-CLI sentence rather than one generic one: the four CLIs expose
+ * delegation differently, and a sentence that named the wrong tool (or the
+ * wrong way of choosing the child's model) would be actively misleading.
+ * Claude Code's Task tool takes a `subagent_type` and an optional per-call
+ * `model` that overrides the subagent definition's own `model:` frontmatter;
+ * Codex's `spawn_agent` takes a per-child model and reasoning effort;
+ * opencode's subagents are `agents.<name>` config entries each carrying a
+ * model; agy's `invoke_subagent` takes a spec with a model and a modelTier.
+ */
+export function getAdapterDelegationHint(command: string): string | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.delegationHint ?? null;
+}
+
+/**
  * Whether the adapter matching `command` can resume an existing agent-native
  * session by id at all — a capability check, not a call. Used by
  * opencode-session-transfer.ts to decide, ahead of running any subprocess,

@@ -38,6 +38,36 @@
 
 import path from "node:path";
 
+import { getAdapterDelegationHint } from "./hook-adapters/index.js";
+
+/**
+ * Greedily wraps `text` to `width` columns, breaking on whitespace and
+ * never splitting a word. Used for the CLI-specific delegation clause, which
+ * is a single long sentence authored in the adapter and therefore has no
+ * hand-placed line breaks — the rest of this module's preamble text is
+ * hand-wrapped, and a single un-wrapped 400-character line would read very
+ * differently from the rest of the block.
+ *
+ * Pure, and exported for direct unit testing of the wrap behaviour itself.
+ */
+export function wrapPromptText(text: string, width = 78): string[] {
+  const words = text.split(/\s+/).filter((word) => word.length > 0);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current.length === 0) {
+      current = word;
+    } else if (current.length + 1 + word.length <= width) {
+      current += ` ${word}`;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current.length > 0) lines.push(current);
+  return lines;
+}
+
 /** A single issue comment, as rendered in a worker's prompt — a local shape
  * rather than importing github.ts's own `GitHubIssueComment`, matching this
  * module's established "plain string builder, no dependency on what fetched
@@ -206,6 +236,19 @@ export interface WorkerPreambleOptions {
    * between rounds (a fix-up round's type may differ from the initial
    * round's), so this is intentionally NOT claim-only. */
   commitTitlePath?: string;
+  /**
+   * The resolved agent command this worker will run under — the ONLY thing
+   * the delegation clause below needs, and deliberately passed as an opaque
+   * string rather than parsed here: this module never inspects
+   * `sessions.command` itself (see AGENTS.md's "sessions.command is an
+   * opaque blob" invariant), it only hands the string to the sanctioned
+   * lookup in hook-adapters/index.ts.
+   *
+   * `undefined`/null ⇒ no delegation clause is emitted at all, which is
+   * the right outcome for a plain shell command (there is no agent CLI to
+   * delegate to) and for any agent with no subagent primitive.
+   */
+  agentCommand?: string | null;
 }
 
 /**
@@ -243,7 +286,7 @@ export interface WorkerPreambleOptions {
  * false` was flatly wrong on this point. The bullet is unconditional now.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
-  const { task, branchName, worktreePath, budgetMinutes, commitTitlePath } = opts;
+  const { task, branchName, worktreePath, budgetMinutes, commitTitlePath, agentCommand } = opts;
 
   const lines = [
     `You are working ${taskLabel(task)} as a Mullion Task Master worker.`,
@@ -252,6 +295,38 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     `on branch ${branchName}. Do all your work there. Do not switch, rebase onto, or`,
     `create another branch — Mullion pushes ${branchName} by name, so work anywhere`,
     "else is invisible to it.",
+  ];
+
+  // The delegation clause — advisory, and CLI-specific: each adapter's own
+  // `delegationHint` names that CLI's delegation primitive AND that CLI's own
+  // way of choosing the child's model (Claude Code's Task tool takes a
+  // `subagent_type` and an optional per-call `model` that overrides the
+  // subagent definition's own `model:` frontmatter; Codex's `spawn_agent`
+  // takes a per-child model and reasoning effort where the install exposes
+  // them; opencode's subagents are `agents.<name>` entries each carrying a
+  // model; agy's `invoke_subagent` takes a spec with a model and a
+  // modelTier). One generic sentence would be wrong for three of the four.
+  //
+  // Emitted only when the worker's command resolves to an agent that has one:
+  // a plain shell gets nothing, because there is no subagent to delegate to.
+  //
+  // It deliberately sits BEFORE the "When you are done:" checklist — it is
+  // advice about how to approach the work, not a completion obligation, and
+  // the checklist below is a list of individually checkable things.
+  //
+  // The clause's closing requirement — the delegated work has to LAND on
+  // this branch, and the worker stays responsible for the final commit — is
+  // load-bearing, not boilerplate: a child can work in its own workspace or
+  // fork, and edits made there never reach this branch unless the worker
+  // lands them. Without that, a delegated implementation could satisfy
+  // Task Master's "no commits ahead of base" gate while the work itself
+  // silently disappeared, and the reviewer would judge an empty diff.
+  const delegationHint = agentCommand ? getAdapterDelegationHint(agentCommand) : null;
+  if (delegationHint) {
+    lines.push("", ...wrapPromptText(delegationHint));
+  }
+
+  lines.push(
     "",
     "When you are done:",
     "",
@@ -279,7 +354,7 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  permission prompt — a question you ask instead of answering yourself ends",
     "  your turn with no commits, which fails the task outright. Decide, and record",
     "  the decision and why in your commit message.",
-  ];
+  );
 
   if (commitTitlePath) {
     lines.push(

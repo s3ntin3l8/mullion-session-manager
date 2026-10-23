@@ -1522,6 +1522,7 @@ async function attemptAutoRebase(
     budgetMinutes: taskMasterConfig.budgetMinutes,
     commitTitlePath,
     baseRef,
+    agentCommand: task.agentCommand,
   });
   const result = await createSessionRecord(app, {
     projectId: project.id,
@@ -2670,6 +2671,7 @@ async function attemptReturnRedCiToWorker(
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     commitTitlePath,
+    agentCommand: task.agentCommand,
   });
   await autoReturnTask(app, task, project, { reason: "ci", seedPrompt: prompt });
   return true;
@@ -2847,6 +2849,7 @@ async function attemptReturnPrCommentsToWorker(
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     commitTitlePath,
+    agentCommand: task.agentCommand,
     comments: newComments.map((c): PrReviewCommentInfo => ({
       author: c.author,
       path: c.path,
@@ -4021,6 +4024,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           branchName: task.branchName ?? deriveTaskBranchName(task),
           worktreePath: task.worktreePath!,
           budgetMinutes: resolvedTaskMaster.budgetMinutes,
+          agentCommand: task.agentCommand,
           // Rendered, not the raw findings-file content — `shouldAutoReturn`
           // guarantees `parsed !== null` here, but `parsed` may be JSON; the
           // worker should read prose, not the wire format Mullion parses.
