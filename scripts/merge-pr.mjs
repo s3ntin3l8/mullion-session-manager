@@ -140,8 +140,21 @@ export function mergeReadiness(pr) {
     };
   }
 
-  if (pr.mergeStateStatus === "BLOCKED" || pr.mergeStateStatus === "DRAFT") {
-    return { action: "stop", reason: `merge state is ${pr.mergeStateStatus}` };
+  if (pr.mergeStateStatus === "BLOCKED") {
+    // BLOCKED with no failed check in the rollup means a REQUIRED check has
+    // not reported on THIS head yet. Right after a push the rollup can
+    // still hold the PREVIOUS head's green checks while the new ones
+    // register — and GitHub calls the state BLOCKED throughout. That is
+    // "not ready yet", not "not ready ever": a genuinely failed check was
+    // already caught above, by the rollup itself.
+    return {
+      action: "wait",
+      reason: "a required check has not reported on this head yet",
+    };
+  }
+
+  if (pr.mergeStateStatus === "DRAFT") {
+    return { action: "stop", reason: "merge state is DRAFT" };
   }
 
   if (pr.mergeable !== "MERGEABLE") {

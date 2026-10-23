@@ -315,3 +315,31 @@ describe("cli", () => {
     );
   });
 });
+
+describe("mergeReadiness — a head whose checks have not reported yet", () => {
+  it("waits on BLOCKED rather than stopping", () => {
+    // Right after a push the rollup can still hold the PREVIOUS head's green
+    // checks while the new ones register, and GitHub calls the state
+    // BLOCKED throughout. Stopping there refused a merge that was merely
+    // early — the failure this script exists to prevent.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+    });
+    expect(readiness.action).toBe("wait");
+  });
+
+  it("still stops on a DRAFT", () => {
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "DRAFT",
+    });
+    expect(readiness.action).toBe("stop");
+  });
+});
