@@ -4,6 +4,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ModelsSection } from "./ModelsSection.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -44,10 +45,16 @@ describe("Settings -> Models", () => {
       .filter(([url, init]) => url === "/api/settings" && init?.method === "PATCH")
       .map(([, init]) => init.body as string);
 
-  // SETTINGS_PATCH_DEBOUNCE_MS (400ms) + headroom for CI load, same as
-  // Settings.notifications.test.tsx's equivalent debounce assertion.
-  const expectPatch = (body: unknown) =>
-    waitFor(() => expect(patchBodies()).toContain(JSON.stringify(body)), { timeout: 2000 });
+  // Flushed rather than waited for: the settings PATCH is debounced
+  // (SETTINGS_PATCH_DEBOUNCE_MS), and racing that against a wait is what
+  // made this flake under full-suite load. Flushing settles it, and
+  // api.patchSettings reaches fetch() synchronously — so the call has
+  // already been made by the time the flush returns, and there is no wait
+  // left to time out.
+  const expectPatch = (body: unknown) => {
+    __flushPendingSettingsPatchForTests();
+    expect(patchBodies()).toContain(JSON.stringify(body));
+  };
 
   const settle = () => new Promise((r) => setTimeout(r, 700));
 
@@ -433,11 +440,16 @@ describe("Settings -> Models", () => {
       const note = screen.getByText(/no second opinion/i).closest("p");
       expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*\/\s*Reviewer-Model:/);
       // The note's TRAILING clause is a second, separate claim: that
-      // `Model:` — not just `Reviewer-Model:` — applies to BOTH roles, and
-      // can therefore make them the same. Deleting that clause wholesale
-      // used to leave this file green, so it is pinned here too, with the
-      // same lookbehind: "Reviewer-Model: applies to both roles" must not
-      // satisfy it.
+      // `Model:` — not just `Reviewer-Model:` — applies to BOTH roles.
+      // Deleting that clause wholesale used to leave this file green, so the
+      // claim is pinned here too, with the same lookbehind:
+      // "Reviewer-Model: applies to both roles" must not satisfy it.
+      //
+      // What is pinned is the "applies to both roles" claim, not the whole
+      // clause: the consequence half ("so it can also make them the same")
+      // is prose the assertion does not reach, and deleting just that half
+      // still leaves this test green. Read the assertion as covering the
+      // claim it names, not the sentence around it.
       expect(note?.textContent ?? "").toMatch(/(?<![-\w])Model:\s*applies to both roles/);
     });
 

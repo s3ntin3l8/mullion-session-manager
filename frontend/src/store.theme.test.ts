@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useDashboardStore } from "./store/index.js";
+import { __flushPendingSettingsPatchForTests } from "./store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 
@@ -49,14 +50,18 @@ describe("store.cycleTheme", () => {
   it("PATCHes each step to the server, debounced", async () => {
     useDashboardStore.getState().cycleTheme();
 
-    await vi.waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ theme: "light" }),
-        }),
-      ),
+    // Flushed rather than waited for: the settings PATCH is debounced
+    // (SETTINGS_PATCH_DEBOUNCE_MS), and racing that against a wait is what
+    // made this flake under full-suite load. Flushing settles it — and
+    // api.patchSettings reaches fetch() synchronously, so the call has
+    // already been made by the time the flush returns.
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ theme: "light" }),
+      }),
     );
   });
 

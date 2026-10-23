@@ -498,10 +498,14 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   which always inherits the parent model, and ignored outright when the
   tool reports that the model parameter is ignored on this session), Codex's
   `spawn_agent` takes a per-child model and reasoning effort where the
-  install exposes them, opencode's subagents are `agents.<name>` entries
-  each carrying a model, agy's `invoke_subagent` takes a spec with a model
-  and a `modelTier`. One generic sentence would be wrong for three of the
-  four.
+  install exposes them, opencode's subagent tool takes an `agent` (the
+  subagent type; 1.x calls it `subagent_type`) and, on 2.x, an optional
+  per-call `model` written as `providerID/modelID` or
+  `providerID/modelID#variant` — Mullion only WARNS below 2.0.29 rather than
+  refusing the agent, so a 1.x install still launches and the row hedges
+  with "where the tool offers one" — agy's `invoke_subagent` takes a spec
+  with a model and a `modelTier`. One generic sentence would be wrong for
+  three of the four.
 
   This is **advisory**, not an obligation to delegate: the clause says the
   task _may_ be split, and the agent decides whether it is worth splitting.

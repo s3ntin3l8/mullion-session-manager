@@ -93,6 +93,37 @@ anywhere under it.
 If you changed `src/db/schema.ts`, also run `npm run db:generate` and commit
 the generated migration under `drizzle/`.
 
+### A long `TMPDIR` breaks socket tests, and it is not a code bug
+
+A `sockaddr_un` socket path is capped at **108 bytes on Linux and 104 on
+macOS**, and that cap includes the NUL terminator, so the usable path is one
+byte shorter. A Mullion-hosted session exports a long `TMPDIR`
+(`.../sessions/<id>.tmp/...`), which is long enough to eat most of that
+budget on its own.
+
+The suite defends against this by putting its own temp root somewhere short
+(`test/helpers/suite-tmpdir.ts`): it uses `os.tmpdir()` when the projected
+path fits the budget and falls back to `/tmp` when it does not. The budget is
+derived from the platform limit, which lives in ONE place —
+`src/cli/sun-path.mjs` — and is read by the backend's own guard
+(`src/plugins/pty.ts`), the demo script (`scripts/demo/env.mjs`) and the
+suite's temp-dir helper alike. The off-by-one for the NUL terminator lives
+there too, so it cannot be got wrong at a call site.
+
+So a `listen()` failure with a bare `EINVAL`, or a test that hangs until its
+timeout, in a run whose `TMPDIR` is long, is this — not the code under test.
+Two symptoms worth recognising:
+
+- `EADDRINUSE`/`EADDRNOTAVAIL` on a socket path that "cannot possibly" be
+  too long, and
+- a test failing only in a session, and passing in a plain checkout.
+
+If you hit either, check `echo $TMPDIR` first. To run the suite with a short
+temp root by hand, `TMPDIR=/tmp npm test`. The same rule applies to a
+Mullion-hosted session's own sockets: the backend relocates a too-long
+`sessionsDir` to a short fallback and logs which path it moved to, so read
+the log line rather than assuming the configured path is in use.
+
 All issues and pull request descriptions must adhere to the standard templates:
 
 - Issue blueprint: [.github/ISSUE_TEMPLATE/issue-blueprint.md](.github/ISSUE_TEMPLATE/issue-blueprint.md)

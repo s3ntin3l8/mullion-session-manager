@@ -4,6 +4,7 @@ import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
+import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
@@ -64,14 +65,13 @@ describe("Settings -> Sessions -> Workflow conventions textarea", () => {
     const textarea = await screen.findByPlaceholderText(/No workflow conventions configured yet/);
     await user.type(textarea, "x");
 
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/api/settings",
-        expect.objectContaining({
-          method: "PATCH",
-          body: JSON.stringify({ sessions: { workflowConventionsText: "x" } }),
-        }),
-      ),
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ sessions: { workflowConventionsText: "x" } }),
+      }),
     );
   });
 });

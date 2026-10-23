@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
+import { fitsSunPath } from "../../src/cli/sun-path.mjs";
 
 /**
  * Environment isolation for the throwaway demo instance (`make demo`,
@@ -58,39 +59,33 @@ const SECRET_KEY = /(SECRET|PASSWORD|_KEY|_TOKEN)$|ENCRYPTION/;
  * The `sockaddr_un.sun_path` limit, in bytes, for the platforms whose limit
  * differs from the default.
  *
- * This mirrors `SUN_PATH_BYTES_BY_PLATFORM` in src/plugins/pty.ts — the rule
- * the backend actually applies — but this file is `.mjs` and cannot import
- * that TypeScript module, so the copy is structural. The demo's own guard
- * below depends on the two agreeing, so the copy is ASSERTED against the
- * backend's (test/scripts/demo-env.test.ts): a change to one that does not
- * reach the other fails the suite instead of leaving the demo's guard stale.
+ * This was a MIRROR of `SUN_PATH_BYTES_BY_PLATFORM` in src/plugins/pty.ts —
+ * the rule the backend actually applies — because this file is `.mjs` and
+ * could not import that TypeScript module. It no longer has to: the rule now
+ * lives in src/cli/sun-path.mjs (plain ESM, so this file CAN import it), and
+ * the backend, this script and the test suite's temp-dir helper all read
+ * that one implementation. The mirror's drift guard
+ * (test/scripts/demo-env.test.ts) is gone with it — a shared module cannot
+ * drift from itself, which is a stronger guarantee than a test comparing two
+ * copies could give.
  *
- * The whole TABLE is mirrored, not just the platforms that differ today, so
- * a platform added to the backend's table and not to this one is caught —
- * comparing only today's two platforms would let that divergence through.
- *
- * A Map, not a plain object: an object literal inherits
- * `Object.prototype`'s keys, so an arbitrary platform string like
- * "constructor" would return a function rather than the default.
+ * The names below are re-exported so this file's own consumers (and its
+ * test) keep the surface they had.
  */
-export const sunPathBytesByPlatform = new Map([["darwin", 104]]);
-
-/** The `sun_path` limit for every platform not listed in the table above. */
-export const defaultSunPathBytes = 108;
-
-/** The `sockaddr_un.sun_path` limit, in bytes, for a given platform. */
-export function maxSunPathBytes(platform = process.platform) {
-  return sunPathBytesByPlatform.get(platform) ?? defaultSunPathBytes;
-}
+export {
+  DEFAULT_SUN_PATH_BYTES as defaultSunPathBytes,
+  maxSunPathBytes,
+  SUN_PATH_BYTES_BY_PLATFORM as sunPathBytesByPlatform,
+} from "../../src/cli/sun-path.mjs";
 
 /**
  * The longest socket name a sessions dir has to hold: a 12-digit session-id
  * socket.
  *
  * The backend takes the max over every socket a sessions dir holds
- * (`longestSocketPath` in src/plugins/pty.ts), so this mirror is asserted
- * against that max too — a longer socket added there would otherwise leave
- * this one under-counting and the demo under-refusing.
+ * (`longestSocketPath` in src/cli/sun-path.mjs), and the demo's guard below
+ * uses that same max — so a socket added on the backend's side is counted
+ * here too, rather than leaving the demo under-counting and under-refusing.
  */
 export const longestSocketName = "999999999999.sock";
 
@@ -198,13 +193,10 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
   // instead. The limit is the platform's own (108 on Linux, 104 on
   // macOS), less one for the NUL terminator — the same rule the backend
   // applies, so a SESSIONS_DIR the backend would keep is not refused here.
-  // Both values are mirrors of the backend's, asserted against it in
-  // test/scripts/demo-env.test.ts.
-  if (
-    env.SESSIONS_DIR !== undefined &&
-    Buffer.byteLength(path.join(path.resolve(env.SESSIONS_DIR), longestSocketName)) >
-      maxSunPathBytes() - 1
-  )
+  // Both the limit and the "longest socket in a sessions dir" max come from
+  // src/cli/sun-path.mjs — the ONE implementation the backend, this script
+  // and the test suite's temp-dir helper all read.
+  if (env.SESSIONS_DIR !== undefined && !fitsSunPath(path.resolve(env.SESSIONS_DIR)))
     problems.push("SESSIONS_DIR is too long; the backend would relocate it");
   for (const key of ["HOME", "TMPDIR"])
     if (env[key] === undefined) problems.push(`${key} must be set (inside the demo dir)`);

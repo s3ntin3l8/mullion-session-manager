@@ -11,7 +11,9 @@ import { getAdapterDelegationHint } from "../../../src/services/hook-adapters/in
 //                 ignored for `subagent_type: "fork"`.
 //   codex:        `spawn_agent` takes a per-child model + reasoning effort
 //                 where the install exposes them.
-//   opencode:     subagents are `agents.<name>` entries, each with a model.
+//   opencode:     the subagent tool takes an `agent` (the subagent type)
+//                 and an optional per-call `model`, written as
+//                 "providerID/modelID" or "providerID/modelID#variant".
 //   agy:          `invoke_subagent` takes a spec with a model and a modelTier.
 //
 // A single generic sentence would be wrong for three of the four — naming
@@ -58,12 +60,45 @@ describe("getAdapterDelegationHint", () => {
     expect(hint).toContain("reasoning effort");
   });
 
-  it("names opencode's agents.<name> entries and their model", () => {
+  it("names opencode's subagent tool and its per-call model", () => {
     const hint = getAdapterDelegationHint("opencode");
     expect(hint).toBeTruthy();
-    expect(hint).toContain("agents.<name>");
-    expect(hint).toContain("explore");
-    expect(hint).toContain("general");
+    // Verified against the installed opencode v2.1.3's subagent-tool input
+    // schema: `agent` (the subagent type), `description`, `prompt`, `model`
+    // ("providerID/modelID" or "providerID/modelID#variant") and `sessionID`.
+    // Those are 2.x's names — 1.x calls the first one `subagent_type` and
+    // has no per-call model at all — and Mullion only WARNS about an old
+    // install rather than refusing it, so the row is hedged to the version
+    // that has the lever.
+    expect(hint).toContain("`agent`");
+    expect(hint).toContain("`model`");
+    expect(hint).toContain("providerID/modelID");
+    // The id must not be guessed: the tool's own parameter description says
+    // to look it up with the `models` tool, filtered to the worker's own
+    // provider. A row that told the worker to pass a cheaper model without
+    // saying where to find one would be advice it cannot follow.
+    expect(hint).toContain("`models` tool");
+    expect(hint).toMatch(/rather than guessing/i);
+    // And the built-in subagents are NOT the cheap option. `general` and
+    // `explore` ship with opencode, but their v2 definitions set only
+    // name/description/mode/permissions and carry no model of their own — so
+    // "prefer a subagent configured with a cheaper model" has to point at
+    // the per-call `model`, not at them. Asserted against the REMOVED
+    // preference clause rather than the whole hint, so an unrelated future
+    // phrasing ("in general", "the general case") cannot fail a test that
+    // is not about those two agents.
+    expect(hint).not.toContain("agents.<name>");
+    expect(hint).not.toMatch(/ship built in/i);
+    expect(hint).not.toMatch(/configured with a cheaper model/i);
+    // The v1 tool has no per-call model, and Mullion only warns about a 1.x
+    // install rather than refusing it — so the row has to be true on both
+    // versions, and the hint must not claim the parameter is always there.
+    expect(hint).toMatch(/on 2\.x/);
+    expect(hint).toMatch(/where the tool offers one/i);
+    // The tool's own note tells the model not to set `model` unasked. The
+    // row has to resolve that, or a worker that reads the tool's schema
+    // will skip the one argument the whole row depends on.
+    expect(hint).toMatch(/this task is that ask/i);
   });
 
   it("names agy's invoke_subagent and its model/modelTier", () => {
