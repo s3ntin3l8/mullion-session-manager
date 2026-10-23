@@ -214,18 +214,45 @@ describe("scope ownership", () => {
       expect(extractDtachSocketPath(description)).toBe(backendExtractDtachSocketPath(description));
   });
 
-  it("owns a scope whose socket sits directly in SESSIONS_DIR", () => {
-    expect(ownsScope(describeScope(path.join(sessionsDir, "7.sock")), sessionsDir)).toBe(true);
+  it("owns a scope whose socket sits directly in one of the OWNED dirs", () => {
+    expect(ownsScope(describeScope(path.join(sessionsDir, "7.sock")), new Set([sessionsDir]))).toBe(
+      true,
+    );
+  });
+
+  // Issue #1770 — the ownership rule is a SET: a scope created before the
+  // sessions dir moved keeps its socket in the OLD dir, and is still this
+  // instance's own.
+  it("owns a scope whose socket sits in a compat dir of the owned set", () => {
+    const legacy = "/tmp/ms-deadbeef";
+    expect(
+      ownsScope(describeScope(path.join(legacy, "7.sock")), new Set([sessionsDir, legacy])),
+    ).toBe(true);
+  });
+
+  // The mirror resolves the owned dirs before comparing, exactly like the
+  // backend's resolveOwnedDirs — without that, a RELATIVE entry in the set
+  // would never match the absolute socket path.
+  it("resolves the owned dirs before comparing, like the backend does", () => {
+    const relative = "./sessions";
+    const absolute = path.resolve(relative);
+    expect(ownsScope(describeScope(path.join(absolute, "7.sock")), new Set([relative]))).toBe(true);
+    // ...and a relative entry that resolves elsewhere is not.
+    expect(ownsScope(describeScope(path.join(absolute, "7.sock")), new Set(["./other"]))).toBe(
+      false,
+    );
   });
 
   it("does not own a scope whose socket is elsewhere, or unparseable", () => {
     const real = "/home/me/opt/mullion/data/sessions";
-    expect(ownsScope(describeScope(path.join(real, "7.sock")), sessionsDir)).toBe(false);
-    expect(ownsScope(describeScope(path.join(sessionsDir, "sub", "7.sock")), sessionsDir)).toBe(
+    expect(ownsScope(describeScope(path.join(real, "7.sock")), new Set([sessionsDir]))).toBe(false);
+    expect(
+      ownsScope(describeScope(path.join(sessionsDir, "sub", "7.sock")), new Set([sessionsDir])),
+    ).toBe(false);
+    expect(ownsScope(describeScope(`${sessionsDir}-other/7.sock`), new Set([sessionsDir]))).toBe(
       false,
     );
-    expect(ownsScope(describeScope(`${sessionsDir}-other/7.sock`), sessionsDir)).toBe(false);
-    expect(ownsScope("not a dtach scope", sessionsDir)).toBe(false);
+    expect(ownsScope("not a dtach scope", new Set([sessionsDir]))).toBe(false);
   });
 });
 

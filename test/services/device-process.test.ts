@@ -165,7 +165,7 @@ describe("listOwnedDeviceScopes", () => {
   it("owns an id whose marker resolves directly under sessionsDir", async () => {
     const marker = deviceMarkerPath(SESSIONS_DIR, "5");
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, `mullion-device -m ${marker}`)];
-    const listing = await listOwnedDeviceScopes(SESSIONS_DIR, INSTANCE_ID);
+    const listing = await listOwnedDeviceScopes(new Set([SESSIONS_DIR]), INSTANCE_ID);
     expect(listing.failed).toBe(false);
     expect(listing.owned.get("5")).toBe(`crs-device-${INSTANCE_ID}-5.scope`);
   });
@@ -174,26 +174,40 @@ describe("listOwnedDeviceScopes", () => {
     listUnitsReply = [
       line(`crs-device-${INSTANCE_ID}-5.scope`, "mullion-device -m /tmp/other-sessions/5.device"),
     ];
-    const listing = await listOwnedDeviceScopes(SESSIONS_DIR, INSTANCE_ID);
+    const listing = await listOwnedDeviceScopes(new Set([SESSIONS_DIR]), INSTANCE_ID);
     expect(listing.owned.has("5")).toBe(false);
+  });
+
+  // Issue #1770 — the device scopes live in the same sessions dir and are
+  // orphaned by the same instance-id change: a scope created before the dir
+  // moved keeps its marker in the OLD dir, and is still this instance's own.
+  it("owns a marker under a COMPAT dir of the owned set (the sessions dir moved)", async () => {
+    listUnitsReply = [
+      line(`crs-device-oldinst-5.scope`, "mullion-device -m /legacy-root/5.device"),
+    ];
+    const listing = await listOwnedDeviceScopes(
+      new Set([SESSIONS_DIR, "/legacy-root"]),
+      INSTANCE_ID,
+    );
+    expect(listing.owned.get("5")).toBe("crs-device-oldinst-5.scope");
   });
 
   it("marks an id unverifiable when a candidate row's Description doesn't parse", async () => {
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, "some unrecognized description")];
-    const listing = await listOwnedDeviceScopes(SESSIONS_DIR, INSTANCE_ID);
+    const listing = await listOwnedDeviceScopes(new Set([SESSIONS_DIR]), INSTANCE_ID);
     expect(listing.owned.has("5")).toBe(false);
     expect(listing.unverifiable.has("5")).toBe(true);
   });
 
   it("resolves failed:true on a listing spawn error", async () => {
     listUnitsShouldError = true;
-    const listing = await listOwnedDeviceScopes(SESSIONS_DIR, INSTANCE_ID);
+    const listing = await listOwnedDeviceScopes(new Set([SESSIONS_DIR]), INSTANCE_ID);
     expect(listing.failed).toBe(true);
     expect(listing.owned.size).toBe(0);
   });
 
   it("queries the crs-device-* glob, not crs-session-*", async () => {
-    await listOwnedDeviceScopes(SESSIONS_DIR, INSTANCE_ID);
+    await listOwnedDeviceScopes(new Set([SESSIONS_DIR]), INSTANCE_ID);
     const call = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "systemctl");
     expect(call?.[1]).toContain("crs-device-*.scope");
   });
@@ -203,19 +217,19 @@ describe("stopDeviceScope", () => {
   it("resolves the owning unit via the listing, then spawns systemctl --user stop <unit>.scope", async () => {
     const marker = deviceMarkerPath(SESSIONS_DIR, "5");
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, `mullion-device -m ${marker}`)];
-    await stopDeviceScope(SESSIONS_DIR, INSTANCE_ID, "5");
+    await stopDeviceScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "5");
     expect(stopCalls).toEqual([["--user", "stop", `crs-device-${INSTANCE_ID}-5.scope`]]);
   });
 
   it("does nothing when the listing doesn't claim this id", async () => {
     listUnitsReply = [];
-    await stopDeviceScope(SESSIONS_DIR, INSTANCE_ID, "5");
+    await stopDeviceScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "5");
     expect(stopCalls).toEqual([]);
   });
 
   it("falls back to stopping the namespaced unit name when the listing itself fails", async () => {
     listUnitsShouldError = true;
-    await stopDeviceScope(SESSIONS_DIR, INSTANCE_ID, "5");
+    await stopDeviceScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "5");
     expect(stopCalls).toEqual([["--user", "stop", `crs-device-${INSTANCE_ID}-5.scope`]]);
   });
 
@@ -223,7 +237,9 @@ describe("stopDeviceScope", () => {
     const marker = deviceMarkerPath(SESSIONS_DIR, "5");
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, `mullion-device -m ${marker}`)];
     stopShouldError = true;
-    await expect(stopDeviceScope(SESSIONS_DIR, INSTANCE_ID, "5")).resolves.toBeUndefined();
+    await expect(
+      stopDeviceScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "5"),
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -231,29 +247,29 @@ describe("isDeviceAliveState / isDeviceAliveStateBatch", () => {
   it('resolves "alive" for an id this instance owns and has listed', async () => {
     const marker = deviceMarkerPath(SESSIONS_DIR, "5");
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, `mullion-device -m ${marker}`)];
-    expect(await isDeviceAliveState(SESSIONS_DIR, INSTANCE_ID, "5")).toBe("alive");
+    expect(await isDeviceAliveState(new Set([SESSIONS_DIR]), INSTANCE_ID, "5")).toBe("alive");
   });
 
   it('resolves "dead" when nothing in the listing claims this id', async () => {
     listUnitsReply = [];
-    expect(await isDeviceAliveState(SESSIONS_DIR, INSTANCE_ID, "5")).toBe("dead");
+    expect(await isDeviceAliveState(new Set([SESSIONS_DIR]), INSTANCE_ID, "5")).toBe("dead");
   });
 
   it('resolves "unknown" for every id when the listing spawn fails, never rejecting', async () => {
     listUnitsShouldError = true;
-    const result = await isDeviceAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["5", "6"]);
+    const result = await isDeviceAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["5", "6"]);
     expect(result).toEqual({ "5": "unknown", "6": "unknown" });
   });
 
   it("includes every requested id in the result, never omitting one", async () => {
     const marker = deviceMarkerPath(SESSIONS_DIR, "5");
     listUnitsReply = [line(`crs-device-${INSTANCE_ID}-5.scope`, `mullion-device -m ${marker}`)];
-    const result = await isDeviceAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["5", "6"]);
+    const result = await isDeviceAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["5", "6"]);
     expect(result).toEqual({ "5": "alive", "6": "dead" });
   });
 
   it("resolves an empty record for an empty id list without spawning anything", async () => {
-    const result = await isDeviceAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, []);
+    const result = await isDeviceAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, []);
     expect(result).toEqual({});
     expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
   });

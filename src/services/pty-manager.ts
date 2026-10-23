@@ -3453,6 +3453,13 @@ export class PtyManager {
   // instance's own `crs-session-*` scopes apart from another Mullion
   // instance's on the same host by dtach socket path, not by unit name.
   private readonly instanceId: string;
+  // Issue #1770 — every dir this instance may own SCOPES in: the sessions dir
+  // above plus every fallback root an earlier release shipped for the same
+  // configured path. Ownership is resolved by a scope's dtach socket path, so
+  // a scope created before the fallback root moved keeps its socket in the OLD
+  // dir — this set is what keeps such a scope this instance's own (alive, and
+  // stoppable) instead of an orphan the reconciler reads as "dead".
+  private readonly ownedSessionsDirs: ReadonlySet<string>;
   // Issue #1715 — the scope backend for THIS host: it launches each
   // session's dtach master, answers "is it still alive?", stops it, and
   // lists the processes inside it. Chosen once, here, from this host's own
@@ -3497,6 +3504,10 @@ export class PtyManager {
         getScopeBackend({
           sessionsDir: this.sessionsDir,
           instanceId: this.instanceId,
+          // Issue #1770 — the ownership set, so a scope created under a
+          // fallback root an earlier release shipped is still this
+          // instance's own (see ownedSessionsDirs above).
+          ownedDirs: this.ownedSessionsDirs,
         });
     }
     return this.scopeBackend;
@@ -3595,6 +3606,20 @@ export class PtyManager {
 
   constructor(opts: {
     sessionsDir: string;
+    /**
+     * Issue #1770 — every dir this instance may own SCOPES in, not just the
+     * one it creates sockets in. Defaults to the sessions dir alone (the
+     * pre-#1770 behavior) so a caller that does not know about the compat
+     * roots keeps working; the plugin (src/plugins/pty.ts) passes the full
+     * set, resolved once at boot from the configured SESSIONS_DIR.
+     *
+     * Ownership is resolved by a scope's dtach socket path, so a scope
+     * created before the fallback root moved keeps its socket in the OLD
+     * dir: without that dir in this set the scope stops being this
+     * instance's own, and the reconciler reads it as "dead" and flips the
+     * session's row to "exited" while the scope keeps running.
+     */
+    ownedSessionsDirs?: ReadonlySet<string>;
     sshAuthSock?: string;
     authEnabled?: boolean;
     controlSocketPath?: string;
@@ -3617,6 +3642,12 @@ export class PtyManager {
     this.sessionsDir = path.resolve(opts.sessionsDir);
     mkdirSync(this.sessionsDir, { recursive: true });
     this.instanceId = deriveInstanceId(this.sessionsDir);
+    // Issue #1770 — the ownership set defaults to the sessions dir alone, so a
+    // caller that knows nothing about the compat roots keeps exactly the
+    // pre-#1770 behavior. The plugin passes the full set.
+    this.ownedSessionsDirs = new Set(
+      opts.ownedSessionsDirs ? [...opts.ownedSessionsDirs, this.sessionsDir] : [this.sessionsDir],
+    );
     // Issue #1715 — the scope backend is resolved LAZILY, on first use (see
     // the `scope` getter), not here. A platform with no backend (macOS
     // today — issue #1716 adds it) must not stop the whole app from BOOTING:

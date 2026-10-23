@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { DeviceManager } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
-import { ensureSessionsDir } from "./pty.js";
+import { resolveSessionsDirs } from "./pty.js";
 import {
   resolveDeviceDiscoveryEnabled,
   resolveDeviceEmulatorLaunch,
@@ -37,6 +37,12 @@ function readActiveDevicePorts(app: FastifyInstance): number[] {
 }
 
 export const devicePlugin = fp(async (app: FastifyInstance) => {
+  // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
+  // set of dirs this instance may own scopes in (the current one plus every
+  // fallback root an earlier release shipped for the same configured path).
+  // Same input, same pure function pty.ts's own plugin already calls — see
+  // ensureSessionsDir's own comment on why this must match exactly.
+  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR);
   const manager = new DeviceManager({
     enabled: app.config.DEVICE_ENABLED,
     adbPath: app.config.DEVICE_ADB_PATH,
@@ -53,9 +59,10 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // itself — this callback is the same seam as onPortAssigned.
     resolveEmulatorLaunch: () =>
       resolveDeviceEmulatorLaunch(app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS, app),
-    // Same input, same pure function pty.ts's own plugin already calls —
-    // see ensureSessionsDir's own comment on why this must match exactly.
-    sessionsDir: ensureSessionsDir(app.config.SESSIONS_DIR),
+    sessionsDir: sessionsDirs.current,
+    // Issue #1770 — the ownership SET, so a device scope created before the
+    // sessions dir moved is still this instance's own.
+    ownedDirs: new Set(sessionsDirs.owned),
     initialPorts: readActiveDevicePorts(app),
     onSpawnError: (id, err) => {
       app.log.warn({ err, deviceId: id }, "device spawn failed");

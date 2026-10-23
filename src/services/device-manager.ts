@@ -71,6 +71,17 @@ export interface DeviceManagerOptions {
    * than read from app.config directly so this manager always agrees with
    * PtyManager on the actual (possibly sun_path-redirected) directory. */
   sessionsDir: string;
+  /** Issue #1770 — every dir this instance may own device SCOPES in, not just
+   *  the one the markers live in: the current sessions dir plus every
+   *  fallback root an earlier release shipped for the same configured path.
+   *  Ownership is resolved by the scope's marker path, so a scope created
+   *  before the sessions dir moved keeps its marker in the OLD dir — without
+   *  that dir in the set, the scope stops being this instance's own and its
+   *  liveness is misread.
+   *
+   *  Defaults to the sessions dir alone (the pre-#1770 behavior); the plugin
+   *  (src/plugins/device.ts) passes the full set. */
+  ownedDirs?: ReadonlySet<string>;
   /** getOrCreate() fires spawn() fire-and-forget (same shape as
    * PtyManager.getOrCreate's `void session.spawn()`) — a caller that wants
    * the outcome polls `get(id)?.toInfo().status/.error` instead of awaiting
@@ -631,7 +642,11 @@ export class Device {
     }
     if (this.kind === "emulator") {
       await stopDeviceScope(
-        this.manager.sessionsDir,
+        // Issue #1770 — the ownership set (the current dir plus every
+        // fallback root an earlier release shipped). `manager` here is the
+        // OPTIONS object, so the fallback is spelled out rather than
+        // delegated to DeviceManager's own accessor.
+        new Set([...(this.manager.ownedDirs ?? []), this.manager.sessionsDir]),
         deriveInstanceId(this.manager.sessionsDir),
         this.id,
       );
@@ -825,6 +840,19 @@ export class Device {
 }
 
 export class DeviceManager {
+  /**
+   * Issue #1770 — every dir this instance may own device scopes in. The
+   * current sessions dir plus the fallback roots an earlier release shipped
+   * for the same configured path (see DeviceManagerOptions.ownedDirs).
+   */
+  get ownedDirs(): ReadonlySet<string> {
+    return new Set(
+      this.opts.ownedDirs
+        ? [...this.opts.ownedDirs, this.opts.sessionsDir]
+        : [this.opts.sessionsDir],
+    );
+  }
+
   private devices = new Map<string, Device>();
   private serverClient: AdbServerClient;
   private allocatedPorts = new Set<number>();
@@ -983,7 +1011,7 @@ export class DeviceManager {
         // running. Nothing was ever reserved/constructed for this attempt,
         // so there's nothing else to release.
         const instanceId = deriveInstanceId(this.opts.sessionsDir);
-        await stopDeviceScope(this.opts.sessionsDir, instanceId, opts.id).catch(() => {});
+        await stopDeviceScope(this.ownedDirs, instanceId, opts.id).catch(() => {});
         removeDeviceMarker(this.opts.sessionsDir, opts.id);
         // `port` may be reserved with nothing ever having called
         // reservePort() for THIS attempt — DeviceManagerOptions.initialPorts
@@ -1076,7 +1104,7 @@ export class DeviceManager {
       return;
     }
     if (kind === "physical") return;
-    await stopDeviceScope(this.opts.sessionsDir, deriveInstanceId(this.opts.sessionsDir), id);
+    await stopDeviceScope(this.ownedDirs, deriveInstanceId(this.opts.sessionsDir), id);
     removeDeviceMarker(this.opts.sessionsDir, id);
   }
 
@@ -1124,7 +1152,7 @@ export class DeviceManager {
    * turns "alive" into an actual resumed stream, via Device.attach(). */
   async isScopeAlive(id: string): Promise<boolean> {
     const state = await isDeviceAliveState(
-      this.opts.sessionsDir,
+      this.ownedDirs,
       deriveInstanceId(this.opts.sessionsDir),
       id,
     );

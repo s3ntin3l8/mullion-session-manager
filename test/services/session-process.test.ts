@@ -234,7 +234,7 @@ describe("listOwnedScopes", () => {
 
   it("owns an id whose socket resolves directly under sessionsDir, from a legacy-shaped unit name", async () => {
     listUnitsReply = [ownedLine("5", "/inst-a")];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.failed).toBe(false);
     expect(result.owned).toEqual(new Map([["5", "crs-session-5.scope"]]));
   });
@@ -246,26 +246,65 @@ describe("listOwnedScopes", () => {
         "/usr/bin/dtach -n /inst-a/6.sock /usr/bin/zsh -lc bash",
       ),
     ];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.owned).toEqual(new Map([["6", `crs-session-${INSTANCE_A}-6.scope`]]));
   });
 
   it("recovers the id from the socket basename, never by parsing the unit name — an id containing '-' is not ambiguous", async () => {
     listUnitsReply = [ownedLine("abc-def", "/inst-a")];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.owned).toEqual(new Map([["abc-def", "crs-session-abc-def.scope"]]));
   });
 
   it("does not own a legacy-named unit whose socket lives under a DIFFERENT sessionsDir", async () => {
     listUnitsReply = [ownedLine("7", "/inst-b")];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
+    expect(result.owned.has("7")).toBe(false);
+    expect(result.unverifiable.has("7")).toBe(false);
+  });
+
+  // Issue #1770 — a scope created before this instance's sessions dir MOVED
+  // (a fallback root an earlier release shipped) keeps its socket in the OLD
+  // dir, and its unit name carries the OLD instance id. It matches neither
+  // the "socket is in my dir" branch nor the "unit names me" branch, so
+  // before #1770 it landed in NEITHER `owned` nor `unverifiable` — and
+  // isMasterAliveStateBatch read that as "dead". The reconciler acts on
+  // "dead": it flipped the session's row to "exited" (and tore the session
+  // down) while the scope kept running, because stopScope could not confirm
+  // ownership of it either.
+  it("owns a scope whose socket lives in a COMPAT dir of the owned set (the sessions dir moved)", async () => {
+    listUnitsReply = [
+      line(
+        `crs-session-${INSTANCE_B}-7.scope`,
+        "/usr/bin/dtach -n /legacy-root/7.sock /usr/bin/zsh -lc bash",
+      ),
+    ];
+    const ownedDirs = new Set(["/inst-a", "/legacy-root"]);
+    const result = await listOwnedScopes(ownedDirs, INSTANCE_A, { all: true });
+    expect(result.owned).toEqual(new Map([["7", `crs-session-${INSTANCE_B}-7.scope`]]));
+    // "alive", never "dead" — the reconciler's destructive branch is skipped.
+    await expect(isMasterAliveStateBatch(ownedDirs, INSTANCE_A, ["7"])).resolves.toEqual({
+      "7": "alive",
+    });
+  });
+
+  it("still does NOT own a scope whose socket is outside every owned dir (another instance's scope)", async () => {
+    listUnitsReply = [
+      line(
+        `crs-session-${INSTANCE_B}-7.scope`,
+        "/usr/bin/dtach -n /some-other-instance/7.sock /usr/bin/zsh -lc bash",
+      ),
+    ];
+    const result = await listOwnedScopes(new Set(["/inst-a", "/legacy-root"]), INSTANCE_A, {
+      all: true,
+    });
     expect(result.owned.has("7")).toBe(false);
     expect(result.unverifiable.has("7")).toBe(false);
   });
 
   it("marks an id unverifiable (not owned, not denied) when a candidate row's Description doesn't parse to a socket path", async () => {
     listUnitsReply = [line("crs-session-9.scope", "some other process, not dtach")];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.owned.has("9")).toBe(false);
     expect(result.unverifiable.has("9")).toBe(true);
   });
@@ -277,17 +316,19 @@ describe("listOwnedScopes", () => {
         "/usr/bin/dtach -n /elsewhere/8.sock /usr/bin/zsh -lc bash",
       ),
     ];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.owned.has("8")).toBe(false);
     expect(result.unverifiable.has("8")).toBe(true);
-    await expect(isMasterAliveStateBatch("/inst-a", INSTANCE_A, ["8"])).resolves.toEqual({
-      "8": "unknown",
-    });
+    await expect(isMasterAliveStateBatch(new Set(["/inst-a"]), INSTANCE_A, ["8"])).resolves.toEqual(
+      {
+        "8": "unknown",
+      },
+    );
   });
 
   it("does not treat another instance's namespaced unit as a candidate for this instance's ids", async () => {
     listUnitsReply = [line(`crs-session-${INSTANCE_B}-9.scope`, "some other process, not dtach")];
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.unverifiable.has("9")).toBe(false);
   });
 
@@ -295,13 +336,13 @@ describe("listOwnedScopes", () => {
     listUnitsReply = [
       line("crs-session-2.scope", '/usr/bin/dtach -n "/space test dir/2.sock" sleep 300'),
     ];
-    const result = await listOwnedScopes("/space test dir", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/space test dir"]), INSTANCE_A, { all: true });
     expect(result.owned).toEqual(new Map([["2", "crs-session-2.scope"]]));
   });
 
   it("resolves failed:true, both maps empty, on a listing spawn error", async () => {
     listUnitsShouldError = true;
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result).toEqual({ owned: new Map(), unverifiable: new Set(), failed: true });
   });
 
@@ -315,12 +356,12 @@ describe("listOwnedScopes", () => {
       });
       return ee as unknown as ReturnType<typeof spawnChildProcess>;
     });
-    const result = await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    const result = await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(result.failed).toBe(true);
   });
 
   it("passes opts.states/opts.all straight through to the systemctl argv", async () => {
-    await listOwnedScopes("/inst-a", INSTANCE_A, { states: "active,deactivating" });
+    await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { states: "active,deactivating" });
     expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
       "systemctl",
       [
@@ -335,7 +376,7 @@ describe("listOwnedScopes", () => {
       expect.objectContaining({ stdio: ["ignore", "pipe", "ignore"] }),
     );
 
-    await listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+    await listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
     expect(vi.mocked(spawnChildProcess)).toHaveBeenCalledWith(
       "systemctl",
       [
@@ -362,7 +403,7 @@ describe("listOwnedScopes", () => {
       listUnitsShouldHang = true;
       vi.useFakeTimers();
       try {
-        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        const promise = listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
         await vi.advanceTimersByTimeAsync(5_000);
         await expect(promise).resolves.toEqual({
           owned: new Map(),
@@ -378,7 +419,7 @@ describe("listOwnedScopes", () => {
       listUnitsShouldHang = true;
       vi.useFakeTimers();
       try {
-        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        const promise = listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
         await vi.advanceTimersByTimeAsync(5_000);
         await promise; // the outer promise already settles at the timeout
         const child = vi.mocked(spawnChildProcess).mock.results[0]?.value as MockChild;
@@ -401,7 +442,7 @@ describe("listOwnedScopes", () => {
       listUnitsShouldHang = true;
       vi.useFakeTimers();
       try {
-        const promise = listOwnedScopes("/inst-a", INSTANCE_A, { all: true });
+        const promise = listOwnedScopes(new Set(["/inst-a"]), INSTANCE_A, { all: true });
         await vi.advanceTimersByTimeAsync(5_000);
         await promise;
         const child = vi.mocked(spawnChildProcess).mock.results[0]?.value as MockChild;
@@ -423,9 +464,23 @@ describe("listOwnedScopes", () => {
 });
 
 describe("stopScope", () => {
+  // Issue #1770 — "manageable": a scope whose socket lives in a COMPAT dir
+  // (the sessions dir moved) is still this instance's own, so it can still be
+  // STOPPED — not merely spared from the reconciler's teardown.
+  it("stops a scope whose socket lives in a COMPAT dir of the owned set", async () => {
+    listUnitsReply = [
+      line(
+        "crs-session-oldinst-1.scope",
+        "/usr/bin/dtach -n /legacy-root/1.sock /usr/bin/zsh -lc bash",
+      ),
+    ];
+    await stopScope(new Set([SESSIONS_DIR, "/legacy-root"]), INSTANCE_ID, "1");
+    expect(stopCalls).toEqual([["--user", "stop", "crs-session-oldinst-1.scope"]]);
+  });
+
   it("resolves the owning unit via the listing, then spawns systemctl --user stop <unit>.scope", async () => {
     listUnitsReply = [ownedLine("1")];
-    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    await stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
     // Two spawns — the ownership listing, then the stop itself. See
     // stopScope's own doc comment on why this is an intentional, accepted
     // latency increase over the single spawn it used to be.
@@ -440,7 +495,7 @@ describe("stopScope", () => {
 
   it("does nothing when the listing succeeds but doesn't claim this id (not owned, or already gone)", async () => {
     listUnitsReply = [];
-    await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
+    await expect(stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toBeUndefined();
     expect(stopCalls).toEqual([]);
   });
 
@@ -451,7 +506,7 @@ describe("stopScope", () => {
   // under THIS instance's sessionsDir.
   it("never stops another instance's legacy-named scope, even though the name matches", async () => {
     listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
-    await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
+    await expect(stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toBeUndefined();
     expect(stopCalls).toEqual([]);
   });
 
@@ -462,7 +517,7 @@ describe("stopScope", () => {
   // nothing, never fall back to stopping the bare name.
   it("does not stop a scope whose ownership is unverifiable (a row names the id but its Description doesn't parse)", async () => {
     listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
+    await expect(stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toBeUndefined();
     expect(stopCalls).toEqual([]);
   });
 
@@ -473,14 +528,14 @@ describe("stopScope", () => {
   // instance created, so falling back to it on a listing failure is safe.
   it("falls back to stopping the namespaced unit name when the listing itself fails", async () => {
     listUnitsShouldError = true;
-    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    await stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
     expect(stopCalls).toEqual([["--user", "stop", `crs-session-${INSTANCE_ID}-1.scope`]]);
   });
 
   it("resolves (does not reject) even when the stop spawn itself errors", async () => {
     listUnitsReply = [ownedLine("1")];
     stopShouldError = true;
-    await expect(stopScope(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toBeUndefined();
+    await expect(stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toBeUndefined();
   });
 
   // Issue #1232 — this spawn also had no timeout. Unlike listOwnedScopes'
@@ -513,7 +568,7 @@ describe("stopScope", () => {
     // left, which is exactly this promise settling.
     vi.useFakeTimers();
     try {
-      const promise = stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+      const promise = stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
       await vi.runAllTimersAsync();
       await expect(promise).resolves.toBeUndefined();
     } finally {
@@ -531,20 +586,28 @@ describe("stopScope", () => {
 describe("isMasterAliveStateBatch", () => {
   it("includes every requested id in the result, never omitting one", async () => {
     listUnitsReply = [ownedLine("1")];
-    const result = await isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1", "2", "3"]);
+    const result = await isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, [
+      "1",
+      "2",
+      "3",
+    ]);
     expect(Object.keys(result).sort()).toEqual(["1", "2", "3"]);
   });
 
   it('resolves "alive" for an id this instance owns and has listed', async () => {
     listUnitsReply = [ownedLine("1")];
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["1"]),
+    ).resolves.toEqual({
       "1": "alive",
     });
   });
 
   it('resolves "dead" (a confident negative) when nothing in the listing claims this id', async () => {
     listUnitsReply = [];
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["1"]),
+    ).resolves.toEqual({
       "1": "dead",
     });
   });
@@ -553,28 +616,36 @@ describe("isMasterAliveStateBatch", () => {
   // THIS instance's own same-id session has already ended.
   it('resolves "dead" (not "unknown") for a same-named unit owned by a different instance', async () => {
     listUnitsReply = [ownedLine("1", "/some/other/instances/sessions")];
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["1"]),
+    ).resolves.toEqual({
       "1": "dead",
     });
   });
 
   it('resolves "unknown" when a row names this id but ownership can\'t be confirmed', async () => {
     listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1"])).resolves.toEqual({
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["1"]),
+    ).resolves.toEqual({
       "1": "unknown",
     });
   });
 
   it('resolves "unknown" for every requested id, never rejects, when the underlying listing spawn fails', async () => {
     listUnitsShouldError = true;
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, ["1", "2"])).resolves.toEqual({
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, ["1", "2"]),
+    ).resolves.toEqual({
       "1": "unknown",
       "2": "unknown",
     });
   });
 
   it("resolves an empty record for an empty id list without spawning anything", async () => {
-    await expect(isMasterAliveStateBatch(SESSIONS_DIR, INSTANCE_ID, [])).resolves.toEqual({});
+    await expect(
+      isMasterAliveStateBatch(new Set([SESSIONS_DIR]), INSTANCE_ID, []),
+    ).resolves.toEqual({});
     expect(vi.mocked(spawnChildProcess)).not.toHaveBeenCalled();
   });
 });
@@ -695,25 +766,29 @@ describe("extractDtachSocketPath", () => {
 describe("listSessionProcesses", () => {
   it("resolves the owning unit via the listing and delegates to cgroup-inventory's listScopeProcesses", async () => {
     listUnitsReply = [ownedLine("1")];
-    await listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1");
+    await listSessionProcesses(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
     expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith("crs-session-1.scope");
   });
 
   it("returns [] without calling listScopeProcesses when nothing owns this id", async () => {
     listUnitsReply = [];
-    await expect(listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toEqual([]);
+    await expect(listSessionProcesses(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toEqual(
+      [],
+    );
     expect(vi.mocked(listScopeProcesses)).not.toHaveBeenCalled();
   });
 
   it("returns [] without calling listScopeProcesses when ownership is unverifiable", async () => {
     listUnitsReply = [line("crs-session-1.scope", "not a dtach invocation")];
-    await expect(listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toEqual([]);
+    await expect(listSessionProcesses(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toEqual(
+      [],
+    );
     expect(vi.mocked(listScopeProcesses)).not.toHaveBeenCalled();
   });
 
   it("falls back to the namespaced unit name and still delegates when the listing itself fails", async () => {
     listUnitsShouldError = true;
-    await listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1");
+    await listSessionProcesses(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
     expect(vi.mocked(listScopeProcesses)).toHaveBeenCalledWith(
       `crs-session-${INSTANCE_ID}-1.scope`,
     );
@@ -723,7 +798,9 @@ describe("listSessionProcesses", () => {
     listUnitsReply = [ownedLine("1")];
     const processes = [{ pid: 123, ppid: 1, comm: "dtach", cmdline: ["dtach", "-n"] }];
     vi.mocked(listScopeProcesses).mockResolvedValueOnce(processes);
-    await expect(listSessionProcesses(SESSIONS_DIR, INSTANCE_ID, "1")).resolves.toEqual(processes);
+    await expect(listSessionProcesses(new Set([SESSIONS_DIR]), INSTANCE_ID, "1")).resolves.toEqual(
+      processes,
+    );
   });
 });
 
@@ -736,8 +813,8 @@ describe("listOwnedScopes coalescing", () => {
   it("shares one systemctl spawn between concurrent identical calls", async () => {
     listUnitsReply = [ownedLine("1")];
     const [a, b] = await Promise.all([
-      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
-      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
+      listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true }),
+      listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true }),
     ]);
     expect(listSpawns()).toHaveLength(1);
     expect(a).toBe(b);
@@ -746,20 +823,20 @@ describe("listOwnedScopes coalescing", () => {
   it("does not share between different filters", async () => {
     listUnitsReply = [ownedLine("1")];
     await Promise.all([
-      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true }),
-      listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { states: "active" }),
+      listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true }),
+      listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { states: "active" }),
     ]);
     expect(listSpawns()).toHaveLength(2);
   });
 
   it("stopScope resolves ownership with a fresh listing, not one already in flight", async () => {
     listUnitsReply = [ownedLine("1")];
-    const inflight = listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
-    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1");
+    const inflight = listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
+    await stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1");
     await inflight;
     expect(listSpawns()).toHaveLength(2);
     // A listing asked for after the stop never joins the pre-stop one.
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(3);
   });
 });
@@ -780,83 +857,106 @@ describe("listOwnedScopes TTL cache", () => {
 
   it("serves a settled listing from cache within the TTL, without a new spawn", async () => {
     listUnitsReply = [ownedLine("1")];
-    const first = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const first = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     clock += 100;
-    const second = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const second = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(1);
     expect(second).toBe(first);
   });
 
   it("re-lists once the TTL has expired", async () => {
     listUnitsReply = [ownedLine("1")];
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     listUnitsReply = [];
     clock += 10_000;
-    const later = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const later = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(2);
     expect(later.owned.size).toBe(0);
   });
 
+  // Issue #1770 — the cache is keyed on the owned SET, so two different sets
+  // never share a listing (a set that owns fewer dirs must not be served a
+  // listing computed for a bigger one).
+  it("keys the cache on the owned set, not just the instance", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
+    listUnitsReply = [ownedLine("2", "/elsewhere")];
+    const other = await listOwnedScopes(new Set([SESSIONS_DIR, "/elsewhere"]), INSTANCE_ID, {
+      all: true,
+    });
+    expect(listSpawns()).toHaveLength(2);
+    expect(other.owned.has("2")).toBe(true);
+  });
+
+  // The same set in a different ORDER is the same key — the key is the set,
+  // not the sequence it was built from.
+  it("treats the same owned set in a different order as the same cache entry", async () => {
+    listUnitsReply = [ownedLine("1")];
+    await listOwnedScopes(new Set([SESSIONS_DIR, "/legacy-root"]), INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set(["/legacy-root", SESSIONS_DIR]), INSTANCE_ID, { all: true });
+    expect(listSpawns()).toHaveLength(1);
+  });
+
   it("keys the cache by filter", async () => {
     listUnitsReply = [ownedLine("1")];
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { states: "active" });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { states: "active" });
     expect(listSpawns()).toHaveLength(2);
   });
 
   it("never caches a failed listing", async () => {
     listUnitsShouldError = true;
-    const failed = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const failed = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(failed.failed).toBe(true);
     listUnitsShouldError = false;
     listUnitsReply = [ownedLine("1")];
-    const ok = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const ok = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(ok.owned.has("1")).toBe(true);
     expect(listSpawns()).toHaveLength(2);
   });
 
   it("invalidateOwnedScopesCache() forces the next call to re-list", async () => {
     listUnitsReply = [ownedLine("1")];
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     invalidateOwnedScopesCache();
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(2);
   });
 
   it("stopScope invalidates: a cached listing is not served after the stop", async () => {
     listUnitsReply = [ownedLine("1")];
-    await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
-    await stopScope(SESSIONS_DIR, INSTANCE_ID, "1"); // fresh listing + stop
+    await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
+    await stopScope(new Set([SESSIONS_DIR]), INSTANCE_ID, "1"); // fresh listing + stop
     const before = listSpawns().length;
     listUnitsReply = [];
-    const after = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const after = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(listSpawns()).toHaveLength(before + 1);
     expect(after.owned.size).toBe(0);
   });
 
   it("does not cache a listing that started before an invalidation", async () => {
     listUnitsReply = [];
-    const stale = listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const stale = listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     invalidateOwnedScopesCache(); // e.g. a spawn completes while it is in flight
     await stale;
     listUnitsReply = [ownedLine("1")];
-    const fresh = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const fresh = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(fresh.owned.has("1")).toBe(true);
     expect(listSpawns()).toHaveLength(2);
   });
 
   it("regression: a cached dead listing does not mask a scope created after it (spawn invalidates)", async () => {
     listUnitsReply = [];
-    const dead = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const dead = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(dead.owned.has("7")).toBe(false);
     // Without invalidation the cached "absent" verdict would be served here.
     listUnitsReply = [ownedLine("7")];
-    expect((await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true })).owned.has("7")).toBe(
-      false,
-    );
+    expect(
+      (await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true })).owned.has("7"),
+    ).toBe(false);
     // pty-manager's bootstrapMaster does exactly this once systemd-run settles.
     invalidateOwnedScopesCache();
-    const next = await listOwnedScopes(SESSIONS_DIR, INSTANCE_ID, { all: true });
+    const next = await listOwnedScopes(new Set([SESSIONS_DIR]), INSTANCE_ID, { all: true });
     expect(next.owned.get("7")).toBe("crs-session-7.scope");
   });
 });

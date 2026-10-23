@@ -340,6 +340,16 @@ function escapeRegExp(value: string): string {
  * unit-name parsing at all on the success path (the id comes from the
  * socket basename, never from splitting the unit name).
  *
+ * Issue #1770 — "under `sessionsDir`" became "under one of this instance's
+ * OWNED dirs" (a set, see resolveOwnedDirs below). The socket path still
+ * identifies the instance; what changed is that an instance can own more
+ * than one dir at a time: the one it uses today, plus the fallback roots
+ * earlier releases shipped for the same configured path, whose sockets are
+ * where every scope created before the root moved still lives. Without that,
+ * such a scope stopped being this instance's own the moment the root moved,
+ * and the reconciler read it as "dead" — flipping the session's row to
+ * "exited" while the scope kept running.
+ *
  * `opts.states`/`opts.all` are passed straight through to `--state=`/
  * `--all` — callers need different filters (isMasterAliveStateBatch's
  * `active,deactivating`, per issue #988's DefaultTimeoutStopSec window, vs.
@@ -348,7 +358,8 @@ function escapeRegExp(value: string): string {
  */
 export interface ScopeOwnershipListing {
   /** Session id -> full unit name (e.g. "crs-session-5.scope"), for every
-   *  row whose dtach socket resolves directly under `sessionsDir`. */
+   *  row whose dtach socket resolves directly under one of this instance's
+   *  OWNED dirs (see resolveOwnedDirs below). */
   owned: Map<string, string>;
   /** Ids some row's unit NAME could plausibly refer to (see
    *  candidateIdForUnit above) but whose Description didn't yield a socket
@@ -403,13 +414,20 @@ export interface ScopeListingOptions {
 }
 
 export function listOwnedScopes(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   opts: ScopeListingOptions = {},
 ): Promise<ScopeOwnershipListing> {
   const prefix = opts.prefix ?? "crs-session";
+  // Issue #1770 — the ownership SET, not one dir: a scope created before the
+  // sessions dir moved (a fallback root an earlier release shipped) keeps its
+  // socket in the OLD dir, and it is still this instance's own. The key is
+  // the sorted set, so two calls that differ only in the ORDER of the same
+  // dirs share a listing — and two calls with genuinely different sets do
+  // not.
+  const resolvedDirs = resolveOwnedDirs(ownedDirs);
   const key = JSON.stringify([
-    path.resolve(sessionsDir),
+    [...resolvedDirs].sort(),
     instanceId,
     opts.states ?? "",
     !!opts.all,
@@ -424,7 +442,7 @@ export function listOwnedScopes(
   const existing = inflightListings.get(key);
   if (existing) return existing;
   const generation = listingGeneration;
-  const promise = fetchOwnedScopes(sessionsDir, instanceId, opts).then(
+  const promise = fetchOwnedScopes(resolvedDirs, instanceId, opts).then(
     (listing) => {
       if (inflightListings.get(key) === promise) inflightListings.delete(key);
       if (generation === listingGeneration && !listing.failed) {
@@ -441,8 +459,29 @@ export function listOwnedScopes(
   return promise;
 }
 
+/**
+ * The ownership SET, resolved to the form the comparison uses.
+ *
+ * Issue #1770 — ownership is resolved by a scope's dtach socket path, and a
+ * scope's socket lives in the dir THIS instance created it in. That dir is
+ * not always the one the instance uses today: a fallback root an earlier
+ * release shipped (see resolveSessionsDirs in src/plugins/pty.ts) holds the
+ * sockets of every scope created before the root moved, and those scopes are
+ * still this instance's own — alive, and stoppable.
+ *
+ * So the set of dirs an instance owns is passed down, rather than a single
+ * dir, and every comparison here is a membership test against it. The set
+ * always contains the instance's CURRENT sessions dir (its callers build it
+ * that way), which is what keeps the "not owned ⇒ not ours ⇒ not ours to
+ * stop" rule (issue #1137's inversion) intact: the set only ever names dirs
+ * this instance itself created.
+ */
+function resolveOwnedDirs(ownedDirs: ReadonlySet<string>): ReadonlySet<string> {
+  return new Set([...ownedDirs].map((dir) => path.resolve(dir)));
+}
+
 async function fetchOwnedScopes(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   opts: ScopeListingOptions,
 ): Promise<ScopeOwnershipListing> {
@@ -463,7 +502,6 @@ async function fetchOwnedScopes(
   if (res.errored || res.timedOut || res.code !== 0) {
     return { owned: new Map(), unverifiable: new Set(), failed: true };
   }
-  const resolvedSessionsDir = path.resolve(sessionsDir);
   const owned = new Map<string, string>();
   const unverifiable = new Set<string>();
   for (const { unit, description } of parseScopeUnitsListing(res.stdout)) {
@@ -473,7 +511,7 @@ async function fetchOwnedScopes(
       if (candidateId !== null) unverifiable.add(candidateId);
       continue;
     }
-    if (path.dirname(socketPath) === resolvedSessionsDir) {
+    if (ownedDirs.has(path.dirname(socketPath))) {
       owned.set(path.basename(socketPath, ".sock"), unit);
     } else if (unit.startsWith(`${prefix}-${instanceId}-`)) {
       // A unit carrying THIS instance's own id whose socket lives
@@ -531,13 +569,16 @@ async function fetchOwnedScopes(
  * expose here.
  */
 async function resolveOwningUnit(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
   opts: { fallbackOnListingFailure: boolean; prefix?: string },
 ): Promise<string | undefined> {
   const prefix = opts.prefix ?? "crs-session";
-  const listing = await fetchOwnedScopes(sessionsDir, instanceId, { all: true, prefix });
+  const listing = await fetchOwnedScopes(resolveOwnedDirs(ownedDirs), instanceId, {
+    all: true,
+    prefix,
+  });
   if (listing.failed) {
     return opts.fallbackOnListingFailure
       ? `${scopeUnitName(instanceId, id, prefix)}.scope`
@@ -585,12 +626,12 @@ async function resolveOwningUnit(
  * added latency doesn't matter in practice.
  */
 export async function stopScope(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
   prefix = "crs-session",
 ): Promise<void> {
-  const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
+  const unit = await resolveOwningUnit(ownedDirs, instanceId, id, {
     fallbackOnListingFailure: true,
     prefix,
   });
@@ -654,6 +695,25 @@ export type SessionLiveness = ScopeLiveness;
  *     with). `"dead"` is the correct, confident answer here, not
  *     `"unknown"` — see the dedicated test coverage in
  *     session-process.test.ts locking this outcome in.
+ *
+ *     Issue #1770 — this confident negative is only sound because the
+ *     ownership SET covers every dir this instance has put a socket in: an
+ *     instance's own scope always lives in one of its owned dirs, so "no
+ *     owned row names this id" really does mean "this instance has no such
+ *     scope running". Before that, a scope whose sessions dir had MOVED
+ *     (a fallback root an earlier release shipped — see resolveOwnedDirs)
+ *     was in neither `owned` nor `unverifiable` and therefore read
+ *     `"dead"`: the reconciler flipped the session's row to "exited" and
+ *     tore the session down while the scope kept running.
+ *
+ *     The set covers the dirs this instance has put a socket in THAT IT CAN
+ *     NAME: the current one plus the fallback roots an earlier release
+ *     shipped for the same configured path. A configured SESSIONS_DIR moved
+ *     by an operator — or a TMPDIR whose VALUE changed between two runs —
+ *     leaves a socket in a dir the set cannot name, and that scope still
+ *     reads "dead" here; tracked as issue #1771, which is the remaining
+ *     hole in this rule (it needs a persisted history of the dirs an
+ *     instance has used, which the DB-less agent role cannot provide).
  *   - `listing.unverifiable.has(id)` -> `"unknown"`. A row could name `id`,
  *     but this instance can't confirm ownership, so it must not assert
  *     either answer.
@@ -669,13 +729,13 @@ export type SessionLiveness = ScopeLiveness;
  * ids resolved with real confidence get `"alive"`/`"dead"`.
  */
 export async function isMasterAliveStateBatch(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   ids: string[],
   prefix = "crs-session",
 ): Promise<Record<string, SessionLiveness>> {
   if (ids.length === 0) return Object.create(null);
-  const listing = await listOwnedScopes(sessionsDir, instanceId, {
+  const listing = await listOwnedScopes(ownedDirs, instanceId, {
     states: "active,deactivating",
     prefix,
   });
@@ -719,12 +779,12 @@ export async function isMasterAliveStateBatch(
  * spawn off a best-effort inventory call.
  */
 export async function listSessionProcesses(
-  sessionsDir: string,
+  ownedDirs: ReadonlySet<string>,
   instanceId: string,
   id: string,
   prefix = "crs-session",
 ): Promise<CgroupProcess[]> {
-  const unit = await resolveOwningUnit(sessionsDir, instanceId, id, {
+  const unit = await resolveOwningUnit(ownedDirs, instanceId, id, {
     fallbackOnListingFailure: true,
     prefix,
   });
