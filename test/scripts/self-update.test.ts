@@ -267,6 +267,44 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
     ]);
   });
 
+  // The darwin branch of fail(): a failed update must not leave its launchd
+  // job (or its plist) behind — the next apply for the same version would
+  // then be refused by `launchctl bootstrap` (an already-loaded label).
+  it("boots the update job out and drops its plist when an update fails on macOS", async () => {
+    writeShim(
+      binDir,
+      "launchctl",
+      `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+exit 0
+`,
+    );
+    writeShim(
+      binDir,
+      "uname",
+      `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
+`,
+    );
+    // A checksum that does not match: the script fails at the verify gate.
+    const { tarballPath } = await buildFakeRelease("9.9.9");
+    await expect(
+      runScript({
+        version: "9.9.9",
+        assetUrl: `file://${tarballPath}`,
+        checksumUrl: `file://${tarballPath}.sha256-missing`,
+        unitName: "com.mullion.primary",
+      }),
+    ).rejects.toThrow();
+
+    const log = readLaunchctlLog();
+    expect(log.some((line) => line.includes("bootout"))).toBe(true);
+    expect(fs.existsSync(path.join(mullionHome, "logs", "com.mullion.update-9.9.9.plist"))).toBe(
+      false,
+    );
+  });
+
   it("leaves current untouched when checksum verification fails", async () => {
     const { tarballPath, checksumPath } = await buildFakeRelease("9.9.8");
     // Corrupt the checksum file's hash (same filename, wrong hex) — the

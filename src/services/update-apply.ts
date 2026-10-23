@@ -276,15 +276,26 @@ async function launchOneShotUpdateJob(
 }
 
 /**
+ * How long a launchctl subcommand may take before we give up on it.
+ *
+ * launchctl is a local, immediate operation — the bootstrap of a job
+ * returns as soon as the job is registered. A hung launchctl would hang
+ * the HTTP request that started the update, leaving the UI's "Update now"
+ * button spinning with no answer, so the wait is bounded.
+ */
+const LAUNCHCTL_TIMEOUT_MS = 10_000;
+
+/**
  * Runs a launchctl subcommand and reports its exit status.
  *
- * The child's stdio is inherited so launchd's own error text (e.g. "Bootstrap
- * failed: 5: Input/output error") lands in the app's log; the text is also
- * captured here so the caller can put it in an API response.
+ * The child's output is PIPED, not inherited: launchd's own error text
+ * (e.g. "Bootstrap failed: 5: Input/output error") is captured here so
+ * the caller can put it in an API response, and it is logged so it also
+ * reaches the app's log.
  */
 function runLaunchctl(
   args: string[],
-  options: { cwd: string },
+  options: { cwd: string; log?: { message: string } & Record<string, unknown> },
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   return new Promise((resolve) => {
     const child = spawnChild("launchctl", args, {
@@ -293,6 +304,23 @@ function runLaunchctl(
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let settled = false;
+    const finish = (result: { ok: true } | { ok: false; message: string }): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish({
+        ok: false,
+        message: `launchctl ${args[0]} timed out after ${LAUNCHCTL_TIMEOUT_MS}ms`,
+      });
+    }, LAUNCHCTL_TIMEOUT_MS);
+    // The timer must not hold the event loop open on its own.
+    timer.unref?.();
+
     child.stdout?.on("data", (chunk: Buffer) => {
       output += chunk.toString();
     });
@@ -300,10 +328,10 @@ function runLaunchctl(
       output += chunk.toString();
     });
     child.on("error", (err) => {
-      resolve({ ok: false, message: err.message });
+      finish({ ok: false, message: err.message });
     });
     child.on("exit", (code) => {
-      resolve(
+      finish(
         code === 0
           ? { ok: true }
           : { ok: false, message: `exit ${code}: ${output.trim() || "no output"}` },
