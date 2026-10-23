@@ -72,7 +72,11 @@ Two levers, in order of preference:
 - **shorten `SESSIONS_DIR`** — the fallback exists because the configured path
   is too long for a socket name, and a shorter path is the real fix;
 - **shorten `HOME`** — only relevant if the home path itself is too long to
-  hold the sockets (unusual; the POSIX `/tmp` is the last resort then).
+  hold the sockets;
+- **make `HOME` writable** — a home directory the app cannot write (a
+  container running as a UID that does not own it, an unmounted NFS home, a
+  read-only home) is skipped, and the POSIX `/tmp` is used instead; when no
+  root works at all, the start-up error names the reason.
 
 The fallback dir is created `0700`, and a dir that already exists is tightened
 to `0700` — but a symlink or a directory owned by another user is refused

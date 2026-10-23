@@ -395,7 +395,12 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     });
   });
 
-  it("fails loudly when the fallback is a symlink", () => {
+  it("never follows a symlinked fallback dir — it moves on to the next root", () => {
+    // The refusal stays a refusal (the symlink is not followed, and the dir
+    // it points at is never used), but it is no longer FATAL: the resolver
+    // tries the next root, because refusing to start over a symlinked
+    // fallback is exactly the failure mode #1762 is about.
+    const lastResort = path.join("/tmp", `ms-${hash}`);
     withHome((home) => {
       const fallback = fallbackUnder(home);
       const target = path.join(TEST_TMPDIR, `ms-symlink-target-${process.pid}`);
@@ -403,14 +408,19 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
       mkdirSync(path.dirname(fallback), { recursive: true });
       try {
         symlinkSync(target, fallback);
-        expect(() => ensureSessionsDir(configured)).toThrow(/not a plain directory/);
+        expect(ensureSessionsDir(configured)).not.toBe(fallback);
+        expect(ensureSessionsDir(configured)).toBe(lastResort);
       } finally {
         rmSync(target, { recursive: true, force: true });
+        rmSync(lastResort, { recursive: true, force: true });
       }
     });
   });
 
-  it("fails loudly when the directory is owned by another uid", () => {
+  it("never uses a fallback dir owned by another uid, and says so when no root is left", () => {
+    // The uid refusal applies to EVERY root, so with the uid mocked there is
+    // no usable root at all: the resolver refuses to start — and says why,
+    // rather than failing with a bare EACCES from the mkdir.
     withHome((home) => {
       mkdirSync(path.dirname(fallbackUnder(home)), { recursive: true });
       mkdirSync(fallbackUnder(home), { mode: 0o700 });
@@ -422,6 +432,30 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
         spy.mockRestore();
       }
     });
+  });
+
+  it("falls through to the last resort when the home root cannot be created (#1762)", () => {
+    // The regression the review found: a home directory the app cannot write
+    // (a container running as a UID that does not own $HOME, an unmounted NFS
+    // home, a read-only home) booted fine under the temp-dir root and would
+    // NOT after the per-user root — the mkdir failure escaped the root
+    // selection instead of moving on to the last resort.
+    const lastResort = path.join("/tmp", `ms-${hash}`);
+    // A directory the current user can read and traverse but NOT write.
+    const unwritable = path.join(TEST_TMPDIR, `unwritable-${process.pid}`);
+    mkdirSync(unwritable, { recursive: true });
+    chmodSync(unwritable, 0o500);
+    const prev = process.env.HOME;
+    process.env.HOME = unwritable;
+    try {
+      expect(ensureSessionsDir(configured)).toBe(lastResort);
+    } finally {
+      if (prev === undefined) delete process.env.HOME;
+      else process.env.HOME = prev;
+      chmodSync(unwritable, 0o700);
+      rmSync(unwritable, { recursive: true, force: true });
+      rmSync(lastResort, { recursive: true, force: true });
+    }
   });
 
   it("returns a short configured path untouched and creates nothing", () => {

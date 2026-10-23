@@ -239,6 +239,14 @@ function homeSessionsRoot(): string {
 }
 
 /**
+ * The home directory itself — the operator-facing lever when the per-user
+ * root is the problem (too long, or not writable).
+ */
+function homeDir(): string {
+  return os.homedir();
+}
+
+/**
  * The roots the fallback may be PLACED under today, in order of
  * preference. The first one whose `ms-<hash>` dir fits the platform's
  * sun_path budget is used.
@@ -368,11 +376,20 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   // fit under any root, that is a real, operator-actionable failure: name
   // the roots and both levers, rather than silently landing two projects in
   // one directory.
+  // Every root is TRIED, not just the first one that fits the budget: a root
+  // that fits on length can still be unusable (an unwritable or stale home
+  // directory, a symlink, a dir owned by another user), and that is a reason
+  // to move on to the next root — not a reason to refuse to start. The last
+  // failure is kept so that "no root worked" can say WHY.
+  let lastFailure: Error | null = null;
   for (const root of currentFallbackRoots()) {
     const candidate = path.join(root, name);
-    if (longestSocketPath(candidate) <= limit - 1) {
+    if (longestSocketPath(candidate) > limit - 1) continue;
+    try {
       secureFallbackDir(candidate);
       return { current: candidate, owned: owned(candidate) };
+    } catch (err) {
+      lastFailure = err instanceof Error ? err : new Error(String(err));
     }
   }
   const roots = currentFallbackRoots().join(", ");
@@ -380,7 +397,8 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
     `the sessions dir ${resolved} does not fit this platform's ${limit}-byte ` +
       `sun_path limit, and neither does the fallback under any of the roots ` +
       `[${roots}] — set SESSIONS_DIR to a shorter path, or point HOME at a ` +
-      `shorter directory (${os.homedir()})`,
+      `shorter, writable directory (${homeDir() || "unset"})` +
+      (lastFailure === null ? "" : ` (the last attempt failed: ${lastFailure.message})`),
   );
 }
 

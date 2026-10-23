@@ -192,10 +192,10 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
       problems.push(`${key} must be an absolute path inside the demo dir`);
   }
   // ensureSessionsDir() (src/plugins/pty.ts) moves SESSIONS_DIR to a short
-  // fallback under the platform's temp dir when its longest socket path would
-  // pass the platform's sun_path limit; the backend's sockets, and so
-  // teardown's ownership check, would then point somewhere else. Refuse a path
-  // that long instead. The limit is the platform's own (108 on Linux, 104 on
+  // fallback (~/.mullion/sessions) when its longest socket path would pass the
+  // platform's sun_path limit; the backend's sockets, and so teardown's
+  // ownership check, would then point somewhere else. Refuse a path that long
+  // instead. The limit is the platform's own (108 on Linux, 104 on
   // macOS), less one for the NUL terminator — the same rule the backend
   // applies, so a SESSIONS_DIR the backend would keep is not refused here.
   // Both values are mirrors of the backend's, asserted against it in
