@@ -59,11 +59,69 @@ const PR_FIELDS = [
   // REQUIRED CONVERSATIONS, and for a required check that never got
   // scheduled. reviewDecision names the first of those.
   "reviewDecision",
+  // The PR's own URL carries the owner and repository name, which the
+  // GraphQL query below needs. Deriving them from the PR beats hardcoding
+  // them: a fork, a renamed repo, or a second checkout would otherwise
+  // query the wrong repository and read the wrong conversation state.
+  "url",
 ];
 
 export function readPr(prNumber) {
   const args = ["pr", "view", prNumber, "--json", PR_FIELDS.join(",")];
-  return JSON.parse(gh(args));
+  const pr = JSON.parse(gh(args));
+  // `gh pr view` cannot see whether review conversations are resolved, and
+  // this repo's `required_conversation_resolution` blocks the merge on an
+  // unresolved one — so the count comes from GraphQL.
+  pr.unresolvedConversations = unresolvedConversationCount(prNumber, repoSlug(pr.url));
+  return pr;
+}
+
+/**
+ * The owner and repository name, taken from a PR's URL.
+ *
+ * Returns null when the URL does not have the expected shape, so a caller
+ * can decide what to do instead of querying a repository guessed wrong.
+ */
+export function repoSlug(prUrl) {
+  const match = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\/\d+/.exec(prUrl ?? "");
+  if (!match) return null;
+  return { owner: match[1], name: match[2] };
+}
+
+/**
+ * How many review conversations on the PR are still unresolved.
+ *
+ * Only GraphQL knows: `gh pr view --json` has no thread resolution, and a
+ * legacy commit status has no equivalent field. An unresolved conversation
+ * blocks the merge until a human resolves it, so a wait will never clear it
+ * — the caller has to know that, not discover it after the timeout.
+ */
+export function unresolvedConversationCount(prNumber, slug) {
+  // Without a slug the query would target a guessed repository; report "none
+  // known" rather than an authoritative-looking zero.
+  if (!slug) return 0;
+  const query = `query($owner:String!,$name:String!,$num:Int!){
+    repository(owner:$owner,name:$name){
+      pullRequest(number:$num){
+        reviewThreads(first:100){ nodes{ isResolved } }
+      }
+    }
+  }`;
+  const out = gh([
+    "api",
+    "graphql",
+    "-f",
+    `query=${query}`,
+    "-F",
+    `owner=${slug.owner}`,
+    "-F",
+    `name=${slug.name}`,
+    "-F",
+    `num=${prNumber}`,
+  ]);
+  const data = JSON.parse(out);
+  const nodes = data?.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  return nodes.filter((n) => !n.isResolved).length;
 }
 
 /**
@@ -162,6 +220,17 @@ export function mergeReadiness(pr) {
     // cannot fix a CHANGES_REQUESTED or satisfy a REVIEW_REQUIRED, and
     // burning the whole timeout on it helps nobody.
     const decision = pr.reviewDecision || "none";
+    // An unresolved review conversation blocks the merge until a human
+    // resolves it. Waiting will not clear it, so say so instead of sitting
+    // out the timeout on a state that cannot change.
+    if ((pr.unresolvedConversations ?? 0) > 0) {
+      return {
+        action: "stop",
+        reason:
+          `${pr.unresolvedConversations} unresolved review conversation(s) — ` +
+          `a human has to resolve them`,
+      };
+    }
     if (decision === "CHANGES_REQUESTED" || decision === "REVIEW_REQUIRED") {
       return {
         action: "stop",

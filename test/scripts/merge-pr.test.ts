@@ -6,6 +6,8 @@ import {
   mergeReadiness,
   parseArgs,
   rebaseAndPush,
+  repoSlug,
+  unresolvedConversationCount,
   waitForReady,
 } from "../../scripts/merge-pr.mjs";
 
@@ -396,5 +398,79 @@ describe("mergeReadiness — a review decision that needs a human", () => {
     });
     expect(readiness.action).toBe("wait");
     expect(readiness.reason).toContain('"none"');
+  });
+});
+
+describe("mergeReadiness — unresolved conversations", () => {
+  it("stops when a review conversation is unresolved", () => {
+    // An unresolved conversation blocks the merge until a human resolves
+    // it. Waiting cannot clear it, so the script must say so rather than
+    // sit out the timeout.
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "APPROVED",
+      unresolvedConversations: 2,
+    });
+    expect(readiness.action).toBe("stop");
+    expect(readiness.reason).toContain("2 unresolved review conversation");
+  });
+
+  it("still waits when every conversation is resolved", () => {
+    const readiness = mergeReadiness({
+      statusCheckRollup: [
+        { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS" },
+      ],
+      mergeable: "MERGEABLE",
+      mergeStateStatus: "BLOCKED",
+      reviewDecision: "APPROVED",
+      unresolvedConversations: 0,
+    });
+    expect(readiness.action).toBe("wait");
+  });
+});
+
+describe("repoSlug", () => {
+  it("reads the owner and name off the PR's own URL", () => {
+    // Hardcoding the slug would point the GraphQL query at the wrong
+    // repository for a fork or a renamed repo.
+    expect(repoSlug("https://github.com/s3ntin3l8/mullion-session-manager/pull/1788")).toEqual({
+      owner: "s3ntin3l8",
+      name: "mullion-session-manager",
+    });
+  });
+
+  it("returns null for a URL that is not a PR URL", () => {
+    expect(repoSlug("https://github.com/s3ntin3l8/mullion-session-manager")).toBeNull();
+    expect(repoSlug(undefined)).toBeNull();
+  });
+});
+
+describe("unresolvedConversationCount", () => {
+  it("counts the threads GraphQL reports as unresolved", () => {
+    execFileSyncMock.mockReset();
+    execFileSyncMock.mockReturnValue(
+      JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [{ isResolved: true }, { isResolved: false }, { isResolved: false }],
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(unresolvedConversationCount(1788, { owner: "o", name: "n" })).toBe(2);
+  });
+
+  it("reports none when the slug is unknown rather than querying a guessed repository", () => {
+    execFileSyncMock.mockReset();
+    expect(unresolvedConversationCount(1788, null)).toBe(0);
+    expect(execFileSyncMock).not.toHaveBeenCalled();
   });
 });
