@@ -152,29 +152,34 @@ describe("reconcileExitedSessions", () => {
   // kept running.
   it("leaves a session alone whose scope lives in a compat dir of the owned set (#1770)", async () => {
     const app = await buildApp();
-    const sessionId = await createSession(app);
+    try {
+      const sessionId = await createSession(app);
 
-    // The dirs this instance may own scopes in: the current one plus every
-    // compat root an earlier release shipped for the same configured path.
-    const { resolveSessionsDirs } = await import("../../src/plugins/pty.js");
-    const owned = resolveSessionsDirs(app.config.SESSIONS_DIR).owned;
-    const current = path.resolve(app.config.SESSIONS_DIR);
-    const compat = owned.find((dir) => dir !== current);
-    expect(compat).toBeDefined();
+      // The dirs this instance may own scopes in: the current one plus every
+      // compat root an earlier release shipped for the same configured path.
+      const { resolveSessionsDirs } = await import("../../src/plugins/pty.js");
+      const owned = resolveSessionsDirs(app.config.SESSIONS_DIR).owned;
+      const current = path.resolve(app.config.SESSIONS_DIR);
+      const compat = owned.find((dir) => dir !== current);
+      expect(compat).toBeDefined();
 
-    // A scope created before the move: the old instance id in the unit name,
-    // the socket in the OLD dir.
-    listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n ${compat}/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+      // A scope created before the move: the old instance id in the unit name,
+      // the socket in the OLD dir.
+      listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n ${compat}/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
 
-    await reconcileExitedSessions(app);
+      await reconcileExitedSessions(app);
 
-    const res = await app.inject({ method: "GET", url: "/api/sessions" });
-    const row = (res.json() as Array<{ id: number; status: string }>).find(
-      (s) => s.id === sessionId,
-    );
-    expect(row?.status).toBe("active");
-
-    await app.close();
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const row = (res.json() as Array<{ id: number; status: string }>).find(
+        (s) => s.id === sessionId,
+      );
+      expect(row?.status).toBe("active");
+    } finally {
+      // Always close the app: this file's apps share one hooks.sock path, so
+      // an app left open by a failing assertion makes every LATER test in the
+      // file fail with "another process is already listening there".
+      await app.close();
+    }
   });
 
   // The CONTROL for the #1770 test above: the same listing, but with the
@@ -184,19 +189,22 @@ describe("reconcileExitedSessions", () => {
   // the difference).
   it("exits a session whose scope is outside every owned dir (the control for #1770)", async () => {
     const app = await buildApp();
-    const sessionId = await createSession(app);
+    try {
+      const sessionId = await createSession(app);
 
-    listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n /some-other-instance/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+      listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n /some-other-instance/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
 
-    await reconcileExitedSessions(app);
+      await reconcileExitedSessions(app);
 
-    const res = await app.inject({ method: "GET", url: "/api/sessions" });
-    const row = (res.json() as Array<{ id: number; status: string }>).find(
-      (s) => s.id === sessionId,
-    );
-    expect(row?.status).toBe("exited");
-
-    await app.close();
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const row = (res.json() as Array<{ id: number; status: string }>).find(
+        (s) => s.id === sessionId,
+      );
+      expect(row?.status).toBe("exited");
+    } finally {
+      // Always close the app — see the note in the #1770 test above.
+      await app.close();
+    }
   });
 
   // Perf audit finding B8(2), trust-rule regression — isMasterAliveStateBatch
