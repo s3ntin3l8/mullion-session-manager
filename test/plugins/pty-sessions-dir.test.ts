@@ -363,10 +363,16 @@ describe("resolveSessionsDirs — the sessions-dir HISTORY (issue #1771)", () =>
     expect(dirs.historyWarning).toMatch(/not readable JSON/);
   });
 
-  it("does not let an over-long trail file widen the owned set", () => {
+  it("keeps the owned set bounded even when the trail file is over the limit", () => {
     // The bound is enforced on READ too: a file with more entries than the
     // limit (hand-edited, or written by a build with a different limit)
     // must not put more dirs into the owned set than the limit allows.
+    //
+    // This asserts the END-TO-END property — the owned set stays bounded —
+    // not which side trims it: the read-side bound is pinned by its own
+    // unit test in test/services/sessions-dir-history.test.ts, and the
+    // write path trims the file itself (which is what bounds the owned set
+    // here).
     const home = makeInstallRoot();
     const many = Array.from({ length: SESSIONS_DIR_HISTORY_LIMIT + 4 }, (_, i) =>
       path.join(tmpdir(), `ms-trail-entry-${i}`),
@@ -395,8 +401,10 @@ describe("resolveSessionsDirs — the sessions-dir HISTORY (issue #1771)", () =>
     expect(written.dirs).toContain(path.resolve(short));
   });
 
-  it("leaves the disk alone through ensureSessionsDir without an install root", () => {
-    // No install root — nothing to keep a trail in, so nothing is written.
+  it("resolves without an install root", () => {
+    // No install root: there is no path to keep a trail in, so the call is
+    // disk-silent by CONSTRUCTION — the write is impossible rather than
+    // skipped, which is why this asserts the resolution and not the disk.
     const short = path.join(tmpdir(), "ms-history-sessions-test-8");
     expect(ensureSessionsDir(short)).toBe(path.resolve(short));
   });
