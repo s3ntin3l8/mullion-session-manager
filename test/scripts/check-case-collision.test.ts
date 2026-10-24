@@ -161,13 +161,11 @@ describe("check-case-collision.mjs", () => {
   });
 
   it("reports a three-name family once, as the widest set", async (ctx) => {
-    // "Foo.ts" / "foo.ts" / "FOO.tsx" is ONE family: the stem rule sees
-    // {Foo.ts, foo.ts} and the full-name rule sees {Foo.ts, foo.ts, FOO.tsx}
-    // — hmm, actually the reverse: the stem rule matches all three (the
-    // stem "foo" is shared), the full-name rule matches the two that share
-    // a full name. Either way the family must be reported once, and the
-    // subset test has to ask the right way round: is the CURRENT set inside
-    // an already-reported one?
+    // "Foo.ts" / "foo.ts" / "FOO.tsx" is ONE family. The stem rule matches
+    // all three (they share the stem "foo"); the full-name rule matches only
+    // the two that share a full name. The family must be reported once — and
+    // the subset test has to ask the right way round: is every member of
+    // the CURRENT set inside an already-reported one?
     write("src/Foo.ts");
     write("src/foo.ts");
     write("src/FOO.tsx");
