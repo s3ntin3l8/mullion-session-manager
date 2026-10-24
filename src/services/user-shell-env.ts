@@ -1,4 +1,4 @@
-import { spawn as spawnChild } from "node:child_process";
+import { runShellCapture } from "./shell-spawn.js";
 
 // Resolves the PATH an *interactive* shell of the user's would have.
 //
@@ -80,43 +80,33 @@ function fallbackNote(): string {
 }
 
 function runInteractiveShell(shell: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    let stdout = "";
-    let done = false;
-    const child = spawnChild(shell, ["-ilc", RESOLVE_SCRIPT], {
-      env: process.env,
-      // No TTY and no stdin: an rc that `read`s or wants job control fails
-      // fast instead of hanging; stderr is never read, so drop it.
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const finish = (value: string | null) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
-    });
-    const timer = setTimeout(() => {
+  // The spawn/timeout/kill machinery lives in `shell-spawn.ts`, shared with
+  // the login-shell probe (issue #1833).
+  return runShellCapture({
+    shell,
+    args: ["-ilc", RESOLVE_SCRIPT],
+    env: process.env,
+    timeoutMs: RESOLVE_TIMEOUT_MS,
+    killEscalationMs: RESOLVE_KILL_ESCALATION_MS,
+    // The raw text carries the sentinel markers, so it must not be trimmed —
+    // and an empty result stays an empty string, because the caller parses
+    // the markers out of it itself.
+    trim: false,
+    // A timed-out resolve must not hold the server open for the escalation's
+    // grace period.
+    unrefEscalationTimer: true,
+    onTimeout: () => {
       log?.warn(
         { shell, timeoutMs: RESOLVE_TIMEOUT_MS },
         `user-shell-env: interactive shell timed out; ${fallbackNote()}`,
       );
-      child.kill();
-      setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      }, RESOLVE_KILL_ESCALATION_MS).unref();
-      finish(null);
-    }, RESOLVE_TIMEOUT_MS);
-    child.on("error", (err) => {
+    },
+    onError: (err) => {
       log?.warn(
         { err, shell },
         `user-shell-env: failed to spawn the interactive shell; ${fallbackNote()}`,
       );
-      finish(null);
-    });
-    child.on("close", () => finish(stdout));
+    },
   });
 }
 

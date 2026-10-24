@@ -1,0 +1,221 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import type * as ChildProcess from "node:child_process";
+
+/**
+ * `runShellCapture` is the shared spawn/timeout/kill machinery behind the
+ * login-shell probe (`login-shell.ts`) and the interactive-shell resolver
+ * (`user-shell-env.ts`) — issue #1833.
+ *
+ * It has to be safe to call from a test that stands in for `spawn`, and safe
+ * when its deadline fires.
+ */
+
+const spawnMock = vi.fn();
+
+// The original module is spread through, so anything else in this test's
+// module graph that imports from node:child_process still gets the real
+// exports — only `spawn` is replaced.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
+});
+
+import { runShellCapture } from "../../src/services/shell-spawn.js";
+
+/** A stand-in for a spawned child, with the pieces the helper touches. */
+function fakeChild(overrides: Record<string, unknown> = {}) {
+  const handlers: Record<string, (...args: unknown[]) => void> = {};
+  const stdoutHandlers: Record<string, (chunk: Buffer) => void> = {};
+  return {
+    child: {
+      stdout: {
+        on: (event: string, fn: (chunk: Buffer) => void) => {
+          stdoutHandlers[event] = fn;
+        },
+        off: vi.fn(),
+      },
+      on: (event: string, fn: (...args: unknown[]) => void) => {
+        handlers[event] = fn;
+      },
+      kill: vi.fn(),
+      exitCode: 0,
+      signalCode: null,
+      ...overrides,
+    },
+    handlers,
+    stdoutHandlers,
+  };
+}
+
+const baseOptions = {
+  shell: "/bin/bash",
+  args: ["-lc", "echo hello"],
+  env: {} as NodeJS.ProcessEnv,
+  timeoutMs: 5_000,
+  killEscalationMs: 2_000,
+  trim: true,
+};
+
+describe("runShellCapture", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    spawnMock.mockReset();
+  });
+
+  it("resolves the script's stdout, trimmed", async () => {
+    const { child, handlers, stdoutHandlers } = fakeChild();
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    stdoutHandlers.data?.(Buffer.from("hello\n"));
+    handlers.close?.();
+
+    expect(await promise).toBe("hello");
+  });
+
+  it("resolves the RAW stdout when trim is off", async () => {
+    // The interactive-shell resolver needs the raw text: it carries its
+    // sentinel markers.
+    const { child, handlers, stdoutHandlers } = fakeChild();
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture({ ...baseOptions, trim: false });
+    stdoutHandlers.data?.(Buffer.from("  hello  "));
+    handlers.close?.();
+
+    expect(await promise).toBe("  hello  ");
+  });
+
+  it("resolves null for an empty result when trim is on, and an empty string when it is off", async () => {
+    const first = fakeChild();
+    spawnMock.mockImplementation(() => first.child);
+    const trimmed = runShellCapture(baseOptions);
+    first.handlers.close?.();
+    expect(await trimmed).toBeNull();
+
+    const second = fakeChild();
+    spawnMock.mockImplementation(() => second.child);
+    const raw = runShellCapture({ ...baseOptions, trim: false });
+    second.handlers.close?.();
+    expect(await raw).toBe("");
+  });
+
+  it("resolves null and reports the failure when the shell cannot be launched", async () => {
+    const { child, handlers } = fakeChild();
+    spawnMock.mockImplementation(() => child);
+
+    const onError = vi.fn();
+    const promise = runShellCapture({ ...baseOptions, onError });
+    handlers.error?.(new Error("spawn ENOENT"));
+
+    expect(await promise).toBeNull();
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onTimeout when the deadline fires", async () => {
+    vi.useFakeTimers();
+    const { child } = fakeChild({ kill: undefined });
+    spawnMock.mockImplementation(() => child);
+
+    const onTimeout = vi.fn();
+    const promise = runShellCapture({ ...baseOptions, onTimeout });
+    const assertion = expect(promise).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(baseOptions.timeoutMs);
+
+    expect(onTimeout).toHaveBeenCalledTimes(1);
+    await assertion;
+  });
+
+  // The regression this pins: on the deadline, the probe kills the child. A
+  // stand-in for `spawn` may have no `kill` at all — and an unguarded
+  // `child.kill()` inside a TIMER callback throws an UNHANDLED exception,
+  // which is fatal to the whole process, not just to the probe. That is
+  // exactly what happened when `test/plugins/hooks.test.ts` replaced
+  // `node:child_process`'s `spawn` with a stand-in: the full suite reported
+  // "TypeError: child.kill is not a function" as an uncaught exception.
+  it("resolves null on the deadline without throwing, even for a child with no kill()", async () => {
+    vi.useFakeTimers();
+    const { child } = fakeChild({
+      // No `kill` at all — the shape a test double takes.
+      kill: undefined,
+    });
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    const assertion = expect(promise).resolves.toBeNull();
+
+    // Past the deadline AND its SIGKILL escalation.
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await assertion;
+  });
+
+  it("escalates to SIGKILL when the child is still alive after the grace period", async () => {
+    vi.useFakeTimers();
+    const kill = vi.fn();
+    const { child } = fakeChild({ kill, exitCode: null, signalCode: null });
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    const assertion = expect(promise).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(baseOptions.timeoutMs);
+    // SIGTERM first — `kill()` with no argument, because SIGTERM is the
+    // default signal.
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill.mock.calls[0]?.[0]).toBeUndefined();
+
+    await vi.advanceTimersByTimeAsync(baseOptions.killEscalationMs);
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+
+    await assertion;
+  });
+
+  // Real timers here: the point is whether the escalation timer HOLDS THE
+  // PROCESS OPEN, which is what `hasRef()` reports.
+  const captureTimers = async (
+    options: Partial<typeof baseOptions>,
+  ): Promise<Array<NodeJS.Timeout>> => {
+    const timers: NodeJS.Timeout[] = [];
+    const original = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+      ...rest: unknown[]
+    ) => {
+      const timer = original(fn, ms, ...rest) as NodeJS.Timeout;
+      timers.push(timer);
+      return timer;
+    }) as unknown as typeof globalThis.setTimeout);
+    try {
+      const { child } = fakeChild({ kill: vi.fn(), exitCode: null, signalCode: null });
+      spawnMock.mockImplementation(() => child);
+      await runShellCapture({
+        ...baseOptions,
+        timeoutMs: 5,
+        killEscalationMs: 60_000,
+        ...options,
+      });
+      return timers;
+    } finally {
+      spy.mockRestore();
+    }
+  };
+
+  it("unrefs the escalation timer when asked, so it cannot hold the process open", async () => {
+    const timers = await captureTimers({ unrefEscalationTimer: true });
+    // timers[0] is the deadline, timers[1] the SIGKILL escalation.
+    expect(timers).toHaveLength(2);
+    expect(timers[1]?.hasRef()).toBe(false);
+  });
+
+  it("leaves the escalation timer referenced by default, so the SIGKILL still gets its chance", async () => {
+    const timers = await captureTimers({});
+    expect(timers).toHaveLength(2);
+    expect(timers[1]?.hasRef()).toBe(true);
+  });
+});
