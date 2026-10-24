@@ -42,23 +42,21 @@ usage() {
   echo "usage: scripts/assemble-release-tarball.sh <version> [output-dir]" >&2
 }
 
-# Files under deploy/ that are deliberately NOT part of the payload.
+# Files and directories under deploy/ that are deliberately NOT part of the
+# payload.
 #
-#   traefik-dynamic.yml / authentik-middleware-example.yml — reverse-proxy
-#     examples for operators who front Mullion with an existing ingress. The
-#     installer never reads them; they are documentation, not payload.
 #   macos/ — the retired Helper-installers' leftovers (the .pkg builder and
 #     its postinstall were removed in #1207 when the Helper moved to its own
-#     repo); only an orphaned logo PNG remained. Nothing references it.
+#     repo); only an orphaned logo PNG remained, and that is gone too. The
+#     exclusion is now defensive rather than load-bearing.
 #
-# Everything else under deploy/ DOES ship, including install.sh, the launchd
-# plist templates, the systemd unit templates, the deploy README, and the
-# mullion-install.sh bootstrap — those are what an operator (and the
-# bootstrap itself) need at install time.
-DEPLOY_EXCLUDE_FILES=(
-  "traefik-dynamic.yml"
-  "authentik-middleware-example.yml"
-)
+# Everything else under deploy/ ships, INCLUDING the two reverse-proxy
+# examples (traefik-dynamic.yml, authentik-middleware-example.yml): the
+# installer's own "Next steps" block ends by pointing operators at those two
+# paths, so on the clone-free path they have to exist on the host — a shipped
+# installer that ends by naming two missing files is not a usable one. They
+# cost ~14 KB.
+DEPLOY_EXCLUDE_FILES=()
 DEPLOY_EXCLUDE_DIRS=(
   "macos"
 )
@@ -111,10 +109,14 @@ cp "$REPO_ROOT/package.json" "$REPO_ROOT/package-lock.json" "$STAGING/"
 # default (the installer is the only thing that should ever be missing from
 # a payload) while the excluded ones stay out.
 cp -R "$REPO_ROOT/deploy" "$STAGING/deploy"
-for excluded in "${DEPLOY_EXCLUDE_FILES[@]}"; do
+# The ${arr[@]+"${arr[@]}"} form is what makes an EMPTY array safe under
+# `set -u` in bash 3.2 — macOS's shell, where an empty array reads as unset
+# and "${arr[@]}" alone aborts the script. Same idiom install.sh uses for its
+# own positional array.
+for excluded in ${DEPLOY_EXCLUDE_FILES[@]+"${DEPLOY_EXCLUDE_FILES[@]}"}; do
   rm -f "$STAGING/deploy/$excluded"
 done
-for excluded in "${DEPLOY_EXCLUDE_DIRS[@]}"; do
+for excluded in ${DEPLOY_EXCLUDE_DIRS[@]+"${DEPLOY_EXCLUDE_DIRS[@]}"}; do
   rm -rf "$STAGING/deploy/$excluded"
 done
 

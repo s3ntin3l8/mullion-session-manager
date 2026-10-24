@@ -235,4 +235,17 @@ describe("deploy/mullion-install.sh", () => {
     expect(stdout).toContain("usage: mullion-install.sh");
     expect(fs.existsSync(argsFile)).toBe(false);
   });
+
+  it("refuses a missing install root before any network call", async () => {
+    // `--role` consumes the next argument as its value, so this leaves no
+    // install root behind. install.sh would reject it too — but only after
+    // this script resolved a release and pulled ~9 MB, so the diagnosis
+    // belongs here.
+    const failure = await failureOf(runBootstrap(["--role", "/tmp/mullion-home"]));
+
+    expect(failure.code).not.toBe(0);
+    expect(failure.stderr).toContain("no install root given");
+    expect(failure.stdout).toContain("usage: mullion-install.sh");
+    expect(fs.existsSync(argsFile)).toBe(false);
+  });
 });

@@ -168,7 +168,7 @@ describe("scripts/assemble-release-tarball.sh", () => {
     }
   });
 
-  it("excludes the reverse-proxy examples and the retired macOS installer leftovers", async () => {
+  it("excludes the retired macOS installer leftovers", async () => {
     await run("bash", [
       path.join(fixture, "scripts", "assemble-release-tarball.sh"),
       VERSION,
@@ -176,12 +176,24 @@ describe("scripts/assemble-release-tarball.sh", () => {
     ]);
 
     const entries = tarballEntries();
-    // The installer never reads these — they are operator documentation.
-    expect(entries).not.toContain("./deploy/traefik-dynamic.yml");
-    expect(entries).not.toContain("./deploy/authentik-middleware-example.yml");
     // deploy/macos/ held the retired Helper installers' .pkg builder and
     // postinstall (removed in #1207); only an orphaned logo PNG was left.
     expect(entries.filter((e) => e.startsWith("./deploy/macos/"))).toEqual([]);
+  });
+
+  it("ships the reverse-proxy examples the installer's own 'Next steps' names", async () => {
+    await run("bash", [
+      path.join(fixture, "scripts", "assemble-release-tarball.sh"),
+      VERSION,
+      outDir,
+    ]);
+
+    // install.sh's post-install output ends by pointing operators at these
+    // two paths. On the clone-free path they have to exist on the host — a
+    // shipped installer that names two missing files is not a usable one.
+    const entries = new Set(tarballEntries());
+    expect(entries.has("./deploy/traefik-dynamic.yml")).toBe(true);
+    expect(entries.has("./deploy/authentik-middleware-example.yml")).toBe(true);
   });
 
   it("keeps macOS's Finder metadata out of the payload", async () => {
