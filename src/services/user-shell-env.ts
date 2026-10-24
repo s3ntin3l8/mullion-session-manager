@@ -101,14 +101,16 @@ function runInteractiveShell(shell: string): Promise<string | null> {
         `user-shell-env: interactive shell timed out; ${fallbackNote()}`,
       );
     },
-    onError: (err) => {
-      // Not only a spawn failure: the child's 'error' event also fires when a
-      // KILL fails (the deadline's SIGTERM, say). The message therefore says
-      // what the failure means — no interactive PATH — rather than what
-      // caused it; the cause is in `err`.
+    onError: (err, spawned) => {
+      // Not every 'error' is a spawn failure: the child's 'error' event also
+      // fires when a KILL fails (the deadline's SIGTERM, say, against a shell
+      // that refuses it). `spawned` tells the two apart, so the message says
+      // what actually happened.
       log?.warn(
         { err, shell },
-        `user-shell-env: could not resolve the interactive PATH; ${fallbackNote()}`,
+        spawned
+          ? `user-shell-env: the interactive shell failed; ${fallbackNote()}`
+          : `user-shell-env: failed to spawn the interactive shell; ${fallbackNote()}`,
       );
     },
   });

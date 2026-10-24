@@ -4,6 +4,10 @@ import type * as ChildProcess from "node:child_process";
 
 let stdoutToEmit: string | null;
 let spawnError: Error | null = null;
+// Set when the fake child is meant to look like one that really started.
+// Node leaves `pid` undefined when the spawn itself failed and sets it once
+// the child is running, and the resolver tells those two apart.
+let childPid: number | undefined;
 let spawned: Array<{ shell: string; args: string[]; opts: { stdio?: unknown } }> = [];
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -17,11 +21,13 @@ vi.mock("node:child_process", async (importOriginal) => {
         exitCode: number | null;
         signalCode: string | null;
         kill: () => void;
+        pid?: number;
       };
       child.stdout = new EventEmitter();
       child.exitCode = null;
       child.signalCode = null;
       child.kill = vi.fn();
+      if (childPid !== undefined) child.pid = childPid;
       if (spawnError) {
         const err = spawnError;
         setImmediate(() => child.emit("error", err));
@@ -81,6 +87,7 @@ describe("resolveUserShellEnv", () => {
   beforeEach(() => {
     spawned = [];
     spawnError = null;
+    childPid = undefined;
     stdoutToEmit = dump("/home/u/.minimax-code/bin:/usr/bin");
     process.env.SHELL = "/usr/bin/zsh";
     delete process.env.MULLION_RESOLVE_INTERACTIVE_ENV;
@@ -164,6 +171,27 @@ describe("resolveUserShellEnv", () => {
     expect(logger.debug).toHaveBeenCalledWith(
       { shell: "/usr/bin/fish" },
       expect.stringContaining("unsupported shell"),
+    );
+  });
+
+  // A child can also fail AFTER it started — a SIGTERM the shell refuses
+  // produces an 'error' event too. Calling that a spawn failure would be
+  // wrong, so the resolver distinguishes the two.
+  it("does not call a post-start failure a spawn failure", async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    setUserShellEnvLogger(logger);
+
+    childPid = 4242; // the child really started
+    spawnError = new Error("kill EPERM");
+    await resolveUserShellEnv();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: spawnError }),
+      expect.stringContaining("the interactive shell failed"),
+    );
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringContaining("failed to spawn"),
     );
   });
 

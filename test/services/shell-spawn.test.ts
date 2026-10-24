@@ -113,6 +113,25 @@ describe("runShellCapture", () => {
 
     expect(await promise).toBeNull();
     expect(onError).toHaveBeenCalledTimes(1);
+    // No `pid` — the spawn itself failed.
+    expect(onError.mock.calls[0]?.[1]).toBe(false);
+  });
+
+  // The child's 'error' event does not only mean the spawn failed: a KILL
+  // that fails produces one too (the deadline's SIGTERM, against a shell that
+  // refuses it). Node leaves `pid` undefined when the spawn failed and sets it
+  // once the child is really running, and the caller needs to tell those
+  // apart — "failed to spawn" is the wrong thing to log about the second.
+  it("tells onError whether the child ever started", async () => {
+    const started = fakeChild({ pid: 4321 });
+    spawnMock.mockImplementation(() => started.child);
+
+    const onError = vi.fn();
+    const promise = runShellCapture({ ...baseOptions, onError });
+    started.handlers.error?.(new Error("kill EPERM"));
+
+    expect(await promise).toBeNull();
+    expect(onError.mock.calls[0]?.[1]).toBe(true);
   });
 
   it("calls onTimeout when the deadline fires", async () => {

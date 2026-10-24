@@ -58,8 +58,17 @@ export interface ShellSpawnOptions {
   unrefEscalationTimer?: boolean;
   /** Called when the deadline fires. */
   onTimeout?: () => void;
-  /** Called when the child could not be spawned. */
-  onError?: (err: Error) => void;
+  /**
+   * Called when the child failed — either because it never started, or
+   * because it started and then broke.
+   *
+   * `spawned` tells the two apart: Node leaves `child.pid` undefined when the
+   * spawn itself failed, and sets it once the child is really running. That
+   * distinction matters because a child can also fail AFTER it started — a
+   * SIGTERM the shell refuses produces one — and "failed to spawn" would be
+   * the wrong thing to log about that.
+   */
+  onError?: (err: Error, spawned: boolean) => void;
 }
 
 /**
@@ -141,7 +150,10 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
     // still needs escalating to SIGKILL. The timer is cleared on 'close',
     // which is the event that actually means the child is gone.
     child.on("error", (err) => {
-      options.onError?.(err);
+      // `pid` is undefined when the spawn itself failed and a number once the
+      // child is really running, so this tells the caller which of the two
+      // happened.
+      options.onError?.(err, child.pid !== undefined);
       finish(null);
     });
     // 'close' (stdio streams closed), NOT 'exit' (process ended) — 'exit'
