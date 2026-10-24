@@ -838,6 +838,33 @@ splits the two permission paths:
   blocked. That is the same fail-open shape the other agents use, just with a
   much shorter patience window.
 
+**Verified live against a real mcode 0.6.12 (the isolated-profile run).** The
+whole chain has now been exercised end to end, not just unit-tested:
+
+| Link                                                  | Observed                                                                                                     |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| A real mcode TUI loads the plugin and fires its hooks | `session_start`, `turn_start`, `review_gate`, `progress` all arrived at a receiver over the hook socket      |
+| The `PermissionRequest` hook raises a real gate       | `review_gate` in state `waiting`, with a `gateId`, on Mullion's own hook socket                              |
+| skip-permissions auto-approves it                     | `gateState` ended `"approved"` — mcode's own TUI showed `◆ Approval required — Bash` and Mullion answered it |
+| A human can answer the gate                           | `POST /api/sessions/:id/review-gate` with `{"decision":"approved"}` resolved a waiting gate to `"approved"`  |
+| No answer in time                                     | the gate **lapsed** (mcode's 10s hook timeout fired) — fail-open, never a denial                             |
+
+The probe ran against a **fully isolated** mcode profile — its own data dir with
+its own physical `v2/sqlite`, its own empty `runtime-owner-leases/` and `run/`,
+no symlink to `~/.minimax` — because a second mcode runtime against a _shared_
+`runtime-state.sqlite` fences the incumbent runtime and aborts the user's other
+sessions (see `AGENTS.md`). The live host's `auth.json`, `config.yaml` and
+`permission.json` were byte-identical before and after.
+
+One caveat this run surfaced, and it is mcode's own behaviour rather than
+Mullion's: **mcode may still show its native permission dialog** even after the
+hook answers "allow". mcode decides that for itself — its hook-result parser
+only auto-applies an allow when the prompt is `hookAutoApprovalEligible`
+(its own permission engine's verdict, and for a Claude-format plugin
+`permissionAutoApproval` is `"ordinary_only"`), so a prompt its engine classes
+as a safety check still reaches mcode's own dialog. Mullion's gate is resolved
+either way; what is left is mcode asking the human once more.
+
 **The plugin's `hooks.json` shape** (verified against mcode 0.6.12's own
 parser): the document may be `{"hooks": {"<Event>": [...]}}` or
 `{"<Event>": [...]}` — mcode unwraps a top-level `hooks` key — and each event
