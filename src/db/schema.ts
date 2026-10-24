@@ -71,6 +71,17 @@ export const hosts = sqliteTable("hosts", {
   // at enrollment AND at renewal; an older agent build that does not send
   // it leaves this null, which is a legitimate state, not a defect.
   platform: text("platform"),
+  // Issue #1725 / roadmap 8.11 — the DRAIN flag: this host is parked and
+  // takes no new work.
+  //
+  // It is an INTENT, not an action: draining a host tells the placement
+  // policy to stop choosing it. It terminates nothing — no session is
+  // killed, no worktree removed, no agent contacted — and a drained host
+  // stays perfectly usable for MANUAL placement.
+  //
+  // A column, so it survives a primary restart: the operator's decision to
+  // park a machine must not quietly expire with the process.
+  drained: integer("drained", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

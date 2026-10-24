@@ -138,6 +138,9 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
             health: "online",
             lastSeenAt: null,
             lastCheckedAt: null,
+            // Issue #1725 — the field is required on the type, so every
+            // fixture carries it.
+            drained: false,
           },
         ]}
         onClose={vi.fn()}
