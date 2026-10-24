@@ -28,7 +28,9 @@ describe("runLoginShell env", () => {
   const savedPath = process.env.PATH;
 
   afterEach(() => {
-    process.env.PATH = savedPath;
+    // `process.env.PATH = undefined` would store the string "undefined".
+    if (savedPath === undefined) delete process.env.PATH;
+    else process.env.PATH = savedPath;
     userPath = null;
     spawnMock.mockReset();
   });
