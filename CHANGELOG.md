@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.45](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.44...v0.3.45) (2026-10-24)
+
+
+### Features
+
+* **agents:** honour a model on a project's reviewer subagent for opencode ([#1808](https://github.com/s3ntin3l8/mullion-session-manager/issues/1808)) ([a842a96](https://github.com/s3ntin3l8/mullion-session-manager/commit/a842a9658aece4cf05a1556925bb7971fe1c6947))
+* **agent:** sleep/wake resilience for macOS agents ([#1719](https://github.com/s3ntin3l8/mullion-session-manager/issues/1719)) ([73d4b46](https://github.com/s3ntin3l8/mullion-session-manager/commit/73d4b46a89036c4c7efe304a411478251080c365))
+* **devices:** gate the Android device panel off on macOS — macOS primary support ([#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720)) ([4b5b0e3](https://github.com/s3ntin3l8/mullion-session-manager/commit/4b5b0e316ed991674f9ba0f479e926fb63d774aa))
+* **hooks:** surface the turn source so a machine-injected turn is distinguishable from a user's ([#1813](https://github.com/s3ntin3l8/mullion-session-manager/issues/1813)) ([756280d](https://github.com/s3ntin3l8/mullion-session-manager/commit/756280d62ff7c7a0756fb19021bb59d82d8b6739))
+* **hosts:** a placement policy that can pick a host ([#1723](https://github.com/s3ntin3l8/mullion-session-manager/issues/1723)) ([#1837](https://github.com/s3ntin3l8/mullion-session-manager/issues/1837)) ([2bcded9](https://github.com/s3ntin3l8/mullion-session-manager/commit/2bcded9dbee9ab0d3dbf629a941b8f01340f070f))
+* **hosts:** say which host a session is on, and never call a sleeping host dead ([#1727](https://github.com/s3ntin3l8/mullion-session-manager/issues/1727)) ([#1861](https://github.com/s3ntin3l8/mullion-session-manager/issues/1861)) ([df5186a](https://github.com/s3ntin3l8/mullion-session-manager/commit/df5186aa199d84d034fa6dd0e0210d6146f46011))
+* **hosts:** the agent reports its platform and its capacity ([#1721](https://github.com/s3ntin3l8/mullion-session-manager/issues/1721)) ([#1817](https://github.com/s3ntin3l8/mullion-session-manager/issues/1817)) ([ecbc228](https://github.com/s3ntin3l8/mullion-session-manager/commit/ecbc228af7616b190038627d2619c9a3bbca0508))
+* **hosts:** the fleet UI — capacity, the placement choice, and the reason ([#1726](https://github.com/s3ntin3l8/mullion-session-manager/issues/1726)) ([#1856](https://github.com/s3ntin3l8/mullion-session-manager/issues/1856)) ([cc68134](https://github.com/s3ntin3l8/mullion-session-manager/commit/cc681344eed48bfcb20d51818f334215fa932716))
+* **mcode:** mcode sessions reach Mullion's own MCP server ([#1783](https://github.com/s3ntin3l8/mullion-session-manager/issues/1783)) ([#1832](https://github.com/s3ntin3l8/mullion-session-manager/issues/1832)) ([f6b50ed](https://github.com/s3ntin3l8/mullion-session-manager/commit/f6b50ed3351a8ab71beb84f96ebf77067b9b33ae))
+* **models:** a per-CLI model catalog for mcode ([#1784](https://github.com/s3ntin3l8/mullion-session-manager/issues/1784)) ([#1828](https://github.com/s3ntin3l8/mullion-session-manager/issues/1828)) ([7dd6739](https://github.com/s3ntin3l8/mullion-session-manager/commit/7dd6739bf59f144f51371fc34553519d99fe8307))
+* **review-relay:** pick the review model from Hermes' model options ([#1863](https://github.com/s3ntin3l8/mullion-session-manager/issues/1863)) ([43b843d](https://github.com/s3ntin3l8/mullion-session-manager/commit/43b843d95b92e2d25dc7546a624a7590cc061b69)), closes [#1775](https://github.com/s3ntin3l8/mullion-session-manager/issues/1775)
+* **sessions:** let a session-scoped spawn_child inherit the parent's permissions ([#1812](https://github.com/s3ntin3l8/mullion-session-manager/issues/1812)) ([c699955](https://github.com/s3ntin3l8/mullion-session-manager/commit/c6999555e95678ff6d15f82a252512f084fee600))
+* **sessions:** the host a session lives on is the session's own ([#1722](https://github.com/s3ntin3l8/mullion-session-manager/issues/1722)) ([#1830](https://github.com/s3ntin3l8/mullion-session-manager/issues/1830)) ([95583dd](https://github.com/s3ntin3l8/mullion-session-manager/commit/95583ddf428ca9ca87c8db146703f2aaac76871f))
+* **task-master:** don't claim a task onto an agent whose provider is out of quota ([#1825](https://github.com/s3ntin3l8/mullion-session-manager/issues/1825)) ([0ebfd91](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ebfd9113e698a2ceb97330ec07a163e11caa8fa))
+
+
+### Bug Fixes
+
+* **agent-detect:** pick up PATH entries from the user's interactive rc files ([#1827](https://github.com/s3ntin3l8/mullion-session-manager/issues/1827)) ([fe0847b](https://github.com/s3ntin3l8/mullion-session-manager/commit/fe0847bda3287bf32d06bfb0a1243c0151d413cf))
+* **codex:** classify provider failures so a Codex worker can report rate_limit ([#1797](https://github.com/s3ntin3l8/mullion-session-manager/issues/1797)) ([457e751](https://github.com/s3ntin3l8/mullion-session-manager/commit/457e7519ba10e3a9b8d3f72742f97c0e9df0eb38))
+* **frontend:** rename the lane helpers so the frontend builds on macOS ([#1811](https://github.com/s3ntin3l8/mullion-session-manager/issues/1811)) ([c56aa96](https://github.com/s3ntin3l8/mullion-session-manager/commit/c56aa96a3aeb9e3e5b01313771fc807352d34ea0))
+* **git:** make a shared clone safe for concurrent agents, and repair it if it breaks ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)) ([#1853](https://github.com/s3ntin3l8/mullion-session-manager/issues/1853)) ([33009f1](https://github.com/s3ntin3l8/mullion-session-manager/commit/33009f1d2372ed7fadd4ba38450ab86c783b2f7f))
+* **mcode:** a CODEX-format plugin so mcode stops asking what Mullion already approved ([#1814](https://github.com/s3ntin3l8/mullion-session-manager/issues/1814)) ([#1829](https://github.com/s3ntin3l8/mullion-session-manager/issues/1829)) ([d7dd04c](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7dd04c417d796a2fcea974e852e7ece57d25c13))
+* **review-relay:** only the reviewer's own review counts as landed ([#1848](https://github.com/s3ntin3l8/mullion-session-manager/issues/1848)) ([6cbd53d](https://github.com/s3ntin3l8/mullion-session-manager/commit/6cbd53d586235328e0b8d516b8171a0076625d90)), closes [#1756](https://github.com/s3ntin3l8/mullion-session-manager/issues/1756)
+* **shell-spawn:** end a child that errors before the deadline ([#1845](https://github.com/s3ntin3l8/mullion-session-manager/issues/1845)) ([#1849](https://github.com/s3ntin3l8/mullion-session-manager/issues/1849)) ([9083955](https://github.com/s3ntin3l8/mullion-session-manager/commit/9083955d1edd13007df45966a2b6b593ae27aa64))
+
+
+### Performance Improvements
+
+* **review-relay:** annotate relay state in the PR poller, not the batch route ([#1859](https://github.com/s3ntin3l8/mullion-session-manager/issues/1859)) ([9b9801e](https://github.com/s3ntin3l8/mullion-session-manager/commit/9b9801eacfe7b79d9399556f0f97c4bb8cbd1a9f)), closes [#1744](https://github.com/s3ntin3l8/mullion-session-manager/issues/1744)
+
 ## [0.3.44](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.43...v0.3.44) (2026-10-24)
 
 
