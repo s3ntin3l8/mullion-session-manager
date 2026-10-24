@@ -919,6 +919,15 @@ export class Session {
   // hook-adapters/codex.ts's file header).
   private codexTranscriptPath: string | null = null;
 
+  // Issue #1734 — the codex home resolved ALONGSIDE the rollout path, at the
+  // moment the path was recorded. It is the session's own home (which may
+  // differ from the backend's) and it does NOT survive a backend restart on
+  // its own — the session's environment is not persisted — so it is stored
+  // here and persisted with the path. Without it, a restored session would
+  // resolve the BACKEND's home, reject its own stored path, and silently
+  // stop being watched.
+  private codexTranscriptHome: string | null = null;
+
   // Issue #1734 — the codex turn whose rate-limit failure has already been
   // reported for this session. Codex records the failure in the rollout, and
   // the rollout's LAST completed turn keeps saying so until the next turn
@@ -1168,6 +1177,7 @@ export class Session {
       stampRestoredLatches: () => this.stampRestoredLatches(),
       // Issue #1734 — restore Codex's rollout path from the state file.
       setCodexTranscriptPath: (path) => this.setCodexTranscriptPath(path),
+      setCodexTranscriptHome: (home) => this.setCodexTranscriptHome(home),
     };
   }
 
@@ -1247,6 +1257,7 @@ export class Session {
       // Issue #1734 — Codex's rollout path, so a codex session that survives
       // a Mullion restart keeps being watched for provider rate limits.
       codexTranscriptPath: this.codexTranscriptPath,
+      codexTranscriptHome: this.codexTranscriptHome,
     };
   }
 
@@ -2374,6 +2385,29 @@ export class Session {
    */
   setCodexTranscriptPath(path: string): void {
     this.codexTranscriptPath = path;
+    // The home is resolved ONCE, here, and kept beside the path. The
+    // session's own environment is the only thing that can make it differ
+    // from the backend's, and that environment does not survive a backend
+    // restart — so re-deriving it later would resolve the backend's home
+    // instead, reject this session's own stored path, and silently stop
+    // watching it.
+    //
+    // A RESTORE passes the persisted home in separately (see
+    // setCodexTranscriptHome) and it wins over the one resolved here.
+    if (this.codexTranscriptHome === null) {
+      this.codexTranscriptHome = this.resolveCodexHome();
+    }
+  }
+
+  /**
+   * Issue #1734 — the codex home resolved ALONGSIDE the rollout path.
+   *
+   * Set by the state-file restore, where the home is the one the session's
+   * codex actually ran under — which the session's own (unpersisted)
+   * environment could no longer tell us after a restart.
+   */
+  setCodexTranscriptHome(home: string): void {
+    this.codexTranscriptHome = home;
   }
 
   /** Issue #1734 — the rollout file path, or null when there is none. */
@@ -2392,8 +2426,18 @@ export class Session {
    * to that — the same rule as `resolveCodexHome()` in
    * hook-adapters/codex.ts, except that the session's own env is consulted
    * first.
+   *
+   * Once a rollout path has been recorded, the home resolved ALONGSIDE it
+   * wins: that is the home the session's codex actually ran under, and it
+   * is persisted with the path (see the state file's own fields) so a
+   * backend restart cannot lose it.
    */
   codexHome(): string {
+    if (this.codexTranscriptHome !== null) return this.codexTranscriptHome;
+    return this.resolveCodexHome();
+  }
+
+  private resolveCodexHome(): string {
     const fromSession = this.env.CODEX_HOME;
     if (typeof fromSession === "string" && fromSession.length > 0) return fromSession;
     const fromBackend = process.env.CODEX_HOME;

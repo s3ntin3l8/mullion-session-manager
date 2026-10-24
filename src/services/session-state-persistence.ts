@@ -76,6 +76,12 @@ export type StoredStateFields = Pick<
   // this the rollout path — and with it the only visible rate-limit signal —
   // would be lost for the rest of that session's life.
   codexTranscriptPath?: string | null;
+  // Issue #1734 — the codex home resolved ALONGSIDE that path. The path
+  // alone is not enough: the session's own `CODEX_HOME` (which may differ
+  // from the backend's) is not otherwise persisted, so a restored session
+  // would resolve the BACKEND's home, reject its own stored path, and
+  // silently stop being watched.
+  codexTranscriptHome?: string | null;
 };
 
 /** The plain Session fields applyStoredState assigns through `host.set`. */
@@ -118,6 +124,11 @@ export interface StoredStateHost {
    * it simply skips the restore.
    */
   setCodexTranscriptPath?(path: string): void;
+  /**
+   * Issue #1734 — restore the codex home resolved alongside that path, so a
+   * restored session keeps looking under the home its own codex ran under.
+   */
+  setCodexTranscriptHome?(home: string): void;
 }
 
 export interface ApplyStoredStateOptions {
@@ -216,6 +227,11 @@ export function applyStoredState(
   // it — does not fire again for a session that is already running.
   if (typeof s.codexTranscriptPath === "string" && s.codexTranscriptPath.length > 0) {
     host.setCodexTranscriptPath?.(s.codexTranscriptPath);
+  }
+  // The home is restored AFTER the path, so the path setter — which
+  // resolves a home of its own — does not overwrite the persisted one.
+  if (typeof s.codexTranscriptHome === "string" && s.codexTranscriptHome.length > 0) {
+    host.setCodexTranscriptHome?.(s.codexTranscriptHome);
   }
   // `turnEndPingSent` isn't persisted either, so it would otherwise restore to
   // its class default `false` — wrong when the restored state is an ended,

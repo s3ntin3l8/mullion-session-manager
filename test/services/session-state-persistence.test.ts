@@ -315,6 +315,39 @@ describe("applyStoredState", () => {
       applyStoredState(r.host, fullState({ codexTranscriptPath: "" }), FILE);
       expect(r.transcriptPath).toBeNull();
     });
+
+    it("restores the codex home alongside the path", () => {
+      // The path alone is not enough: the session's own CODEX_HOME (which
+      // may differ from the backend's) is not otherwise persisted, so a
+      // restored session would resolve the BACKEND's home, reject its own
+      // stored path, and silently stop being watched.
+      const r = makeRig();
+      const homes: string[] = [];
+      const extended: Rig & { home: string | null } = {
+        ...r,
+        home: null,
+      };
+      extended.host = {
+        ...r.host,
+        setCodexTranscriptPath: () => {
+          /* the path setter resolves a home of its own — the persisted one wins */
+        },
+        setCodexTranscriptHome: (home: string) => {
+          extended.home = home;
+          homes.push(home);
+        },
+      };
+      applyStoredState(
+        extended.host,
+        fullState({
+          codexTranscriptPath: "/tmp/x/rollout.jsonl",
+          codexTranscriptHome: "/opt/home",
+        }),
+        FILE,
+      );
+      expect(extended.home).toBe("/opt/home");
+      expect(homes).toEqual(["/opt/home"]);
+    });
   });
 
   it("stamps latches after every field/background-task restore, in both modes", () => {
