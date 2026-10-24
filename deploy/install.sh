@@ -589,7 +589,7 @@ launchd_job_home() {
 # systemd specifier (%h, %t, …) that cannot be resolved statically — an
 # unknown root, which the caller fails safe on.
 systemd_unit_home() {
-  local unit="$1" env_file working_dir value="" env_files
+  local unit="$1" env_file working_dir value="" fallback="" env_files
   [ -f "$unit" ] || return 0
   # `|| true` on every pipeline: see plist_string's own comment — under
   # `set -e -o pipefail` a failing pipeline inside a command substitution
@@ -597,17 +597,32 @@ systemd_unit_home() {
   env_files="$(sed -n 's/^EnvironmentFile=//p' "$unit" 2>/dev/null || true)"
   while IFS= read -r env_file; do
     [ -n "$env_file" ] || continue
-    # A specifier cannot be resolved without systemd's own expansion.
+    # A specifier cannot be resolved without systemd's own expansion — this
+    # line's root is unknown. Keep looking: another line may name the root.
     case "$env_file" in
-      *%*) return 0 ;;
+      *%*) continue ;;
     esac
     # systemd's leading "-" means "ignore this file if it is missing".
     env_file="${env_file#-}"
-    value="$(dirname "$env_file" || true)"
-    break
+    # The installer's own template writes <root>/.env, and that is the line
+    # that names the install root. A unit that ALSO carries a shared
+    # defaults file (EnvironmentFile=-/etc/default/mullion) must not resolve
+    # to THAT — so the /.env line wins, whatever order the lines are in.
+    case "$env_file" in
+      */.env)
+        value="$(dirname "$env_file" || true)"
+        break
+        ;;
+    esac
+    # A resolvable line that is not the installer's .env: remember it, but
+    # prefer the /.env line if one shows up.
+    [ -n "$fallback" ] || fallback="$(dirname "$env_file" || true)"
   done <<EOF
 $env_files
 EOF
+  if [ -z "$value" ]; then
+    value="$fallback"
+  fi
   if [ -n "$value" ]; then
     printf '%s\n' "$value"
     return 0
@@ -638,14 +653,20 @@ same_install_root() {
 # install_root_port ROOT — the port that install root binds: the PORT its
 # .env sets, or the schema's own default (3000, src/plugins/env.ts) when it
 # sets none — which is the case for BOTH roles, as the installer writes it.
+# The .env is read exactly the way the installer reads MULLION_ROLE out of
+# it (the LAST assignment wins, and the value is unquoted and trimmed), so
+# the two never disagree about what a .env says.
 install_root_port() {
   local root="$1" port=""
   if [ -f "$root/.env" ]; then
-    port="$(sed -n 's/^PORT=//p' "$root/.env" 2>/dev/null | head -1 || true)"
-    port="${port%%[[:space:]]*}"
-    port="${port//\"/}"
-    port="${port//\'/}"
-    port="${port//$'\r'/}"
+    port="$(grep -E '^PORT=' "$root/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    port="${port%$'\r'}"
+    while [[ "$port" == [[:space:]]* ]]; do port="${port#[[:space:]]}"; done
+    while [[ "$port" == *[[:space:]] ]]; do port="${port%[[:space:]]}"; done
+    case "$port" in
+      \"*) port="${port#\"}" ;;
+      \'*) port="${port#\'}" ;;
+    esac
   fi
   printf '%s\n' "${port:-3000}"
 }
