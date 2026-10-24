@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
-import { commandHasModelFlag, commandModelCli } from "./modelCatalogs.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { commandHasModelFlag, commandModelCli, MODEL_CATALOG_FETCHERS } from "./modelCatalogs.js";
+import { jsonResponse } from "../test/jsonResponse.js";
 
 describe("commandModelCli", () => {
   it("identifies the model-capable CLIs by their bare binary name", () => {
@@ -54,5 +55,47 @@ describe("commandHasModelFlag", () => {
     expect(commandHasModelFlag("opencode --model anthropic/claude-sonnet-4-5", "opencode")).toBe(
       false,
     );
+  });
+});
+
+// The fetcher map replaced a chain of ternaries (Hermes review, PR #1828):
+// a CLI added to `ModelCli` without a fetcher is now a COMPILE error rather
+// than a silent fall-through to opencode's catalog.
+describe("MODEL_CATALOG_FETCHERS", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const stubFetch = (calls: string[]) => {
+    vi.stubGlobal("fetch", (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Promise.resolve(jsonResponse(200, []));
+    });
+  };
+
+  it("covers every fetched CLI exactly once", () => {
+    expect(Object.keys(MODEL_CATALOG_FETCHERS).sort()).toEqual([
+      "agy",
+      "codex",
+      "mcode",
+      "opencode",
+    ]);
+  });
+
+  it("sends each CLI to its own endpoint", async () => {
+    const calls: string[] = [];
+    stubFetch(calls);
+
+    await MODEL_CATALOG_FETCHERS.mcode();
+    await MODEL_CATALOG_FETCHERS.codex();
+    await MODEL_CATALOG_FETCHERS.agy();
+    await MODEL_CATALOG_FETCHERS.opencode();
+
+    expect(calls).toEqual([
+      "/api/mcode/models",
+      "/api/codex/models",
+      "/api/agy/models",
+      "/api/opencode/models",
+    ]);
   });
 });

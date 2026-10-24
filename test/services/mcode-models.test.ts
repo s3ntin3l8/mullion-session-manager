@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -35,6 +35,21 @@ provider:
       - MiniMax-M3
       - MiniMax-M3.1-Flash
 `;
+
+/** A temp data dir with a `config.yaml` in it. */
+function makeDataDir(config?: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-mcode-models-"));
+  if (config !== undefined) writeFileSync(path.join(dir, "config.yaml"), config);
+  return dir;
+}
+
+/** Rewrites a file and pushes its mtime forward, so an mtime-based
+ * invalidation is observed even on a filesystem with coarse timestamps. */
+function rewriteWithNewerMtime(filePath: string, contents: string): void {
+  writeFileSync(filePath, contents);
+  const future = new Date(Date.now() + 10_000);
+  utimesSync(filePath, future, future);
+}
 
 describe("parseMcodeModelCatalog", () => {
   it("turns the provider's models map into provider/model ids", () => {
@@ -92,6 +107,54 @@ provider:
       Blocked: {}
     whitelist:
       - Allowed
+`;
+    expect(parseMcodeModelCatalog(config)).toEqual(["minimax/Allowed"]);
+  });
+
+  // A whitelist is a filter Mullion does not own. A stock install lists BARE
+  // model ids (verified against the host's own config.yaml), but a full
+  // `provider/model` id or a glob must not silently filter out everything.
+  it("accepts a whitelist entry that is a full provider/model id", () => {
+    const config = `
+provider:
+  minimax:
+    models:
+      Allowed: {}
+      Blocked: {}
+    whitelist:
+      - minimax/Allowed
+`;
+    expect(parseMcodeModelCatalog(config)).toEqual(["minimax/Allowed"]);
+  });
+
+  it("accepts a whitelist entry that is a glob", () => {
+    const config = `
+provider:
+  minimax:
+    models:
+      MiniMax-M3: {}
+      MiniMax-M3.1-Flash: {}
+      Something-Else: {}
+    whitelist:
+      - "MiniMax-*"
+`;
+    expect(parseMcodeModelCatalog(config)).toEqual([
+      "minimax/MiniMax-M3",
+      "minimax/MiniMax-M3.1-Flash",
+    ]);
+  });
+
+  it("IGNORES a whitelist that matches nothing, rather than emptying the catalog", () => {
+    // The failure mode this guards: a whitelist in a shape this service does
+    // not understand would filter out every model, leaving the picker empty —
+    // worse than not applying it at all.
+    const config = `
+provider:
+  minimax:
+    models:
+      Allowed: {}
+    whitelist:
+      - "some-shape-we-do-not-understand"
 `;
     expect(parseMcodeModelCatalog(config)).toEqual(["minimax/Allowed"]);
   });
@@ -159,81 +222,109 @@ custom_provider:
 });
 
 describe("listMcodeModels", () => {
+  const dirs: string[] = [];
+
+  const dataDir = (config?: string): string => {
+    const dir = makeDataDir(config);
+    dirs.push(dir);
+    return dir;
+  };
+
   beforeEach(() => {
     resetMcodeModelsCache();
   });
 
   afterEach(() => {
     resetMcodeModelsCache();
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reads config.yaml out of mcode's data dir", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-mcode-models-"));
-    try {
-      writeFileSync(path.join(dir, "config.yaml"), STOCK_CONFIG);
-      const models = await listMcodeModels({ dataDir: dir });
-      expect(models).toEqual(["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"]);
-      expect(resolveMcodeConfigPath(dir)).toBe(path.join(dir, "config.yaml"));
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = dataDir(STOCK_CONFIG);
+    const models = await listMcodeModels({ dataDir: dir });
+    expect(models).toEqual(["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"]);
+    expect(resolveMcodeConfigPath(dir)).toBe(path.join(dir, "config.yaml"));
   });
 
   it("returns [] when mcode has no config.yaml", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-mcode-models-"));
-    try {
-      expect(await listMcodeModels({ dataDir: dir })).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    expect(await listMcodeModels({ dataDir: dataDir() })).toEqual([]);
   });
 
   it("returns [] for a malformed config.yaml instead of throwing", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "mullion-mcode-models-"));
-    try {
-      writeFileSync(path.join(dir, "config.yaml"), "provider:\n  - [unclosed\n");
-      expect(await listMcodeModels({ dataDir: dir })).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const dir = dataDir("provider:\n  - [unclosed\n");
+    expect(await listMcodeModels({ dataDir: dir })).toEqual([]);
   });
 
-  it("caches a successful catalog for an hour", async () => {
-    const readConfig = vi.fn().mockReturnValue(STOCK_CONFIG);
-    let now = 1_000_000;
-    const first = await listMcodeModels({ readConfig, now: () => now });
-    expect(first).toHaveLength(2);
-
-    // A second call inside the TTL does not read the file again.
-    now += 60_000;
-    const second = await listMcodeModels({ readConfig, now: () => now });
-    expect(second).toEqual(first);
-    expect(readConfig).toHaveBeenCalledTimes(1);
-
-    // Past the TTL it re-reads.
-    now += 3 * 60 * 60 * 1000;
-    await listMcodeModels({ readConfig, now: () => now });
-    expect(readConfig).toHaveBeenCalledTimes(2);
+  it("serves the cached entry for an unchanged file", async () => {
+    const dir = dataDir(STOCK_CONFIG);
+    const first = await listMcodeModels({ dataDir: dir });
+    const second = await listMcodeModels({ dataDir: dir });
+    // The SAME array instance — the second call was served from the cache,
+    // not re-parsed.
+    expect(second).toBe(first);
   });
 
-  it("does NOT cache an empty catalog", async () => {
-    // An empty result is usually transient (the file is momentarily
-    // unreadable), so it must be retried rather than pinned for an hour.
-    const readConfig = vi.fn().mockReturnValue("");
-    expect(await listMcodeModels({ readConfig })).toEqual([]);
-    expect(await listMcodeModels({ readConfig })).toEqual([]);
-    expect(readConfig).toHaveBeenCalledTimes(2);
+  // The review's core point (PR #1828): a TTL alone would serve a stale list
+  // for up to an hour after the user added a model or signed a different
+  // provider in, and the Settings section has no refresh button.
+  it("picks up a change to config.yaml immediately", async () => {
+    const dir = dataDir(STOCK_CONFIG);
+    expect(await listMcodeModels({ dataDir: dir })).toEqual([
+      "minimax/MiniMax-M3.1-Flash",
+      "minimax/MiniMax-M3",
+    ]);
+
+    rewriteWithNewerMtime(
+      path.join(dir, "config.yaml"),
+      `
+provider:
+  minimax:
+    models:
+      Brand-New-Model: {}
+`,
+    );
+
+    expect(await listMcodeModels({ dataDir: dir })).toEqual(["minimax/Brand-New-Model"]);
+  });
+
+  it("does not serve a stale entry after the file disappears", async () => {
+    const dir = dataDir(STOCK_CONFIG);
+    expect(await listMcodeModels({ dataDir: dir })).toHaveLength(2);
+
+    rmSync(path.join(dir, "config.yaml"));
+    expect(await listMcodeModels({ dataDir: dir })).toEqual([]);
   });
 
   it("shares one file read between concurrent callers", async () => {
-    const readConfig = vi.fn().mockReturnValue(STOCK_CONFIG);
+    const dir = dataDir(STOCK_CONFIG);
     const [a, b, c] = await Promise.all([
-      listMcodeModels({ readConfig }),
-      listMcodeModels({ readConfig }),
-      listMcodeModels({ readConfig }),
+      listMcodeModels({ dataDir: dir }),
+      listMcodeModels({ dataDir: dir }),
+      listMcodeModels({ dataDir: dir }),
     ]);
     expect(a).toEqual(b);
     expect(b).toEqual(c);
-    expect(readConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the cache per data dir", async () => {
+    const one = dataDir(STOCK_CONFIG);
+    const two = dataDir(`
+provider:
+  other:
+    models:
+      Only-Here: {}
+`);
+    expect(await listMcodeModels({ dataDir: one })).toEqual([
+      "minimax/MiniMax-M3.1-Flash",
+      "minimax/MiniMax-M3",
+    ]);
+    expect(await listMcodeModels({ dataDir: two })).toEqual(["other/Only-Here"]);
+    // ...and going back to the first dir still answers with ITS catalog.
+    expect(await listMcodeModels({ dataDir: one })).toEqual([
+      "minimax/MiniMax-M3.1-Flash",
+      "minimax/MiniMax-M3",
+    ]);
   });
 });

@@ -48,57 +48,37 @@
  * missing, the file unparseable, mcode not installed — answers `[]` rather
  * than throwing, so a broken or absent mcode can never break the Settings
  * section that fetches the catalog.
+ *
+ * ## Invalidation is by FILE MTIME, not by a timer
+ *
+ * Adding a model, signing a different provider in, or changing the whitelist
+ * all rewrite `config.yaml` — so the file's own mtime is the exact signal for
+ * "the catalog changed". A TTL alone would serve a stale list for up to an
+ * hour after the user did the thing they were trying to do, and the Settings
+ * section has no refresh button to paper over it. The cache is therefore keyed
+ * by the resolved config PATH and invalidated by that file's mtime: the second
+ * read of an unchanged file costs one open+fstat and no parse, and any write
+ * to the file is picked up on the very next request.
  */
 
-import { readFileSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { resolveMcodeDataDir } from "./hook-adapters/mcode.js";
 import { validateCliModel } from "./hook-adapters/shared.js";
 
-/** 1h in-memory TTL — the same posture as the sibling catalogs in
- * `opencode-models.ts`. The catalog is effectively static (it only changes
- * when the user edits mcode's config or signs in with another provider), so
- * re-reading the file on every request would be pure overhead. */
-const CACHE_TTL_MS = 60 * 60 * 1000;
-
-let cache: { fetchedAt: number; models: string[] } | null = null;
-
-/** The in-flight read, so N concurrent requests share ONE file read. */
-let pending: Promise<string[]> | null = null;
-
-export interface McodeModelCatalogOptions {
-  /** Injectable clock, for the TTL test. */
-  now?: () => number;
-  /** Injectable data dir, for the test. Defaults to mcode's own resolution
-   * (`MINIMAX_DATA_DIR` → `MAVIS_DATA_DIR` → `~/.minimax`). */
-  dataDir?: string;
-  /** Injectable config reader, for the test. Defaults to reading
-   * `<dataDir>/config.yaml`. */
-  readConfig?: () => string | null;
-}
-
-/** mcode's config file, inside its data dir. */
-export function resolveMcodeConfigPath(dataDir: string = resolveMcodeDataDir()): string {
-  return path.join(dataDir, "config.yaml");
-}
-
-/** Reads a file, returning its contents or null when it is missing or
- * unreadable. ONE read, no existence check first — an `existsSync` followed by
- * a `readFileSync` is a file-system race (CodeQL's `js/file-system-race`), the
- * same hazard the mcode adapter's own `readFileOrNull` documents. */
-function readFileOrNull(filePath: string): string | null {
-  try {
-    return readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-}
-
 /**
- * The provider subtrees mcode's config can hold. `provider` is the map of
- * built-in/BYOK providers (`minimax`, …); `custom_provider` holds the
- * user-added ones. Both are keyed by provider id, and both carry the same
+ * The provider subtrees mcode's config can hold.
+ *
+ * - `provider` — the map of built-in/BYOK providers (`minimax`, …). Pinned by
+ *   mcode's own model-picker service, which reads
+ *   `Object.entries(config.provider ?? {})`.
+ * - `custom_provider` — the user-added providers. Pinned by mcode's own
+ *   config reader, which lifts it as
+ *   `custom_provider: bE(me(t.custom_provider) ? t.custom_provider : void 0)`
+ *   — a TOP-LEVEL key, not a sub-key of `provider`.
+ *
+ * Both are keyed by provider id, and both carry the same
  * `models` / `model_order` / `whitelist` shape.
  */
 function providerSubtrees(root: Record<string, unknown>): Array<[string, unknown]> {
@@ -136,16 +116,41 @@ function orderModelIds(modelIds: string[], modelOrder: unknown): string[] {
 }
 
 /**
+ * Matches a whitelist entry against a model.
+ *
+ * A stock mcode install lists BARE model ids in `whitelist`
+ * (`["MiniMax-M3", "MiniMax-M3.1-Flash"]` — verified against the host's own
+ * `~/.minimax/config.yaml`). But a whitelist is a filter we do not own, and a
+ * filter we cannot interpret must not silently empty the catalog: an entry
+ * could equally be a full `provider/model` id, or a glob. All three shapes
+ * are therefore accepted, and the caller IGNORES a whitelist that matches
+ * nothing at all rather than serving an empty list.
+ */
+function whitelistEntryMatches(entry: string, providerId: string, modelId: string): boolean {
+  if (entry === modelId) return true;
+  if (entry === `${providerId}/${modelId}`) return true;
+  // A glob, with `*` as the only wildcard. Everything else is literal, so
+  // the pattern is anchored and the rest is regex-escaped.
+  if (!entry.includes("*")) return false;
+  const pattern = entry
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  const re = new RegExp(`^${pattern}$`);
+  return re.test(modelId) || re.test(`${providerId}/${modelId}`);
+}
+
+/**
  * Parses a mcode `config.yaml` into the catalog of `provider/model` ids.
  *
  * Pure — exported for tests. Never throws: an unparseable document, a
  * document that is not a mapping, and a document with no providers all yield
  * `[]`.
  *
- * A provider's `whitelist` restricts which of its models are selectable. When
- * it is present and non-empty it wins; on a stock install it equals the model
- * set exactly, so it is a no-op there, but honouring it means the picker never
- * offers a model mcode itself would refuse.
+ * A provider's `whitelist` restricts which of its models are selectable. It is
+ * honoured only when it actually matches something: a whitelist in a shape
+ * this service does not understand would otherwise filter out every model and
+ * leave the picker empty, which is worse than not applying it at all.
  */
 export function parseMcodeModelCatalog(yamlText: string): string[] {
   let document: unknown;
@@ -168,16 +173,26 @@ export function parseMcodeModelCatalog(yamlText: string): string[] {
     const modelMap = provider.models;
     if (!modelMap || typeof modelMap !== "object" || Array.isArray(modelMap)) continue;
 
-    const modelIds = Object.keys(modelMap).filter((id) => id.trim().length > 0);
+    const modelIds = orderModelIds(
+      Object.keys(modelMap).filter((id) => id.trim().length > 0),
+      provider.model_order,
+    );
 
     const whitelist = provider.whitelist;
-    const allowed =
-      Array.isArray(whitelist) && whitelist.length > 0
-        ? new Set(whitelist.filter((value): value is string => typeof value === "string"))
-        : null;
+    const entries = Array.isArray(whitelist)
+      ? whitelist.filter((value): value is string => typeof value === "string")
+      : [];
+    const allowed = entries.filter((entry) =>
+      modelIds.some((modelId) => whitelistEntryMatches(entry, providerId, modelId)),
+    );
+    // A whitelist that matches nothing is in a shape we do not understand, so
+    // it is not applied — an empty catalog is a worse answer than an
+    // unrestricted one.
+    const restricted = allowed.length > 0;
 
-    for (const modelId of orderModelIds(modelIds, provider.model_order)) {
-      if (allowed && !allowed.has(modelId)) continue;
+    for (const modelId of modelIds) {
+      if (restricted && !allowed.some((entry) => whitelistEntryMatches(entry, providerId, modelId)))
+        continue;
       const id = `${providerId}/${modelId}`;
       // The same allowlist the launch path applies, so a value the picker
       // offers is never one `resolveCliModel` would later drop at spawn time.
@@ -191,41 +206,104 @@ export function parseMcodeModelCatalog(yamlText: string): string[] {
   return models;
 }
 
+/** One cached catalog, keyed by the config file it came from. */
+interface CatalogCacheEntry {
+  /** The config file this entry describes. */
+  configPath: string;
+  /** That file's mtime when it was read. */
+  mtimeMs: number;
+  /** The models it produced. */
+  models: string[];
+}
+
+let cache: CatalogCacheEntry | null = null;
+
+/** The in-flight read, so N concurrent requests share ONE file read. Wrapped
+ * in an object with an id so the "is this still the current read?" check
+ * compares numbers — comparing the promises themselves is what CodeQL's
+ * `js/missing-await` rule flags. */
+let pending: { id: number; promise: Promise<string[]> } | null = null;
+let pendingCounter = 0;
+
+/** What one look at the config file found. */
+type ConfigRead =
+  { kind: "missing" } | { kind: "unchanged" } | { kind: "changed"; text: string; mtimeMs: number };
+
+/**
+ * Looks at the config file and reports whether it changed since the cached
+ * entry.
+ *
+ * The file is opened ONCE and its mtime comes from that same descriptor
+ * (`fstatSync`), so the mtime and the content cannot disagree: there is no
+ * stat-then-read window for a concurrent writer to slip into. (A separate
+ * `statSync` followed by a `readFileSync` would be exactly the file-system
+ * race CodeQL's `js/file-system-race` rule flags — the same hazard the mcode
+ * adapter's `readFileOrNull` documents.)
+ */
+function readConfigFile(configPath: string): ConfigRead {
+  let fd: number | null = null;
+  try {
+    fd = openSync(configPath, "r");
+    const mtimeMs = fstatSync(fd).mtimeMs;
+    if (cache?.configPath === configPath && cache.mtimeMs === mtimeMs) {
+      return { kind: "unchanged" };
+    }
+    return { kind: "changed", text: readFileSync(fd, "utf8"), mtimeMs };
+  } catch {
+    return { kind: "missing" };
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+        // A failed close must not change the answer.
+      }
+    }
+  }
+}
+
+/** mcode's config file, inside its data dir. */
+export function resolveMcodeConfigPath(dataDir: string = resolveMcodeDataDir()): string {
+  return path.join(dataDir, "config.yaml");
+}
+
+export interface McodeModelCatalogOptions {
+  /** Injectable data dir, for the test. Defaults to mcode's own resolution
+   * (`MINIMAX_DATA_DIR` → `MAVIS_DATA_DIR` → `~/.minimax`). */
+  dataDir?: string;
+}
+
 /**
  * The catalog of model ids mcode can be launched with, or `[]` when there is
  * none to report.
  *
- * Cached for an hour on SUCCESS only: an empty result is never cached, so a
- * config file that is momentarily unreadable (a concurrent write, a
- * half-flushed file) is retried on the next call instead of pinning "no
- * models" for an hour.
+ * The cached entry is keyed by the resolved config path and invalidated by
+ * that file's mtime, so a change to mcode's own config is reflected on the
+ * next call rather than after a TTL.
  */
 export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Promise<string[]> {
-  const now = opts.now ?? Date.now;
+  const configPath = resolveMcodeConfigPath(opts.dataDir ?? resolveMcodeDataDir());
 
-  if (cache !== null && now() - cache.fetchedAt < CACHE_TTL_MS) {
-    return cache.models;
-  }
+  // Concurrency: one file read shared by N simultaneous callers.
+  if (pending !== null) return pending.promise;
 
-  if (pending !== null) return pending;
-
-  // The read below is synchronous, so the promise settles before the
-  // assignment on the next line — clearing `pending` from INSIDE the async
-  // function would therefore run first and the assignment would then install
-  // an already-settled promise as the in-flight slot, pinning every later
-  // call to the first result forever. The slot is cleared by the awaiting
-  // caller instead, after the assignment has happened.
+  const id = ++pendingCounter;
   const promise = (async () => {
     try {
-      const dataDir = opts.dataDir ?? resolveMcodeDataDir();
-      const text = opts.readConfig
-        ? opts.readConfig()
-        : readFileOrNull(resolveMcodeConfigPath(dataDir));
-      if (text === null) return [];
-      const models = parseMcodeModelCatalog(text);
-      if (models.length > 0) {
-        cache = { fetchedAt: now(), models };
+      const read = readConfigFile(configPath);
+      if (read.kind === "missing") {
+        // The file is gone (or unreadable): drop any entry for it, so a
+        // later reappearance is read fresh.
+        if (cache?.configPath === configPath) cache = null;
+        return [];
       }
+      if (read.kind === "unchanged") {
+        // readConfigFile only reports "unchanged" when the cached entry is
+        // for THIS path and this file's mtime — so the entry is there.
+        return cache?.models ?? [];
+      }
+      const models = parseMcodeModelCatalog(read.text);
+      cache = { configPath, mtimeMs: read.mtimeMs, models };
       return models;
     } catch {
       // A catalog is a convenience, never a hard dependency — a failure here
@@ -233,12 +311,12 @@ export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Prom
       return [];
     }
   })();
-  pending = promise;
+  pending = { id, promise };
 
   try {
     return await promise;
   } finally {
-    if (pending === promise) pending = null;
+    if (pending?.id === id) pending = null;
   }
 }
 

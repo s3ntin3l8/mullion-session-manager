@@ -855,6 +855,11 @@ A missing or malformed file answers `[]` instead of taking the Settings section
 down with it, and the ids are `provider/model` — the shape mcode's `-m,
 --model` flag takes.
 
+The catalog is invalidated by the config file's **own mtime**, not by a timer:
+adding a model, signing a different provider in, or editing the whitelist all
+rewrite `config.yaml`, so the picker reflects the change on the next request
+rather than serving a stale list until a TTL expires.
+
 **Verified live against a real mcode 0.6.12 (the isolated-profile run).** The
 whole chain has now been exercised end to end, not just unit-tested:
 

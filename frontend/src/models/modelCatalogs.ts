@@ -114,6 +114,23 @@ export function commandHasModelFlag(command: string, cli: ModelCli): boolean {
   return re.test(command);
 }
 
+// The CLIs whose catalog comes from the backend. Claude Code is deliberately
+// absent: its options are the static CLAUDE_MODELS list, which never touches
+// the network.
+export type FetchedModelCli = Exclude<ModelCli, "claude-code">;
+
+// One fetcher per CLI, as a MAP rather than a chain of ternaries. The map's
+// key type is the full set of fetched CLIs, so adding a CLI to `ModelCli`
+// without giving it a fetcher is a COMPILE error — a ternary chain would
+// silently fall through to opencode's catalog instead (Hermes review,
+// PR #1828).
+export const MODEL_CATALOG_FETCHERS: Record<FetchedModelCli, () => Promise<string[]>> = {
+  codex: api.listCodexModels,
+  agy: api.listAgyModels,
+  opencode: api.listOpenCodeModels,
+  mcode: api.listMcodeModels,
+};
+
 // Per-CLI options for the command palette's picker, where the target CLI can
 // change after mount (the user highlights a different launcher). Unlike
 // useCatalog above, this keys its fetch on `cli` itself, so switching
@@ -141,14 +158,7 @@ export function useModelOptions(cli: ModelCli): {
     // never touches `result` — nothing to fetch or set here.
     if (cli === "claude-code") return;
     let cancelled = false;
-    const fetcher =
-      cli === "codex"
-        ? api.listCodexModels
-        : cli === "agy"
-          ? api.listAgyModels
-          : cli === "mcode"
-            ? api.listMcodeModels
-            : api.listOpenCodeModels;
+    const fetcher = MODEL_CATALOG_FETCHERS[cli];
     fetcher()
       .then((list) => {
         if (cancelled) return;
