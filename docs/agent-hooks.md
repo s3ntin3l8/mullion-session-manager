@@ -771,8 +771,16 @@ format-aware auto-approval mapping are both present in **0.6.12**'s own bundle
 version Mullion's mcode support was already live-verified against. Below it the
 CODEX plugin is not loaded at all, and since the Claude-format plugin no longer
 carries `PermissionRequest`, the hook would be registered **nowhere** and
-skip-permissions would silently stop working. So the install checks the host's
+skip-permissions would silently stop working. So the install resolves the host's
 mcode version and says so out loud rather than failing quietly.
+
+The version is probed **in a login shell** — the same shape `agent-detect.ts`
+uses to find the agent binaries — because a spawned session's shell is a login
+shell and sees the PATH the user's profile builds (nvm, direnv, Homebrew…),
+while the Mullion server runs under systemd --user with a minimal PATH.
+Asking the server's own PATH would report "not installed" for an mcode every
+session runs perfectly well, which is the same "fails open, silently" shape
+this check exists to prevent.
 
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,

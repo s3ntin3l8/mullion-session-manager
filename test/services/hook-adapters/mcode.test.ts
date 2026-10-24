@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import {
   existsSync,
   mkdtempSync,
@@ -15,9 +15,8 @@ import {
   mcodeAdapter,
   MCODE_PLUGIN_MARKER_NAME,
   MCODE_PERMISSION_PLUGIN_DIR_NAME,
-  MCODE_MIN_VERSION_FOR_CODEX_PLUGIN,
   __testing,
-  mcodeSupportsCodexPlugin,
+  mcodeVersionWarning,
   buildMcodeHooksJson,
   buildMcodePermissionHooksJson,
   buildMcodePluginManifest,
@@ -365,51 +364,87 @@ describe("the CODEX-format plugin's mcode version floor", () => {
     __testing.setMcodeVersion(undefined);
   });
 
-  it("compares dotted numeric versions", () => {
-    expect(__testing.compareVersions("0.6.12", "0.6.12")).toBe(0);
-    expect(__testing.compareVersions("0.6.11", "0.6.12")).toBeLessThan(0);
-    expect(__testing.compareVersions("0.6.13", "0.6.12")).toBeGreaterThan(0);
-    expect(__testing.compareVersions("0.7.0", "0.6.12")).toBeGreaterThan(0);
-    expect(__testing.compareVersions("1.0.0", "0.6.12")).toBeGreaterThan(0);
-  });
-
   it("parses the version out of whatever mcode --version printed", () => {
-    // mcode prints just "0.6.13", but a wrapper may print a profile line
-    // first, and the version may carry a prefix. An output with no version
+    // The probe runs in a LOGIN shell, so a profile can print its own
+    // versions to stdout BEFORE mcode's line — the LAST triple wins, exactly
+    // as opencode's own parseOpencodeVersion does. An output with no version
     // in it is UNKNOWN, not a guess.
     expect(__testing.parseMcodeVersion("0.6.13\n")).toBe("0.6.13");
     expect(__testing.parseMcodeVersion("v0.6.13")).toBe("0.6.13");
     expect(__testing.parseMcodeVersion("mcode 0.6.13")).toBe("0.6.13");
     expect(__testing.parseMcodeVersion("profile: work\nmcode 0.6.13")).toBe("0.6.13");
+    // The profile printed ITS version first — mcode's is the later line, and
+    // taking the first triple would report a version that is not mcode's.
+    expect(__testing.parseMcodeVersion("nvm v0.39.7\nmcode 0.6.9")).toBe("0.6.9");
     expect(__testing.parseMcodeVersion("")).toBeNull();
     expect(__testing.parseMcodeVersion("unknown")).toBeNull();
   });
 
-  it("supports the CODEX format from mcode 0.6.12 on", () => {
-    // 0.6.12 is the floor because the CODEX plugin format AND the
-    // format-aware auto-approval mapping are both present in 0.6.12's own
-    // bundle — verified by reading its chunks, not just 0.6.13's.
-    __testing.setMcodeVersion(MCODE_MIN_VERSION_FOR_CODEX_PLUGIN);
-    expect(mcodeSupportsCodexPlugin()).toBe(true);
-    __testing.setMcodeVersion("0.6.13");
-    expect(mcodeSupportsCodexPlugin()).toBe(true);
+  it("warns below the floor and not at or above it", () => {
+    expect(mcodeVersionWarning("0.6.11")).toContain("too old");
+    expect(mcodeVersionWarning("0.6.12")).toBeNull();
+    expect(mcodeVersionWarning("0.6.13")).toBeNull();
+    expect(mcodeVersionWarning("1.0.0")).toBeNull();
+    // Unknown is never a reason to warn — "never warn on doubt".
+    expect(mcodeVersionWarning(null)).toBeNull();
   });
 
-  it("does NOT support it below the floor", () => {
-    // Below the floor the CODEX plugin is not loaded at all, and since the
-    // Claude-format plugin no longer carries PermissionRequest, the hook
-    // would be registered nowhere — so the install warns instead of failing
-    // silently.
-    __testing.setMcodeVersion("0.6.11");
-    expect(mcodeSupportsCodexPlugin()).toBe(false);
+  it("WARNS ON INSTALL when the host's mcode is below the floor", async () => {
+    // The review's point: without this, deleting the whole warning block
+    // leaves every test green, and the "no longer silent" guarantee is
+    // untested.
+    const originalDataDir = process.env.MINIMAX_DATA_DIR;
+    const originalHome = process.env.HOME;
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-version-warn-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    process.env.HOME = tmp;
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args) => {
+      errors.push(args.map(String).join(" "));
+    });
+    try {
+      __testing.setMcodeVersion("0.6.11");
+      installMcodePlugin();
+      // The version check is asynchronous by design (it must not block the
+      // session-start path), so let it settle.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(errors.join("\n")).toContain("too old");
+      expect(errors.join("\n")).toContain("0.6.11");
+    } finally {
+      spy.mockRestore();
+      __testing.setMcodeVersion(undefined);
+      rmSync(tmp, { recursive: true, force: true });
+      if (originalDataDir === undefined) delete process.env.MINIMAX_DATA_DIR;
+      else process.env.MINIMAX_DATA_DIR = originalDataDir;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 
-  it("treats an unknown version as supported", () => {
-    // The only way the version is unknown is that `mcode --version` could not
-    // be run — which in practice means mcode is not on PATH, and then there
-    // is no mcode session to hook.
-    __testing.setMcodeVersion(null);
-    expect(mcodeSupportsCodexPlugin()).toBe(true);
+  it("does NOT warn on install for a supported mcode", async () => {
+    const originalDataDir = process.env.MINIMAX_DATA_DIR;
+    const originalHome = process.env.HOME;
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-version-warn-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    process.env.HOME = tmp;
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args) => {
+      errors.push(args.map(String).join(" "));
+    });
+    try {
+      __testing.setMcodeVersion("0.6.13");
+      installMcodePlugin();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(errors.join("\n")).not.toContain("too old");
+    } finally {
+      spy.mockRestore();
+      __testing.setMcodeVersion(undefined);
+      rmSync(tmp, { recursive: true, force: true });
+      if (originalDataDir === undefined) delete process.env.MINIMAX_DATA_DIR;
+      else process.env.MINIMAX_DATA_DIR = originalDataDir;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 });
 
