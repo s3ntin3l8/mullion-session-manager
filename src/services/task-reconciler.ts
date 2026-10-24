@@ -6,8 +6,8 @@ import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { resolveTaskWorkerHost } from "./session-live-info.js";
-import { projectCwdForHost } from "./placement.js";
+import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
 // attemptAutoRebase's stale-attempt-termination branch below for why this
@@ -549,11 +549,16 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
   // `in_progress`. Acceptable at this tool's scale (a handful of concurrent
   // tasks, well under GitHub's rate limits); revisit with real backoff if
   // that scale assumption ever changes.
+  // Grouped by the host that HOLDS the task's worktree — the worker
+  // session's own host, which after placement is not necessarily the
+  // project's host (#1724). These calls push to the worktree's repo, so
+  // asking the project's host would push the wrong checkout.
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {
-    const group = byHost.get(row.project.hostId) ?? [];
+    const hostId = resolveTaskWorkerHost(app, row.task);
+    const group = byHost.get(hostId) ?? [];
     group.push(row);
-    byHost.set(row.project.hostId, group);
+    byHost.set(hostId, group);
   }
 
   await Promise.all(
@@ -1154,11 +1159,15 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
   // budget force-fail for unrelated claimed/in_progress tasks on OTHER
   // hosts — the kind of "hard backstop, not a negotiation" that sweep's own
   // doc comment describes.
+  // Grouped by the host that HOLDS the task's worktree — see the CI-wait
+  // sweep's own comment: the draft PR is pushed from the worktree's repo,
+  // so the host has to be the one that has it (#1724).
   const byHost = new Map<string, typeof rows>();
   for (const row of rows) {
-    const group = byHost.get(row.project.hostId) ?? [];
+    const hostId = resolveTaskWorkerHost(app, row.task);
+    const group = byHost.get(hostId) ?? [];
     group.push(row);
-    byHost.set(row.project.hostId, group);
+    byHost.set(hostId, group);
   }
 
   const now = Date.now();
@@ -1376,7 +1385,17 @@ async function attemptAutoRebase(
   // on — not necessarily the project's own host any more. So the backend
   // AND the project root it resolves against both follow the worker.
   const workerHostId = resolveTaskWorkerHost(app, task);
-  const workerCwd = projectCwdForHost(project, workerHostId);
+  // The project root ON THE WORKER'S HOST — see task-claim.ts's retry path
+  // for the same reasoning: null here means there is no directory to
+  // resume the worktree in, which is a failure, not a silent fallback to a
+  // path that does not exist on this host.
+  const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
+  if (workerCwd === null) {
+    app.log.warn(
+      { taskId: task.id, hostId: workerHostId },
+      "task auto-rebase: the worker's host has no path for this project — the worktree cannot be resumed there",
+    );
+  }
   const backend = resolveBackend(app, workerHostId);
 
   if (task.rebaseStartedAt !== null) {
@@ -1503,7 +1522,23 @@ async function attemptAutoRebase(
   // preamble tells it to commit and leave the tree clean, so anything left
   // behind on an already-superseded attempt is a contract violation, not
   // work worth the careful preservation removeWorktreeIfClean exists for.
-  const stalePath = deriveWorktreePath(project.cwd, branchName);
+  // The path is derived from the worker's project root — the same root the
+  // worktree was cut from — so the stale attempt is cleared where it
+  // actually is. Deriving it from the PROJECT's root would name a
+  // directory that does not exist on the worker's host when the two
+  // differ, and the resume below would then collide with it.
+  if (workerCwd === null) {
+    // The worker's host has no path for this project, so there is no
+    // directory to resume the worktree in — and no stale attempt to clear.
+    // Say the real cause instead of a missing branch.
+    recordMergeError(
+      app,
+      task.id,
+      "Conflicts with main — the worker's host has no path for this project, so the rebase cannot run there",
+    );
+    return;
+  }
+  const stalePath = deriveWorktreePath(workerCwd, branchName);
   await backend.removeWorktree(stalePath, workerCwd).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, stalePath },
@@ -3659,11 +3694,17 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
   // loop did (which is why remote-hosted tasks used to be skipped
   // entirely here — see git history/#760 for the "why not just read
   // local and risk a false inconclusive" reasoning this used to document).
+  // Grouped by the REVIEW SESSION's own host — the host the review agent
+  // actually ran on, which is where its findings file is (#1724: the
+  // reviewer joins the worker's host). Keying on the PROJECT's host would
+  // read the findings from a machine that never ran the review, so the
+  // findings would never be ingested.
   const byHost = new Map<string, typeof allRows>();
   for (const row of allRows) {
-    const group = byHost.get(row.project.hostId) ?? [];
+    const hostId = resolveSessionHostId(app, row.session);
+    const group = byHost.get(hostId) ?? [];
     group.push(row);
-    byHost.set(row.project.hostId, group);
+    byHost.set(hostId, group);
   }
   if (byHost.size === 0) return;
 

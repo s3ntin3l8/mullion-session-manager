@@ -12,7 +12,7 @@ import {
   resolveTaskWorkerHost,
   withLiveStatus,
 } from "./session-live-info.js";
-import { projectCwdForHost } from "./placement.js";
+import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -752,7 +752,7 @@ export async function retryTask(
   // worktree cleanup below is PROJECT-scoped (the task's worktree), and
   // the spawn host is the placement decision #1724 owns.
   async function release(reason: string, worktreeToClean?: { path: string }): Promise<void> {
-    if (worktreeToClean) {
+    if (worktreeToClean && workerCwd !== null) {
       await resolveBackend(app, workerHostId)
         .removeWorktreeIfClean(worktreeToClean.path, workerCwd)
         .catch((err: unknown) => {
@@ -790,7 +790,17 @@ export async function retryTask(
   // repository lives), but the checkout this session works in has to be on
   // the machine the session runs on.
   const workerHostId = resolveTaskWorkerHost(app, task);
-  const workerCwd = projectCwdForHost(project, workerHostId);
+  // The project root ON THE WORKER'S HOST. Null when the project is not
+  // mapped there — and then there is no directory to resume the worktree
+  // in, which is a failure rather than something to paper over with the
+  // project's own path (that path does not exist on this host).
+  const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
+  if (workerCwd === null) {
+    app.log.warn(
+      { taskId: task.id, hostId: workerHostId },
+      "task retry: the worker's host has no path for this project — the worktree cannot be resumed there",
+    );
+  }
 
   let committed = false;
   // Hoisted out of the try block (rather than a `const` declared inside
@@ -807,6 +817,14 @@ export async function retryTask(
     // resolveWithinRoots 400, not just a missing route), so this checks
     // `statusCode === 404` specifically rather than the class alone; any
     // other HostRequestError falls through to the generic catch below.
+    if (workerCwd === null) {
+      // The worker's host has no path for this project, so there is no
+      // directory to resume the worktree in. Retrying against a path that
+      // does not exist there would fail as a missing branch, which says
+      // nothing about the real cause; say the real cause instead.
+      await release("the worker's host has no path for this project");
+      return { ok: false, reason: "worktree-failed" };
+    }
     const backend = resolveBackend(app, workerHostId);
     try {
       worktree = await backend.resumeTaskWorktree(workerCwd, branchName);

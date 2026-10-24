@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   chooseHost,
   parseHostCwds,
-  projectCwdForHost,
   projectCwdOnHost,
   serializeHostCwds,
   type PlacementCandidate,
@@ -381,10 +380,10 @@ describe("the per-host cwd map (issue #1724)", () => {
     const map = parseHostCwds(project.hostCwds);
     expect(projectCwdOnHost(project, "local", map)).toBe("/home/x/repo");
     expect(projectCwdOnHost(project, "remote-a", map)).toBe("/srv/repo");
-    // A host with no entry does not have the project.
+    // A host with no entry does not have the project — and there is
+    // deliberately NO variant that falls back to the project's own root:
+    // that path does not exist on the other host, and using it would put a
+    // session in a directory that is not there.
     expect(projectCwdOnHost(project, "remote-b", map)).toBeNull();
-    // The fallback variant (for a caller that already knows the host has
-    // the project) never returns null.
-    expect(projectCwdForHost(project, "remote-a")).toBe("/srv/repo");
   });
 });

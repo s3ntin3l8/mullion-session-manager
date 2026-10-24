@@ -248,6 +248,15 @@ describe("projects route", () => {
   it("round-trips the per-host cwd map, and clears it with null", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    // A REAL host: the map's keys must name hosts we know about, so the
+    // test registers one rather than inventing an id.
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "remote-a", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = host.json().id as string;
+
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -256,29 +265,29 @@ describe("projects route", () => {
         name: "mapped-project",
         cwd,
         placement: "auto",
-        hostCwds: { "remote-a": "/srv/repo" },
+        hostCwds: { [hostId]: "/srv/repo" },
       },
     });
     expect(created.statusCode).toBe(201);
     // The API speaks the shape it accepts: an object, not the column's
     // JSON encoding.
-    expect(created.json().hostCwds).toEqual({ "remote-a": "/srv/repo" });
+    expect(created.json().hostCwds).toEqual({ [hostId]: "/srv/repo" });
 
     const { id } = created.json();
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
     // The list holds every project in this file's shared DB, so find ours
     // by id rather than by position.
     expect(listed.json().find((p: { id: number }) => p.id === id).hostCwds).toEqual({
-      "remote-a": "/srv/repo",
+      [hostId]: "/srv/repo",
     });
 
     const patched = await app.inject({
       method: "PATCH",
       url: `/api/projects/${id}`,
-      payload: { hostCwds: { "remote-b": "/opt/repo" } },
+      payload: { hostCwds: { [hostId]: "/opt/repo" } },
     });
     expect(patched.statusCode).toBe(200);
-    expect(patched.json().hostCwds).toEqual({ "remote-b": "/opt/repo" });
+    expect(patched.json().hostCwds).toEqual({ [hostId]: "/opt/repo" });
 
     // null clears the map: the project lives on its own host and nowhere
     // else, which is what an absent map means.
@@ -290,6 +299,49 @@ describe("projects route", () => {
     expect(cleared.statusCode).toBe(200);
     expect(cleared.json().hostCwds).toEqual({});
 
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a hostCwds path that is not absolute", async () => {
+    // The paths become a session's working directory on THAT host, so a
+    // relative one would resolve against whatever the agent's cwd
+    // happened to be.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "relative-map",
+        cwd,
+        hostCwds: { "remote-a": "relative/path" },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a hostCwds key that names no known host", async () => {
+    // A typo in a host id would sit in the map forever — the host it
+    // names would never become a placement candidate, so the map would
+    // look like it had done nothing.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "typo-map",
+        cwd,
+        hostCwds: { "remtoe-a": "/srv/repo" },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().message).toMatch(/unknown host/i);
     await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });
   });

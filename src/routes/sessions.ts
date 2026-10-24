@@ -623,6 +623,13 @@ export async function sessionsRoute(app: FastifyInstance) {
             "parentSessionId is itself a child session — only one level of nesting is allowed",
           );
         }
+        if (result.reason === "host-unknown-project") {
+          // Issue #1724 — the session was pinned to a host the project is
+          // not on, and there is no directory for it there.
+          return reply.badRequest(
+            result.detail ?? "The host this session was pinned to has no path for this project",
+          );
+        }
         if (result.reason === "cwd-outside-project") {
           return reply.badRequest(
             "cwd must resolve inside the project directory or be a registered git worktree of its repo",
