@@ -1432,8 +1432,15 @@ describe("hooksPlugin (issue #172)", () => {
       );
       await replyPromise;
 
+      // The session's own codex home travels with the path: it is the trust
+      // root the rollout is looked for under, and a session spawned with its
+      // own CODEX_HOME has a different one from the backend's.
       expect(app.pty.codexTranscriptPathSessions()).toEqual([
-        { id: "1", transcriptPath: "/home/u/.codex/sessions/2026/10/24/rollout-abc.jsonl" },
+        {
+          id: "1",
+          transcriptPath: "/home/u/.codex/sessions/2026/10/24/rollout-abc.jsonl",
+          codexHome: path.join(os.homedir(), ".codex"),
+        },
       ]);
       socket.destroy();
     });
