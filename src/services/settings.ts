@@ -1334,6 +1334,15 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
  * a real prototype-pollution hole, and the reason CodeQL flags the naive
  * form. With no prototype to pollute and no `[[Set]]` on the way in, a
  * `__proto__` key is just an ordinary own property that nothing looks up.
+ *
+ * CodeQL's `js/remote-property-injection` still fires on the
+ * user-provided property NAME (it does not model the null-prototype
+ * containment), so the alert is dismissed in GHAS with this containment
+ * argument — the same pattern dock-config.ts's `isSymlinkPath` uses for
+ * `js/path-injection`, and for the same reason: the repo's codeql.yml runs
+ * plain codeql-action/analyze with no follow-up step that reads a SARIF
+ * suppression annotation, so a `// codeql[...]` comment here would not
+ * silence anything.
  */
 function sanitizeProviderMap(
   value: unknown,
