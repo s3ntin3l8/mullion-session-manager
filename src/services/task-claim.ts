@@ -297,11 +297,21 @@ export async function dispatchClaimedTask(
   // guess: the project's own root is a path that host does not have.
   const placementCwd = projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds));
   if (placementCwd === null) {
+    // Refusing without RECORDING anything leaves the task exactly where it
+    // was, so the sweep picks it up again on the next tick and the only
+    // trace is a log line. The failure reason goes on the task, where the
+    // user and the board can see it.
+    const detail = `the placement host ${placement.hostId} has no path for this project`;
     app.log.warn(
       { taskId, hostId: placement.hostId },
-      "task dispatch: the placement host has no path for this project — refusing to claim",
+      `task dispatch: ${detail} — refusing to claim`,
     );
-    return { ok: false, reason: "worktree-failed" };
+    app.db
+      .update(tasks)
+      .set({ status: "failed", failureReason: detail })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .run();
+    return { ok: false, reason: "worktree-failed", detail };
   }
   // The predicted path is derived from the PLACEMENT root — the path the
   // worktree is about to be created at. NOT the task row's stamped
