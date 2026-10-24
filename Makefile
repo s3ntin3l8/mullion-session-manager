@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt check-scope-leaks
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -72,6 +72,13 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 	@if git show-ref --verify --quiet "refs/heads/$(name)"; then \
 		echo "Branch '$(name)' already exists."; exit 1; \
 	fi
+	@$(MAKE) --no-print-directory git-safe
 	git fetch origin
 	git worktree add .wt/$(name) -b $(name) origin/main
 	cd .wt/$(name) && npm ci && npm --prefix frontend ci
+
+git-safe: ## Make this clone safe for concurrent agents (turns git's auto-gc off; issue #1836)
+	node scripts/git-safe-clone.mjs
+
+git-doctor: ## Report git object damage in this clone; add APPLY=1 to repair it
+	node scripts/git-doctor.mjs $(if $(APPLY),--apply) $(if $(FORCE),--force)

@@ -25,6 +25,21 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
 - **Commit hooks:** `.pre-commit-config.yaml` uses file-based path scopes
   (`files:`) rather than generic `types_or:`, so a hook only checks the
   workspace it actually applies to.
+- **The clone's automatic gc is off** (`gc.auto 0`), because this clone is
+  shared by several agents that push concurrently and a background `git gc`
+  can destroy an object a concurrent write is creating
+  ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
+  `make wt` sets it for you; `make git-safe` does it on demand and is safe to
+  re-run. Loose objects then accumulate, so run `git gc` deliberately, when no
+  agent is pushing.
+  If the damage ever happens — a commit that will not complete, with an error
+  naming a _missing_ object — `make git-doctor` reports it, and
+  `make git-doctor APPLY=1` repairs it: the zero-byte objects are **moved**
+  (never deleted) into a quarantine inside `.git/`, the refs are restored from
+  the remote, and the affected worktree indexes are rebuilt. The index rebuild
+  re-stages from the working tree, so it refuses to run when the index holds
+  staged work unless you add `FORCE=1` — nothing is lost either way, but the
+  refusal is there so you can decide.
 
 ## Demo instance and screenshots
 
