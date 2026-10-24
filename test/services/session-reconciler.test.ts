@@ -211,6 +211,80 @@ describe("reconcileExitedSessions", () => {
     expect(row?.status).toBe("exited");
   });
 
+  // Issue #1771 — the END-TO-END assertion for the sessions-dir HISTORY: a
+  // scope created before this install's sessions dir MOVED (an operator
+  // moved SESSIONS_DIR, or TMPDIR's value changed between runs) keeps its
+  // socket in a dir no derivation can name — the compat roots only cover
+  // what an earlier RELEASE would have used for the same configured path.
+  // Before the history, the scope was neither owned nor unverifiable, so the
+  // liveness read "dead" — and the reconciler's destructive branch flipped
+  // the row to "exited" and tore the session down while the scope kept
+  // running.
+  it("leaves a session alone whose scope lives in a dir this install has moved away from (#1771)", async () => {
+    // An install root whose trail names the dir the scope still lives in.
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-home-"));
+    const movedDir = path.join(os.tmpdir(), "mullion-moved-sessions-dir");
+    fs.writeFileSync(
+      path.join(installRoot, "sessions-dirs.json"),
+      JSON.stringify({ dirs: [movedDir] }),
+    );
+    const previousHome = process.env.MULLION_HOME;
+    process.env.MULLION_HOME = installRoot;
+    try {
+      const app = await openTestApp();
+      const sessionId = await createSession(app);
+
+      listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n ${movedDir}/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const row = (res.json() as Array<{ id: number; status: string }>).find(
+        (s) => s.id === sessionId,
+      );
+      expect(row?.status).toBe("active");
+    } finally {
+      // The trail file and the env var are this test's own; the app itself
+      // belongs to the file (the afterEach closes it).
+      if (previousHome === undefined) delete process.env.MULLION_HOME;
+      else process.env.MULLION_HOME = previousHome;
+      fs.rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The CONTROL for the #1771 test above: the same install root, the same
+  // trail, but the scope's socket sits in a dir the trail does NOT name.
+  // The row flips to "exited" — which proves the test above is not passing
+  // vacuously, and that the TRAIL is what makes the difference.
+  it("exits a session whose scope is outside every dir the trail names (the control for #1771)", async () => {
+    const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-home-"));
+    const movedDir = path.join(os.tmpdir(), "mullion-moved-sessions-dir");
+    fs.writeFileSync(
+      path.join(installRoot, "sessions-dirs.json"),
+      JSON.stringify({ dirs: [movedDir] }),
+    );
+    const previousHome = process.env.MULLION_HOME;
+    process.env.MULLION_HOME = installRoot;
+    try {
+      const app = await openTestApp();
+      const sessionId = await createSession(app);
+
+      listUnitsOut = `crs-session-oldinst-${sessionId}.scope loaded active running /usr/bin/dtach -n /some-other-instance/${sessionId}.sock /usr/bin/zsh -lc bash\n`;
+
+      await reconcileExitedSessions(app);
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      const row = (res.json() as Array<{ id: number; status: string }>).find(
+        (s) => s.id === sessionId,
+      );
+      expect(row?.status).toBe("exited");
+    } finally {
+      if (previousHome === undefined) delete process.env.MULLION_HOME;
+      else process.env.MULLION_HOME = previousHome;
+      fs.rmSync(installRoot, { recursive: true, force: true });
+    }
+  });
+
   // Perf audit finding B8(2), trust-rule regression — isMasterAliveStateBatch
   // resolves "unknown" for every id (not "dead") on a systemctl spawn/parse
   // failure (see its own doc comment in session-process.ts). This pins that

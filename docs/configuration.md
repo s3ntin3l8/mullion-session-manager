@@ -87,6 +87,22 @@ keeps its socket in the old dir (`$TMPDIR/ms-<8 hex>`, `/tmp/ms-<8 hex>`), and
 Mullion still recognizes it as its own: it stays alive, and it can still be
 stopped. Moving the fallback root therefore never orphans a running session.
 
+**A dir you moved away from stays owned too.** The rule above covers the
+locations Mullion itself chose; it cannot name a dir _you_ moved — an
+operator who relocates `SESSIONS_DIR`, or a `TMPDIR` whose value changed
+between two runs, leaves the running session's socket in a dir Mullion no
+longer resolves to. So a versioned-release install keeps a small trail of the
+dirs it has resolved, in `<MULLION_HOME>/sessions-dirs.json` (mode `0600`, at
+most 16 entries, the oldest dropped first), and a scope in one of those dirs
+stays alive and stoppable. The trail only ever holds dirs this install
+resolved itself, so it cannot widen what Mullion claims to own; a missing,
+corrupt or unwritable file is reported in the log and ignored, and the start-up
+never fails because of it. It is per install root, so it survives a
+`SESSIONS_DIR` move — but a wiped install root loses it, and a session whose
+dir was never recorded stays unplaceable. See
+[`architecture.md`](architecture.md)'s ownership-set section for the
+mechanism.
+
 ## Auth (optional, off by default)
 
 See [`auth.md`](auth.md) for the full setup/security writeup.
