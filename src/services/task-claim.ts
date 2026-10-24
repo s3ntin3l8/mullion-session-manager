@@ -290,9 +290,29 @@ export async function dispatchClaimedTask(
     },
     unattended: true,
   });
-  const placementCwd =
-    projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds)) ?? project.cwd;
-  const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(placementCwd, branchName);
+  // The project root ON THE PLACEMENT HOST. Null would mean the placement
+  // chose a host this project is not on — unreachable in practice (the
+  // policy only ever chooses a host the project is mapped on), but the
+  // session would have no directory to run in, so refuse rather than
+  // guess: the project's own root is a path that host does not have.
+  const placementCwd = projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds));
+  if (placementCwd === null) {
+    app.log.warn(
+      { taskId, hostId: placement.hostId },
+      "task dispatch: the placement host has no path for this project — refusing to claim",
+    );
+    return { ok: false, reason: "worktree-failed" };
+  }
+  // The predicted path is derived from the PLACEMENT root — the path the
+  // worktree is about to be created at. NOT the task row's stamped
+  // `worktreePath`: that one was stamped at CLAIM time from the project's
+  // root, on the project's host, and for an "auto" project that is a
+  // different directory on a different machine — so asking the placement
+  // host about it would look at a path it does not have, and every placed
+  // task's first dispatch would be released as "a previous attempt left an
+  // unclean worktree". (The row's own worktreePath is corrected to the
+  // real path further down, once the worktree exists.)
+  const predictedWorktreePath = deriveWorktreePath(placementCwd, branchName);
 
   const taskMasterConfig = resolveTaskMasterConfig(app);
   const maxConcurrent = taskMasterConfig.maxConcurrent;
