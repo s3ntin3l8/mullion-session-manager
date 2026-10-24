@@ -164,13 +164,6 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
 EOF
 chmod +x "$SBX_BIN/uname"
 
-# The com.mullion.* jobs and plists that exist on THIS host before the
-# sandboxed runs — so the checks below can assert that the runs did not
-# change them (a before/after comparison can fail; "no com.mullion.* job
-# exists" cannot, on a host that has one).
-JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
-
 echo
 echo "=== 4. the installer refuses cleanly when launchctl is missing ==="
 if PATH="$SBX_BIN" command -v launchctl >/dev/null 2>&1; then
@@ -206,12 +199,18 @@ chmod +x "$SBX_BIN/launchctl"
 
 ROLE_HOME="$SBX_HOME/role-home"
 mkdir -p "$ROLE_HOME"
-# The com.mullion.* plists and jobs on THIS host, captured right before the
-# run below: that run gets PAST the prerequisite check (it reaches the .env
-# write and the plist write), so a sandbox that is not holding WOULD leave a
-# trace on the real machine — which is what the comparison can catch.
+# The state of the REAL home that a leaked install would touch: the
+# LaunchAgents plists, the loaded com.mullion.* jobs, and the CLI link the
+# installer creates. Captured right before the run below.
+#
+# This comparison is a guard on the SANDBOX, not on the refusal: the run
+# stops at the role check (install.sh's own .env role check), so on the
+# passing path nothing is written at all and the comparison stays green by
+# construction. It fires when the sandbox stops holding — the run would
+# then write a plist, bootstrap a job and link the CLI into the REAL home.
 PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
 JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+CLI_BEFORE="$(ls -ld "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
 # The seeded role is the OPPOSITE of the requested one on purpose: if the
 # installer could not read the .env, it would fall back to its default
 # ("primary"), and a request for "primary" would then be ACCEPTED — so a
@@ -234,22 +233,14 @@ else
   else
     fail "the refused install modified the existing .env"
   fi
-  if grep -q "$SBX_HOME" "$TMPD/install-roleswitch.log"; then
-    pass "the installer worked inside the sandbox HOME"
-  else
-    fail "the installer's log never mentions the sandbox HOME — the sandbox is not holding"
-  fi
-  # The install root the script PASSED is echoed back by the installer, so
-  # that line proves nothing about HOME. What proves the sandbox held is
-  # that the REAL home never appears in the installer's output.
-  if grep -q "$HOME" "$TMPD/install-roleswitch.log"; then
-    fail "the installer's log mentions the REAL \$HOME — the sandbox is not holding"
-  else
-    pass "the installer never touched the real \$HOME"
-  fi
-  # …and the real machine is unchanged: no new plist, no new job.
+  # …and the real machine is unchanged: no new plist, no new job, and the
+  # CLI link the installer creates is not touched. (Comparing the real
+  # home's state is what can actually fire: the installer never PRINTS the
+  # real $HOME, so a log grep for it cannot tell a sandboxed run from an
+  # unsandboxed one.)
   PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
   JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+  CLI_AFTER="$(ls -ld "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
   if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
     pass "the run left the real ~/Library/LaunchAgents untouched"
   else
@@ -259,6 +250,11 @@ else
     pass "the run left the real launchd jobs untouched"
   else
     fail "the run installed a launchd job on the REAL host — the sandbox is not holding"
+  fi
+  if [ "$CLI_BEFORE" = "$CLI_AFTER" ]; then
+    pass "the run left the real ~/.local/bin/mullion untouched"
+  else
+    fail "the run wrote the CLI link into the REAL home — the sandbox is not holding"
   fi
 fi
 
