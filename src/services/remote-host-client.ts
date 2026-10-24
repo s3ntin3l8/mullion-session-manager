@@ -10,6 +10,7 @@ import {
   isUnsignedBodyPath,
   sign,
 } from "./request-signature.js";
+import type { HostCapacityReport } from "./host-capacity.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "./scaffold-generate.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
@@ -112,6 +113,16 @@ export class HostRequestError extends Error {
 // than returning a default/empty payload on network failure or timeout.
 const REQUEST_TIMEOUT_MS = 5_000;
 
+// Issue #1721 / roadmap 8.7 — the CAPACITY call's own budget, shorter
+// than the default on purpose. Capacity is ADVISORY input to a placement
+// policy, while the health ping next to it decides a verdict; the sweep
+// awaits the capacity call after the ping, so a hung capacity route would
+// otherwise add its own timeout to the sweep and, with the sweep's
+// reentrancy guard, push the NEXT tick (and with it every host's health
+// update) out. Two seconds is generous for a reading of four numbers on
+// the far end of a LAN.
+const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
+
 // Test-only knob (issue #1634): a full local `make test` runs hundreds of real
 // Fastify servers in parallel, and the multi-host integration tests make REAL
 // loopback round trips whose 5s budget the resulting event-loop lag can blow
@@ -120,6 +131,12 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // the user-facing "how long before an unreachable host is reported as such"
 // value stays REQUEST_TIMEOUT_MS.
 let defaultRequestTimeoutMs = REQUEST_TIMEOUT_MS;
+// The capacity call's own budget (see CAPACITY_REQUEST_TIMEOUT_MS). Kept as
+// its own variable so the test override below can widen it too: the knob
+// exists because this host's parallel suite blows real budgets, and a test
+// that exercises a slow capacity route needs the SAME escape hatch every
+// other call site has.
+let capacityRequestTimeoutMs = CAPACITY_REQUEST_TIMEOUT_MS;
 export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
   // AbortSignal.timeout throws on NaN/negative and a value above 2^31-1 only
   // warns and clamps to 1ms (every request would abort instantly) — refuse
@@ -128,9 +145,15 @@ export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
     throw new RangeError(`request timeout override must be in (0, 2^31-1] ms, got ${ms}`);
   }
   const previous = defaultRequestTimeoutMs;
+  const previousCapacity = capacityRequestTimeoutMs;
   defaultRequestTimeoutMs = ms;
+  // The capacity call has its own (shorter) budget, so it needs the same
+  // escape hatch — otherwise a test that needs a slow capacity route to
+  // answer would have no way to say so.
+  capacityRequestTimeoutMs = ms;
   return () => {
     defaultRequestTimeoutMs = previous;
+    capacityRequestTimeoutMs = previousCapacity;
   };
 }
 
@@ -588,6 +611,29 @@ export class RemoteHostClient {
   // what's (and isn't — no idle timeout, no DB-backed anything) included.
   resolveConfig(): Promise<AgentConfig> {
     return this.request("/internal/config");
+  }
+
+  /**
+   * Issue #1721 / roadmap 8.7 — this agent's own capacity report.
+   *
+   * Returns null — NOT an error — when the agent answers 404, which is what
+   * an agent build that predates the route does. "This build does not
+   * report capacity" and "this host is broken" are different facts, and
+   * only the second one may ever affect a health verdict (see
+   * host-heartbeat.ts's sweep). Every other failure (timeout, unreachable,
+   * 5xx) propagates to the caller, which decides what to do with it.
+   */
+  async resolveCapacity(): Promise<HostCapacityReport | null> {
+    try {
+      return await this.request<HostCapacityReport>(
+        "/internal/capacity",
+        undefined,
+        capacityRequestTimeoutMs,
+      );
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) return null;
+      throw err;
+    }
   }
 
   // Issue #647 / roadmap 7.8 — mirrors GET /internal/updates/status; see

@@ -34,6 +34,139 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1721 / roadmap 8.7 — the CAPACITY signal, merged into the same
+  // list the health signal already lives in (and the platform the agent
+  // reported at enrollment).
+  it("measures the LOCAL host's capacity on demand, and reports the platform it recorded", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(res.statusCode).toBe(200);
+    const local = (res.json() as Array<Record<string, unknown>>).find((h) => h.isLocal === true);
+    // The local host has no remote poll to ride, so its numbers are
+    // measured fresh on every request — through the same function an agent
+    // uses, which is what makes the two comparable.
+    expect(local?.capacity).toEqual(
+      expect.objectContaining({
+        platform: process.platform,
+        logicalCores: expect.any(Number),
+        loadAverage1m: expect.any(Number),
+        memory: expect.objectContaining({ totalBytes: expect.any(Number) }),
+        sessions: expect.objectContaining({ tracked: expect.any(Number) }),
+        sampledAt: expect.any(String),
+      }),
+    );
+    // The LOCAL host's platform is this process's own — the row never had
+    // one (nothing self-reported it), so the API fills it in. One fact,
+    // one place: without this, the same response would say
+    // `platform: null` and `capacity.platform: "linux"` for the same host.
+    expect(local?.platform).toBe(process.platform);
+    await app.close();
+  });
+
+  it("reports null capacity for a remote host that has never reported any", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "quiet", baseUrl: "http://127.0.0.1:4002", token: "t" },
+    });
+    const { id } = created.json();
+    const res = await app.inject({ method: "GET", url: "/api/hosts" });
+    const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+    expect(row?.capacity).toBeNull();
+    await app.close();
+  });
+
+  it("reports a remote host's cached capacity, with the age of the reading", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "busy", baseUrl: "http://127.0.0.1:4003", token: "t" },
+    });
+    const { id } = created.json();
+    app.hostCapacityTracker?.record(
+      id,
+      {
+        platform: "darwin",
+        logicalCores: 16,
+        loadAverage1m: 2.1,
+        memory: { totalBytes: 100, freeBytes: 50 },
+        sessions: { tracked: 3, alive: 3 },
+      },
+      1_700_000_000_000,
+    );
+    const res = await app.inject({ method: "GET", url: "/api/hosts" });
+    const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+    expect(row?.capacity).toEqual(
+      expect.objectContaining({
+        platform: "darwin",
+        logicalCores: 16,
+        sessions: { tracked: 3, alive: 3 },
+        sampledAt: new Date(1_700_000_000_000).toISOString(),
+      }),
+    );
+    await app.close();
+  });
+
+  it("does not 500 the fleet list on a capacity entry with an unusable timestamp", async () => {
+    // The sweep stamps a finite time when it records a reading, so the
+    // route's own guard is defence in depth — and defence in depth that no
+    // test reaches is defence in depth that can be deleted. This pins it:
+    // a NaN straight into the tracker must still render the list.
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "bad-stamp", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    });
+    const { id } = created.json();
+    app.hostCapacityTracker?.record(
+      id,
+      {
+        platform: "linux",
+        logicalCores: 4,
+        loadAverage1m: 0,
+        memory: { totalBytes: 1, freeBytes: 1 },
+        sessions: { tracked: 0, alive: 0 },
+      },
+      Number.NaN,
+    );
+
+    const res = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(res.statusCode).toBe(200);
+    const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+    expect(row?.capacity).toEqual(expect.objectContaining({ platform: "linux" }));
+    await app.close();
+  });
+
+  it("invalidates the CAPACITY cache when a host's baseUrl/token is rotated via PATCH", async () => {
+    // Numbers measured against the OLD baseUrl describe a different agent.
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "box-2c", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    });
+    const { id } = created.json();
+    app.hostCapacityTracker?.record(id, {
+      platform: "linux",
+      logicalCores: 4,
+      loadAverage1m: 0,
+      memory: { totalBytes: 1, freeBytes: 1 },
+      sessions: { tracked: 0, alive: 0 },
+    });
+    expect(app.hostCapacityTracker?.get(id)).toBeDefined();
+
+    await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://127.0.0.1:4009" },
+    });
+    expect(app.hostCapacityTracker?.get(id)).toBeUndefined();
+    await app.close();
+  });
+
   it("creates a remote host and never returns its token", async () => {
     const app = await buildApp();
     const res = await app.inject({

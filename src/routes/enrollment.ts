@@ -3,6 +3,7 @@ import {
   claimHost,
   clearHostSession,
   enrollHost,
+  recordHostSelfReport,
   rotateSession,
   verifyHostSession,
   type HostRegistration,
@@ -40,6 +41,10 @@ interface RegisterBody {
   hostname: string;
   name?: string;
   capabilities?: unknown;
+  // Issue #1721 / roadmap 8.7 — the agent's own platform ("darwin" |
+  // "linux" | …), free-form and informational. Optional: an agent build
+  // that predates the field does not send it, and the column stays null.
+  platform?: string;
 }
 
 const registerSchema = {
@@ -54,6 +59,14 @@ const registerSchema = {
       hostname: { type: "string", minLength: 1 },
       name: { type: "string" },
       capabilities: {},
+      // Issue #1721 — DECLARED, because the schema below is
+      // `additionalProperties: false` and Fastify's `removeAdditional`
+      // strips an undeclared key before the handler ever sees it. That is
+      // the same version-skew mechanism the taskId/initialPromptApplied
+      // fields rely on — except here the field is additive, so an OLD
+      // primary (which strips it) and a NEW agent (which sends it) simply
+      // mean "no platform recorded", never a failed registration.
+      platform: { type: "string" },
     },
   },
 };
@@ -133,12 +146,12 @@ export async function enrollmentRoute(app: FastifyInstance) {
     "/api/internal/register",
     { schema: registerSchema, config: { rateLimit: REGISTER_RATE_LIMIT } },
     async (request, reply) => {
-      const { token, hostId, baseUrl, hostname, name, capabilities } = request.body;
+      const { token, hostId, baseUrl, hostname, name, capabilities, platform } = request.body;
 
       if (!isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
-      const input: RegisterAgentInput = { baseUrl, hostname, name, capabilities };
+      const input: RegisterAgentInput = { baseUrl, hostname, name, capabilities, platform };
 
       // Issue #213 cross-host capture: every path below issues a fresh
       // session credential (host-registry.ts's issueSession), which
@@ -151,6 +164,13 @@ export async function enrollmentRoute(app: FastifyInstance) {
       if (hostId) {
         const renewed = rotateSession(app, hostId, token);
         if (!renewed) return reply.unauthorized("session renewal rejected");
+        // Issue #1721 — the renewal path re-presents the agent's own
+        // self-report, so the platform is refreshed here too (it used to
+        // ignore the body entirely, so a host could never update it after
+        // its first enrollment). Written separately from the credential
+        // rotation: the self-report is informational state, the session is
+        // the credential, and neither depends on the other.
+        recordHostSelfReport(app, renewed.hostId, { platform });
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [renewed.hostId] });
         // Issue #820 — no forceReconnect equivalent yet (see hosts.ts's
         // PATCH handler for the same documented gap): an already-open

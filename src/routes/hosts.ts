@@ -14,6 +14,7 @@ import {
 import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
+import { measureHostCapacity } from "../services/host-capacity.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion } from "./server-info.js";
@@ -96,11 +97,42 @@ export async function hostsRoute(app: FastifyInstance) {
         lastCheckedAt: null,
       };
       const toIso = (ms: number | null) => (ms === null ? null : new Date(ms).toISOString());
+      // Issue #1721 / roadmap 8.7 — the CAPACITY signal, merged here for
+      // the same reason health is: one row per host, and the Fleet UI
+      // (#1726) will read this list.
+      //
+      // The LOCAL host is measured on demand through the same function the
+      // agent uses (services/host-capacity.ts's measureHostCapacity), so
+      // its numbers are comparable with an agent's by construction — and
+      // always fresh, where a remote host's are as fresh as the last
+      // sweep. A remote host that never reported capacity gets null; a
+      // remote host that STOPPED reporting keeps its last known numbers
+      // with their age, so the UI can show them as stale.
+      const capacity =
+        host.id === LOCAL_HOST_ID
+          ? { ...measureHostCapacity(app), sampledAt: new Date().toISOString() }
+          : (() => {
+              const entry = app.hostCapacityTracker?.get(host.id);
+              if (!entry) return null;
+              // The cached timestamp is a number the sweep stamped itself,
+              // but the conversion below must never be the thing that
+              // breaks: an unparseable instant throws a RangeError, and
+              // this map runs for the WHOLE fleet.
+              const sampledAt = Number.isFinite(entry.sampledAt) ? entry.sampledAt : Date.now();
+              return { ...entry.capacity, sampledAt: new Date(sampledAt).toISOString() };
+            })();
       return {
         ...host,
+        // The LOCAL host's platform is this process's own — the row simply
+        // never had one, because nothing self-reported it. Reporting it
+        // here keeps one fact in one place: without it, the same response
+        // would say `platform: null` and `capacity.platform: "linux"` for
+        // the same host, and #1726's UI would have to pick a winner.
+        platform: host.id === LOCAL_HOST_ID ? process.platform : host.platform,
         health: health.status,
         lastSeenAt: toIso(health.lastSeenAt),
         lastCheckedAt: toIso(health.lastCheckedAt),
+        capacity,
       };
     });
   });
@@ -157,6 +189,11 @@ export async function hostsRoute(app: FastifyInstance) {
       // HOST_HEARTBEAT_INTERVAL_SECONDS.
       if (request.body.baseUrl !== undefined || request.body.token !== undefined) {
         app.hostHeartbeatTracker?.invalidateHost(id);
+        // Issue #1721 — same staleness reasoning for the CAPACITY cache:
+        // numbers measured against the OLD baseUrl describe a different
+        // agent, so they are dropped here rather than lingering for up to a
+        // sweep interval as if they were this host's.
+        app.hostCapacityTracker?.invalidateHost(id);
         // Same staleness reasoning as invalidateHost above, applied to the
         // events subscription: an open socket built from the old
         // baseUrl/token must not be left running until it happens to error

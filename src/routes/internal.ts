@@ -4,6 +4,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
+import { measureHostCapacity } from "../services/host-capacity.js";
 import { taskReviewFindingsPath, taskCommitTitlePath } from "../services/task-prompt.js";
 import {
   listAgentRules,
@@ -769,6 +770,27 @@ export async function internalRoutes(app: FastifyInstance) {
   // Settings value (services/settings.ts's idleThresholdSeconds) with no
   // env-var equivalent, so an agent has no way to know it either.
   app.get("/internal/config", INTERNAL_RATE_LIMIT, async () => buildAgentConfig(app));
+
+  // Issue #1721 / roadmap 8.7 — this agent's own CAPACITY: how busy this
+  // machine is, in numbers a placement policy can compare across hosts.
+  // The fleet has a health signal today (online / degraded / offline) but no
+  // capacity signal, so "put the work on the idle machine" is still a manual
+  // decision (see the placement half, #1723-#1727).
+  //
+  // Read-only and self-describing, exactly like /internal/config above, and
+  // behind the same gate: the bearer token plus the HMAC signature (or the
+  // static-Bearer path for a manually-registered host). It reads no DB —
+  // an agent has none — only the `os` primitives and this process's own
+  // in-memory session tracking.
+  //
+  // The measurement lives in services/host-capacity.ts, NOT here, because
+  // the primary measures ITSELF with the same function: one producer, two
+  // callers, so a local host's numbers and an agent's numbers are
+  // comparable by construction rather than by two implementations that
+  // happen to agree today.
+  app.get("/internal/capacity", INTERNAL_RATE_LIMIT, async () => {
+    return { ...measureHostCapacity(app), sampledAt: new Date().toISOString() };
+  });
 
   // Issue #647 / roadmap 7.8 — agent self-update, under /internal/ rather
   // than mirroring the primary's /api/updates/* verbatim (as the issue text

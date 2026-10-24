@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import net from "node:net";
+import http from "node:http";
 import { buildTestApp } from "../helpers/app.js";
 
 // Exercises the real background timer wiring end-to-end (plugin -> service
@@ -154,6 +155,188 @@ describe("hostHeartbeatPlugin: real sweep wiring (issue #246)", () => {
       expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("degraded");
     } finally {
       server.close();
+    }
+  }, 20000);
+});
+
+// Issue #1721 / roadmap 8.7 — the CAPACITY poll rides the sweep that
+// already exists: no second timer, and its outcome NEVER touches the
+// health verdict. These tests drive the real plugin and a real HTTP
+// server standing in for an agent, because that is the only way the
+// "same timer" claim can be checked at all — a unit test of the sweep
+// function would not show which timer called it.
+describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #1721)", () => {
+  // This block needs its OWN environment: the block above deletes
+  // DATABASE_URL and HOST_HEARTBEAT_INTERVAL_SECONDS in its afterAll, and
+  // test/setup.ts's own file-wide default is "0" (the heartbeat OFF) — so
+  // without this, the sweep would either run at the 30s schema default (and
+  // every waitUntil below would time out) or, worse, with no DATABASE_URL at
+  // all, the app would fall back to the DEFAULT ./data/app.db and write the
+  // test's hosts into the checkout.
+  beforeAll(() => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.MULLION_ROLE = "primary";
+    process.env.HOST_HEARTBEAT_INTERVAL_SECONDS = "1";
+  });
+
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+    delete process.env.MULLION_ROLE;
+    delete process.env.HOST_HEARTBEAT_INTERVAL_SECONDS;
+  });
+
+  /** A fake agent: answers /health, and /internal/capacity as told. */
+  async function startFakeAgent(capacityStatus: number, sampledAt?: string) {
+    const hits = { health: 0, capacity: 0 };
+    const server = http.createServer((req, res) => {
+      if (req.url === "/health") {
+        hits.health += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "healthy" }));
+        return;
+      }
+      if (req.url === "/internal/capacity") {
+        hits.capacity += 1;
+        if (capacityStatus === 404) {
+          // An agent build that predates the route.
+          res.writeHead(404);
+          res.end("not found");
+          return;
+        }
+        if (capacityStatus >= 500) {
+          res.writeHead(capacityStatus);
+          res.end("boom");
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            platform: "linux",
+            logicalCores: 4,
+            loadAverage1m: 0.5,
+            memory: { totalBytes: 1024, freeBytes: 512 },
+            sessions: { tracked: 2, alive: 1 },
+            sampledAt: sampledAt ?? new Date().toISOString(),
+          }),
+        );
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("expected a real bound address");
+    }
+    return { server, hits, baseUrl: `http://127.0.0.1:${address.port}` };
+  }
+
+  it("records the agent's capacity numbers, and polls them ON THE HEALTH SWEEP", async () => {
+    const agent = await startFakeAgent(200);
+    try {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "capacity-host", baseUrl: agent.baseUrl, token: "t" },
+      });
+      const { id } = created.json();
+
+      await waitUntil(() => app.hostCapacityTracker?.get(id) !== undefined, 8000);
+
+      const entry = app.hostCapacityTracker?.get(id);
+      expect(entry?.capacity.platform).toBe("linux");
+      expect(entry?.capacity.logicalCores).toBe(4);
+      expect(entry?.capacity.memory).toEqual({ totalBytes: 1024, freeBytes: 512 });
+      expect(entry?.capacity.sessions).toEqual({ tracked: 2, alive: 1 });
+      expect(entry?.sampledAt).toBeGreaterThan(0);
+
+      // The SAME sweep: one health ping and one capacity call per tick.
+      // A second timer would show up as a different ratio (or as capacity
+      // calls with no health ping at all).
+      expect(agent.hits.health).toBeGreaterThan(0);
+      expect(agent.hits.capacity).toBe(agent.hits.health);
+    } finally {
+      agent.server.close();
+    }
+  }, 20000);
+
+  it("survives a capacity report with an unparseable sampledAt", async () => {
+    // The report comes from a REMOTE host, so its timestamp is untrusted
+    // input: a body without a parseable one (a non-Mullion service behind
+    // an admin-added baseUrl, a proxy, a future build) must not be able to
+    // break GET /api/hosts for the WHOLE fleet with an Invalid time
+    // value.
+    const agent = await startFakeAgent(200, "not-a-timestamp");
+    try {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "bad-timestamp", baseUrl: agent.baseUrl, token: "t" },
+      });
+      const { id } = created.json();
+
+      await waitUntil(() => app.hostCapacityTracker?.get(id) !== undefined, 8000);
+
+      // The entry is stamped with a FINITE time, and the fleet list still
+      // renders — for every host, not just this one.
+      const entry = app.hostCapacityTracker?.get(id);
+      expect(entry?.sampledAt).toBeGreaterThan(0);
+      const res = await app.inject({ method: "GET", url: "/api/hosts" });
+      expect(res.statusCode).toBe(200);
+      const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+      expect(row?.capacity).toEqual(expect.objectContaining({ platform: "linux" }));
+    } finally {
+      agent.server.close();
+    }
+  }, 20000);
+
+  it("does NOT flap the health dot when the agent has no capacity route (a 404)", async () => {
+    // "This build does not report capacity" is NOT "this host is broken" —
+    // the health verdict comes from the ping alone.
+    const agent = await startFakeAgent(404);
+    try {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "old-agent", baseUrl: agent.baseUrl, token: "t" },
+      });
+      const { id } = created.json();
+
+      await waitUntil(() => agent.hits.capacity > 0, 8000);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+      expect(app.hostCapacityTracker?.get(id)).toBeUndefined();
+    } finally {
+      agent.server.close();
+    }
+  }, 20000);
+
+  it("does NOT flap the health dot when the capacity call itself fails", async () => {
+    const agent = await startFakeAgent(500);
+    try {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "broken-capacity", baseUrl: agent.baseUrl, token: "t" },
+      });
+      const { id } = created.json();
+
+      await waitUntil(() => agent.hits.capacity > 0, 8000);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      expect(app.hostHeartbeatTracker?.getHealth(id).status).toBe("online");
+      expect(app.hostCapacityTracker?.get(id)).toBeUndefined();
+    } finally {
+      agent.server.close();
     }
   }, 20000);
 });

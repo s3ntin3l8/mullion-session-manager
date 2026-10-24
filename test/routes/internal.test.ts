@@ -406,6 +406,44 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1721 / roadmap 8.7 — the agent's own CAPACITY report. Behind
+  // the same gate as every other /internal/* route, and measured by the
+  // ONE function the primary also uses for itself (so the two are
+  // comparable by construction).
+  it("rejects a capacity request with no Authorization header", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/internal/capacity" });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("reports this agent's own platform, cores, load, memory and session counts", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/capacity",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      platform: string;
+      logicalCores: number;
+      loadAverage1m: number;
+      memory: { totalBytes: number; freeBytes: number };
+      sessions: { tracked: number; alive: number };
+      sampledAt: string;
+    };
+    expect(body.platform).toBe(process.platform);
+    expect(body.logicalCores).toBeGreaterThan(0);
+    expect(body.loadAverage1m).toBeGreaterThanOrEqual(0);
+    expect(body.memory.totalBytes).toBeGreaterThan(0);
+    expect(body.sessions).toEqual({ tracked: 0, alive: 0 });
+    // The age stamp, so the primary can tell a fresh reading from a stale
+    // one — a host that stops reporting keeps its last numbers.
+    expect(Number.isNaN(Date.parse(body.sampledAt))).toBe(false);
+    await app.close();
+  });
+
   it("discovers candidates from this agent's own PROJECTS_ROOTS", async () => {
     const app = await buildApp();
     const res = await app.inject({
