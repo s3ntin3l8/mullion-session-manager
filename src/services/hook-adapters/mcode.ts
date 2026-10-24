@@ -94,6 +94,64 @@ export const MCODE_ADAPTER_NAME = "mcode";
  * and the "no per-session data inside" rule documented in the header. */
 export const MCODE_PLUGIN_DIR_NAME = "mullion";
 
+/** Issue #1814 — the SECOND plugin directory, in mcode's CODEX plugin format.
+ *
+ * mcode's hook-result parser is PLUGIN-FORMAT-AWARE, and that is what decides
+ * whether Mullion's answer to a `PermissionRequest` is actually applied:
+ *
+ * ```js
+ * // mcode 0.6.13, chunks/chunk-7ONY7WH4.js — TMn()
+ * let i = n.sourceFormat;
+ * if (s.behavior === "allow") return … {
+ *   ...e,
+ *   permissionDecision: "allow",
+ *   permissionAutoApproval: i === "CODEX" ? "any_prompt" : "ordinary_only",
+ *   … };
+ * ```
+ *
+ * and the gate that consumes it:
+ *
+ * ```js
+ * function pur(e, t) {
+ *   return e.behavior !== "allow" ? false
+ *     : e.autoApproval === "any_prompt" ? true
+ *     : e.autoApproval === "ordinary_only" && t.hookAutoApprovalEligible === true;
+ * }
+ * ```
+ *
+ * `sourceFormat` comes from WHICH MANIFEST the plugin carries (mcode 0.6.13,
+ * `chunks/chunk-H6JEREKX.js`): `.minimax-plugin/plugin.json` → `MINIMAX`,
+ * `.claude-plugin/plugin.json` → `CLAUDE`, `.codex-plugin/plugin.json` →
+ * `CODEX`. The first two both yield `ordinary_only`, which mcode only
+ * auto-applies when `hookAutoApprovalEligible` is true — and that is FALSE for
+ * a matched permission rule or any safety category other than
+ * `noMatchingPermissionRule` (e.g. `dangerousRemoval`). That is why, under
+ * skip-permissions, Mullion's gate resolved to `"approved"` while mcode STILL
+ * showed its own `◆ Approval required` dialog.
+ *
+ * Only the CODEX format yields `any_prompt` — an unconditional allow, so
+ * mcode never asks. (The alternatives were checked and ruled out: answering
+ * `PreToolUse` with an allow hits the same eligibility gate; `permissionMode:
+ * bypassPermissions` lives in the host-global `config.yaml` that Mullion must
+ * never mutate, and the TUI's and ACP's setters WRITE that file; and
+ * `mcode exec --permission full` is process-local but `exec` has no
+ * interactive permission capability at all.)
+ *
+ * WHY A SECOND DIRECTORY rather than converting the whole plugin: the CODEX
+ * dialect renames mcode's tool vocabulary (its file-edit tool surfaces as
+ * `apply_patch` rather than `Write`/`Edit`), and it matches `matcher` strings
+ * EXACTLY instead of by regex. Converting everything would silently break
+ * Mullion's `file_change` / `git_branch` / `todo` / `plan_ready` detection,
+ * which are written against the Claude dialect. So the split is surgical:
+ * the Claude-format plugin keeps every event EXCEPT `PermissionRequest`, and
+ * this CODEX-format plugin carries `PermissionRequest` alone.
+ *
+ * The two directories MUST be separate: mcode picks the format by which
+ * manifest file exists in a directory, with MINIMAX > CLAUDE > CODEX priority,
+ * so a directory holding both a `.claude-plugin/` and a `.codex-plugin/` would
+ * be loaded as CLAUDE and the whole point would be lost. */
+export const MCODE_PERMISSION_PLUGIN_DIR_NAME = "mullion-permission";
+
 /** Marker file written into the plugin dir so Mullion can tell "this plugin
  * is ours, safe to remove" from "the user put their own plugin here". Same
  * ownership-record idea as mullion-bundle.ts's INSTALLED_MARKER_NAME. */
@@ -156,6 +214,13 @@ export function resolveMcodePluginDir(): string {
   return path.join(resolveMcodePluginsDir(), MCODE_PLUGIN_DIR_NAME);
 }
 
+/** Issue #1814 — the CODEX-format plugin directory that carries
+ * `PermissionRequest`. See MCODE_PERMISSION_PLUGIN_DIR_NAME for why it is a
+ * second directory and not a reformat of the first. */
+export function resolveMcodePermissionPluginDir(): string {
+  return path.join(resolveMcodePluginsDir(), MCODE_PERMISSION_PLUGIN_DIR_NAME);
+}
+
 /** Host-stable location of the mcode hook shim script. Deliberately
  * homedir-anchored and NOT under the checkout, so a `git worktree remove`
  * can never leave a dangling path behind — the same discipline
@@ -206,13 +271,19 @@ export const MCODE_HOOK_EVENTS = [
   "SessionEnd",
 ] as const;
 
-/** Builds the plugin's `hooks/hooks.json` contents. The command line is
- * FIXED — it carries no per-session data, because the plugin directory is
- * host-global. The per-session socket/token/forwarder path travels in the
- * handoff file the shim reads at run time.
+/** One hook entry for a mcode plugin's `hooks/hooks.json`.
+ *
+ * The command line is FIXED — it carries no per-session data, because the
+ * plugin directory is host-global. The per-session socket/token/forwarder path
+ * travels in the handoff file the shim reads at run time.
  *
  * Exported for tests. Pure, no I/O. */
-export function buildMcodeHooksJson(shimPath: string): string {
+function mcodeHookEntry(
+  shimPath: string,
+  event: string,
+  matcher?: string,
+  timeout = 10,
+): { matcher?: string; hooks: Array<{ type: "command"; command: string; timeout: number }> } {
   // The forwarder is invoked as `<agent> <kind>` (see forwarder.mjs's own
   // header) — `kind` is the hook EVENT name, and it is NOT optional: the
   // forwarder bails out (silently, no message) when either argv is missing.
@@ -227,7 +298,7 @@ export function buildMcodeHooksJson(shimPath: string): string {
   // (Hermes review, PR #1793). The shim resolves node ITSELF at run time
   // (the handoff file's `nodePath`, falling back to PATH), so nothing is
   // lost by not naming node here.
-  const entry = (event: string, matcher?: string, timeout = 10) => ({
+  return {
     ...(matcher ? { matcher } : {}),
     hooks: [
       {
@@ -248,45 +319,72 @@ export function buildMcodeHooksJson(shimPath: string): string {
         timeout,
       },
     ],
-  });
+  };
+}
 
+/** Builds the CLAUDE-format plugin's `hooks/hooks.json` contents.
+ *
+ * Issue #1814 — `PermissionRequest` is NOT here: it moved to the CODEX-format
+ * plugin (see MCODE_PERMISSION_PLUGIN_DIR_NAME), which is the only format
+ * whose "allow" mcode applies unconditionally. Every other event stays in this
+ * plugin, in the Claude dialect, because that is the dialect mcode's tool
+ * names and matchers are written against.
+ *
+ * Exported for tests. Pure, no I/O. */
+export function buildMcodeHooksJson(shimPath: string): string {
   const hooks: Record<string, unknown[]> = {
-    SessionStart: [entry("SessionStart")],
-    UserPromptSubmit: [entry("UserPromptSubmit")],
-    PreToolUse: [entry("PreToolUse")],
+    SessionStart: [mcodeHookEntry(shimPath, "SessionStart")],
+    UserPromptSubmit: [mcodeHookEntry(shimPath, "UserPromptSubmit")],
+    PreToolUse: [mcodeHookEntry(shimPath, "PreToolUse")],
     PostToolUse: [
       // File-editing tools → file_change (the forwarder maps these).
       {
         matcher: "Write|Edit|MultiEdit|NotebookEdit",
-        ...entry("PostToolUse"),
+        ...mcodeHookEntry(shimPath, "PostToolUse"),
       },
       // Bash → git_branch detection, same as Claude Code's own split.
       {
         matcher: "Bash",
-        ...entry("PostToolUse"),
+        ...mcodeHookEntry(shimPath, "PostToolUse"),
       },
     ],
-    // PermissionRequest is the BLOCKING hook: it is the whole reason
-    // skip-permissions works for mcode (Mullion answers "allow" over the hook
-    // socket instead of mcode showing its own permission dialog), and it is
-    // also what carries a real review gate when skip-permissions is OFF.
-    //
-    // It MUST be registered — without it mcode's permission prompts never
-    // reach Mullion at all, and skip-permissions would silently do nothing.
-    // No matcher: PermissionRequest only fires for the tool call that
-    // actually needs a decision, whatever tool that is.
-    //
-    // The 10s ceiling is mcode's own limit (see above), which is why the
-    // skip-permissions path resolves it in milliseconds — Mullion's gate
-    // server auto-approves immediately — while a HUMAN approval that takes
-    // longer than mcode's hook budget falls back to mcode's own native
-    // permission prompt (a timeout is an "ask", never a denial, in mcode's
-    // own hook-result handling).
-    PermissionRequest: [entry("PermissionRequest")],
-    Stop: [entry("Stop")],
+    Stop: [mcodeHookEntry(shimPath, "Stop")],
     // SessionEnd gets a short timeout: mcode itself budgets only a few
     // seconds for it (its own per-event budget), and it is fire-and-forget.
-    SessionEnd: [entry("SessionEnd", undefined, 2)],
+    SessionEnd: [mcodeHookEntry(shimPath, "SessionEnd", undefined, 2)],
+  };
+
+  return JSON.stringify({ hooks }, null, 2);
+}
+
+/** Builds the CODEX-format plugin's `hooks/hooks.json` contents — the
+ * `PermissionRequest` hook and nothing else.
+ *
+ * Issue #1814. `PermissionRequest` is the BLOCKING hook: it is the whole
+ * reason skip-permissions works for mcode (Mullion answers "allow" over the
+ * hook socket instead of mcode showing its own permission dialog), and it is
+ * also what carries a real review gate when skip-permissions is OFF.
+ *
+ * It MUST be registered — without it mcode's permission prompts never reach
+ * Mullion at all, and skip-permissions would silently do nothing. No matcher:
+ * PermissionRequest only fires for the tool call that actually needs a
+ * decision, whatever tool that is.
+ *
+ * The reply is UNCHANGED from the Claude dialect — mcode's CODEX parser reads
+ * the same `{ hookSpecificOutput: { hookEventName, decision } }` shape — but
+ * the FORMAT it is delivered through is what makes mcode apply the allow
+ * unconditionally instead of only for auto-approval-eligible prompts.
+ *
+ * The 10s ceiling is mcode's own limit (see mcodeHookEntry), which is why the
+ * skip-permissions path resolves it in milliseconds — Mullion's gate server
+ * auto-approves immediately — while a HUMAN approval that takes longer than
+ * mcode's hook budget falls back to mcode's own native permission prompt (a
+ * timeout is an "ask", never a denial, in mcode's own hook-result handling).
+ *
+ * Exported for tests. Pure, no I/O. */
+export function buildMcodePermissionHooksJson(shimPath: string): string {
+  const hooks: Record<string, unknown[]> = {
+    PermissionRequest: [mcodeHookEntry(shimPath, "PermissionRequest")],
   };
 
   return JSON.stringify({ hooks }, null, 2);
@@ -299,6 +397,28 @@ export function buildMcodePluginManifest(): string {
     {
       name: MCODE_PLUGIN_DIR_NAME,
       description: "Mullion's session hooks for mcode (MiniMax Code).",
+      author: { name: "Mullion" },
+    },
+    null,
+    2,
+  );
+}
+
+/** The CODEX-format plugin manifest's contents (issue #1814).
+ *
+ * The same JSON shape as the Claude-format manifest — mcode's compatible
+ * loader requires a `name` and treats `description`/`author` as conventional.
+ * It is written to `.codex-plugin/plugin.json` (NOT `.claude-plugin/`), which
+ * is what makes mcode treat the plugin as `sourceFormat: "CODEX"` and hence
+ * apply a `PermissionRequest` allow unconditionally.
+ *
+ * The CODEX loader additionally REJECTS a plugin manifest's `agents` key
+ * (Claude-format only), so this manifest deliberately carries none. */
+export function buildMcodePermissionPluginManifest(): string {
+  return JSON.stringify(
+    {
+      name: MCODE_PERMISSION_PLUGIN_DIR_NAME,
+      description: "Mullion's permission hook for mcode (MiniMax Code).",
       author: { name: "Mullion" },
     },
     null,
@@ -386,24 +506,140 @@ function writeFileAtomic(targetPath: string, contents: string, mode: number): vo
   }
 }
 
+/** One plugin directory Mullion installs for mcode. */
+interface McodePluginSpec {
+  /** The plugin directory, under `<dataDir>/plugins/`. */
+  dir: string;
+  /** The manifest path, RELATIVE to the plugin dir. Which manifest file
+   * exists is what tells mcode which format the plugin is in. */
+  manifestRelPath: string;
+  /** The manifest's contents. */
+  manifest: string;
+  /** The `hooks/hooks.json` contents. */
+  hooks: string;
+}
+
+/** The manifest directories mcode recognises, in its own detection priority
+ * order (MINIMAX > CLAUDE > CODEX). Only ONE of them may exist in a plugin
+ * directory: the first one present wins, so a leftover of a higher-priority
+ * format would silently change the plugin's dialect. */
+const MCODE_MANIFEST_DIRS = [".minimax-plugin", ".claude-plugin", ".codex-plugin"];
+
+/** The two plugin directories Mullion installs (issue #1814): the
+ * Claude-format one carrying every event except `PermissionRequest`, and the
+ * CODEX-format one carrying `PermissionRequest` alone. */
+function mcodePluginSpecs(): McodePluginSpec[] {
+  const shimPath = resolveMcodeShimPath();
+  return [
+    {
+      dir: resolveMcodePluginDir(),
+      manifestRelPath: path.join(".claude-plugin", "plugin.json"),
+      manifest: buildMcodePluginManifest(),
+      hooks: buildMcodeHooksJson(shimPath),
+    },
+    {
+      dir: resolveMcodePermissionPluginDir(),
+      manifestRelPath: path.join(".codex-plugin", "plugin.json"),
+      manifest: buildMcodePermissionPluginManifest(),
+      hooks: buildMcodePermissionHooksJson(shimPath),
+    },
+  ];
+}
+
 /**
- * Installs (or refreshes) the host-global plugin + the host-stable shim.
+ * Installs (or refreshes) ONE plugin directory.
+ *
+ * REFUSES to write into a plugin directory that exists but carries no
+ * ownership marker (Hermes review, PR #1793): that directory belongs to the
+ * user, and clobbering it would destroy their own plugin of the same name.
+ * Removal already had this rule; install now has it too, so the two are
+ * symmetric. When that happens the plugin is simply NOT installed — the
+ * session comes up without hooks (hooks are a pure enhancement) and the
+ * user keeps their own plugin.
+ */
+function installMcodePluginDir(spec: McodePluginSpec): void {
+  // Ownership check BEFORE any write: a plugin directory that exists without
+  // our marker is the user's own, and must not be touched. ANY of mcode's
+  // three manifest formats counts — a directory holding only a
+  // `.codex-plugin/plugin.json` is just as much "a user plugin called
+  // mullion" as one holding the Claude-format manifest.
+  const markerPath = path.join(spec.dir, MCODE_PLUGIN_MARKER_NAME);
+  const existingMarker = readFileOrNull(markerPath);
+  if (existingMarker !== null && existingMarker !== MCODE_PLUGIN_MARKER_CONTENT) {
+    console.error(
+      `mcode hook adapter: refusing to install into ${spec.dir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
+    );
+    return;
+  }
+  if (
+    existingMarker === null &&
+    MCODE_MANIFEST_DIRS.some(
+      (name) => readFileOrNull(path.join(spec.dir, name, "plugin.json")) !== null,
+    )
+  ) {
+    console.error(
+      `mcode hook adapter: refusing to install into ${spec.dir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
+    );
+    return;
+  }
+
+  // From here on the directory is Mullion's (either it carries our marker, or
+  // it did not exist at all). Drop any manifest directory that is NOT this
+  // plugin's own: mcode picks the format by which manifest file is present,
+  // in MINIMAX > CLAUDE > CODEX priority, so a leftover of another format
+  // would silently change the plugin's dialect. This is also the migration
+  // an upgrade from the pre-#1814 layout needs — the CODEX plugin's
+  // directory must not keep a `.claude-plugin/` around, or mcode would load
+  // it as CLAUDE and the whole point of the second plugin would be lost.
+  for (const name of MCODE_MANIFEST_DIRS) {
+    if (path.join(name, "plugin.json") === spec.manifestRelPath) continue;
+    try {
+      rmSync(path.join(spec.dir, name), { recursive: true, force: true });
+    } catch {
+      // Best-effort: a stale manifest directory that cannot be removed would
+      // change this plugin's dialect, so it is reported rather than ignored.
+      console.error(
+        `mcode hook adapter: could not remove the stale ${name} directory from ${spec.dir} — mcode may load this plugin in the wrong format.`,
+      );
+    }
+  }
+
+  mkdirSync(path.dirname(path.join(spec.dir, spec.manifestRelPath)), {
+    recursive: true,
+    mode: 0o755,
+  });
+  mkdirSync(path.join(spec.dir, "hooks"), { recursive: true, mode: 0o755 });
+
+  // All three go through the ATOMIC writer, not a plain writeFileSync
+  // (Hermes review, PR #1793 — the last open suggestion). mcode scans its
+  // plugin directory ONCE at startup, so a half-written hooks.json is exactly
+  // the failure the atomic shim write prevents: two Mullion sessions
+  // starting mcode at the same moment (Task Master workers) could otherwise
+  // expose a truncated hooks.json to the second mcode's scan, and mcode
+  // would load a plugin with no hooks and no error.
+  writeFileAtomic(path.join(spec.dir, spec.manifestRelPath), spec.manifest, 0o644);
+  writeFileAtomic(path.join(spec.dir, "hooks", "hooks.json"), spec.hooks, 0o644);
+  writeFileAtomic(
+    path.join(spec.dir, MCODE_PLUGIN_MARKER_NAME),
+    MCODE_PLUGIN_MARKER_CONTENT,
+    0o644,
+  );
+}
+
+/**
+ * Installs (or refreshes) the host-global plugins + the host-stable shim.
  *
  * Idempotent by construction: the plugin's contents are derived only from
  * constants, so re-running this writes byte-identical files. The marker
  * file records that Mullion owns the directory, so cleanup can remove it
  * without touching a user-authored plugin of the same name.
  *
- * REFUSES to write into a plugin directory that exists but carries no
- * ownership marker (Hermes review, PR #1793): that directory belongs to the
- * user, and clobbering it would destroy their own plugin named `mullion`.
- * Removal already had this rule; install now has it too, so the two are
- * symmetric. When that happens the plugin is simply NOT installed — the
- * session comes up without hooks (hooks are a pure enhancement) and the
- * user keeps their own plugin.
+ * TWO plugin directories are installed (issue #1814) — the Claude-format one
+ * and the CODEX-format `PermissionRequest` one. They are independent: a
+ * refusal to install one (an unmarked user directory of that name) leaves the
+ * other one installed.
  */
 export function installMcodePlugin(): void {
-  const pluginDir = resolveMcodePluginDir();
   const shimPath = resolveMcodeShimPath();
   const shimSource = resolveMcodeShimSourcePath();
 
@@ -421,70 +657,29 @@ export function installMcodePlugin(): void {
     writeFileAtomic(shimPath, readFileSync(shimSource, "utf8"), 0o755);
   }
 
-  // Ownership check BEFORE any write: a plugin directory that exists without
-  // our marker is the user's own, and must not be touched.
-  const markerPath = path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME);
-  const existingMarker = readFileOrNull(markerPath);
-  if (existingMarker !== null && existingMarker !== MCODE_PLUGIN_MARKER_CONTENT) {
-    console.error(
-      `mcode hook adapter: refusing to install into ${pluginDir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
-    );
-    return;
+  for (const spec of mcodePluginSpecs()) {
+    installMcodePluginDir(spec);
   }
-  if (
-    existingMarker === null &&
-    readFileOrNull(path.join(pluginDir, ".claude-plugin", "plugin.json"))
-  ) {
-    console.error(
-      `mcode hook adapter: refusing to install into ${pluginDir} — it exists but is not marked as Mullion-managed (a user-authored plugin of the same name?). Leaving it untouched.`,
-    );
-    return;
-  }
-
-  mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true, mode: 0o755 });
-  mkdirSync(path.join(pluginDir, "hooks"), { recursive: true, mode: 0o755 });
-
-  // All three go through the ATOMIC writer, not a plain writeFileSync
-  // (Hermes review, PR #1793 — the last open suggestion). mcode scans its
-  // plugin directory ONCE at startup, so a half-written hooks.json is exactly
-  // the failure the atomic shim write prevents: two Mullion sessions
-  // starting mcode at the same moment (Task Master workers) could otherwise
-  // expose a truncated hooks.json to the second mcode's scan, and mcode
-  // would load a plugin with no hooks and no error.
-  writeFileAtomic(
-    path.join(pluginDir, ".claude-plugin", "plugin.json"),
-    buildMcodePluginManifest(),
-    0o644,
-  );
-  writeFileAtomic(
-    path.join(pluginDir, "hooks", "hooks.json"),
-    buildMcodeHooksJson(shimPath),
-    0o644,
-  );
-  writeFileAtomic(
-    path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME),
-    MCODE_PLUGIN_MARKER_CONTENT,
-    0o644,
-  );
 }
 
 /**
- * Removes the host-global plugin directory and shim, but ONLY if they still
+ * Removes the host-global plugin directories and shim, but ONLY if they still
  * carry Mullion's ownership marker. A user who replaced either with their
  * own content keeps it.
  */
 export function removeMcodePlugin(): void {
-  const pluginDir = resolveMcodePluginDir();
-  const marker = path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME);
-  // ONE read, no existence check first — see readFileOrNull's own note (an
-  // existsSync-then-read pair is a file-system race; CodeQL flags it).
-  const markerContents = readFileOrNull(marker);
-  if (markerContents === MCODE_PLUGIN_MARKER_CONTENT) {
-    try {
-      // rm -rf via node: no shell, no glob surprises.
-      rmSync(pluginDir, { recursive: true, force: true });
-    } catch {
-      // A failed removal must never break an uninstall.
+  for (const spec of mcodePluginSpecs()) {
+    const marker = path.join(spec.dir, MCODE_PLUGIN_MARKER_NAME);
+    // ONE read, no existence check first — see readFileOrNull's own note (an
+    // existsSync-then-read pair is a file-system race; CodeQL flags it).
+    const markerContents = readFileOrNull(marker);
+    if (markerContents === MCODE_PLUGIN_MARKER_CONTENT) {
+      try {
+        // rm -rf via node: no shell, no glob surprises.
+        rmSync(spec.dir, { recursive: true, force: true });
+      } catch {
+        // A failed removal must never break an uninstall.
+      }
     }
   }
 
@@ -501,12 +696,13 @@ export function removeMcodePlugin(): void {
 /**
  * The hook-protocol kinds this agent can ever produce.
  *
- * Derived from the events the plugin ACTUALLY registers (SessionStart,
- * UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Stop,
- * SessionEnd) mapped through the Claude Code dialect — `emits` feeds
- * pty-manager's `hookEmits` and `HOOK_ADAPTER_EMITS_BY_BIN`, i.e. it is what
- * the frontend offers as reachable for an mcode session, so it must not
- * claim kinds this adapter cannot produce (Hermes review, PR #1793).
+ * Derived from the events the plugins ACTUALLY register — the Claude-format
+ * plugin's (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop,
+ * SessionEnd) plus the CODEX-format plugin's (PermissionRequest, issue
+ * #1814) — mapped through the Claude Code dialect. `emits` feeds pty-manager's
+ * `hookEmits` and `HOOK_ADAPTER_EMITS_BY_BIN`, i.e. it is what the frontend
+ * offers as reachable for an mcode session, so it must not claim kinds this
+ * adapter cannot produce (Hermes review, PR #1793).
  *
  * NOT claimed, because the events that produce them are not registered:
  * `notification` (needs `Notification`), `compact` (needs `PreCompact` /

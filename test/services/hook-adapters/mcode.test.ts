@@ -14,13 +14,17 @@ import os from "node:os";
 import {
   mcodeAdapter,
   MCODE_PLUGIN_MARKER_NAME,
+  MCODE_PERMISSION_PLUGIN_DIR_NAME,
   buildMcodeHooksJson,
+  buildMcodePermissionHooksJson,
   buildMcodePluginManifest,
+  buildMcodePermissionPluginManifest,
   buildMcodeHookHandoff,
   installMcodePlugin,
   removeMcodePlugin,
   matchesMcodeCommand,
   resolveMcodePluginDir,
+  resolveMcodePermissionPluginDir,
   resolveMcodeShimPath,
   resolveMcodeGlobalSkillsDir,
 } from "../../../src/services/hook-adapters/mcode.js";
@@ -178,21 +182,20 @@ describe("buildMcodeHooksJson", () => {
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
-        "PermissionRequest",
         "Stop",
         "SessionEnd",
       ]),
     );
   });
 
-  it("registers the PermissionRequest hook — it IS the skip-permissions channel", () => {
-    // Without this registration mcode's permission prompts never reach
-    // Mullion, so skip-permissions would silently do nothing and no review
-    // gate would ever open for an mcode session.
-    const permissionRequest = parsed.hooks.PermissionRequest;
-    expect(permissionRequest).toBeDefined();
-    expect(permissionRequest).toHaveLength(1);
-    expect(permissionRequest[0].hooks[0].command).toContain("mcode PermissionRequest");
+  it("does NOT declare PermissionRequest — it moved to the CODEX-format plugin", () => {
+    // Issue #1814. PermissionRequest has to be registered SOMEWHERE, but in
+    // the Claude format mcode only applies an "allow" when the prompt is
+    // auto-approval-eligible — which a safety-classified command (rm -rf) is
+    // not — so mcode still showed its own dialog. The CODEX format applies
+    // the allow unconditionally. Registering it in BOTH would raise the gate
+    // twice.
+    expect(parsed.hooks.PermissionRequest).toBeUndefined();
   });
 
   it("gives every hook a timeout in SECONDS, at mcode's 10-second ceiling", () => {
@@ -251,6 +254,88 @@ describe("buildMcodeHooksJson", () => {
   });
 });
 
+describe("buildMcodePermissionHooksJson — the CODEX-format plugin (issue #1814)", () => {
+  const json = buildMcodePermissionHooksJson("/host/shim.sh");
+  const parsed = JSON.parse(json);
+
+  it("declares PermissionRequest and NOTHING else", () => {
+    // One event, one plugin. Every other event stays in the Claude-format
+    // plugin, whose tool vocabulary and matcher semantics Mullion's mapping
+    // is written against.
+    expect(Object.keys(parsed.hooks)).toEqual(["PermissionRequest"]);
+  });
+
+  it("registers the PermissionRequest hook — it IS the skip-permissions channel", () => {
+    // Without this registration mcode's permission prompts never reach
+    // Mullion, so skip-permissions would silently do nothing and no review
+    // gate would ever open for an mcode session.
+    const permissionRequest = parsed.hooks.PermissionRequest;
+    expect(permissionRequest).toBeDefined();
+    expect(permissionRequest).toHaveLength(1);
+    expect(permissionRequest[0].hooks[0].command).toContain("mcode PermissionRequest");
+  });
+
+  it("carries no matcher", () => {
+    // mcode's CODEX dialect matches a matcher string EXACTLY against the
+    // tool name (no regex), and PermissionRequest must fire for whatever
+    // tool needs a decision — so it carries none.
+    expect(permissionRequestMatcher(parsed)).toBeUndefined();
+  });
+
+  it("gives the hook a timeout in SECONDS, at mcode's 10-second ceiling", () => {
+    const timeout = parsed.hooks.PermissionRequest[0].hooks[0].timeout;
+    expect(Number.isInteger(timeout)).toBe(true);
+    expect(timeout).toBeGreaterThanOrEqual(1);
+    expect(timeout).toBeLessThanOrEqual(10);
+  });
+
+  it("invokes the shim directly, with the event name as the forwarder's second argument", () => {
+    const command = parsed.hooks.PermissionRequest[0].hooks[0].command;
+    expect(command).toBe('"/host/shim.sh" mcode PermissionRequest');
+    expect(command).not.toContain("node");
+  });
+
+  it("uses only the hook fields the CODEX dialect accepts", () => {
+    // mcode's CODEX loader rejects `args`, `shell`, `if`, `async` and
+    // `asyncRewake` on a hook entry as HOOK_HANDLER_UNSUPPORTED, and a
+    // matcher must match ^[A-Za-z0-9_|]+$. Mullion uses none of the rejected
+    // fields, and no matcher at all.
+    const entry = parsed.hooks.PermissionRequest[0].hooks[0];
+    expect(Object.keys(entry).sort()).toEqual(["command", "timeout", "type"]);
+    expect(entry.type).toBe("command");
+  });
+
+  it("is byte-identical across calls (no per-session data in the plugin)", () => {
+    expect(buildMcodePermissionHooksJson("/host/shim.sh")).toBe(json);
+  });
+});
+
+/** The matcher of the single PermissionRequest entry, or undefined. */
+function permissionRequestMatcher(parsed: {
+  hooks: Record<string, Array<{ matcher?: string }>>;
+}): string | undefined {
+  return parsed.hooks.PermissionRequest[0].matcher;
+}
+
+describe("buildMcodePluginManifest", () => {
+  it("declares the plugin name mcode requires", () => {
+    const manifest = JSON.parse(buildMcodePluginManifest());
+    expect(manifest.name).toBe("mullion");
+  });
+});
+
+describe("buildMcodePermissionPluginManifest", () => {
+  it("declares the plugin name mcode requires", () => {
+    const manifest = JSON.parse(buildMcodePermissionPluginManifest());
+    expect(manifest.name).toBe(MCODE_PERMISSION_PLUGIN_DIR_NAME);
+  });
+
+  it("carries no `agents` key — the CODEX loader rejects one", () => {
+    const manifest = JSON.parse(buildMcodePermissionPluginManifest());
+    expect(manifest.agents).toBeUndefined();
+  });
+});
+
 /** Directory entries, tolerating a missing directory. */
 function listDir(dir: string): string[] {
   try {
@@ -306,13 +391,63 @@ describe("install/remove the host-global plugin", () => {
       expect(existsSync(path.join(pluginDir, ".mullion-managed"))).toBe(true);
       expect(existsSync(resolveMcodeShimPath())).toBe(true);
 
+      // Issue #1814 — the CODEX-format plugin lives in its OWN directory,
+      // carrying only PermissionRequest.
+      const permissionDir = resolveMcodePermissionPluginDir();
+      expect(existsSync(path.join(permissionDir, ".codex-plugin", "plugin.json"))).toBe(true);
+      expect(existsSync(path.join(permissionDir, "hooks", "hooks.json"))).toBe(true);
+      expect(existsSync(path.join(permissionDir, ".mullion-managed"))).toBe(true);
+      // ...and it must NOT carry a Claude- or MiniMax-format manifest: mcode
+      // picks the format by which manifest is present (MINIMAX > CLAUDE >
+      // CODEX), so a leftover would silently load it as CLAUDE — the format
+      // that cannot suppress mcode's own dialog.
+      expect(existsSync(path.join(permissionDir, ".claude-plugin"))).toBe(false);
+      expect(existsSync(path.join(permissionDir, ".minimax-plugin"))).toBe(false);
+
       // The plugin must carry no per-session data.
       const hooks = readFileSync(path.join(pluginDir, "hooks", "hooks.json"), "utf8");
       expect(hooks).not.toContain(ctx.hookToken);
       expect(hooks).not.toContain(ctx.hookSocketPath);
+      const permissionHooks = readFileSync(path.join(permissionDir, "hooks", "hooks.json"), "utf8");
+      expect(permissionHooks).not.toContain(ctx.hookToken);
+      expect(permissionHooks).not.toContain(ctx.hookSocketPath);
 
       removeMcodePlugin();
       expect(existsSync(pluginDir)).toBe(false);
+      expect(existsSync(permissionDir)).toBe(false);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
+
+  it("drops a stale Claude-format manifest from the CODEX plugin directory", () => {
+    // The upgrade path from the pre-#1814 layout: a directory that used to
+    // carry the Claude-format manifest and now carries the CODEX one must not
+    // keep both, or mcode would load the plugin as CLAUDE (higher priority)
+    // and the whole fix would silently do nothing.
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      const permissionDir = resolveMcodePermissionPluginDir();
+      mkdirSync(path.join(permissionDir, ".claude-plugin"), { recursive: true });
+      writeFileSync(
+        path.join(permissionDir, ".claude-plugin", "plugin.json"),
+        JSON.stringify({ name: "mullion-permission" }),
+      );
+      // Pretend the directory is ours — the marker is what makes it ours.
+      writeFileSync(
+        path.join(permissionDir, MCODE_PLUGIN_MARKER_NAME),
+        "This directory is managed by Mullion (hook-adapters/mcode.ts). Remove it with `mullion` uninstall.\n",
+      );
+
+      installMcodePlugin();
+
+      expect(existsSync(path.join(permissionDir, ".claude-plugin"))).toBe(false);
+      expect(existsSync(path.join(permissionDir, ".codex-plugin", "plugin.json"))).toBe(true);
     } finally {
       if (realHome === undefined) delete process.env.HOME;
       else process.env.HOME = realHome;
@@ -470,6 +605,38 @@ describe("install/remove the host-global plugin", () => {
       else process.env.HOME = realHome;
     }
   });
+
+  it("does not clobber a user-authored CODEX plugin of the same name on INSTALL", () => {
+    // Issue #1814 — the refusal rule applies to the CODEX-format plugin
+    // directory too. Any of mcode's three manifest formats marks the
+    // directory as "a plugin called mullion-permission", so a user's own
+    // plugin of that name is left alone.
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      const permissionDir = resolveMcodePermissionPluginDir();
+      mkdirSync(path.join(permissionDir, ".codex-plugin"), { recursive: true });
+      const userManifest = JSON.stringify({
+        name: "mullion-permission",
+        description: "user's own",
+      });
+      writeFileSync(path.join(permissionDir, ".codex-plugin", "plugin.json"), userManifest);
+
+      installMcodePlugin();
+
+      expect(readFileSync(path.join(permissionDir, ".codex-plugin", "plugin.json"), "utf8")).toBe(
+        userManifest,
+      );
+      expect(existsSync(path.join(permissionDir, "hooks", "hooks.json"))).toBe(false);
+      expect(existsSync(path.join(permissionDir, MCODE_PLUGIN_MARKER_NAME))).toBe(false);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
 });
 
 describe("resolveMcodeGlobalSkillsDir", () => {
@@ -513,6 +680,18 @@ describe("resolveMcodePluginDir — the data dir override", () => {
     process.env.MINIMAX_DATA_DIR = "/tmp/mcode-own";
     delete process.env.MAVIS_DATA_DIR;
     expect(resolveMcodePluginDir()).toBe(path.join("/tmp/mcode-own", "plugins", "mullion"));
+  });
+
+  // Issue #1814 — the CODEX-format plugin resolves the same way, and lands
+  // in its OWN directory (mcode picks the plugin format by which manifest
+  // file a directory carries, so the two must not share one).
+  it("resolves the CODEX-format plugin into its own directory", () => {
+    process.env.MINIMAX_DATA_DIR = "/tmp/mcode-own";
+    delete process.env.MAVIS_DATA_DIR;
+    expect(resolveMcodePermissionPluginDir()).toBe(
+      path.join("/tmp/mcode-own", "plugins", MCODE_PERMISSION_PLUGIN_DIR_NAME),
+    );
+    expect(resolveMcodePermissionPluginDir()).not.toBe(resolveMcodePluginDir());
   });
 
   it("honours mcode's legacy MAVIS_DATA_DIR alias", () => {

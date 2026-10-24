@@ -5,7 +5,11 @@ import {
 } from "../../src/services/hook-adapters/claude-code.js";
 import { codexAdapter } from "../../src/services/hook-adapters/codex.js";
 import { agyAdapter } from "../../src/services/hook-adapters/agy.js";
-import { mcodeAdapter, buildMcodeHooksJson } from "../../src/services/hook-adapters/mcode.js";
+import {
+  mcodeAdapter,
+  buildMcodeHooksJson,
+  buildMcodePermissionHooksJson,
+} from "../../src/services/hook-adapters/mcode.js";
 import {
   buildForwarderMessage,
   detectGitCheckout,
@@ -2549,10 +2553,19 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
   });
 
   it("mcode: the registered hook events are exactly the ones the parity payloads cover", () => {
-    // Guards against a hook being added to the plugin without a matching
+    // Guards against a hook being added to a plugin without a matching
     // parity payload above — the same "no test payload declared for
     // registered event" failure mode the claude-code case checks for.
-    const registered = Object.keys(JSON.parse(buildMcodeHooksJson("/shim")).hooks);
+    //
+    // Issue #1814 — mcode's events are now split across TWO plugins: the
+    // Claude-format one carries everything except `PermissionRequest`, and
+    // the CODEX-format one carries `PermissionRequest` alone (the only
+    // format whose "allow" mcode applies unconditionally). The registered
+    // set is therefore the UNION of the two.
+    const registered = [
+      ...Object.keys(JSON.parse(buildMcodeHooksJson("/shim")).hooks),
+      ...Object.keys(JSON.parse(buildMcodePermissionHooksJson("/shim")).hooks),
+    ];
     expect(registered.length).toBeGreaterThan(0);
     for (const event of registered) {
       expect(
@@ -2568,6 +2581,29 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
         `no test payload declared for registered mcode event ${event}`,
       ).toContain(event);
     }
+  });
+
+  it("mcode: the CODEX plugin's PermissionRequest reply is the same shape the Claude plugin used", () => {
+    // Issue #1814 — the point of the second plugin is the FORMAT the reply
+    // is delivered through, not the reply itself: mcode's CODEX parser reads
+    // the same `{hookSpecificOutput:{hookEventName, decision}}` shape the
+    // Claude parser does. If the two ever diverge, the CODEX plugin would
+    // silently stop being able to say "allow" — which is the whole fix.
+    expect(formatGateDecision("mcode", "approved", undefined)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "allow" },
+      },
+    });
+    expect(formatGateDecision("mcode", "denied", "no")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: { behavior: "deny", message: "no" },
+      },
+    });
+    // A "no response" stays empty, which mcode reads as "ask" — the same
+    // fail-open shape the Claude-format plugin had.
+    expect(formatGateDecision("mcode", "no_response", undefined)).toEqual({});
   });
 });
 
