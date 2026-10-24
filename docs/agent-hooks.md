@@ -979,15 +979,15 @@ whole chain has now been exercised end to end, not just unit-tested:
 | A human can answer the gate                           | `POST /api/sessions/:id/review-gate` with `{"decision":"approved"}` resolved a waiting gate to `"approved"`                                                                                                                                                                      |
 | No answer in time                                     | the gate **lapsed** (mcode's 10s hook timeout fired) — fail-open, never a denial                                                                                                                                                                                                 |
 
-**Both** probe runs ran against a **fully isolated** mcode profile — its own data
-dir, with its own physical `<data dir>/v2/sqlite/` (its runtime-state database), its own empty
-`<data dir>/v2/runtime-owner-leases/` (mcode's runtime-owner leases) and
-`<data dir>/run/` (its OAuth lease sockets), and **no symlink** to `~/.minimax` —
-because a second mcode runtime against a _shared_ `runtime-state.sqlite` fences the
-incumbent runtime and aborts the user's other sessions (see `AGENTS.md`). Neither
-run touched the live host's `config.yaml` or `permission.json`: both were
-byte-identical before and after. (The 0.6.12 run compared `auth.json` too, and it
-was likewise byte-identical.)
+**Both** probe runs ran against **fully isolated** mcode profiles, each with its
+own data dir, its own physical `<data dir>/v2/sqlite/` (its runtime-state
+database), its own empty `<data dir>/v2/runtime-owner-leases/` (mcode's
+runtime-owner leases) and `<data dir>/run/` (its OAuth lease sockets), and **no
+symlink** to `~/.minimax` — because a second mcode runtime against a _shared_
+`runtime-state.sqlite` fences the incumbent runtime and aborts the user's other
+sessions (see `AGENTS.md`). Neither run touched the live host's `config.yaml` or
+`permission.json`: both were byte-identical before and after. (The 0.6.12 run
+compared `auth.json` too, and it was likewise byte-identical.)
 
 **The caveat this run surfaced is now FIXED — and it was a plugin-FORMAT problem,
 not a hook problem.** The run showed mcode raising its native permission dialog
@@ -1075,6 +1075,14 @@ mcode 0.6.13 driving a real Mullion:
 | there is **no double gate**                                                         | **one** `review_gate` for the turn — the Claude-format plugin does not register `PermissionRequest`, so only the CODEX one asks                                                                         |
 | mcode **applies** the allow                                                         | the gate was auto-approved ("auto-approving review gate — mcode session spawned with skip-permissions"), the command **ran**, and **no** `◆ Approval required` appeared in the TUI                      |
 | the MCP server is visible and **answers**                                           | the session called `mullion.list_sessions` and the call **returned** — the whole `mcode-process → MCP child → MullionClient` chain, against a live Mullion                                              |
+
+The first row lists **this run's** observations, not the plugin's full event
+set: exactly three hook messages reached Mullion — `session_start`, `turn_start`
+and `review_gate`. The 0.6.12 table above is the one that enumerates the
+events (it also saw `progress`, from `Stop`). This run's session was still
+mid-turn when the probe ended it, so `Stop` never fired, and its turn edited no
+file, so nothing else was emitted either. What this table claims is the
+**two-plugin layout**, not the event catalogue.
 
 Same isolated recipe as the 0.6.12 run above, plus one genuinely new piece: the
 credential was an **independent** `mcode login` inside that profile — a separate
