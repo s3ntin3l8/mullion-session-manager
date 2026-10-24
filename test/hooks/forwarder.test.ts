@@ -238,10 +238,11 @@ describe("forwarder.mjs (issue #174)", () => {
   // UNCAUGHT exception: vitest reports it as an *unhandled error*, so every
   // assertion in the file still passes and yet the suite exits non-zero.
   //
-  // This test makes the race deterministic — a child that is already gone by
-  // the time the write happens — so the EPIPE is guaranteed rather than
-  // load-dependent. If the fix ever regresses, the unhandled error makes
-  // THIS RUN fail, which is exactly the symptom the issue is about.
+  // This test makes the race deterministic — a child that accepts the write
+  // and then exits while the flush is still pending — so the EPIPE is
+  // guaranteed rather than load-dependent. If the fix ever regresses, the
+  // unhandled error makes THIS RUN fail, which is exactly the symptom the
+  // issue is about.
   it("survives a child that exits before the write flushes (issue #1831)", async () => {
     // The race, made deterministic. The child stays alive long enough to
     // ACCEPT the write, then exits — and the FLUSH, still pending, fails
