@@ -1,6 +1,6 @@
 {
   "name": "mullion-session-manager",
-  "version": "0.3.43",
+  "version": "0.3.44",
   "type": "module",
   "description": "Self-hosted, tiled, persistent browser dashboard for host-run AI CLI terminals (Claude Code, Codex, opencode, ...)",
   "license": "AGPL-3.0-or-later",
@@ -18,6 +18,7 @@
     "build": "tsc -p tsconfig.build.json && cp -r src/hooks dist/hooks && cp -r src/mcp dist/mcp && cp -r src/cli dist/cli && cp -r src/bundle dist/bundle && mkdir -p dist/docs && cp docs/agent-guide.md dist/docs/agent-guide.md && npm run build:smoke-test",
     "build:smoke-test": "node --input-type=module -e \"await import('./dist/app.js');\"",
     "start": "node dist/server.js",
+    "postinstall": "node scripts/fix-node-pty-helper.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",

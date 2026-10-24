@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { coverageConfig } from "../vitest.shared.js";
+import { coverageConfig, maxWorkers } from "../vitest.shared.js";
 
 // Frontend's unit-test setup. Started deliberately minimal (Phase 4d, pure
 // logic modules only, e.g. reorder.ts) — the default environment stays
@@ -52,5 +52,6 @@ export default defineConfig({
     // backend's own vitest.config.ts, which this object was byte-identical
     // to before being extracted.)
     coverage: coverageConfig,
+    maxWorkers,
   },
 });

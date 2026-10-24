@@ -1,5 +1,5 @@
 import { defineConfig, configDefaults } from "vitest/config";
-import { coverageConfig, worktreeExcludes } from "./vitest.shared.js";
+import { coverageConfig, maxWorkers, worktreeExcludes } from "./vitest.shared.js";
 
 export default defineConfig({
   test: {
@@ -32,6 +32,7 @@ export default defineConfig({
     // `make test-e2e` instead.
     exclude: [...configDefaults.exclude, "frontend/**", ...worktreeExcludes, "test/e2e/**"],
     coverage: coverageConfig,
+    maxWorkers,
     // Most tests here call buildApp(), which stands up a full Fastify
     // instance (db migrations, PtyManager, hooks.sock). Under
     // `test-shards: 2` on a CI runner (~90 files/shard, 51s of import alone
