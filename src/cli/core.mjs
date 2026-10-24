@@ -1758,11 +1758,11 @@ function formatTriageStatus(r) {
       if (r.github.comment.bodyTruncated) lines.push("(the triage text was cut short)");
     }
     // The attribution says how the comment was matched to the triage: the
-    // marker Mullion's own prompt asks for, or merely the reviewer bot's newest
-    // comment after the dispatch (a custom prompt may not use the marker) —
-    // which may be some other comment of that bot's rather than the triage.
+    // marker Mullion's own prompt asks for, or merely the newest bot comment
+    // after the dispatch (by the reviewer bot when one is configured; a custom
+    // prompt may not use the marker) — which may not be the triage.
     if (r.github.comment?.attribution === "fallback") {
-      lines.push("(reviewer bot's newest comment, marker missing — may not be the triage)");
+      lines.push("(newest bot comment, marker missing — may not be the triage)");
     }
     // Comments by other bots are skipped; when that is why nothing shows up,
     // say whose they were, so a mistyped reviewer bot login is visible.

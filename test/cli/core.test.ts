@@ -1876,9 +1876,7 @@ describe("runCommand", () => {
         const io = fakeIo();
         expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
         const out = io.written.join("");
-        expect(out).toContain(
-          "reviewer bot's newest comment, marker missing — may not be the triage",
-        );
+        expect(out).toContain("newest bot comment, marker missing — may not be the triage");
       });
 
       it("says whose comment was ignored when nothing from the reviewer bot landed (#1847)", async () => {
