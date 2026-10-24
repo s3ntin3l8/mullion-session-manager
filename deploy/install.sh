@@ -544,36 +544,80 @@ fi
 # when it cannot be determined at all — the safe direction, which is the
 # behaviour before this change).
 #
-# launchd_job_home PLIST — the install root a launchd agent job's definition
-# belongs to, read from the MULLION_HOME the installer wrote into it. Empty
-# when the file is missing or carries no MULLION_HOME.
-launchd_job_home() {
-  local plist="$1"
+# plist_string PLIST KEYPATH [SEDKEY] — the value of a key in a plist.
+# KEYPATH is plutil's dotted key path ("EnvironmentVariables.MULLION_HOME");
+# SEDKEY is the plain key the sed fallback looks for (it does not care about
+# nesting, so the plain key is right there). macOS ships plutil, which reads
+# the plist's STRUCTURE rather than its line layout (a legal one-line plist
+# defeats a line-oriented sed); the sed fallback keeps this working where
+# plutil is absent — the Linux CI suite drives the launchd branch through a
+# shimmed `uname`, and has no plutil.
+# Empty when the file is missing or the key is absent.
+plist_string() {
+  local plist="$1" keypath="$2" sedkey="${3:-$2}" value=""
   [ -f "$plist" ] || return 0
+  if command -v plutil >/dev/null 2>&1; then
+    value="$(plutil -extract "$keypath" raw -o - "$plist" 2>/dev/null || true)"
+    printf '%s\n' "$value"
+    return 0
+  fi
   # `|| true`: the installer runs under `set -e -o pipefail`, so a failing
   # pipeline inside a command substitution would abort the whole install.
-  # An unreadable definition is "unknown root" — the caller fails safe.
-  sed -n '/<key>MULLION_HOME<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}' "$plist" 2>/dev/null | head -1 || true
+  sed -n "/<key>$sedkey<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}" "$plist" 2>/dev/null | head -1 || true
+}
+
+# launchd_job_home PLIST — the install root a launchd agent job's definition
+# belongs to: the MULLION_HOME the installer wrote into it (it lives in the
+# job's EnvironmentVariables), with the WorkingDirectory (<root>/current) as
+# the fallback for a hand-written definition. Empty when the file is missing
+# or carries neither.
+launchd_job_home() {
+  local plist="$1" value=""
+  [ -f "$plist" ] || return 0
+  value="$(plist_string "$plist" "EnvironmentVariables.MULLION_HOME" "MULLION_HOME" || true)"
+  if [ -z "$value" ]; then
+    value="$(plist_string "$plist" WorkingDirectory || true)"
+    value="${value%/}"
+    value="${value%/current}"
+  fi
+  printf '%s\n' "$value"
 }
 
 # systemd_unit_home UNIT — the same for a systemd user unit: its
 # EnvironmentFile=<root>/.env, with WorkingDirectory=<root>/current as the
-# fallback. Empty when the file is missing or carries neither.
+# fallback. Empty when the file is missing, carries neither, or names a
+# systemd specifier (%h, %t, …) that cannot be resolved statically — an
+# unknown root, which the caller fails safe on.
 systemd_unit_home() {
-  local unit="$1" env_file working_dir
+  local unit="$1" env_file working_dir value="" env_files
   [ -f "$unit" ] || return 0
-  # `|| true` on every pipeline: see launchd_job_home's own comment — under
+  # `|| true` on every pipeline: see plist_string's own comment — under
   # `set -e -o pipefail` a failing pipeline inside a command substitution
   # would abort the whole install.
-  env_file="$(sed -n 's/^EnvironmentFile=//p' "$unit" 2>/dev/null | head -1 || true)"
-  # systemd's leading "-" means "ignore this file if it is missing".
-  env_file="${env_file#-}"
-  if [ -n "$env_file" ]; then
-    dirname "$env_file" || true
+  env_files="$(sed -n 's/^EnvironmentFile=//p' "$unit" 2>/dev/null || true)"
+  while IFS= read -r env_file; do
+    [ -n "$env_file" ] || continue
+    # A specifier cannot be resolved without systemd's own expansion.
+    case "$env_file" in
+      *%*) return 0 ;;
+    esac
+    # systemd's leading "-" means "ignore this file if it is missing".
+    env_file="${env_file#-}"
+    value="$(dirname "$env_file" || true)"
+    break
+  done <<EOF
+$env_files
+EOF
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
     return 0
   fi
   working_dir="$(sed -n 's/^WorkingDirectory=//p' "$unit" 2>/dev/null | head -1 || true)"
   [ -n "$working_dir" ] || return 0
+  case "$working_dir" in
+    *%*) return 0 ;;
+  esac
+  working_dir="${working_dir%/}"
   # <root>/current -> <root>
   printf '%s\n' "${working_dir%/current}"
 }
@@ -589,6 +633,35 @@ same_install_root() {
   a="$(cd "$this_root" 2>/dev/null && pwd -P)" || a="$this_root"
   b="$(cd "$other_root" 2>/dev/null && pwd -P)" || b="$other_root"
   [ "$a" = "$b" ]
+}
+
+# install_root_port ROOT — the port that install root binds: the PORT its
+# .env sets, or the schema's own default (3000, src/plugins/env.ts) when it
+# sets none — which is the case for BOTH roles, as the installer writes it.
+install_root_port() {
+  local root="$1" port=""
+  if [ -f "$root/.env" ]; then
+    port="$(sed -n 's/^PORT=//p' "$root/.env" 2>/dev/null | head -1 || true)"
+    port="${port%%[[:space:]]*}"
+    port="${port//\"/}"
+    port="${port//\'/}"
+    port="${port//$'\r'/}"
+  fi
+  printf '%s\n' "${port:-3000}"
+}
+
+# warn_if_port_collision OTHER_LABEL OTHER_ROOT — two roots on one host that
+# bind the same port cannot both run: the second one exits on EADDRINUSE
+# and crash-loops. Neither generated .env sets PORT, so this is the COMMON
+# case for two roots on one host — leaving the other job alone is right,
+# but it is not "the host is fine", and the operator has to hear about it.
+warn_if_port_collision() {
+  local other_label="$1" other_root="$2" this_port other_port
+  this_port="$(install_root_port "$MULLION_HOME")"
+  other_port="$(install_root_port "$other_root")"
+  if [ "$this_port" = "$other_port" ]; then
+    echo "WARNING: $other_label (installed in $other_root) and this install would BOTH bind port $this_port — one of them will crash-loop with EADDRINUSE. Set PORT in one of the two .env files to give them different ports." >&2
+  fi
 }
 
 # How the operator tails this host's service logs — platform-specific, and
@@ -661,6 +734,7 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
   OTHER_JOB_HOME="$(launchd_job_home ~/Library/LaunchAgents/"$OTHER_LABEL.plist")"
   if [ -n "$OTHER_JOB_HOME" ] && ! same_install_root "$MULLION_HOME" "$OTHER_JOB_HOME"; then
     echo "==> Leaving $OTHER_LABEL alone: it is installed in $OTHER_JOB_HOME, a different install root from $MULLION_HOME"
+    warn_if_port_collision "$OTHER_LABEL" "$OTHER_JOB_HOME"
   else
     if launchctl print "$(launchd_gui_domain)/$OTHER_LABEL" >/dev/null 2>&1; then
       echo "==> Booting out $OTHER_LABEL (this host is now role: $ROLE)"
@@ -722,6 +796,7 @@ else
   OTHER_UNIT_HOME="$(systemd_unit_home ~/.config/systemd/user/"$OTHER_UNIT_NAME")"
   if [ -n "$OTHER_UNIT_HOME" ] && ! same_install_root "$MULLION_HOME" "$OTHER_UNIT_HOME"; then
     echo "==> Leaving $OTHER_UNIT_NAME enabled: it is installed in $OTHER_UNIT_HOME, a different install root from $MULLION_HOME"
+    warn_if_port_collision "$OTHER_UNIT_NAME" "$OTHER_UNIT_HOME"
   else
     if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
       systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then

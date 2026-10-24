@@ -776,7 +776,7 @@ exit 0
       skipDownload(mullionHome);
       const otherPlist = seedOtherLaunchdJob("com.mullion.agent", otherHome);
 
-      const { stdout } = await runScript(["--role", "primary", mullionHome]);
+      const { stdout, stderr } = await runScript(["--role", "primary", mullionHome]);
 
       const log = readLaunchctlLog();
       expect(
@@ -785,6 +785,47 @@ exit 0
       // The other role's definition is left on disk.
       expect(fs.existsSync(otherPlist)).toBe(true);
       expect(stdout).toMatch(/Leaving com\.mullion\.agent alone/);
+      // Neither .env sets a PORT, so both roots would bind 3000 — the
+      // operator has to hear about it (one of the two would crash-loop).
+      expect(stderr).toMatch(/BOTH bind port 3000/);
+    });
+
+    it("does not warn about a port collision when the other root binds a different port", async () => {
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      const otherHome = freshMullionHome();
+      skipDownload(mullionHome);
+      fs.writeFileSync(path.join(otherHome, ".env"), "PORT=4001\n");
+      seedOtherLaunchdJob("com.mullion.agent", otherHome);
+
+      const { stderr } = await runScript(["--role", "primary", mullionHome]);
+
+      expect(stderr).not.toMatch(/BOTH bind port/);
+    });
+
+    it("boots the other role's job out when its root is this root spelled through a symlink", async () => {
+      // The same directory reached by two paths is still the same install
+      // root — a symlinked path must not read as "a different root" and skip
+      // the teardown.
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const linked = path.join(os.tmpdir(), `mullion-link-${Date.now()}`);
+      fs.symlinkSync(mullionHome, linked);
+      try {
+        const otherPlist = seedOtherLaunchdJob("com.mullion.agent", linked);
+
+        await runScript(["--role", "primary", mullionHome]);
+
+        const log = readLaunchctlLog();
+        const domain = `gui/${process.getuid?.() ?? 501}`;
+        expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
+        expect(fs.existsSync(otherPlist)).toBe(false);
+      } finally {
+        fs.rmSync(linked, { force: true });
+      }
     });
 
     it("boots the other role's job out when it is installed in THIS install root", async () => {
