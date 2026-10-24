@@ -86,6 +86,7 @@ describe("hermes review relay", () => {
         provider: "hermes",
         apiUrl: API,
         model: "hermes-agent",
+        modelProvider: "",
         promptRepo: "acme/.github",
         promptPath: "review.md",
         cooldownMinutes: 10,
@@ -423,9 +424,46 @@ describe("hermes review relay", () => {
       expect(headers["Idempotency-Key"]).toBe("hermes-review:acme/widgets#7@..abc1234");
       expect(init.redirect).toBe("manual");
       const body = JSON.parse(init.body as string);
-      expect(body.model).toBe("hermes-agent");
+      // The profile default sends no model: the gateway's own default applies.
+      expect(body).not.toHaveProperty("model");
       expect(body.input).toContain("Target: pr #7 in repo acme/widgets");
       expect(body.input).toContain("REVIEW PROMPT BODY");
+    });
+
+    describe("which model the run asks for (#1775)", () => {
+      const dispatchedBody = async () => {
+        await requestHermesReview(app, PR);
+        const [post] = calls("/v1/runs");
+        return JSON.parse((post[1] as RequestInit).body as string);
+      };
+
+      it("sends neither model nor provider for the profile default, whatever is stored", async () => {
+        // "hermes-agent" is only the API server's alias under ITS launch
+        // profile (a `-p review-bot` gateway advertises `review-bot`), so on
+        // the wire it would be a literal model id again; no model is the
+        // gateway default. A stale provider must not turn it into an override.
+        applySettingsPatch(app, {
+          reviewRelay: { model: "hermes-agent", modelProvider: "openrouter" },
+        });
+        const body = await dispatchedBody();
+        expect(body).not.toHaveProperty("model");
+        expect(body).not.toHaveProperty("provider");
+      });
+
+      it("qualifies an override with its provider", async () => {
+        applySettingsPatch(app, {
+          reviewRelay: { model: "claude-sonnet-5-5", modelProvider: "anthropic" },
+        });
+        const body = await dispatchedBody();
+        expect(body).toMatchObject({ model: "claude-sonnet-5-5", provider: "anthropic" });
+      });
+
+      it("sends a bare custom model when no provider is stored", async () => {
+        applySettingsPatch(app, { reviewRelay: { model: "my-model", modelProvider: "" } });
+        const body = await dispatchedBody();
+        expect(body.model).toBe("my-model");
+        expect(body).not.toHaveProperty("provider");
+      });
     });
 
     it("a retry of the same range reuses the key, and so does a later request for it", async () => {

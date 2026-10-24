@@ -236,6 +236,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     provider: "none",
     apiUrl: "",
     model: "hermes-agent",
+    modelProvider: "",
     promptRepo: "",
     promptPath: "hermes-review-prompt.md",
     triagePromptRepo: "",

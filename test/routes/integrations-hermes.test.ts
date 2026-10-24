@@ -5,7 +5,11 @@ import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { applySettingsPatch, mergeSettings } from "../../src/services/settings.js";
-import { clearHermesKey, getHermesKey } from "../../src/services/hermes-integration.js";
+import {
+  clearHermesKey,
+  getHermesKey,
+  setHermesKey,
+} from "../../src/services/hermes-integration.js";
 
 const tmpDb = path.join(os.tmpdir(), `integrations-hermes-test-${process.pid}.db`);
 
@@ -112,6 +116,110 @@ describe("Hermes review relay integration routes", () => {
     });
   });
 
+  describe("GET /api/integrations/hermes/model-options (#1775)", () => {
+    const URL = "/api/integrations/hermes/model-options";
+    const configure = () => {
+      applySettingsPatch(app, { reviewRelay: { apiUrl: "http://192.168.2.6:8642/p/review-bot" } });
+      setHermesKey(app, "sekret-key"); // pragma: allowlist secret
+    };
+    const options = (providers: unknown[]) =>
+      new Response(JSON.stringify({ providers, model: "x", provider: "y" }), { status: 200 });
+
+    it("reports not-configured with no URL or no key, without calling Hermes", async () => {
+      expect((await call("GET", URL)).json()).toEqual({
+        available: false,
+        reason: "not-configured",
+      });
+      applySettingsPatch(app, { reviewRelay: { apiUrl: "http://192.168.2.6:8642" } });
+      expect((await call("GET", URL)).json()).toEqual({
+        available: false,
+        reason: "not-configured",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("lists the usable providers with the stored key, never the unconfigured ones", async () => {
+      configure();
+      fetchMock.mockResolvedValue(
+        options([
+          {
+            slug: "anthropic",
+            name: "Anthropic",
+            models: ["claude-sonnet-5-5", "claude-sonnet-5-5"],
+          },
+          { slug: "openrouter", name: "OpenRouter", models: ["x/y:free"], authenticated: true },
+          { slug: "nous", name: "Nous", models: [], authenticated: true },
+          { slug: "gemini", name: "Gemini", models: ["g"], authenticated: false },
+          { name: "no slug", models: ["z"] },
+        ]),
+      );
+      const res = await call("GET", URL);
+      expect(res.json()).toEqual({
+        available: true,
+        providers: [
+          { provider: "anthropic", name: "Anthropic", models: ["claude-sonnet-5-5"] },
+          { provider: "openrouter", name: "OpenRouter", models: ["x/y:free"] },
+        ],
+      });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe(
+        "http://192.168.2.6:8642/p/review-bot/api/model/options?include_unconfigured=0",
+      );
+      expect((init.headers as Record<string, string>).Authorization).toBe("Bearer sekret-key");
+      expect(res.body).not.toContain("sekret-key");
+    });
+
+    it("caps one provider's models so the dropdown stays usable", async () => {
+      configure();
+      const many = Array.from({ length: 1000 }, (_, i) => `m${i}`);
+      fetchMock.mockResolvedValue(options([{ slug: "openrouter", name: "OR", models: many }]));
+      const res = await call("GET", URL);
+      expect(res.json().providers[0].models).toHaveLength(300);
+    });
+
+    it("answers an available, empty list when no provider has anything to offer", async () => {
+      configure();
+      fetchMock.mockResolvedValue(
+        options([
+          { slug: "gemini", name: "Gemini", models: ["g"], authenticated: false },
+          { slug: "nous", name: "Nous", models: [] },
+        ]),
+      );
+      expect((await call("GET", URL)).json()).toEqual({ available: true, providers: [] });
+    });
+
+    it("shares the cap between providers, so many of them stay a usable list", async () => {
+      configure();
+      const many = Array.from({ length: 300 }, (_, i) => `m${i}`);
+      fetchMock.mockResolvedValue(
+        options(
+          Array.from({ length: 10 }, (_, i) => ({ slug: `p${i}`, name: `P${i}`, models: many })),
+        ),
+      );
+      const providers = (await call("GET", URL)).json().providers as Array<{ models: string[] }>;
+      expect(providers).toHaveLength(10);
+      expect(providers.every((p) => p.models.length === 60)).toBe(true);
+    });
+
+    it("reports unauthorized on a 401 so the UI can say the key is wrong", async () => {
+      configure();
+      fetchMock.mockResolvedValue(new Response("no", { status: 401 }));
+      expect((await call("GET", URL)).json()).toEqual({ available: false, reason: "unauthorized" });
+    });
+
+    it("reports unreachable, with a 200, when Hermes is down or answers nonsense", async () => {
+      configure();
+      fetchMock.mockRejectedValueOnce(new Error("connect timed out"));
+      const down = await call("GET", URL);
+      expect(down.statusCode).toBe(200);
+      expect(down.json()).toEqual({ available: false, reason: "unreachable" });
+      fetchMock.mockResolvedValueOnce(new Response("<html>", { status: 200 }));
+      expect((await call("GET", URL)).json()).toEqual({ available: false, reason: "unreachable" });
+      fetchMock.mockResolvedValueOnce(new Response("boom", { status: 500 }));
+      expect((await call("GET", URL)).json()).toEqual({ available: false, reason: "unreachable" });
+    });
+  });
+
   describe("settings.reviewRelay sanitizing", () => {
     it("treats relay settings saved before `provider` existed as Hermes", () => {
       const merged = mergeSettings({ reviewRelay: { apiUrl: "http://h:8643" } });
@@ -129,6 +237,7 @@ describe("Hermes review relay integration routes", () => {
         provider: "none",
         apiUrl: "",
         model: "hermes-agent",
+        modelProvider: "",
         promptRepo: "",
         promptPath: "hermes-review-prompt.md",
         triagePromptRepo: "",

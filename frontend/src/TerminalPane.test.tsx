@@ -600,6 +600,7 @@ function renderPane(
         provider: "none",
         apiUrl: "",
         model: "hermes-agent",
+        modelProvider: "",
         promptRepo: "",
         promptPath: "hermes-review-prompt.md",
         triagePromptRepo: "",

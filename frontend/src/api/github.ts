@@ -14,6 +14,7 @@ import type {
   WebhookRegistrationResult,
   GitHubIntegration,
   HermesIntegration,
+  HermesModelOptions,
   RunwayIntegration,
   RunwayQuota,
   ReviewRun,
@@ -166,6 +167,9 @@ export const githubApi = {
     }),
 
   clearHermesKey: () => request<void>("/api/integrations/hermes", { method: "DELETE" }),
+
+  getHermesModelOptions: () =>
+    request<HermesModelOptions>("/api/integrations/hermes/model-options"),
 
   testHermesConnection: () =>
     request<{ ok: boolean }>("/api/integrations/hermes/test", { method: "POST" }),

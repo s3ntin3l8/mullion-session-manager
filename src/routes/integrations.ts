@@ -28,8 +28,10 @@ import {
   setHermesKey,
 } from "../services/hermes-integration.js";
 import {
+  HermesAuthError,
   HermesNotConfiguredError,
   HermesUnavailableError,
+  listHermesModelOptions,
   testHermesConnection,
 } from "../services/hermes-review.js";
 import {
@@ -407,6 +409,30 @@ export async function integrationsRoute(app: FastifyInstance) {
         throw err;
       }
       return { ok: true };
+    },
+  );
+
+  // The model picker's inventory (issue #1775). Like the Runway quota route
+  // below, an unavailable Hermes is an answer, not an error: the picker falls
+  // back to free text, so it needs a reason, not a 5xx.
+  app.get(
+    "/api/integrations/hermes/model-options",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async () => {
+      try {
+        return { available: true as const, providers: await listHermesModelOptions(app) };
+      } catch (err) {
+        if (err instanceof HermesNotConfiguredError) {
+          return { available: false as const, reason: "not-configured" as const };
+        }
+        if (err instanceof HermesAuthError) {
+          return { available: false as const, reason: "unauthorized" as const };
+        }
+        if (err instanceof HermesUnavailableError) {
+          return { available: false as const, reason: "unreachable" as const };
+        }
+        throw err;
+      }
     },
   );
 

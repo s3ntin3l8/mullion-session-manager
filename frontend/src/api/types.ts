@@ -623,6 +623,19 @@ export interface HermesIntegration {
   updatedAt: string | null;
 }
 
+/** One provider's models from Hermes' picker inventory (issue #1775). */
+export interface HermesModelProvider {
+  /** Hermes provider slug — what a run's `provider` takes. */
+  provider: string;
+  name: string;
+  models: string[];
+}
+
+/** An unavailable Hermes is an answer (200), so the picker can fall back to free text. */
+export type HermesModelOptions =
+  | { available: true; providers: HermesModelProvider[] }
+  | { available: false; reason: "not-configured" | "unauthorized" | "unreachable" };
+
 /** Never carries the key — see src/services/runway-integration.ts. */
 export interface RunwayIntegration {
   hasKey: boolean;
@@ -2138,6 +2151,8 @@ export interface AppSettings {
     provider: "none" | "hermes";
     apiUrl: string;
     model: string;
+    /** Hermes provider slug the model belongs to; empty = the bare model. */
+    modelProvider: string;
     promptRepo: string;
     promptPath: string;
     /** The issue-triage relay's own prompt (issue #1629). */
