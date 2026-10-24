@@ -71,9 +71,6 @@ function mkTmpDir(prefix: string): string {
   return dir;
 }
 
-// The fixture lives in its own module so that other tests can build a session
-// the same way (see the mcode adapter's MCP-credential test).
-
 const ORIGINAL_ENV = { ...process.env };
 
 beforeEach(() => {
