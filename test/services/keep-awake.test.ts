@@ -226,6 +226,45 @@ describe("startKeepAwake", () => {
     keepAwake.stop();
   });
 
+  it("tolerates a kill() that throws — the child may already be gone", () => {
+    vi.useFakeTimers();
+    const child = fakeChild();
+    child.kill.mockImplementation(() => {
+      throw new Error("ESRCH");
+    });
+    const spawnFn = vi.fn(() => child);
+    const app = mockApp();
+
+    const keepAwake = startKeepAwake(app, { platform: "darwin", spawnFn: spawnFn as never });
+    keepAwake.sync();
+    expect(keepAwake.isArmed()).toBe(true);
+
+    // Disarming must not throw out of the timer callback.
+    expect(() => keepAwake.stop()).not.toThrow();
+    expect(app.log.debug).toHaveBeenCalled();
+  });
+
+  it("tolerates a spawn() that throws synchronously — warns once and arms nothing", () => {
+    vi.useFakeTimers();
+    const spawnFn = vi.fn(() => {
+      throw new Error("spawn caffeinate EACCES");
+    });
+    const app = mockApp();
+
+    const keepAwake = startKeepAwake(app, { platform: "darwin", spawnFn: spawnFn as never });
+    expect(() => keepAwake.sync()).not.toThrow();
+
+    expect(keepAwake.isArmed()).toBe(false);
+    expect(app.log.warn).toHaveBeenCalledTimes(1);
+
+    // A later tick must not re-warn, and must not re-arm.
+    keepAwake.sync();
+    vi.advanceTimersByTime(60_000);
+    expect(app.log.warn).toHaveBeenCalledTimes(1);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    keepAwake.stop();
+  });
+
   it("arms on its own timer, without an explicit sync()", () => {
     vi.useFakeTimers();
     const spawnFn = vi.fn(() => fakeChild());
