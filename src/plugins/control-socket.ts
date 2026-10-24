@@ -151,7 +151,16 @@ interface OpSpec {
 }
 
 /** Body fields a session-scoped `sessions.spawn_child` may forward (#1518);
- * verified against createSessionSchema in routes/sessions.ts. */
+ * verified against createSessionSchema in routes/sessions.ts.
+ *
+ * Issue #1733 — `skipPermissions` joins the list, but it is CAPPED by the
+ * parent's own value right here, where the connection's scope is known, so
+ * forwarding it can only ever NARROW the child's permission posture, never
+ * widen it. See the handler's own comment for the reasoning.
+ * `kind` does NOT join: making a child a dock session hides it from the
+ * session list, which is a visibility change rather than a permission one,
+ * and #426 called it out explicitly.
+ */
 const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "command",
   "name",
@@ -160,6 +169,7 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "smallModel",
   "seedPrompt",
   "open",
+  "skipPermissions",
 ];
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
@@ -1292,16 +1302,44 @@ export const OPS: Record<string, OpSpec> = {
       // Session scope forwards an explicit ALLOWLIST (#1518), not a denylist:
       // a field newly added to POST /api/sessions' schema (as `env` once was)
       // must not silently widen what a session-scoped caller can set.
-      // `skipPermissions`, `kind`, `env`, `nameLocked` etc. are privilege- or
-      // visibility-adjacent and stay full-scope only (a full-scope caller has
-      // that power directly). `seedPrompt` grants nothing `command` doesn't
-      // already (a session-scoped caller fully controls its child's first turn
-      // via `command` itself).
+      // `kind`, `env`, `nameLocked` etc. are privilege- or visibility-adjacent
+      // and stay full-scope only (a full-scope caller has that power
+      // directly). `seedPrompt` grants nothing `command` doesn't already (a
+      // session-scoped caller fully controls its child's first turn via
+      // `command` itself).
+      //
+      // Issue #1733 — `skipPermissions` IS forwarded now, so a delegated
+      // child inherits the parent's unattended permission posture instead of
+      // stalling on a prompt nobody is watching. It is CAPPED by the parent's
+      // own value, so the field can only narrow: a session-scoped caller can
+      // ask for a MORE permissive child and will not get one.
+      //
+      // The cap is applied HERE, where the connection's scope is known, and
+      // not in createSessionRecord — because full scope keeps its own power
+      // over a child (the repo pins that: a full-scope caller setting
+      // `skipPermissions` on a child of a prompting parent still gets it),
+      // and a full-scope caller can already set the flag on the parent
+      // itself. Session scope is the only path where the cap is a security
+      // boundary rather than a policy.
       const rest: Record<string, unknown> =
         conn.scope === "session"
-          ? Object.fromEntries(
-              Object.entries(fullRest).filter(([key]) => SESSION_SPAWN_CHILD_FIELDS.includes(key)),
-            )
+          ? (() => {
+              const forwarded = Object.fromEntries(
+                Object.entries(fullRest).filter(([key]) =>
+                  SESSION_SPAWN_CHILD_FIELDS.includes(key),
+                ),
+              );
+              // The parent's own posture is the ceiling. `requested` may only
+              // narrow it: unset means "inherit", and an explicit true still
+              // cannot exceed what the parent has.
+              const parentSkipPermissions =
+                (parentLookup.result as { skipPermissions?: unknown } | undefined)
+                  ?.skipPermissions === true;
+              const requested = forwarded.skipPermissions;
+              forwarded.skipPermissions =
+                (requested === undefined ? true : requested === true) && parentSkipPermissions;
+              return forwarded;
+            })()
           : fullRest;
       const payload = {
         ...rest,

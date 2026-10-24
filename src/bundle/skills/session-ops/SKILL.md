@@ -60,15 +60,20 @@ Only your own children are reachable — a sibling or unrelated session is `403`
 
 This is a genuine child session — it survives if you're later killed, not a
 `Task`-tool subagent (no session, no PTY). A spawned child always starts as
-an ordinary, visible `terminal` session with permission prompts on; `kind`
-and `skipPermissions` are silently ignored from inside a session even if
-you pass them (only a full-scope operator can set either — unless this host
-has auth disabled entirely, in which case you already are one; see the
-Mullion host skill's scope caveat). If a child needs to act unattended
-(edit files, run tests, commit) rather than wait on a human, it needs
-`skipPermissions: true` to actually take effect. Its panel doesn't
-auto-open unless a human turned that on separately — either way it shows
-in the sidebar.
+an ordinary, visible `terminal` session; `kind` is silently ignored from
+inside a session even if you pass it (only a full-scope operator can set it
+— unless this host has auth disabled entirely, in which case you already
+are one; see the Mullion host skill's scope caveat).
+
+`skipPermissions` IS honoured from inside a session, but only as far as your
+own session's posture allows: **a child can never be more permissive than
+the session that spawned it.** Pass `skipPermissions: true` and the child
+gets it only if you already run with permissions skipped; pass `false` (or
+omit it) and the child inherits your posture. So a child of an unattended
+session is unattended too. If a child needs to act unattended (edit files,
+run tests, commit) rather than wait on a human, pass
+`skipPermissions: true`. Its panel doesn't auto-open unless a human turned
+that on separately — either way it shows in the sidebar.
 
 **Don't bake prompt text into `command`.** Use `initialPrompt` (MCP) /
 `--initial-prompt` (CLI) instead — it's delivered via the target CLI's own

@@ -34,13 +34,20 @@ import { gitEnv } from "../../src/services/git-env.js";
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 
+// Issue #1733 — the agent's own argv reaches the dtach MASTER's spawn (the
+// child_process one), not the attach client's node-pty spawn, so the mock's
+// calls have to be reachable from the test. Hoisted into a variable for
+// that; the mock itself is unchanged.
+const childProcessMock = vi.hoisted(() => ({ spawn: undefined as unknown }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
   // createWorktree, invoked via session-lifecycle.ts) — only the
   // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
   // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
-  return mockChildProcessSpawn(actual, { passthrough: ["git"] });
+  const mocked = mockChildProcessSpawn(actual, { passthrough: ["git"] });
+  childProcessMock.spawn = mocked.spawn;
+  return mocked;
 });
 
 // Issue #271 follow-up — opencode-session-transfer.ts's own subprocess calls
@@ -985,6 +992,62 @@ describe("sessions route", () => {
       const res = await app.inject({ method: "GET", url: "/api/sessions/not-a-number" });
       expect(res.statusCode).toBe(400);
       await app.close();
+    });
+  });
+
+  // Issue #1733 — the row is not the end of the story: the child's CLI has
+  // to actually RECEIVE the skip-permissions flag. This asserts the join
+  // end to end — the POST body through the spawn to the argv the agent is
+  // launched with — rather than the row alone.
+  describe("POST /api/sessions — skipPermissions reaches the launched argv", () => {
+    let app: Awaited<ReturnType<typeof buildApp>>;
+
+    beforeEach(async () => {
+      app = await buildApp();
+    });
+
+    // The app MUST be closed even when an assertion throws — this file's
+    // other tests share the node-pty mock and the session/socket paths, so
+    // an app left open by a failed assertion cascades into every test after
+    // it.
+    afterEach(async () => {
+      await app.close();
+    });
+
+    it("launches with the agent's skip-permissions flag when the row says so", async () => {
+      const projectId = await createProject(app);
+      const before = childProcessMock.spawn.mock.calls.length;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", skipPermissions: true },
+      });
+      expect(created.statusCode).toBe(201);
+
+      await waitUntil(() => childProcessMock.spawn.mock.calls.length > before);
+      const spawnCall =
+        childProcessMock.spawn.mock.calls[childProcessMock.spawn.mock.calls.length - 1];
+      const argv = [spawnCall[0], ...(spawnCall[1] ?? [])].join(" ");
+      expect(argv).toContain("--dangerously-skip-permissions");
+    });
+
+    it("launches WITHOUT the flag when the row says so", async () => {
+      const projectId = await createProject(app);
+      const before = childProcessMock.spawn.mock.calls.length;
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "claude", skipPermissions: false },
+      });
+      expect(created.statusCode).toBe(201);
+
+      await waitUntil(() => childProcessMock.spawn.mock.calls.length > before);
+      const spawnCall =
+        childProcessMock.spawn.mock.calls[childProcessMock.spawn.mock.calls.length - 1];
+      const argv = [spawnCall[0], ...(spawnCall[1] ?? [])].join(" ");
+      expect(argv).not.toContain("--dangerously-skip-permissions");
     });
   });
 

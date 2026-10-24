@@ -969,7 +969,9 @@ describe("controlSocketPlugin (issue #185)", () => {
      * spawned, so a scrollback test can assert it got back THIS session's
      * content, not just some non-empty base64 string (which the
      * getScrollback() preamble alone would already satisfy). */
-    async function createRealSession(): Promise<{ sessionId: number; hookToken: string }> {
+    async function createRealSession(options?: {
+      skipPermissions?: boolean;
+    }): Promise<{ sessionId: number; hookToken: string }> {
       // Direct app.inject() calls (not through the socket) still hit the
       // real global auth gate — MULLION_AUTH_TOKEN is set for every test in
       // this describe block, so setup here needs the same bearer header a
@@ -986,7 +988,13 @@ describe("controlSocketPlugin (issue #185)", () => {
         method: "POST",
         url: "/api/sessions",
         headers: authHeaders,
-        payload: { projectId: project.json().id, command: "bash" },
+        payload: {
+          projectId: project.json().id,
+          command: "bash",
+          ...(options?.skipPermissions !== undefined
+            ? { skipPermissions: options.skipPermissions }
+            : {}),
+        },
       });
       const sessionId = created.json().id as number;
       const hookToken = app!.pty.get(String(sessionId))!.hookToken;
@@ -1575,7 +1583,11 @@ describe("controlSocketPlugin (issue #185)", () => {
           .map(([opts]) => opts as { method?: string; url?: string; payload?: string })
           .find((o) => o.method === "POST" && o.url === "/api/sessions")!;
         expect(Object.keys(JSON.parse(post.payload!)).sort()).toEqual(
-          ["command", "name", "parentSessionId", "projectId"].sort(),
+          // Issue #1733 — `skipPermissions` joins the allowlist: it is
+          // capped by the parent's own value server-side, so forwarding it
+          // can only narrow. `kind` does NOT join — see the "silently strips
+          // kind" test below.
+          ["command", "name", "parentSessionId", "projectId", "skipPermissions"].sort(),
         );
         socket.destroy();
       });
@@ -1775,7 +1787,12 @@ describe("controlSocketPlugin (issue #185)", () => {
 
       // Independent review, PR #426 — session scope must never be able to
       // escalate a spawned child's privileges or hide it as a dock session.
-      it("session scope: silently strips skipPermissions and kind — a child always starts as a visible, non-skip-permissions terminal session", async () => {
+      it("session scope: silently strips kind — a child always starts as a visible terminal session", async () => {
+        // Issue #1733 — `kind` REMAINS full-scope only: making a child a
+        // dock session hides it from the session list, which is a visibility
+        // change rather than a permission one, and #426 called it out
+        // explicitly. `skipPermissions` is the one field that moved (see the
+        // inheritance tests below) — it is capped by the parent's own value.
         app = await buildApp();
         await app.ready();
         const { hookToken } = await createRealSession();
@@ -1784,12 +1801,78 @@ describe("controlSocketPlugin (issue #185)", () => {
           `${JSON.stringify({
             id: 1,
             op: "sessions.spawn_child",
-            body: { command: "bash", skipPermissions: true, kind: "dock" },
+            body: { command: "bash", kind: "dock" },
           })}\n`,
         );
         const reply = await waitForReply(socket);
         expect(reply.ok).toBe(true);
-        expect(reply.result).toMatchObject({ kind: "terminal", skipPermissions: false });
+        expect(reply.result).toMatchObject({ kind: "terminal" });
+        socket.destroy();
+      });
+
+      // Issue #1733 — a delegated child inherits the parent's unattended
+      // permission posture. Task Master's own workers run unattended
+      // (settings.taskMaster.skipPermissions is "on" by default), and a child
+      // they spawned used to start with permission prompts ON — so a
+      // delegated step that touched a file outside the sandbox blocked on a
+      // prompt nobody was watching. Agent-to-agent delegation was strictly
+      // LESS autonomous than the queue path it was supposed to complement.
+      it("session scope: a child INHERITS the parent's skipPermissions", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession({ skipPermissions: true });
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ skipPermissions: true });
+        socket.destroy();
+      });
+
+      it("session scope: a child of a prompting parent does NOT get skipPermissions", async () => {
+        // The parent's posture is the CEILING. A session-scoped caller that
+        // asks for a MORE permissive child must not get one — that is the
+        // #426 invariant, and it is what makes forwarding the field safe.
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession({ skipPermissions: false });
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", skipPermissions: true },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ skipPermissions: false });
+        socket.destroy();
+      });
+
+      it("session scope: a child may NARROW its parent's skipPermissions", async () => {
+        // The other direction is always allowed: a child can be less
+        // permissive than its parent.
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession({ skipPermissions: true });
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", skipPermissions: false },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ skipPermissions: false });
         socket.destroy();
       });
 
