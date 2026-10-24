@@ -105,6 +105,24 @@ describe("hosts route (issue #26)", () => {
       payload: { name: "not this machine" },
     });
     expect(renamed.statusCode).toBe(400);
+
+    // And a body that carries the drain flag ALONG WITH something else is
+    // refused too — otherwise the whole patch (the name, the token) would
+    // be applied to the primary, which is exactly what the check above
+    // exists to prevent.
+    const smuggled = await app.inject({
+      method: "PATCH",
+      url: "/api/hosts/local",
+      payload: { drained: true, name: "pwned", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    expect(smuggled.statusCode).toBe(400);
+    const after = await app.inject({ method: "GET", url: "/api/hosts" });
+    const local = after.json().find((h: { id: string }) => h.id === "local");
+    expect(local.name).toBe("Local");
+    expect(local.hasToken).toBe(false);
+    // Still parked from the legitimate call above — the smuggled body
+    // changed nothing.
+    expect(local.drained).toBe(true);
     await app.close();
   });
 
