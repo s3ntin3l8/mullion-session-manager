@@ -10,11 +10,17 @@
 # in-app Settings -> Server info "Update now" button
 # (POST /api/updates/apply), which uses scripts/self-update.sh instead.
 #
-# Run from within a checkout of this repo (it reads deploy/mullion.service /
-# deploy/mullion-agent.service as templates, relative to this script's own
-# location) — a fresh prod host does NOT need a full build toolchain-driven
-# checkout beyond that; the app itself is installed from the CI-built
-# release tarball, not built from this checkout.
+# Runs from a checkout of this repo OR from inside a release tarball — it
+# reads deploy/mullion.service / deploy/mullion-agent.service (and, on
+# macOS, deploy/launchd/*.plist) as templates, relative to this script's own
+# location, and it sources ../scripts/portable.sh the same way. Both
+# relative paths hold in a checkout AND in the release tarball, because the
+# tarball ships deploy/ beside scripts/ (see
+# scripts/assemble-release-tarball.sh). A fresh prod host therefore needs
+# NEITHER a build toolchain NOR a clone: deploy/mullion-install.sh fetches
+# the published release, verifies its checksum, and runs the copy of this
+# script that is inside it. The app itself is always installed from the
+# CI-built release tarball, never built from a checkout.
 #
 # Usage: deploy/install.sh [--role primary|agent] <mullion-home> [owner/repo]
 #   --role        primary (default) or agent — see deploy/README.md's env
@@ -851,17 +857,27 @@ else
 fi
 
 if [ "$ROLE" = "primary" ]; then
+  # Absolute paths, not repo-relative ones: on the clone path the operator
+  # stands in the checkout and `deploy/…` resolves, but on the clone-free
+  # path (deploy/mullion-install.sh) they ran this from wherever they liked,
+  # and the files live under the install root. $MULLION_HOME/current/deploy/…
+  # resolves on BOTH paths — the release tarball ships deploy/ (see
+  # scripts/assemble-release-tarball.sh), and `current` points at it.
   cat <<EOF
 
-Next steps (see deploy/README.md):
-  - Point Traefik at this host (deploy/traefik-dynamic.yml).
-  - Wire up your forwardAuth middleware (deploy/authentik-middleware-example.yml).
+Next steps (see $MULLION_HOME/current/deploy/README.md):
+  - Point Traefik at this host ($MULLION_HOME/current/deploy/traefik-dynamic.yml).
+  - Wire up your forwardAuth middleware ($MULLION_HOME/current/deploy/authentik-middleware-example.yml).
   - Check GET /health and /api/server-info once Traefik is routing.
 EOF
 else
+  # docs/ is NOT part of the release payload (only deploy/ is), so this one
+  # cites the repository rather than a path that only exists in a checkout.
+  # $REPO, not a hardcoded name — the installer parameterises the repository
+  # precisely so a fork can publish its own releases.
   cat <<EOF
 
-Next steps (see docs/multi-host.md):
+Next steps (see https://github.com/$REPO/blob/main/docs/multi-host.md):
   - If you used self-registration (Path 1 in $MULLION_HOME/.env), this
     agent should already be self-registering with the primary — check
     Settings -> Hosts on the primary for a new "enrolled" host, or watch
