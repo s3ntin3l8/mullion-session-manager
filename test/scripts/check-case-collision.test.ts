@@ -38,6 +38,17 @@ describe("check-case-collision.mjs", () => {
     fs.writeFileSync(full, "x");
   }
 
+  // True when the two paths are the SAME file on disk — which is what a
+  // case-insensitive filesystem does with two names that differ only in
+  // case: the second one collapses into the first.
+  function sameFile(a: string, b: string): boolean {
+    try {
+      return fs.statSync(path.join(root, a)).ino === fs.statSync(path.join(root, b)).ino;
+    } catch {
+      return false;
+    }
+  }
+
   it("passes on a tree with no case-only pair", async () => {
     write("src/Board.tsx");
     write("src/boardLanes.ts");
@@ -67,9 +78,50 @@ describe("check-case-collision.mjs", () => {
     expect(output).toContain("unifiedBoard.ts");
   });
 
-  it("ignores assets that share a stem (an asset is imported WITH its extension)", async () => {
-    // favicon.ico and favicon.svg are unambiguous: nothing imports them
-    // without naming the extension.
+  it("fails on a case-only pair of ASSETS (they cannot coexist on a Mac)", async (ctx) => {
+    // The point of the rule: "favicon.svg" and "Favicon.svg" are two files
+    // in the index, and on a case-insensitive filesystem (macOS) a checkout
+    // collapses one into the other — the tree silently diverges from the
+    // index. The pair CANNOT BE CREATED on such a filesystem, which is why
+    // the check has to run on Linux, where it can.
+    write("frontend/public/favicon.svg");
+    write("frontend/public/Favicon.svg");
+    if (sameFile("frontend/public/favicon.svg", "frontend/public/Favicon.svg")) {
+      // The filesystem collapsed the pair into one file — it cannot
+      // represent the fixture, so there is nothing to check here (CI, on
+      // Linux, can).
+      ctx.skip();
+      return;
+    }
+
+    let failed = false;
+    try {
+      await execFileAsync(process.execPath, [SCRIPT, root]);
+    } catch {
+      failed = true;
+    }
+    expect(failed).toBe(true);
+  });
+
+  it("fails on a case-only pair of DIRECTORIES", async (ctx) => {
+    fs.mkdirSync(path.join(root, "src", "UnifiedBoard"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src", "unifiedBoard"), { recursive: true });
+    if (sameFile("src/UnifiedBoard", "src/unifiedBoard")) {
+      ctx.skip();
+      return;
+    }
+
+    let failed = false;
+    try {
+      await execFileAsync(process.execPath, [SCRIPT, root]);
+    } catch {
+      failed = true;
+    }
+    expect(failed).toBe(true);
+  });
+
+  it("ignores assets that share a stem but not their name (favicon.ico, favicon.svg)", async () => {
+    // Different full names: unambiguous, and they coexist on a Mac.
     write("frontend/public/favicon.ico");
     write("frontend/public/favicon.svg");
     write("docs/assets/logo.png");

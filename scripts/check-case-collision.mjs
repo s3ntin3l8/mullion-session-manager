@@ -53,11 +53,23 @@ function importName(fileName) {
   return dot > 0 ? fileName.slice(0, dot) : fileName;
 }
 
-// Only files a TypeScript import can resolve are at risk: an asset is
-// always imported WITH its extension ("./favicon.svg"), so two assets that
-// share a stem are unambiguous. A module is imported by name
-// ("./UnifiedBoard.js"), and the extension is what the resolver guesses —
-// which is exactly where a case-only difference bites.
+// Two rules, because they catch different things:
+//
+//   1. the same STEM ignoring case, for module files — an extensionless
+//      specifier cannot tell "Foo.ts" from "foo.tsx" apart on a
+//      case-insensitive filesystem, and TypeScript fails the build with
+//      TS1149. Only files a TypeScript import can resolve are at risk
+//      here: a module is imported BY NAME ("./UnifiedBoard.js") and the
+//      extension is what the resolver guesses.
+//   2. the same FULL NAME ignoring case, for ANY file and any directory —
+//      "favicon.svg" and "Favicon.svg" cannot even coexist on a
+//      case-insensitive filesystem: a git checkout collapses one into the
+//      other and the tree silently diverges from the index. A directory
+//      and a file are the same story (they cannot share a name, case
+//      aside).
+//
+// Rule 1 alone would miss the asset pairs; rule 2 alone would miss the
+// "Foo.ts" vs "foo.tsx" pair (different full names). So both are checked.
 const MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 
 function moduleExtension(fileName) {
@@ -74,26 +86,47 @@ function walk(dir) {
   } catch {
     return;
   }
-  // directory -> lowercased import name -> the file names that map to it
-  const byName = new Map();
+  const stems = new Map();
+  const fullNames = new Map();
   for (const entry of entries) {
+    const name = entry.name;
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) walk(path.join(dir, entry.name));
-    } else if (entry.isFile()) {
-      if (!MODULE_EXTENSIONS.has(moduleExtension(entry.name))) continue;
-      const key = importName(entry.name).toLowerCase();
-      const list = byName.get(key) ?? [];
-      list.push(entry.name);
-      byName.set(key, list);
+      if (SKIP_DIRS.has(name)) continue;
+    } else if (!entry.isFile()) {
+      continue;
+    }
+    const full = fullNames.get(name.toLowerCase()) ?? [];
+    full.push(entry.isDirectory() ? `${name}/` : name);
+    fullNames.set(name.toLowerCase(), full);
+    if (entry.isFile() && MODULE_EXTENSIONS.has(moduleExtension(name))) {
+      const key = importName(name).toLowerCase();
+      const list = stems.get(key) ?? [];
+      list.push(name);
+      stems.set(key, list);
     }
   }
-  for (const [key, list] of byName) {
+  const where = path.relative(ROOT, dir) || ".";
+  for (const list of stems.values()) {
     if (list.length > 1) {
       collisions.push({
-        dir: path.relative(ROOT, dir) || ".",
-        key,
+        dir: where,
+        reason: "same name ignoring case, different extensions — an import specifier cannot tell them apart",
         files: list.sort(),
       });
+    }
+  }
+  for (const list of fullNames.values()) {
+    if (list.length > 1) {
+      collisions.push({
+        dir: where,
+        reason: "the same name ignoring case — they cannot coexist on a case-insensitive filesystem",
+        files: list.sort(),
+      });
+    }
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory() && !SKIP_DIRS.has(entry.name)) {
+      walk(path.join(dir, entry.name));
     }
   }
 }
@@ -104,13 +137,16 @@ if (collisions.length > 0) {
   console.error("These file names differ only in case, in the same directory:");
   for (const c of collisions) {
     console.error(`  ${c.dir}/ — ${c.files.join("  and  ")}`);
+    console.error(`      ${c.reason}`);
   }
   console.error(
-    "\nAn extensionless import specifier cannot tell them apart on a\n" +
-      'case-insensitive filesystem (macOS): "./Name.js" resolves to\n' +
-      "whichever the filesystem finds first, and TypeScript fails the build\n" +
-      "with TS1149. Rename one of them so the names differ by more than\n" +
-      "case (issue #1803).",
+    "\nOn a case-insensitive filesystem (macOS's default) two such names\n" +
+      'cannot coexist: a git checkout collapses one into the other, and the\n' +
+      "tree silently diverges from the index. An import specifier cannot\n" +
+      'tell them apart either ("./Name.js" resolves to whichever the\n' +
+      "filesystem finds first), and TypeScript fails the build with TS1149.\n" +
+      "Rename one of them so the names differ by more than case (issue\n" +
+      "#1803).",
   );
   process.exit(1);
 }
