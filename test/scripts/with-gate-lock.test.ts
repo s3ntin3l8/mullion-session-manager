@@ -66,13 +66,25 @@ describe.skipIf(!hasFlock)("with-gate-lock.sh", () => {
 
   it("does not leak the lock fd to orphans the command leaves behind", () => {
     // Regression: the child used to inherit fd 9, so a leaked fixture process
-    // (cf. #1798) kept the lock held after the hook returned.
-    const res = run(["sh", "-c", "setsid sleep 5 >/dev/null 2>&1 & exit 0"]);
+    // (cf. #1798) kept the lock held after the hook returned. The command
+    // reports the orphan's pid so cleanup targets exactly that process.
+    const pidFile = path.join(repo, "orphan.pid");
+    const res = run([
+      "sh",
+      "-c",
+      `setsid sleep 5 >/dev/null 2>&1 & echo $! >${JSON.stringify(pidFile)}; exit 0`,
+    ]);
     expect(res.status).toBe(0);
+    const orphan = Number(fs.readFileSync(pidFile, "utf8"));
     try {
+      expect(orphan).toBeGreaterThan(0);
       expect(lockIsHeld()).toBe(false);
     } finally {
-      spawnSync("pkill", ["-f", "^sleep 5$"]);
+      try {
+        process.kill(orphan, "SIGKILL");
+      } catch {
+        // already gone
+      }
     }
   });
 
@@ -116,4 +128,36 @@ describe.skipIf(!hasFlock)("with-gate-lock.sh", () => {
       expect(lockIsHeld()).toBe(false);
     },
   );
+
+  it("does not hot-spin or drop the lock while the command is stopped", async () => {
+    // Regression: under job control `wait` returned immediately for a stopped
+    // child while `kill -0` still succeeded, so the wrapper busy-looped while
+    // holding the repo-wide lock.
+    const wrapper = startWrapper(["sleep", "30"]);
+    await sleepMs(500);
+    const cmd = childOf(wrapper);
+    process.kill(cmd, "SIGSTOP");
+    const cpu = () => {
+      const f = fs.readFileSync(`/proc/${wrapper.pid}/stat`, "utf8").split(") ")[1].split(" ");
+      return Number(f[11]) + Number(f[12]); // utime + stime, clock ticks
+    };
+    const before = cpu();
+    await sleepMs(1000);
+    expect(cpu() - before).toBeLessThan(20); // 100 ticks/s: a spin burns ~100
+    expect(lockIsHeld()).toBe(true);
+    process.kill(cmd, "SIGCONT");
+    process.kill(cmd, "SIGTERM");
+    await sleepMs(400);
+    expect(lockIsHeld()).toBe(false);
+  });
+
+  it("removes its holder file on exit and ignores a stale one", () => {
+    const holder = `${lockPath()}.holder`;
+    run(["true"]);
+    expect(fs.existsSync(holder)).toBe(false);
+    fs.writeFileSync(holder, "pid 999999 in /nowhere since long ago\n");
+    const second = run(["true"]); // lock is free: no waiting message, then cleaned up
+    expect(second.status).toBe(0);
+    expect(fs.existsSync(holder)).toBe(false);
+  });
 });
