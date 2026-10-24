@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { buildLaunchPlan } from "../../../src/services/launch-plan.js";
 import {
   existsSync,
   mkdtempSync,
@@ -481,6 +482,54 @@ describe("buildMcodeMcpConfig — the plugin's MCP server declaration (#1783)", 
     expect(parsed.mcpServers.mullion.env).toBeUndefined();
   });
 
+  // The review's point: a test that pins "carries NO env" pins an ASSUMPTION,
+  // so nothing in the suite could catch the delivery mechanism changing. This
+  // pins the mechanism Mullion actually owns, end to end:
+  //
+  //   1. the SESSION env carries the three credential vars (launch-plan.ts) —
+  //      that is where mcode's process env comes from;
+  //   2. the plugin's `.mcp.json` carries NO env — a literal token there
+  //      would be a per-session secret in a HOST-GLOBAL file, which is
+  //      exactly what #1783 exists to prevent;
+  //   3. and mcode hands that process env down to the MCP server it starts.
+  //
+  // (3) is mcode's behaviour, and it is cited with mcode 0.6.13's own source
+  // in the adapter's header — its MCP client's transport factory merges
+  // `{...Fbr(), ...server.env, ...override}`, and `Fbr()` copies every string
+  // entry of `process.env`. It was also measured against a real mcode: a stub
+  // server named by a plugin's `.mcp.json` recorded MULLION_HOOK_SOCKET,
+  // MULLION_HOOK_TOKEN, MULLION_SOCKET_PATH and MULLION_SESSION_ID from its
+  // own environment.
+  it("delivers the credentials through the SESSION env, not through the entry", () => {
+    const plan = buildLaunchPlan({
+      id: "42",
+      cwd: "/tmp/project",
+      command: "mcode",
+      socketPath: "/tmp/sessions/42.sock",
+      hookToken: "the-hook-token",
+      hookSocketPath: "/tmp/sessions/hooks.sock",
+      controlSocketPath: "/tmp/sessions/mullion.sock",
+      sessionsDir: "/tmp/sessions",
+      sshAuthSock: "",
+      authEnabled: false,
+      env: {},
+      injectAgentGuide: true,
+      injectProjectBriefing: true,
+      injectMullionBundle: true,
+      skipPermissions: false,
+    });
+
+    // (1) The session's env — which becomes the mcode process's env.
+    expect(plan.env.MULLION_HOOK_SOCKET).toBe("/tmp/sessions/hooks.sock");
+    expect(plan.env.MULLION_HOOK_TOKEN).toBe("the-hook-token");
+    expect(plan.env.MULLION_SOCKET_PATH).toBe("/tmp/sessions/mullion.sock");
+
+    // (2) …and the entry itself carries none of them.
+    const entry = JSON.parse(buildMcodeMcpConfig("/mcp/server.mjs", "/node")).mcpServers.mullion;
+    expect(entry.env).toBeUndefined();
+    expect(JSON.stringify(entry)).not.toContain("the-hook-token");
+  });
+
   it("uses only the fields mcode's compatible MCP schema accepts", () => {
     // mcode rejects unknown fields in a plugin's MCP entry as
     // MCP_CONFIG_UNSUPPORTED, so the entry carries exactly three.
@@ -585,6 +634,42 @@ describe("install/remove the host-global plugin", () => {
       removeMcodePlugin();
       expect(existsSync(pluginDir)).toBe(false);
       expect(existsSync(permissionDir)).toBe(false);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
+
+  it("drops a stale .mcp.json from the plugin that does NOT declare the MCP server", () => {
+    // Exactly ONE plugin may declare the server — two declarations would
+    // start Mullion's MCP server twice. So the install enforces the
+    // invariant rather than assuming it: a leftover `.mcp.json` in the
+    // plugin that does not declare it is removed.
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      const permissionDir = resolveMcodePermissionPluginDir();
+      mkdirSync(path.join(permissionDir, ".codex-plugin"), { recursive: true });
+      writeFileSync(
+        path.join(permissionDir, ".codex-plugin", "plugin.json"),
+        JSON.stringify({ name: "mullion-permission" }),
+      );
+      // Pretend the directory is ours — the marker is what makes it ours.
+      writeFileSync(
+        path.join(permissionDir, MCODE_PLUGIN_MARKER_NAME),
+        "This directory is managed by Mullion (hook-adapters/mcode.ts). Remove it with `mullion` uninstall.\n",
+      );
+      // A leftover declaration from an earlier layout.
+      writeFileSync(path.join(permissionDir, ".mcp.json"), JSON.stringify({ mcpServers: {} }));
+
+      installMcodePlugin();
+
+      expect(existsSync(path.join(permissionDir, ".mcp.json"))).toBe(false);
+      // …while the plugin that DOES declare it keeps its declaration.
+      expect(existsSync(path.join(resolveMcodePluginDir(), ".mcp.json"))).toBe(true);
     } finally {
       if (realHome === undefined) delete process.env.HOME;
       else process.env.HOME = realHome;

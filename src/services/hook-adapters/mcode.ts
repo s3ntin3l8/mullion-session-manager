@@ -631,17 +631,55 @@ function writeFileAtomic(targetPath: string, contents: string, mode: number): vo
  *
  * ## Why the entry carries NO SECRET
  *
- * mcode spawns a stdio MCP server with
- * `env: { ...allowlist, ...ALL of mcode's process.env, ...entry.env }` — it
- * copies every string entry of the mcode process's own environment. And
  * Mullion ALREADY puts the per-session credentials in every session's env:
  * `launch-plan.ts` injects `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and
  * `MULLION_SOCKET_PATH` after the env scrub (its lines 283, 284 and 291).
+ * Those three are exactly the ones `src/mcp/client.mjs`'s `MullionClient`
+ * reads out of its own environment.
+ *
+ * And mcode hands the mcode PROCESS's whole environment down to an MCP server
+ * it starts. In mcode 0.6.13 (`chunks/chunk-H6JEREKX.js`) that is the MCP
+ * client's own transport factory:
+ *
+ * ```js
+ * function dce(t, e) {
+ *   switch (t.type) {
+ *     case "stdio": return cce(t, { env: e?.env });
+ *     …
+ * }}
+ * function cce(t, e) {
+ *   return new ace({ command: t.command, args: t.args, env: Ubr(t.env, e?.env), … });
+ * }
+ * function Ubr(t, e) { return { ...Fbr(), ...t ?? {}, ...e ?? {} }; }
+ * function Fbr() {
+ *   let t = {};
+ *   for (const [e, r] of Object.entries(process.env)) {
+ *     if (typeof r === "string") t[e] = r;
+ *   }
+ *   return t;
+ * }
+ * ```
+ *
+ * `Fbr()` copies EVERY string entry of `process.env`, so the MCP child's
+ * environment is the mcode process's environment, plus the server's own `env`,
+ * plus any override.
+ *
+ * (There is a SECOND, unrelated stdio transport in the same bundle — the MCP
+ * SDK's own `StdioClientTransport`, whose `start()` uses
+ * `env: { ...Lbr(), ...this._serverParams.env }` with `Lbr()` copying only a
+ * six-variable allowlist (HOME, LOGNAME, PATH, SHELL, TERM, USER). That is
+ * NOT the path a local plugin's MCP server takes — it is the path for an MCP
+ * server whose transport mcode did not build itself. The plugin path is
+ * `dce`/`cce` above.)
  *
  * So the credentials reach Mullion's MCP server with **no new plumbing at
- * all**: mcode's own spawn hands the mcode process's environment down to the
- * MCP server it starts, and those three variables are exactly the ones
- * `src/mcp/client.mjs`'s `MullionClient` reads out of its own environment.
+ * all**: mcode's own spawn hands the mcode process's environment down, and the
+ * three variables are already in it.
+ *
+ * Measured, not assumed: a stub server named by a plugin's `.mcp.json`
+ * recorded `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN`, `MULLION_SOCKET_PATH`
+ * and `MULLION_SESSION_ID` from its own environment — along with the rest of
+ * the mcode process's environment.
  *
  * The entry therefore carries only `type`, `command` and `args` — which is
  * also all mcode's "compatible" MCP schema accepts (it rejects unknown
@@ -795,9 +833,20 @@ function installMcodePluginDir(spec: McodePluginSpec): void {
   writeFileAtomic(path.join(spec.dir, "hooks", "hooks.json"), spec.hooks, 0o644);
   if (spec.mcpConfig !== null) {
     // The plugin's MCP server declaration (issue #1783). It carries NO
-    // secret — the per-session credentials ride the mcode process's own
-    // environment, and mcode hands them down to the MCP server it spawns.
+    // secret — the credentials ride the mcode process's own environment,
+    // and mcode hands that down to the MCP server it starts.
     writeFileAtomic(path.join(spec.dir, ".mcp.json"), spec.mcpConfig, 0o644);
+  } else {
+    // A leftover `.mcp.json` in a directory that no longer declares the
+    // server would start Mullion's MCP server a SECOND time — the exact
+    // failure the "exactly one plugin declares it" invariant guards against.
+    // So the invariant is enforced, not assumed.
+    try {
+      rmSync(path.join(spec.dir, ".mcp.json"), { force: true });
+    } catch {
+      // Best-effort: a stale declaration left behind is reported by mcode
+      // itself (MCP_SERVER_DUPLICATE), not by us failing an install.
+    }
   }
   writeFileAtomic(
     path.join(spec.dir, MCODE_PLUGIN_MARKER_NAME),

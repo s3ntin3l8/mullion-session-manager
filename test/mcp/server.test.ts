@@ -76,8 +76,12 @@ class ResponseReader {
  */
 function spawnServer(env: NodeJS.ProcessEnv = {}): ChildProcessWithoutNullStreams {
   const base = { ...process.env };
+  // No session credentials: the server must still start and serve, and report
+  // that it cannot reach a Mullion session (issue #1783 — the user's own
+  // personal mcode loads Mullion's plugin, so this IS the state it runs in).
   delete base.MULLION_HOOK_SOCKET;
   delete base.MULLION_HOOK_TOKEN;
+  delete base.MULLION_SOCKET_PATH;
   return spawn(process.execPath, [SERVER_PATH], {
     env: { ...base, ...env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -228,16 +232,9 @@ describe("mcp/server.mjs (issue #271)", () => {
   // session: the server keeps serving, and every tool reports that it cannot
   // reach a Mullion session.
   it("stays alive and serving when it has no session credentials at all", async () => {
-    // Strip the control-socket path too, so this is the fully
-    // credential-less case a personal mcode would produce.
-    const base = { ...process.env };
-    delete base.MULLION_HOOK_SOCKET;
-    delete base.MULLION_HOOK_TOKEN;
-    delete base.MULLION_SOCKET_PATH;
-    child = spawn(process.execPath, [SERVER_PATH], {
-      env: base,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // spawnServer() strips every credential var, so this IS the fully
+    // credential-less case a personal mcode produces.
+    child = spawnServer();
     const reader = new ResponseReader(child);
 
     // A tool call with no credentials comes back as a clean, tool-level
