@@ -60,6 +60,7 @@ const { enqueueTask, dispatchClaimedTask, retryTask } =
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
+const placementModule = await import("../../src/services/placement.js");
 const hostGitModule = await import("../../src/services/host-git.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");
 const { createWorktree, removeWorktreeIfClean } =
@@ -544,6 +545,64 @@ describe("claimTask", () => {
     const app = await buildApp();
     const outcome = await claimAndDispatch(app, 999999, { auto: false });
     expect(outcome).toEqual({ ok: false, reason: "not-found" });
+    await app.close();
+  });
+
+  // Issue #1724 — a placement that names a host the project has no path on
+  // is refused rather than run in a directory that does not exist there.
+  //
+  // The refusal FAILS the task, so it is a real transition and it has to be
+  // recorded like every other one: a bare status write reaches neither the
+  // activity feed nor the issue sync, and the failure would be invisible in
+  // both. This is the same `claimed -> failed` write retryTask's own
+  // release() makes, and it records it the same way.
+  it("records the transition when it refuses a claim the placement host cannot run", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 64);
+
+    // The policy only ever picks a host the project is mapped on, so the
+    // refusal is reached by forcing the placement onto a host the project's
+    // per-host map does not name.
+    vi.spyOn(placementModule, "resolvePlacement").mockReturnValue({
+      hostId: "host-without-the-project",
+      reason: "forced for the test",
+      considered: [],
+      fellBack: false,
+    });
+
+    // A "claimed" row, the state dispatch expects — enqueueTask's own
+    // transition is not what this test is about.
+    app.db.update(tasks).set({ status: "claimed" }).where(eq(tasks.id, task.id)).run();
+    const infoSpy = vi.spyOn(app.log, "info");
+
+    const outcome = await dispatchClaimedTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("failed");
+    expect(row.failureReason).toContain("host-without-the-project");
+
+    // The transition record — the activity feed and the board hang off it.
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: task.id,
+        from: "claimed",
+        to: "failed",
+        via: "placement-refusal",
+      }),
+      "task transition",
+    );
+    // And the issue sync — the task's GitHub issue has to learn it failed.
+    expect(mockSyncTaskTransition).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ status: "failed" }),
+      expect.anything(),
+      "failed",
+    );
+
+    fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
 

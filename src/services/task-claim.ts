@@ -306,11 +306,34 @@ export async function dispatchClaimedTask(
       { taskId, hostId: placement.hostId },
       `task dispatch: ${detail} — refusing to claim`,
     );
-    app.db
+    const updated = app.db
       .update(tasks)
       .set({ status: "failed", failureReason: detail })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
+    // The transition record is what the activity feed and the issue sync
+    // hang off — a bare status write reaches neither, so the failure
+    // would be invisible in both. `retryTask`'s own release() makes the
+    // same `claimed -> failed` write and records it the same way.
+    if (updated.changes > 0) {
+      recordTaskTransition(app, {
+        taskId,
+        projectId: project.id,
+        from: "claimed",
+        to: "failed",
+        via: "placement-refusal",
+        context: { reason: detail, hostId: placement.hostId },
+      });
+      // Fire-and-forget, same posture as every other sync on this path —
+      // the transition is already committed, and a GitHub-side problem
+      // must not unwind it.
+      void syncTaskTransition(
+        app,
+        { ...task, status: "failed", failureReason: detail },
+        project,
+        "failed",
+      );
+    }
     return { ok: false, reason: "worktree-failed", detail };
   }
   // The predicted path is derived from the PLACEMENT root — the path the
