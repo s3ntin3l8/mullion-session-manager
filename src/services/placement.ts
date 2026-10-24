@@ -180,12 +180,28 @@ export function serializeHostCwds(map: Record<string, string> | null | undefined
 }
 
 /**
+ * The sentinel for "the project IS on this host, but its path is not known".
+ *
+ * It exists for the create-project preview: a project that does not exist yet
+ * lives on the host it is being created on, and its path is not chosen until
+ * it is saved.
+ *
+ * NOT null, and that is load-bearing: null means "the project is NOT here",
+ * which makes the host ineligible (the policy's rule is
+ * `candidate.projectCwd !== null`). Returning null here would silently empty
+ * every preview — the create-modal one would answer "nowhere" for a project
+ * that is about to exist. The path is only ever READ where the project row
+ * exists, so the empty string never becomes a directory.
+ */
+const PROJECT_PATH_UNKNOWN = "";
+
+/**
  * The project's working directory ON a given host — null when the project is
  * not there.
  *
  * The project's own host always HAS the project — that is where its checkout
  * lives — but the path itself may be unknown (a project that does not exist
- * yet, in the create-project preview). The empty string says "here, but I do
+ * yet, in the create-project preview). The sentinel above says "here, but I do
  * not know where": the CALLER only needs to know the project is PRESENT
  * there, and the real path comes from the project row.
  *
@@ -198,7 +214,7 @@ export function projectCwdOnHost(
   hostId: string,
   hostCwds: Record<string, string>,
 ): string | null {
-  if (hostId === project.hostId) return project.cwd ?? "";
+  if (hostId === project.hostId) return project.cwd ?? PROJECT_PATH_UNKNOWN;
   return hostCwds[hostId] ?? null;
 }
 

@@ -386,4 +386,17 @@ describe("the per-host cwd map (issue #1724)", () => {
     // session in a directory that is not there.
     expect(projectCwdOnHost(project, "remote-b", map)).toBeNull();
   });
+
+  it("keeps the project's own host ELIGIBLE when its path is not known yet", () => {
+    // A project that does not exist yet (the create-project preview) lives on
+    // the host it is being created on, and its path is not chosen until it is
+    // saved. The answer must NOT be null: null means "the project is not
+    // here", which would make the host ineligible and empty the preview.
+    const project = { hostId: "local" };
+    const cwd = projectCwdOnHost(project, "local", {});
+    expect(cwd).not.toBeNull();
+    // And it must not be the OTHER hosts' answer either — a host with no map
+    // entry still does not have the project.
+    expect(projectCwdOnHost(project, "remote-a", {})).toBeNull();
+  });
 });
