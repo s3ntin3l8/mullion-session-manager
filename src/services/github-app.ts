@@ -282,9 +282,10 @@ export const REVIEW_PERMISSIONS = {
 // Its own narrow set: the marker is the only thing that touches checks.
 //
 // A GitHub App install has to be APPROVED for this permission before the
-// mint succeeds; until it is, the mint fails and resolveGitHubToken falls
-// back to the PAT/OAuth token (a `repo`-scoped user token covers check runs),
-// so the marker works on an install that has not re-approved the App.
+// mint succeeds; until it is, the mint fails with a 422. There is no PAT/OAuth
+// fallback for this scope: GitHub only lets a GitHub App create check runs, so
+// a user token 403s ("You must authenticate via a GitHub App"). The marker is
+// skipped instead, and resolveChecksToken says why (#1790).
 export const CHECKS_PERMISSIONS = {
   checks: "write",
   metadata: "read",
@@ -427,6 +428,10 @@ interface CachedToken {
 interface CachedTokenFailure {
   ok: false;
   expiresAt: number;
+  // The HTTP status of the mint that failed, kept so a repeat call inside the
+  // negative TTL can still tell "permission not granted" (422) from "not
+  // installed" (#1790).
+  status?: number;
 }
 const tokenCache = new Map<string, CachedToken | CachedTokenFailure>();
 const CACHE_SAFETY_MARGIN_MS = 60_000;
@@ -525,6 +530,9 @@ export interface InstallationTokenResult {
   token: string | null;
   // Only meaningful when `token` is null — see `InstallationLookup` above.
   installationsChecked: number | null;
+  // Set when `token` is null because a previous mint for this scope failed and
+  // is still in the negative cache: the HTTP status that mint got.
+  failureStatus?: number;
 }
 
 /**
@@ -560,7 +568,7 @@ export async function getInstallationToken(
       // A previously-doomed mint for this scope (e.g. the App hasn't been
       // re-approved with the `actions`/`metadata` permissions `"read"`
       // needs) — don't re-attempt it every call within the negative TTL.
-      return { token: null, installationsChecked: null };
+      return { token: null, installationsChecked: null, failureStatus: cached.status };
     }
   }
 
@@ -589,7 +597,11 @@ export async function getInstallationToken(
     // momentary GitHub blip.
     const status = err instanceof GitHubAppError ? err.status : undefined;
     if (status !== undefined && status >= 400 && status < 500) {
-      tokenCache.set(key, { ok: false, expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS });
+      tokenCache.set(key, {
+        ok: false,
+        expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS,
+        status,
+      });
     }
     throw err;
   }

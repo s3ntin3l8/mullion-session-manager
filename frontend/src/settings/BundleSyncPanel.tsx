@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { api, ApiError } from "../api/index.js";
-import type { AgentRuleAgent, BundleSyncStatus, SyncStatus } from "../api/index.js";
+import type { BundleSyncCli, BundleSyncStatus, SyncStatus } from "../api/index.js";
 import { resolveAgentLogo } from "../cliLogos.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { ErrorText } from "../ui/ErrorText.js";
@@ -32,18 +32,26 @@ import { Row, SecondaryButton } from "../ui/primitives.js";
 // different for each pair. Kept as a local lookup rather than trusting the
 // API to spell this out per-row: the distinction is a property of each
 // CLI's own delivery mechanism, not something that varies per response.
-const HAS_SESSION_FALLBACK: Record<AgentRuleAgent, boolean> = {
+const HAS_SESSION_FALLBACK: Record<BundleSyncCli, boolean> = {
   "claude-code": true,
   opencode: true,
   codex: false,
   agy: false,
+  // Issue: mcode support — mcode has no per-session bundle fallback (the
+  // bundle lands in its own <dataDir>/skills, which it scans at startup),
+  // so "not-synced" for mcode genuinely means nothing is installed yet.
+  mcode: false,
 };
 
-const CLI_META: Record<AgentRuleAgent, { label: string; logoBinary: string }> = {
+const CLI_META: Record<BundleSyncCli, { label: string; logoBinary: string }> = {
   "claude-code": { label: "Claude Code", logoBinary: "claude" },
   codex: { label: "Codex", logoBinary: "codex" },
   opencode: { label: "opencode", logoBinary: "opencode" },
   agy: { label: "Antigravity", logoBinary: "agy" },
+  // Issue: mcode support — no logo asset ships with mcode and none is
+  // vendored, so resolveAgentLogo returns null and the row renders
+  // without an image, same as any other un-branded agent.
+  mcode: { label: "MiniMax Code", logoBinary: "mcode" },
 };
 
 function fieldDotClass(status: SyncStatus): "on" | "off" | "warn" | null {
@@ -78,7 +86,7 @@ function fieldStatusText(status: SyncStatus): string {
 }
 
 function fieldNote(
-  cli: AgentRuleAgent,
+  cli: BundleSyncCli,
   kind: "skills" | "agents",
   status: SyncStatus,
 ): string | null {
@@ -100,7 +108,7 @@ function BundleSyncField({
   field,
 }: {
   label: string;
-  cli: AgentRuleAgent;
+  cli: BundleSyncCli;
   kind: "skills" | "agents";
   field: { status: SyncStatus; root: string | null; count: number };
 }) {

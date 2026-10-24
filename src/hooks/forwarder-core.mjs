@@ -721,6 +721,38 @@ function mapClaudeCodeEventCore(kind, payload) {
   }
 }
 
+// mcode (MiniMax Code) — the `mcode` hook adapter
+// (src/services/hook-adapters/mcode.ts).
+//
+// mcode RETIRED standalone user hooks: custom hooks must belong to a Plugin.
+// A plugin is a directory under `<dataDir>/plugins/`, and mcode reads the
+// CLAUDE CODE plugin format from it — `.claude-plugin/plugin.json` plus
+// `hooks/hooks.json` declaring Claude Code's event names. mcode's hook
+// payloads are Claude Code's too (hook_event_name, tool_name, tool_input,
+// tool_response, cwd, session_id, transcript_path).
+//
+// So the event→message mapping is the Claude Code mapping, verbatim — this
+// function exists as a separate entry point rather than a reuse of
+// mapClaudeCodeEvent itself for one reason: the agent envelope. Claude
+// Code's mappers stamp agentId/agentType from the payload
+// (applyAgentEnvelope), and mcode's payloads carry the same fields, so the
+// envelope is identical. The separate name exists so the forwarder's
+// dispatch stays explicit per agent, and so a future mcode-specific
+// divergence has an obvious home.
+//
+// The ONE mcode-specific difference is in the PERMISSION path, and it is
+// not here: mcode's `PermissionRequest` hook accepts a plain
+// `{"decision":"allow"}` result (mcode's own code: the
+// `"PermissionRequest"?{decision:"allow"` branch and its `lA` helper), so
+// Mullion's hook server can answer the permission prompt itself. That is how
+// skip-permissions is implemented for mcode — per-session, without ever
+// touching the user's global ~/.minimax/config.yaml (mcode's TUI has no
+// --permission flag, and relocating the data dir per session breaks auth —
+// see the mcode adapter's header for the full spike record).
+export function mapMcodeEvent(kind, payload) {
+  return applyAgentEnvelope(payload, mapClaudeCodeEventCore(kind, payload));
+}
+
 // Phase 5 (Track A) — the wire kinds hook-protocol.ts declares an
 // agentId/agentType envelope for (file_change, tool_failure, subagent).
 // Stamped in ONE place (applyAgentEnvelope, called from mapClaudeCodeEvent
@@ -1216,6 +1248,8 @@ export function buildForwarderMessage(agent, kind, payload) {
       return mapCodexEvent(kind, payload ?? {});
     case "agy":
       return mapAgyEvent(kind, payload ?? {});
+    case "mcode":
+      return mapMcodeEvent(kind, payload ?? {});
     default:
       return null;
   }
@@ -1258,6 +1292,21 @@ export function formatGateDecision(agent, decision, reason) {
       // to Claude Code's — see formatClaudeCodeGateDecision above. Never set
       // `interrupt`, `updatedInput`, or `updatedPermissions`: Codex's own
       // embedded schema documents all three as fail-closed if present.
+      return formatClaudeCodeGateDecision(decision, reason);
+    case "mcode":
+      // mcode's plugin hooks use the CLAUDE CODE dialect (the plugin format
+      // it reads IS Claude Code's — see mapMcodeEvent's header), so the
+      // `hookSpecificOutput.decision.{behavior,message}` shape is the right
+      // one to emit.
+      //
+      // This is ALSO the mechanism by which skip-permissions works for
+      // mcode: with the bypass on, Mullion's hook server answers the
+      // PermissionRequest with "allow" instead of raising a review gate.
+      // mcode honours a PermissionRequest hook result of
+      // `{"decision":"allow"}` (its own code has the
+      // `"PermissionRequest"?{decision:"allow"` branch) and equally honours
+      // the CLAUDE-format hookSpecificOutput form, so the Claude shape
+      // below works unchanged.
       return formatClaudeCodeGateDecision(decision, reason);
     // agy has no gate dialect at all — it never registers a
     // PermissionRequest-equivalent hook (see mapAgyEvent's PreToolUse
@@ -1315,6 +1364,18 @@ export function formatSessionStartOutput(agent, additionalContext) {
       // Mullion-owned hook group (see hook-adapters/codex-trust.ts) —
       // untrusted, Codex silently skips the hook entirely, so this never
       // throws or blocks on that either.
+      return formatClaudeCodeSessionStartOutput(additionalContext);
+    case "mcode":
+      // mcode reads the CLAUDE CODE plugin format (`.claude-plugin/plugin.json`),
+      // so its hook-result dialect IS Claude Code's — including SessionStart's
+      // `hookSpecificOutput.additionalContext`. Verified in mcode 0.6.12's own
+      // code: the CLAUDE-format result parser reads the additional context out
+      // of `hookSpecificOutput.additionalContext` (a string) and REQUIRES
+      // `hookSpecificOutput.hookEventName` to equal the event name — which
+      // formatClaudeCodeSessionStartOutput already emits.
+      //
+      // Without this case mcode's SessionStart reply would be a bare `{}` and
+      // Mullion's project briefing would never reach an mcode session.
       return formatClaudeCodeSessionStartOutput(additionalContext);
     case "agy":
       // CONFIRMED against a live SessionStart firing (issue #715 — this was

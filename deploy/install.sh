@@ -530,6 +530,168 @@ EOF
   chmod 600 "$MULLION_HOME/.env"
 fi
 
+# --- the other role's install root --------------------------------------------
+#
+# The installer tears down the OTHER role's job when it would collide with
+# this one — but only when the two roles share THIS install root (the same
+# .env, the same PORT). Two roles in two different install roots have two
+# .env files, two SESSIONS_DIRs and two ports, and can coexist on one host;
+# tearing the other one down then destroys a working, unrelated deployment
+# (issue #1800, found by the macOS launchd validation in issue #1794).
+#
+# So the other role's job definition is read to find the install root it
+# belongs to, and the teardown happens only when that root is THIS root (or
+# when it cannot be determined at all — the safe direction, which is the
+# behaviour before this change).
+#
+# plist_string PLIST KEYPATH [SEDKEY] — the value of a key in a plist.
+# KEYPATH is plutil's dotted key path ("EnvironmentVariables.MULLION_HOME");
+# SEDKEY is the plain key the sed fallback looks for (it does not care about
+# nesting, so the plain key is right there). macOS ships plutil, which reads
+# the plist's STRUCTURE rather than its line layout (a legal one-line plist
+# defeats a line-oriented sed); the sed fallback keeps this working where
+# plutil is absent — the Linux CI suite drives the launchd branch through a
+# shimmed `uname`, and has no plutil.
+# Empty when the file is missing or the key is absent.
+plist_string() {
+  local plist="$1" keypath="$2" sedkey="${3:-$2}" value=""
+  [ -f "$plist" ] || return 0
+  if command -v plutil >/dev/null 2>&1; then
+    value="$(plutil -extract "$keypath" raw -o - "$plist" 2>/dev/null || true)"
+    printf '%s\n' "$value"
+    return 0
+  fi
+  # `|| true`: the installer runs under `set -e -o pipefail`, so a failing
+  # pipeline inside a command substitution would abort the whole install.
+  sed -n "/<key>$sedkey<\/key>/{n;s/.*<string>\(.*\)<\/string>.*/\1/p;}" "$plist" 2>/dev/null | head -1 || true
+}
+
+# launchd_job_home PLIST — the install root a launchd agent job's definition
+# belongs to: the MULLION_HOME the installer wrote into it (it lives in the
+# job's EnvironmentVariables), with the WorkingDirectory (<root>/current) as
+# the fallback for a hand-written definition. Empty when the file is missing
+# or carries neither.
+launchd_job_home() {
+  local plist="$1" value=""
+  [ -f "$plist" ] || return 0
+  value="$(plist_string "$plist" "EnvironmentVariables.MULLION_HOME" "MULLION_HOME" || true)"
+  if [ -z "$value" ]; then
+    value="$(plist_string "$plist" WorkingDirectory || true)"
+    value="${value%/}"
+    value="${value%/current}"
+  fi
+  printf '%s\n' "$value"
+}
+
+# systemd_unit_home UNIT — the same for a systemd user unit: its
+# EnvironmentFile=<root>/.env, with WorkingDirectory=<root>/current as the
+# fallback. Empty when the file is missing, carries neither, or names a
+# systemd specifier (%h, %t, …) that cannot be resolved statically — an
+# unknown root, which the caller fails safe on.
+systemd_unit_home() {
+  local unit="$1" env_file working_dir value="" fallback="" env_files
+  [ -f "$unit" ] || return 0
+  # `|| true` on every pipeline: see plist_string's own comment — under
+  # `set -e -o pipefail` a failing pipeline inside a command substitution
+  # would abort the whole install.
+  env_files="$(sed -n 's/^EnvironmentFile=//p' "$unit" 2>/dev/null || true)"
+  while IFS= read -r env_file; do
+    [ -n "$env_file" ] || continue
+    # A specifier cannot be resolved without systemd's own expansion — this
+    # line's root is unknown. Keep looking: another line may name the root.
+    case "$env_file" in
+      *%*) continue ;;
+    esac
+    # systemd's leading "-" means "ignore this file if it is missing".
+    env_file="${env_file#-}"
+    # The installer's own template writes <root>/.env, and that is the line
+    # that names the install root. A unit that ALSO carries a shared
+    # defaults file (EnvironmentFile=-/etc/default/mullion) must not resolve
+    # to THAT — so the /.env line wins, whatever order the lines are in.
+    case "$env_file" in
+      */.env)
+        value="$(dirname "$env_file" || true)"
+        break
+        ;;
+    esac
+    # A resolvable line that is not the installer's .env: remember it, but
+    # prefer the /.env line if one shows up.
+    [ -n "$fallback" ] || fallback="$(dirname "$env_file" || true)"
+  done <<EOF
+$env_files
+EOF
+  if [ -z "$value" ]; then
+    value="$fallback"
+  fi
+  if [ -n "$value" ]; then
+    printf '%s\n' "$value"
+    return 0
+  fi
+  working_dir="$(sed -n 's/^WorkingDirectory=//p' "$unit" 2>/dev/null | head -1 || true)"
+  [ -n "$working_dir" ] || return 0
+  case "$working_dir" in
+    *%*) return 0 ;;
+  esac
+  working_dir="${working_dir%/}"
+  # <root>/current -> <root>
+  printf '%s\n' "${working_dir%/current}"
+}
+
+# same_install_root THIS_ROOT OTHER_ROOT — true when the two roots are the
+# same directory, however it is spelled (a symlinked path and its real path
+# are the same root, and two different spellings must not read as "different
+# roots" and skip the teardown).
+same_install_root() {
+  local this_root="$1" other_root="$2" a b
+  [ -n "$other_root" ] || return 1
+  [ "$this_root" = "$other_root" ] && return 0
+  a="$(cd "$this_root" 2>/dev/null && pwd -P)" || a="$this_root"
+  b="$(cd "$other_root" 2>/dev/null && pwd -P)" || b="$other_root"
+  [ "$a" = "$b" ]
+}
+
+# install_root_port ROOT — the port that install root binds: the PORT its
+# .env sets, or the schema's own default (3000, src/plugins/env.ts) when it
+# sets none — which is the case for BOTH roles, as the installer writes it.
+# The .env is read exactly the way the installer reads MULLION_ROLE out of
+# it (the LAST assignment wins, and the value is unquoted and trimmed), so
+# the two never disagree about what a .env says.
+install_root_port() {
+  local root="$1" port=""
+  if [ -f "$root/.env" ]; then
+    port="$(grep -E '^PORT=' "$root/.env" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    port="${port%$'\r'}"
+    while [[ "$port" == [[:space:]]* ]]; do port="${port#[[:space:]]}"; done
+    while [[ "$port" == *[[:space:]] ]]; do port="${port%[[:space:]]}"; done
+    # At most one matching quote character from each end — the same trim the
+    # installer does for MULLION_ROLE (L206): a value written as
+    # PORT="4001" must read as 4001, not as 4001".
+    case "$port" in
+      \"*) port="${port#\"}" ;;
+      \'*) port="${port#\'}" ;;
+    esac
+    case "$port" in
+      *\") port="${port%\"}" ;;
+      *\') port="${port%\'}" ;;
+    esac
+  fi
+  printf '%s\n' "${port:-3000}"
+}
+
+# warn_if_port_collision OTHER_LABEL OTHER_ROOT — two roots on one host that
+# bind the same port cannot both run: the second one exits on EADDRINUSE
+# and crash-loops. Neither generated .env sets PORT, so this is the COMMON
+# case for two roots on one host — leaving the other job alone is right,
+# but it is not "the host is fine", and the operator has to hear about it.
+warn_if_port_collision() {
+  local other_label="$1" other_root="$2" this_port other_port
+  this_port="$(install_root_port "$MULLION_HOME")"
+  other_port="$(install_root_port "$other_root")"
+  if [ "$this_port" = "$other_port" ]; then
+    echo "WARNING: $other_label (installed in $other_root) and this install would BOTH bind port $this_port — one of them will crash-loop with EADDRINUSE. Set PORT in one of the two .env files to give them different ports." >&2
+  fi
+}
+
 # How the operator tails this host's service logs — platform-specific, and
 # set before the install branch so it is defined even when the install is
 # skipped.
@@ -584,16 +746,31 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
   # it expects for a user's own LaunchAgent.
   chmod 644 ~/Library/LaunchAgents/"$LABEL.plist"
 
-  # The OTHER role's job must not stay loaded: both roles load the same .env
-  # and bind the same PORT — a crash loop, not just a mismatch (the same
-  # reasoning as the systemd path's `disable --now` below). Best-effort: the
-  # other job may simply never have existed on this host.
-  if launchctl print "$(launchd_gui_domain)/$OTHER_LABEL" >/dev/null 2>&1; then
-    echo "==> Booting out $OTHER_LABEL (this host is now role: $ROLE)"
-    launchctl bootout "$(launchd_gui_domain)/$OTHER_LABEL" ||
-      echo "WARNING: failed to boot out $OTHER_LABEL — it may still be running and could collide on PORT until stopped by hand (launchctl bootout $(launchd_gui_domain)/$OTHER_LABEL)." >&2
+  # The OTHER role's job must not stay loaded WHEN IT IS THE SAME INSTALL:
+  # both roles would then load the same .env and bind the same PORT — a crash
+  # loop, not just a mismatch (the same reasoning as the systemd path's
+  # `disable --now` below). Best-effort: the other job may simply never have
+  # existed on this host.
+  #
+  # But two roles in two DIFFERENT install roots can coexist on one host —
+  # two .env files, two SESSIONS_DIRs, two ports — and booting the other one
+  # out (and deleting its plist!) would destroy a working, unrelated
+  # deployment. So the teardown is scoped to THIS install root: the other
+  # job's own definition says which root it belongs to, and only a job of
+  # THIS root (or one whose root cannot be determined) is torn down
+  # (issue #1800).
+  OTHER_JOB_HOME="$(launchd_job_home ~/Library/LaunchAgents/"$OTHER_LABEL.plist")"
+  if [ -n "$OTHER_JOB_HOME" ] && ! same_install_root "$MULLION_HOME" "$OTHER_JOB_HOME"; then
+    echo "==> Leaving $OTHER_LABEL alone: it is installed in $OTHER_JOB_HOME, a different install root from $MULLION_HOME"
+    warn_if_port_collision "$OTHER_LABEL" "$OTHER_JOB_HOME"
+  else
+    if launchctl print "$(launchd_gui_domain)/$OTHER_LABEL" >/dev/null 2>&1; then
+      echo "==> Booting out $OTHER_LABEL (this host is now role: $ROLE)"
+      launchctl bootout "$(launchd_gui_domain)/$OTHER_LABEL" ||
+        echo "WARNING: failed to boot out $OTHER_LABEL — it may still be running and could collide on PORT until stopped by hand (launchctl bootout $(launchd_gui_domain)/$OTHER_LABEL)." >&2
+    fi
+    rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" 2>/dev/null || true
   fi
-  rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" 2>/dev/null || true
 
   # `launchctl bootstrap` refuses a label that is ALREADY loaded
   # ("Bootstrap failed: 5: Input/output error"), so a re-run (a repair, a
@@ -638,21 +815,33 @@ else
   # second round): stopping the old unit first means the new one starts
   # clean, rather than colliding on PORT and crash-looping (self-healing
   # either way under Restart=on-failure, but a clean transition is better).
-  if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
-    systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then
-    # Hermes review, PR #529 (fourth round): is-enabled alone misses a unit
-    # started manually without ever being enabled (e.g. `systemctl --user
-    # start mullion-agent.service` while testing) — it would still be
-    # running and still PORT-collide, just outside what is-enabled reports.
-    echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
-    # Hermes review, PR #529 (third round): `|| true` alone would silently
-    # swallow a genuine failure here (the new unit would then start and
-    # PORT-collide with the still-running old one) — surface it instead of
-    # just continuing quietly. Still non-fatal: self-healing under
-    # Restart=on-failure either way, and this is best-effort by design (see
-    # above).
-    systemctl --user disable --now "$OTHER_UNIT_NAME" ||
-      echo "WARNING: failed to disable $OTHER_UNIT_NAME — it may still be running and could collide with $UNIT_NAME on PORT until stopped by hand (systemctl --user disable --now $OTHER_UNIT_NAME)." >&2
+  #
+  # Two roles in two DIFFERENT install roots can coexist on one host (two
+  # .env files, two SESSIONS_DIRs, two ports) — so this teardown is scoped
+  # to THIS install root: the other unit's own file says which root it
+  # belongs to, and only a unit of THIS root (or one whose root cannot be
+  # determined) is disabled (issue #1800).
+  OTHER_UNIT_HOME="$(systemd_unit_home ~/.config/systemd/user/"$OTHER_UNIT_NAME")"
+  if [ -n "$OTHER_UNIT_HOME" ] && ! same_install_root "$MULLION_HOME" "$OTHER_UNIT_HOME"; then
+    echo "==> Leaving $OTHER_UNIT_NAME enabled: it is installed in $OTHER_UNIT_HOME, a different install root from $MULLION_HOME"
+    warn_if_port_collision "$OTHER_UNIT_NAME" "$OTHER_UNIT_HOME"
+  else
+    if systemctl --user --quiet is-enabled "$OTHER_UNIT_NAME" 2>/dev/null ||
+      systemctl --user --quiet is-active "$OTHER_UNIT_NAME" 2>/dev/null; then
+      # Hermes review, PR #529 (fourth round): is-enabled alone misses a unit
+      # started manually without ever being enabled (e.g. `systemctl --user
+      # start mullion-agent.service` while testing) — it would still be
+      # running and still PORT-collide, just outside what is-enabled reports.
+      echo "==> Disabling $OTHER_UNIT_NAME (this host is now role: $ROLE)"
+      # Hermes review, PR #529 (third round): `|| true` alone would silently
+      # swallow a genuine failure here (the new unit would then start and
+      # PORT-collide with the still-running old one) — surface it instead of
+      # just continuing quietly. Still non-fatal: self-healing under
+      # Restart=on-failure either way, and this is best-effort by design (see
+      # above).
+      systemctl --user disable --now "$OTHER_UNIT_NAME" ||
+        echo "WARNING: failed to disable $OTHER_UNIT_NAME — it may still be running and could collide with $UNIT_NAME on PORT until stopped by hand (systemctl --user disable --now $OTHER_UNIT_NAME)." >&2
+    fi
   fi
 
   systemctl --user enable --now "$UNIT_NAME"

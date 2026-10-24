@@ -48,6 +48,24 @@ both alive and stoppable, and it only ever names dirs this instance itself
 created — the "never stop a scope you have not confirmed you own" rule
 (issue #1137) is unchanged.
 
+**The sessions-dir history (issue #1771).** That set can name every dir an
+earlier _release_ would have used for the same configured path, but not every
+dir this _install_ has used: an operator who moved `SESSIONS_DIR` (or moved
+the project it is relative to), or a `TMPDIR` whose value changed between two
+runs, leaves a scope's dtach socket in a dir no derivation can name — so the
+scope reads as "dead" and the reconciler tears the session down while the
+scope keeps running. The install root (`MULLION_HOME`) therefore keeps a
+trail of the dirs this install has resolved
+(`src/services/sessions-dir-history.ts` → `<MULLION_HOME>/sessions-dirs.json`,
+mode `0600`, at most 16 entries, written atomically because two plugins
+resolve the same path in one process), and the ownership set grows by that
+trail. Only what the instance itself resolved is ever recorded, so the trail
+cannot widen the set beyond dirs this instance created (issue #1137); a
+missing, corrupt or unwritable file is warned about and ignored, never fatal.
+The trail is per install root — it survives a `SESSIONS_DIR` move and a
+`TMPDIR` change, but a wiped install root loses it, and a scope whose dir was
+never recorded by this install stays unplaceable (and still reads "dead").
+
 **The scope seam (`src/services/scope/`, issue #1715).** Everything above
 about `systemd --user` is one _implementation_ of a platform-neutral seam:
 "run a detached long-lived process and track it". `src/services/scope/types.ts`
@@ -149,8 +167,8 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   with and verifying signed requests from its primary. `bundle-sync` is the
   one plugin that runs on both roles (issue #941 — a boot-time `onReady`
   hook, registered on both the primary and an `agent`-role host, that syncs
-  the shipped `src/bundle/skills/` bundle into **all four CLIs'** (Claude
-  Code, codex, agy, opencode) own global skill/agent directory once per
+  the shipped `src/bundle/skills/` bundle into **all five CLIs'** (Claude
+  Code, codex, agy, opencode, mcode) own global skill/agent directory once per
   process start, tracked by a manifest at `~/.mullion/bundle-sync.json`; see
   `src/services/bundle-sync.ts` and
   [`agent-guide.md`](agent-guide.md#where-your-skills-actually-come-from)).
@@ -161,7 +179,8 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   opencode got a zero-copy per-session pointer instead
   (`hook-adapters/claude-code.ts`'s `--plugin-dir`,
   `hook-adapters/opencode.ts`'s `skills` config entry); `bundle-sync` aligned all
-  four onto the one boot-time mechanism. Claude Code's `--plugin-dir` is
+  four onto the one boot-time mechanism (mcode joined that set later, landing
+  on the boot-time mechanism directly). Claude Code's `--plugin-dir` is
   **not** fully retired by this, though: it's still emitted per-session
   whenever a project has its own DB-authored skill/reviewer content to
   compose alongside the shipped bundle (`composeClaudeSessionBundle`), and

@@ -337,6 +337,11 @@ function GitHubAppSection({
                   githubApp.keyRotatedAt
                     ? `set ${formatRelativeAge(new Date(githubApp.keyRotatedAt).getTime())}`
                     : null,
+                  // #1790 — the last review marker write failed: say so here,
+                  // not only in the server log.
+                  githubApp.checksMarker && githubApp.checksMarker.state !== "ok"
+                    ? `Hermes review marker: ${githubApp.checksMarker.state} (${githubApp.checksMarker.owner}/${githubApp.checksMarker.repo}, ${formatRelativeAge(githubApp.checksMarker.at)})`
+                    : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")

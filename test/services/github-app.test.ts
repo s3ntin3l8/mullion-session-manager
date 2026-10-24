@@ -470,6 +470,25 @@ describe("github-app (#489)", () => {
       expect(mintAttempts).toBe(1);
     });
 
+    // #1790 — a repeat call inside the negative TTL must still know WHY the
+    // mint failed, or "permission not granted" (422) would read as "not
+    // installed" the second time round.
+    it("keeps the failed mint's status on a cached negative result", async () => {
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        return Promise.resolve(jsonResponse(422, { message: "permissions not granted" }));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        getInstallationToken("123", privateKey, "acme", "widgets", "checks"),
+      ).rejects.toThrow(GitHubAppError);
+      const second = await getInstallationToken("123", privateKey, "acme", "widgets", "checks");
+      expect(second).toEqual({ token: null, installationsChecked: null, failureStatus: 422 });
+    });
+
     // #744 — same negative-cache-then-null posture as the "read" scope
     // above, exercised for "dispatch": an installation not yet re-approved
     // with `actions: write` 422s on the mint, and a repeat call within the

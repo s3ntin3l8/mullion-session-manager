@@ -360,12 +360,16 @@ export function PrDetailView({
 
   const reReview = () =>
     run("review", async () => {
-      await api.reReviewProjectPr(projectId, number);
+      const res = await api.reReviewProjectPr(projectId, number);
       // Refetch: the request produced a new run, so the old verdict on screen
       // is stale (the state is memoized per run, so a refetch shows the new
       // one straight away).
       setReloadKey((k) => k + 1);
-      return "Re-review requested";
+      // #1790 — the review runs either way; the marker is how the repository's
+      // own review workflow sees it, so say when it could not be written.
+      return res.marker && !res.marker.written
+        ? `Re-review requested — in-flight marker not written: ${res.marker.message}`
+        : "Re-review requested";
     });
 
   const handoff = () =>

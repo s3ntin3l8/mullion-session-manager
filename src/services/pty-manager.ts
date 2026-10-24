@@ -498,7 +498,24 @@ export class Session {
   // injectAgentGuide's own public visibility exists for). Not part of
   // SessionInfo/toInfo()'s public surface, same as injectAgentGuide.
   readonly injectMullionBundle: boolean;
-  private readonly skipPermissions: boolean;
+  // Whether this session was spawned with tool-permission prompts bypassed.
+  //
+  // Public (not private) since issue: mcode support — plugins/hooks.ts needs
+  // to read it to AUTO-APPROVE a review gate for an agent whose CLI has no
+  // skip-permissions flag of its own. mcode's TUI has no `--permission`
+  // option (verified empirically against mcode 0.6.12) and its
+  // `permissionMode` lives in the HOST-GLOBAL ~/.minimax/config.yaml, which
+  // Mullion must never mutate (it would leak the bypass into every non-Mullion
+  // mcode on the host). So for mcode the bypass is delivered the only way it
+  // can be per-session: Mullion's own hook server answers the agent's
+  // PermissionRequest with "allow" instead of raising a review gate. The
+  // other four agents get the same effect from their own CLI flag
+  // (getSkipPermissionFlag), which is why only mcode needs this.
+  //
+  // Same spawn-time-snapshot posture as injectAgentGuide above: read once, at
+  // spawn, never re-derived — a mid-session change to the setting cannot
+  // retroactively flip an already-running agent's permission posture.
+  readonly skipPermissions: boolean;
   // Task Master's initial-turn prompt (see CreateSessionOptions.initialPrompt
   // above) — consumed once, in bootstrapMaster() below, to build finalCommand;
   // never persisted into `command`/`this.command`, so a later reattach or

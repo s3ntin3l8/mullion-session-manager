@@ -18,6 +18,7 @@ import {
   sshAgentSocketPath,
 } from "../services/ssh-agent-socket.js";
 import { probeSocket } from "../services/unix-socket.js";
+import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 import { fitsSunPath, maxSunPathBytes } from "../cli/sun-path.mjs";
@@ -289,11 +290,23 @@ export interface ResolvedSessionsDirs {
    *  another user). The refusal is never silent: the dir is not followed
    *  and not used, but the operator is told. */
   skipped: ReadonlyArray<{ root: string; reason: string }>;
+  /** Why the sessions-dir HISTORY could not be read or written (issue
+   *  #1771) — never fatal, but not silent either: the caller says so, and
+   *  the boot continues with the dirs the resolver can derive on its own. */
+  historyWarning?: string;
 }
 
 /**
  * Resolves the configured sessions dir to the dir this instance actually
  * uses, plus the set of dirs it may own scopes in.
+ *
+ * It has ONE side effect: the resolved dir is RECORDED in the install
+ * root's trail of dirs this install has used (issue #1771 — see
+ * `options.mullionHome` and services/sessions-dir-history.ts). That trail is
+ * what lets the owned set keep naming a dir the operator moved away from,
+ * or one a changed TMPDIR produced. With no install root (a dev checkout)
+ * nothing is read and nothing is written, and the result is exactly what it
+ * was before the trail existed.
  *
  * The fallback's NAME is a fixed 8-hex-char hash of the resolved configured
  * path, and it is never shortened to buy bytes. The name is not decoration:
@@ -319,8 +332,22 @@ export interface ResolvedSessionsDirs {
  * is per-user (`systemctl --user`), so a different user cannot inject a row
  * into it. That is why the compat dirs need no separate hardening pass the
  * way the current fallback dir gets one in secureFallbackDir.
+ *
+ * Issue #1771 — the set also grows by the HISTORY: the dirs this install
+ * has resolved before, kept in the install root (MULLION_HOME). The compat
+ * roots can only name what an earlier RELEASE would have used for the same
+ * configured path, so they cannot name the dir an operator moved
+ * SESSIONS_DIR away from, nor the fallback a changed TMPDIR produced. A
+ * scope living in one of those is this instance's own, and without the
+ * history the reconciler reads it as "dead" and tears the session down
+ * while the scope keeps running. The history records only what this
+ * instance itself resolved (see services/sessions-dir-history.ts), so it
+ * cannot widen the set beyond dirs this instance made.
  */
-export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
+export function resolveSessionsDirs(
+  configured: string,
+  options: { mullionHome?: string } = {},
+): ResolvedSessionsDirs {
   const resolved = path.resolve(configured);
   const limit = maxSunPathBytes();
   const hash = createHash("md5").update(resolved).digest("hex").slice(0, 8);
@@ -329,16 +356,46 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
   // These are the dirs a scope from an earlier release can still live in.
   const compatDirs = shippedFallbackRoots().map((root) => path.join(root, name));
 
-  const owned = (current: string): string[] => {
-    const all = [current, ...compatDirs];
+  // The install root's trail of dirs this install has resolved. It is read
+  // AND written by the resolver (see finish() below): a dir recorded by an
+  // EARLIER boot is in the owned set even when this boot resolves
+  // somewhere else. No install root (a dev checkout) means no trail at all,
+  // and the behaviour is exactly today's.
+  const mullionHome = options.mullionHome ?? "";
+
+  const owned = (current: string, recorded: readonly string[]): string[] => {
+    const all = [current, ...compatDirs, ...recorded];
     return [...new Set(all.map((dir) => path.resolve(dir)))].sort();
   };
   const skipped: Array<{ root: string; reason: string }> = [];
 
+  /**
+   * Finishes the resolution: records the resolved dir in the trail and
+   * assembles the owned set.
+   *
+   * The recording happens HERE, once the dir is settled — the trail may
+   * only hold dirs this instance actually resolved (issue #1137), and the
+   * resolved dir is the only one it may name. Both callers of this function
+   * (pty.ts's plugin and device.ts's) resolve the same configured path, so
+   * both record the same dir; the write is atomic, so the second write is
+   * harmless.
+   */
+  function finish(current: string): ResolvedSessionsDirs {
+    const trail = recordSessionsDir(mullionHome, current);
+    return {
+      current,
+      owned: owned(current, trail.dirs),
+      skipped,
+      ...(trail.warning === undefined ? {} : { historyWarning: trail.warning }),
+    };
+  }
+
   // The limit counts the NUL terminator, so the usable path is one byte
   // shorter than it — that off-by-one lives in fitsSunPath (src/cli/sun-path.mjs),
   // once, rather than at each comparison.
-  if (fitsSunPath(resolved)) return { current: resolved, owned: owned(resolved), skipped };
+  if (fitsSunPath(resolved)) {
+    return finish(resolved);
+  }
 
   // The fallback has to fit TOO: it lives under one of the roots above, and
   // a root long enough to push the CONFIGURED path over the limit can push
@@ -358,7 +415,7 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
     if (!fitsSunPath(candidate)) continue;
     try {
       secureFallbackDir(candidate);
-      return { current: candidate, owned: owned(candidate), skipped };
+      return finish(candidate);
     } catch (err) {
       // This root cannot hold the fallback — the mkdir failed (an unwritable
       // or stale home directory), or the hardening refused it (a symlink, a
@@ -389,14 +446,25 @@ export function resolveSessionsDirs(configured: string): ResolvedSessionsDirs {
 // app.config.SESSIONS_DIR input so DeviceManager's scope-ownership
 // namespace (deriveInstanceId, device-process.ts) always agrees with
 // PtyManager's, rather than each plugin risking drift by deriving its own
-// notion of "the real sessionsDir" independently. Pure function of its one
-// input, so calling it a second time here is safe — no shared state.
+// notion of "the real sessionsDir" independently.
+//
+// Note that it is no longer a PURE function of its one input: the resolver
+// it delegates to also RECORDS the dir it resolved in the install root's
+// trail (issue #1771) — but only when it is given one. With no install root
+// (the default, and every dev checkout) nothing is read and nothing is
+// written, so the call leaves the disk untouched; with one, it records the
+// dir. Callers that want the trail to be kept pass the install root, and
+// calling it more than once is safe either way: the record is the same dir,
+// and the write is atomic.
 //
 // The OWNERSHIP set (resolveSessionsDirs) is what callers that resolve
 // SCOPES need; this wrapper is the "which dir do the sockets live in"
 // question on its own.
-export function ensureSessionsDir(configured: string): string {
-  return resolveSessionsDirs(configured).current;
+export function ensureSessionsDir(
+  configured: string,
+  options: { mullionHome?: string } = {},
+): string {
+  return resolveSessionsDirs(configured, options).current;
 }
 
 // The fallback lives under the platform's temp dir under a predictable
@@ -438,7 +506,17 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // (the current one plus every fallback root an earlier release shipped for
   // the same configured path). Both are handed to PtyManager, which is the
   // only thing that resolves scopes on this host.
-  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR);
+  //
+  // Issue #1771 — the install root (MULLION_HOME) is passed along so the
+  // resolver can keep its trail of the dirs this install has resolved: the
+  // compat roots can only name what an earlier RELEASE would have used for
+  // the same configured path, so a dir an operator moved SESSIONS_DIR away
+  // from (or a fallback a changed TMPDIR produced) is only nameable from
+  // that trail. Empty in a dev checkout, where the behaviour is exactly
+  // today's.
+  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR, {
+    mullionHome: app.config.MULLION_HOME,
+  });
   const sessionsDir = sessionsDirs.current;
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
     app.log.info(
@@ -453,6 +531,17 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     app.log.warn(
       { root: skip.root, reason: skip.reason },
       "sessionsDir fallback root unusable, using the next one",
+    );
+  }
+  // The history file is an aid, not a requirement: a corrupt or unwritable
+  // one is reported here and the boot continues with the dirs the resolver
+  // could derive. Reported ONCE — this plugin registers before device.ts's
+  // (which resolves the same configured path through the same resolver), so
+  // it is the one place that says it.
+  if (sessionsDirs.historyWarning) {
+    app.log.warn(
+      { reason: sessionsDirs.historyWarning },
+      "the sessions-dir history is incomplete, so a scope in a dir this install has moved away from may read as dead",
     );
   }
   // Issue #820 PR5d — see resolveSshAuthSock's own doc comment for the full

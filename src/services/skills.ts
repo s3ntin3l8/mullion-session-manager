@@ -116,6 +116,7 @@ import {
   OpenCodeSkillUserAuthoredError,
 } from "./hook-adapters/opencode-skills.js";
 import { resolveAgyGlobalSkillsDir, resolveAgyGlobalAgentsDir } from "./hook-adapters/agy.js";
+import { resolveMcodeGlobalSkillsDir } from "./hook-adapters/mcode.js";
 import {
   readClaudeCodeSkillEnabledMap,
   writeClaudeCodeSkillEnabled,
@@ -524,6 +525,19 @@ function globalSkillDirs(): SkillSourceDir[] {
     {
       dir: resolveAgyGlobalSkillsDir(),
       agent: "agy",
+      scope: "global",
+    },
+    // Issue: mcode support — mcode's own always-scanned user skills root is
+    // `<dataDir>/skills` (mcode ALSO reads ~/.claude/skills, ~/.codex/skills
+    // and ~/.agents/skills, but those three are opt-in behind mcode's
+    // `skills.external.enabled` setting, so the mcode-native root is the one
+    // root Mullion can install into and KNOW mcode will read). The
+    // already-listed claude-code/codex/opencode roots are NOT repeated here:
+    // they are the same physical directories those agents already report,
+    // and listing them again would double-count them in the Skills Manager.
+    {
+      dir: resolveMcodeGlobalSkillsDir(),
+      agent: "mcode",
       scope: "global",
     },
   ];

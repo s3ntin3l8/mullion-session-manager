@@ -524,7 +524,14 @@ export interface GitHubAppStatus {
   installationCount: number | null;
   keyFingerprint: string | null;
   keyRotatedAt: string | null;
+  // #1790 — the outcome of the last Hermes in-flight marker write through this
+  // App since the server started. Absent before the first review request.
+  checksMarker?: { state: string; owner: string; repo: string; at: number };
 }
+
+/** Whether a Hermes review's in-flight marker was written, and why not (#1790). */
+export type ReviewMarker =
+  { written: true; checkRunId: number } | { written: false; reason: string; message: string };
 
 // #514 — PUT /api/integrations/github/app's response: it now verifies the
 // credential against GitHub (GET /app) before persisting, so a successful
@@ -568,6 +575,7 @@ export interface ReviewRun {
   output?: string;
   error?: string;
   shuttingDown: boolean;
+  marker?: ReviewMarker;
 }
 
 export interface GitHubIntegration {
@@ -1225,6 +1233,11 @@ export interface RemoveWorktreeResult {
 // wins (currently only Codex's AGENTS.override.md over AGENTS.md) — it says
 // nothing about another agent sharing the same absolutePath.
 export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
+// Issue: mcode support — the CLIs the bundle sync can install skills into.
+// A SUPERSET of AgentRuleAgent: mcode gets the bundle's skills (into its own
+// `<dataDir>/skills`) but has no agent-rule concept, so it is deliberately
+// absent from AgentRuleAgent while present here.
+export type BundleSyncCli = "claude-code" | "codex" | "opencode" | "agy" | "mcode";
 export type AgentRuleScope = "project" | "global";
 export type AgentRuleStatus = "active" | "shadowed";
 
@@ -1273,7 +1286,7 @@ export interface BundleSyncCliAgentsStatus {
 }
 
 export interface BundleSyncCliStatus {
-  cli: AgentRuleAgent;
+  cli: BundleSyncCli;
   detected: boolean;
   skills: BundleSyncCliFieldStatus;
   agents: BundleSyncCliAgentsStatus;
@@ -2041,6 +2054,8 @@ export interface AppSettings {
   };
   codex: { defaultModel: string | null; reviewerModel: string | null };
   agy: { defaultModel: string | null; reviewerModel: string | null };
+  // Issue: mcode support — mcode takes `-m <provider/model>`.
+  mcode: { defaultModel: string | null; reviewerModel: string | null };
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;

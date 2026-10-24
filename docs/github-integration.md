@@ -238,18 +238,26 @@ individual issue, only a repository):
   protocol's in-flight marker, which is a check run on the reviewed commit
   (`POST /repos/{owner}/{repo}/check-runs`). Writing one needs `checks:
 write`, a permission none of the other sets grants, so it is its own set
-  rather than a widening of `write`. Until the App registration is
-  re-approved with Checks: Read & write, this scope's mint fails and
-  `resolveGitHubToken` falls back to the PAT/OAuth token — a `repo`-scoped
-  user token covers check runs, so the marker still works. To fix it on the
-  App itself: Settings → Developer settings → GitHub Apps → Permissions &
-  events → Repository permissions → Checks: Read & write, then accept the
-  update on the installation.
+  rather than a widening of `write`. **Unlike the other sets there is no
+  PAT/OAuth fallback:** GitHub only lets a GitHub App create check runs ("You
+  must authenticate via a GitHub App"), so a user token would be refused every
+  time. Without an App that is installed on the owner and has been approved for
+  Checks: Read & write, the relay skips the marker — the review itself still
+  runs, but the repository's own review workflow cannot see it and may start a
+  second one. Mullion says why instead of failing quietly: the review
+  response, `review status` and Settings → Review relay → Recent reviews carry
+  a `marker` with a reason (`app-not-configured`, `not-installed`,
+  `permission-not-granted`, `mint-failed` or `write-failed`), and Settings →
+  Integrations → GitHub App shows the last failure. To fix it on the App
+  itself: Settings → Developer settings → GitHub Apps → Permissions & events →
+  Repository permissions → Checks: Read & write, then accept the update on the
+  installation. (Reading check runs, which the relay does to continue a PR's
+  session, works with any token.)
 
 The sets are minted and cached independently, so an installation that only
 granted the write set (e.g. one approved before Actions/Metadata were added
 to the App definition) still gets Task Master's writes covered while the
-read- and dispatch-scoped calls fall back to the PAT. If the App isn't
+read- and dispatch-scoped calls fall back to the PAT (the checks set is the one exception, above). If the App isn't
 installed on a given `owner`, a mint 422s because the installation never granted that
 permission set, or the mint fails outright (a transient GitHub outage), the
 call transparently falls back to the PAT/OAuth token instead of failing

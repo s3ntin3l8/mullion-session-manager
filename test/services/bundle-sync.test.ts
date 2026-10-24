@@ -895,7 +895,7 @@ describe("getBundleSyncStatus", () => {
     const status = getBundleSyncStatus({ enabled: false, detectedClis: NO_DETECTED });
     expect(status.enabled).toBe(false);
     expect(status.bundleHash).toBeNull();
-    expect(status.clis).toHaveLength(4);
+    expect(status.clis).toHaveLength(5);
     for (const cli of status.clis) {
       expect(cli.skills.status).toBe("disabled");
       expect(cli.skills.count).toBe(0);
@@ -910,7 +910,11 @@ describe("getBundleSyncStatus", () => {
     expect(status.bundleHash).toBeNull();
     for (const cli of status.clis) {
       expect(cli.skills.status).toBe("not-synced");
-      if (cli.cli === "codex") {
+      // "n-a" = this CLI has no agents/ directory to sync into at all:
+      // codex (no agent concept) and mcode (its agent files use a
+      // different shape, so the bundle's Claude Code subagent format
+      // isn't translatable — see AGENT_TARGETS).
+      if (cli.cli === "codex" || cli.cli === "mcode") {
         expect(cli.agents.status).toBe("n-a");
       } else {
         expect(cli.agents.status).toBe("not-synced");
@@ -922,13 +926,13 @@ describe("getBundleSyncStatus", () => {
     // Deliberately no writeAgent() call — src/bundle/agents/ doesn't exist
     // in this repo yet (#943/#953's job), and getBundleSyncStatus must not
     // be surprised by that once it ships: skills sync fine, agents stay
-    // untouched everywhere except codex's unconditional "n-a".
+    // untouched everywhere except codex's and mcode's unconditional "n-a".
     writeSkill("host");
     syncBundleContent();
     const status = getBundleSyncStatus({ enabled: true, detectedClis: NO_DETECTED });
     for (const cli of status.clis) {
       expect(cli.skills.status).toBe("synced");
-      if (cli.cli === "codex") {
+      if (cli.cli === "codex" || cli.cli === "mcode") {
         expect(cli.agents.status).toBe("n-a");
       } else {
         expect(cli.agents.status).toBe("not-synced");

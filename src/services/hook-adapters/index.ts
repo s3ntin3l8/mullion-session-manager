@@ -6,6 +6,7 @@ import { claudeCodeAdapter } from "./claude-code.js";
 import { openCodeAdapter } from "./opencode.js";
 import { codexAdapter } from "./codex.js";
 import { agyAdapter } from "./agy.js";
+import { mcodeAdapter } from "./mcode.js";
 
 export type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
@@ -16,7 +17,17 @@ export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
 // matters in that the first match wins — each adapter's `matches()` is
 // conservative enough that two adapters matching the same command is not
 // expected to happen in practice.
-const ADAPTERS: HookAgentAdapter[] = [claudeCodeAdapter, openCodeAdapter, codexAdapter, agyAdapter];
+//
+// Issue: mcode support — mcode (MiniMax Code) is added last. Its `matches()`
+// is anchored to the program token `mcode` and it never matches any of the
+// other four agents' binaries, so ordering is irrelevant for it in practice.
+const ADAPTERS: HookAgentAdapter[] = [
+  claudeCodeAdapter,
+  openCodeAdapter,
+  codexAdapter,
+  agyAdapter,
+  mcodeAdapter,
+];
 
 export interface AppliedHooks {
   /** The command to actually spawn — unchanged unless an adapter's
@@ -171,7 +182,24 @@ export function commandIsOpencode(command: string): boolean {
   return adapter === openCodeAdapter;
 }
 
-export type ModelInjectingCli = "claude-code" | "codex" | "agy";
+/**
+ * Issue: mcode support — whether `command` would resolve to the mcode adapter
+ * specifically. Distinct from a generic "some adapter matches" check (which
+ * would be true for Claude Code/Codex/agy too), because mcode's
+ * skip-permissions bypass is delivered a way no other agent's is: mcode has
+ * no `--permission` CLI flag, so Mullion's own hook server auto-approves the
+ * agent's `PermissionRequest` instead (see src/plugins/hooks.ts). That
+ * auto-approve must apply to mcode sessions ONLY — an unrelated agent's gate
+ * must still wait for a human, even in a session that was spawned with
+ * skip-permissions. Pure lookup, no I/O. Same shape as commandIsOpencode
+ * above.
+ */
+export function commandIsMcode(command: string): boolean {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter === mcodeAdapter;
+}
+
+export type ModelInjectingCli = "claude-code" | "codex" | "agy" | "mcode";
 
 /**
  * Which non-opencode CLI (if any) `command` resolves to, for the CLIs whose
@@ -183,6 +211,8 @@ export function commandModelCli(command: string): ModelInjectingCli | null {
   if (adapter === claudeCodeAdapter) return "claude-code";
   if (adapter === codexAdapter) return "codex";
   if (adapter === agyAdapter) return "agy";
+  // Issue: mcode support — mcode takes `-m <provider/model>` too.
+  if (adapter === mcodeAdapter) return "mcode";
   return null;
 }
 

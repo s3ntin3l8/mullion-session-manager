@@ -314,6 +314,10 @@ export interface GitHubAppStatus {
   // or a rotation), for Settings' "Key set <date>" display. `null` when
   // not configured, or for a row that predates this column.
   keyRotatedAt: Date | null;
+  // #1790 — the outcome of the last Hermes in-flight marker write through this
+  // App, when one has been attempted since the server started. Absent before
+  // the first review request.
+  checksMarker?: ChecksMarkerOutcome;
 }
 
 /**
@@ -356,6 +360,18 @@ export function clearGitHubAppStatusCacheForTests(): void {
 export async function getGitHubAppStatus(
   app: FastifyInstance,
   provider: string = GITHUB_PROVIDER,
+): Promise<GitHubAppStatus> {
+  const status = await readGitHubAppStatus(app, provider);
+  // #1790 — only the primary App writes the review marker; the last outcome
+  // of that write rides along so Settings can say why it is not happening.
+  const marker =
+    provider === GITHUB_PROVIDER && status.appId ? checksOutcomes.get(status.appId) : undefined;
+  return marker ? { ...status, checksMarker: marker } : status;
+}
+
+async function readGitHubAppStatus(
+  app: FastifyInstance,
+  provider: string,
 ): Promise<GitHubAppStatus> {
   const row = getRow(app, provider);
   if (!row?.githubAppId || !row?.githubAppPrivateKeyEnc) {
@@ -464,7 +480,10 @@ export async function resolveGitHubToken(
   // them would hand every Task Master *write* an `actions` scope it has no
   // use for, undermining the least-privilege property #489 shipped for.
   // See github-app.ts's WRITE_PERMISSIONS/READ_PERMISSIONS/ISSUES_READ_PERMISSIONS/DISPATCH_PERMISSIONS.
-  scope: InstallationTokenScope = "write",
+  // "checks" is excluded on purpose: GitHub only lets a GitHub App create
+  // check runs, so a PAT/OAuth fallback for it can never succeed. Use
+  // `resolveChecksToken` (#1790).
+  scope: Exclude<InstallationTokenScope, "checks"> = "write",
 ): Promise<string | null> {
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the
@@ -491,9 +510,18 @@ export async function resolveGitHubToken(
       // operator further tell a genuine non-install apart from the
       // 100-installation page cap (`listInstallations`, github-app.ts)
       // silently truncating the list before this owner was ever checked.
+      // A null `installationsChecked` is a mint that already failed and sits
+      // in the negative cache: not a missing installation.
       app.log.debug(
-        { owner: repo.owner, repo: repo.repo, installationsChecked: result.installationsChecked },
-        "[github-integration] GitHub App has no installation covering this owner — falling back to the shared PAT/OAuth token",
+        {
+          owner: repo.owner,
+          repo: repo.repo,
+          installationsChecked: result.installationsChecked,
+          failureStatus: result.failureStatus,
+        },
+        result.installationsChecked === null
+          ? "[github-integration] GitHub App token mint failed earlier for this scope (cached) — falling back to the shared PAT/OAuth token"
+          : "[github-integration] GitHub App has no installation covering this owner — falling back to the shared PAT/OAuth token",
       );
     }
   } catch (err) {
@@ -520,6 +548,148 @@ export async function resolveGitHubToken(
     );
   }
   return getToken(app);
+}
+
+/** Why the in-flight marker for a Hermes review could not be written. */
+export type MarkerUnavailableReason =
+  | "app-not-configured"
+  | "not-installed"
+  | "permission-not-granted"
+  | "mint-failed"
+  | "write-failed";
+
+export type ChecksTokenResult =
+  | { token: string; reason?: undefined }
+  | { token: null; reason: Exclude<MarkerUnavailableReason, "write-failed"> };
+
+/** The user-facing sentence for a marker that was not written. */
+export function markerUnavailableMessage(
+  reason: MarkerUnavailableReason,
+  owner: string,
+  detail?: string,
+): string {
+  switch (reason) {
+    case "app-not-configured":
+      return "no GitHub App is configured — GitHub only lets an App create check runs, so the GitHub auto-review cannot see this run";
+    case "not-installed":
+      return `the GitHub App is not installed on ${owner} — the GitHub auto-review cannot see this run`;
+    case "permission-not-granted":
+      return "GitHub refused the App's Checks token (HTTP 422) — the installation has not granted Checks: Read & write, or does not include this repository; fix that on the installation, and until then the GitHub auto-review cannot see this run";
+    case "mint-failed":
+      return "the GitHub App token for Checks could not be minted — the GitHub auto-review cannot see this run (see the server log)";
+    case "write-failed":
+      return `GitHub refused the check-run write${detail ? ` (${detail})` : ""} — the GitHub auto-review cannot see this run`;
+  }
+}
+
+export interface ChecksMarkerOutcome {
+  /** "ok", or why the marker token could not be had / used. */
+  state: "ok" | MarkerUnavailableReason;
+  owner: string;
+  repo: string;
+  at: number;
+}
+
+// The last marker outcome per App id, for the Settings status — it reads this
+// instead of minting a token of its own (#1790).
+const checksOutcomes = new Map<string, ChecksMarkerOutcome>();
+
+/** Records the outcome of a marker attempt for the Settings status. */
+export function recordChecksMarkerOutcome(
+  appId: string | null,
+  repo: { owner: string; repo: string },
+  state: ChecksMarkerOutcome["state"],
+): void {
+  checksOutcomes.set(appId ?? "", { state, owner: repo.owner, repo: repo.repo, at: Date.now() });
+}
+
+/** Test-only reset. */
+export function clearChecksMarkerOutcomesForTests(): void {
+  checksOutcomes.clear();
+}
+
+/**
+ * The token for the Hermes review's in-flight marker, which is a check run.
+ *
+ * GitHub only lets a GitHub App create check runs ("You must authenticate via
+ * a GitHub App"), so unlike `resolveGitHubToken` there is NO PAT/OAuth
+ * fallback: a user token would 403 every time (#1790). A null token carries
+ * the reason instead, so the caller can say why no marker was written.
+ */
+export async function resolveChecksToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<ChecksTokenResult> {
+  const appId = getConfiguredAppId(app);
+  const outcome = async (): Promise<ChecksTokenResult> => {
+    try {
+      const appCreds = getGitHubAppCredentials(app);
+      if (!appCreds) return { token: null, reason: "app-not-configured" };
+      const result = await getInstallationToken(
+        appCreds.appId,
+        appCreds.privateKeyPem,
+        repo.owner,
+        repo.repo,
+        "checks",
+      );
+      if (result.token) return { token: result.token };
+      if (result.failureStatus === 422) return { token: null, reason: "permission-not-granted" };
+      if (result.installationsChecked === null) return { token: null, reason: "mint-failed" };
+      return { token: null, reason: "not-installed" };
+    } catch (err) {
+      if (!(
+        err instanceof GitHubAppError ||
+        err instanceof DecryptionError ||
+        err instanceof GitHubApiError
+      )) {
+        throw err;
+      }
+      app.log.warn(
+        { err, owner: repo.owner, repo: repo.repo },
+        "[github-integration] GitHub App installation token mint for the review marker failed",
+      );
+      return {
+        token: null,
+        reason:
+          err instanceof GitHubAppError && err.status === 422
+            ? "permission-not-granted"
+            : "mint-failed",
+      };
+    }
+  };
+  const result = await outcome();
+  // Only a failure is recorded here: "ok" means a marker was WRITTEN, which
+  // only the write site knows (a replay or a request with no session writes
+  // nothing and must not reset an earlier failure).
+  if (!result.token) recordChecksMarkerOutcome(appId, repo, result.reason ?? "mint-failed");
+  return result;
+}
+
+/** The tokens a Hermes review dispatch needs for its in-flight marker. */
+export interface MarkerTokens {
+  /** The App token that can WRITE the marker, or null (see `markerUnavailable`). */
+  markerToken: string | null;
+  markerUnavailable?: Exclude<MarkerUnavailableReason, "write-failed">;
+  /**
+   * A token that can READ check runs (the remembered session). The App's when
+   * it has one; otherwise the user token, which reads check runs fine even
+   * though GitHub refuses to create one with it.
+   */
+  markerReadToken?: string;
+}
+
+export async function resolveMarkerTokens(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+  fallbackReadToken?: string,
+): Promise<MarkerTokens> {
+  const checks = await resolveChecksToken(app, repo);
+  if (checks.token) return { markerToken: checks.token, markerReadToken: checks.token };
+  return {
+    markerToken: null,
+    markerUnavailable: checks.reason,
+    markerReadToken: getToken(app) ?? fallbackReadToken,
+  };
 }
 
 /**
