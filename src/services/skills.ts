@@ -274,6 +274,20 @@ async function readMdFilesSafe(dir: string): Promise<string[]> {
 interface ParsedFrontmatter {
   name: string;
   description: string;
+  /**
+   * Issue #1731 — the `opencode-model:` key: the model a project's reviewer
+   * subagent should run on under opencode, as `provider/model`.
+   *
+   * A SEPARATE key, not the plain `model:`, because the frontmatter blob is
+   * shared by all four CLIs and Claude Code's copy is passed through
+   * VERBATIM (it is that CLI's native agent format, where `model:` IS a
+   * first-class key with its own meaning — "inherit" matches the spawning
+   * conversation). opencode's `agents.<name>.model` accepts only
+   * `provider/model` (or `provider/model#variant`): a bare Claude alias does
+   * not match, so the two CLIs need different values from the same source
+   * document. A dedicated key keeps them apart.
+   */
+  opencodeModel?: string;
 }
 
 function stripYamlScalarQuotes(value: string): string {
@@ -302,12 +316,15 @@ function stripYamlScalarQuotes(value: string): string {
 // comment), everything else requires both.
 function parseFlatFrontmatterFields(
   raw: string,
-): { name: string | null; description: string | null } | null {
+): { name: string | null; description: string | null; opencodeModel: string | null } | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw);
   if (!match) return null;
 
   let name: string | null = null;
   let description: string | null = null;
+  // Issue #1731 — the `opencode-model:` key. See ParsedFrontmatter's own
+  // comment for why it is a separate key from the plain `model:`.
+  let opencodeModel: string | null = null;
   for (const line of match[1].split(/\r?\n/)) {
     // CodeQL (js/polynomial-redos), PR #894 — `\s*(.*)$` overlaps `\s` and
     // `.` on the same input, a superlinear-backtracking shape newly
@@ -319,16 +336,24 @@ function parseFlatFrontmatterFields(
     // below already strips exactly the leading whitespace `\s*` used to
     // consume, so capturing it into the group and trimming it afterward
     // produces the identical `value`.
-    const kv = /^(name|description):(.*)$/.exec(line);
+    // `name`/`description` keep the original strict pattern; the new
+    // `opencode-model` key ALSO tolerates whitespace before its colon, so it
+    // parses exactly what stripOpenCodeModelKey removes. Without that
+    // alignment a valid-YAML `opencode-model : x` would be stripped from
+    // Claude Code's copy and never parsed at all — a silent no-op, with no
+    // model and no warning.
+    const kv = /^(?:(name|description):(.*)|(opencode-model)\s*:(.*))$/.exec(line);
     if (!kv) continue;
-    const value = kv[2].trim();
+    const value = (kv[2] ?? kv[4]).trim();
     if (/^[|>][+-]?\d?$/.test(value)) continue; // block-scalar indicator, unsupported
     const unquoted = stripYamlScalarQuotes(value);
     if (unquoted.length === 0) continue;
-    if (kv[1] === "name" && name === null) name = unquoted;
-    if (kv[1] === "description" && description === null) description = unquoted;
+    const key = kv[1] ?? kv[3];
+    if (key === "name" && name === null) name = unquoted;
+    if (key === "description" && description === null) description = unquoted;
+    if (key === "opencode-model" && opencodeModel === null) opencodeModel = unquoted;
   }
-  return { name, description };
+  return { name, description, opencodeModel };
 }
 
 // Exported so a guard test can assert Mullion's own shipped bundle skills
@@ -339,7 +364,11 @@ function parseFlatFrontmatterFields(
 export function parseSkillFrontmatter(raw: string): ParsedFrontmatter | null {
   const parsed = parseFlatFrontmatterFields(raw);
   if (!parsed?.name || !parsed.description) return null;
-  return { name: parsed.name, description: parsed.description };
+  const result: ParsedFrontmatter = { name: parsed.name, description: parsed.description };
+  // Issue #1731 — carried through only when present, so a frontmatter block
+  // without the key parses to exactly the same object it did before.
+  if (parsed.opencodeModel !== null) result.opencodeModel = parsed.opencodeModel;
+  return result;
 }
 
 // Issue #885 — a subagent file (kind "agent") needs both fields, same as a

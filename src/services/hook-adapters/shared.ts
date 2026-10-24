@@ -165,6 +165,29 @@ export function validateCliModel(value: string): boolean {
   return CLI_MODEL_RE.test(value);
 }
 
+/**
+ * opencode's model shape: `provider/model`, optionally `#variant`.
+ *
+ * The sibling of validateCliModel above, and it lives here for the same
+ * reason: this module is a leaf (no imports beyond node builtins and a
+ * type-only one), so anything that must validate an opencode model without
+ * dragging in the adapter graph can import it here.
+ *
+ * The check is deliberately LINEAR, not a regex. An earlier implementation
+ * split the string between two `\S+` groups at every "/" before backtracking
+ * to try the next one, which is polynomial in the number of "/" — and the
+ * code path is reachable with attacker-controlled text (issue #1423), where
+ * a project reviewer agent's frontmatter is operator-authored but still
+ * arrives over HTTP. The rewrite as a plain substring search keeps the same
+ * semantics (a "/" strictly between the first and last character; a "/"
+ * immediately at either boundary, e.g. "/foo" or "foo/", does not count on
+ * its own) while being linear and non-backtracking.
+ */
+export function validateOpenCodeModel(value: string): boolean {
+  if (value.length < 3 || /\s/.test(value)) return false;
+  return value.slice(1, -1).includes("/");
+}
+
 /** ` --model '<value>'` to append to a launch command, or "" when there is no
  * model or the command already carries its own model flag (a hand-typed
  * `--model` always wins over a Mullion default). `shortFlag` covers CLIs

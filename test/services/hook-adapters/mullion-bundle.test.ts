@@ -20,6 +20,7 @@ import {
   deriveOpenCodeReviewerAgentConfig,
   rewriteBundleSkillName,
   deriveAgyAgentFile,
+  stripOpenCodeModelKey,
 } from "../../../src/services/hook-adapters/mullion-bundle.js";
 
 const VALID_SKILL = `---
@@ -416,6 +417,168 @@ describe("deriveOpenCodeReviewerAgentConfig", () => {
     expect(
       deriveOpenCodeReviewerAgentConfig("---\nname: __proto__\ndescription: nope\n---\nbody"),
     ).toBeNull();
+  });
+});
+
+// Issue #1731 — a project's reviewer agent can name the model it should run
+// on under opencode, through its own `opencode-model:` frontmatter key.
+//
+// A SEPARATE key from the plain `model:`, because the frontmatter blob is
+// shared by all four CLIs and Claude Code's copy is that CLI's native agent
+// format — where `model:` is a first-class key with its own meaning
+// ("inherit" matches the spawning conversation). opencode's
+// `agents.<name>.model` accepts only `provider/model`, so the two CLIs need
+// different values from the same source document.
+describe("the reviewer's opencode-model (issue #1731)", () => {
+  const WITH_OPENCODE_MODEL = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+opencode-model: anthropic/claude-sonnet-4-5
+---
+
+You are reviewing a change in this project.
+`;
+
+  const WITH_BARE_ALIAS = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+opencode-model: sonnet
+---
+
+You are reviewing a change in this project.
+`;
+
+  it("carries a valid opencode model into the inline agents entry", () => {
+    const result = deriveOpenCodeReviewerAgentConfig(WITH_OPENCODE_MODEL);
+    expect(result!.config.model).toBe("anthropic/claude-sonnet-4-5");
+    // The rest of the entry is unchanged.
+    expect(result!.config.mode).toBe("subagent");
+    expect(result!.config.description).toContain("Reviews diffs");
+  });
+
+  it("carries a valid opencode model into the agent file's frontmatter", () => {
+    const result = deriveOpenCodeReviewerAgentFile(WITH_OPENCODE_MODEL);
+    expect(result!.contents).toContain('model: "anthropic/claude-sonnet-4-5"');
+    expect(result!.contents).toContain("mode: subagent");
+  });
+
+  it("parses a valid-YAML `opencode-model : x` — the shape stripOpenCodeModelKey removes", () => {
+    // The parser and the stripper must agree. When they did not, a
+    // whitespace-before-colon key was stripped from Claude Code's copy and
+    // never parsed at all: a silent no-op, with no model and no warning.
+    const spaced = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+opencode-model : anthropic/claude-sonnet-4-5
+---
+
+You are reviewing a change in this project.
+`;
+    const result = deriveOpenCodeReviewerAgentConfig(spaced);
+    expect(result!.config.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+
+  it("DROPS a bare Claude alias rather than handing it to opencode", () => {
+    // opencode's own config loader drops a value that is not
+    // `provider/model` — verified live against opencode 2.1.3, where
+    // `"model": "sonnet"` comes back out of `opencode debug config` with
+    // the key simply absent. Dropping it here makes the failure visible
+    // (a warning) instead of silent.
+    const result = deriveOpenCodeReviewerAgentConfig(WITH_BARE_ALIAS);
+    expect(result).not.toBeNull();
+    expect(result!.config.model).toBeUndefined();
+    expect(Object.hasOwn(result!.config, "model")).toBe(false);
+  });
+
+  it("DROPS the plain `model:` key's value — it is Claude Code's, not opencode's", () => {
+    // VALID_REVIEWER_AGENT carries `model: inherit`, which is Claude Code's
+    // spelling and is NOT a valid opencode model.
+    const result = deriveOpenCodeReviewerAgentConfig(VALID_REVIEWER_AGENT);
+    expect(result!.config.model).toBeUndefined();
+  });
+
+  it("leaves the entry untouched when the project names no model at all", () => {
+    const result = deriveOpenCodeReviewerAgentConfig(VALID_REVIEWER_AGENT);
+    expect(Object.keys(result!.config).sort()).toEqual(["description", "mode", "system"]);
+  });
+
+  it("keeps the plain `model:` key out of opencode's file frontmatter", () => {
+    const result = deriveOpenCodeReviewerAgentFile(VALID_REVIEWER_AGENT);
+    expect(result!.contents).not.toContain("model:");
+  });
+});
+
+// Issue #1731 — Claude Code's copy of the same agent must not carry
+// opencode's key. Claude Code's agent loader warns about frontmatter keys
+// it does not recognise, so leaving it in would put a warning in every
+// session that used the reviewer.
+describe("stripOpenCodeModelKey (issue #1731)", () => {
+  it("removes the key from the frontmatter and leaves the body alone", () => {
+    const raw = `---
+name: my-project-reviewer
+description: d
+model: inherit
+opencode-model: anthropic/claude-sonnet-4-5
+---
+
+The body mentions opencode-model: on purpose.
+`;
+    const stripped = stripOpenCodeModelKey(raw);
+    expect(stripped).not.toContain("opencode-model: anthropic/claude-sonnet-4-5");
+    expect(stripped).toContain("name: my-project-reviewer");
+    expect(stripped).toContain("description: d");
+    // The plain `model:` key is Claude Code's OWN field and must survive:
+    // stripping it would silently cost Claude Code the reviewer's own model.
+    expect(stripped).toContain("model: inherit");
+    // The body is not frontmatter — a mention there must survive.
+    expect(stripped).toContain("The body mentions opencode-model: on purpose.");
+  });
+
+  it("leaves content with no frontmatter unchanged", () => {
+    const raw = "no frontmatter here\n";
+    expect(stripOpenCodeModelKey(raw)).toBe(raw);
+  });
+
+  it("returns a CRLF frontmatter byte-identical when no line was filtered", () => {
+    // Rebuilding it unconditionally would rewrite the CRLF line endings with
+    // lone LFs — a gratuitous change to a file whose content we did not mean
+    // to alter.
+    const raw =
+      "---\r\nname: my-project-reviewer\r\ndescription: d\r\nmodel: inherit\r\n---\r\n\r\nbody\r\n";
+    expect(stripOpenCodeModelKey(raw)).toBe(raw);
+  });
+
+  it("still removes the key from a CRLF frontmatter that HAS one", () => {
+    const raw =
+      "---\r\nname: my-project-reviewer\r\ndescription: d\r\nopencode-model: anthropic/claude-sonnet-4-5\r\n---\r\n\r\nbody\r\n";
+    const stripped = stripOpenCodeModelKey(raw);
+    expect(stripped).not.toContain("opencode-model:");
+    expect(stripped).toContain("name: my-project-reviewer");
+  });
+
+  it("is what composeClaudeSessionBundle applies to the reviewer copy", () => {
+    const files = composeClaudeSessionBundle("/tmp/does-not-matter", {
+      reviewerAgent: `---
+name: my-project-reviewer
+description: d
+model: inherit
+opencode-model: anthropic/claude-sonnet-4-5
+---
+
+body
+`,
+    });
+    expect(files).not.toBeNull();
+    // The composed bundle ALSO carries the shipped bundle's own reviewer
+    // agent — this is the PROJECT's copy.
+    const reviewer = files!.find((f) => f.path.includes("my-project-reviewer.md"));
+    expect(reviewer).toBeDefined();
+    expect(reviewer!.contents).not.toContain("opencode-model:");
+    // Claude Code's own `model:` key is untouched — it is that CLI's native
+    // field, not opencode's, and stripping it would silently cost Claude
+    // Code the reviewer's own model.
+    expect(reviewer!.contents).toContain("model: inherit");
+    expect(reviewer!.contents).toContain("description: d");
   });
 });
 

@@ -107,6 +107,34 @@ for. See "Scaffolding it into the repo instead" below.
   — `.claude/agents/mullion-reviewer.md` in this repo is the worked
   example the UI's starter template is derived from).
 
+  One extra key is available for the opencode delivery of that agent:
+  **`opencode-model:`**, the model the reviewer should run on under opencode,
+  in opencode's own `provider/model` shape (optionally `provider/model#variant`):
+
+  ```markdown
+  ---
+  name: my-reviewer
+  description: Reviews diffs for this project's own invariants.
+  opencode-model: anthropic/claude-sonnet-4-5
+  ---
+
+  You are reviewing a change in this project.
+  ```
+
+  It is a SEPARATE key from the plain `model:`, because the frontmatter blob
+  is shared by all four CLIs and each CLI reads it in its own format:
+  Claude Code's copy is that CLI's native agent format, where `model:` is a
+  first-class key (`inherit` matches the spawning conversation), while
+  opencode's `agents.<name>.model` accepts only `provider/model` — a bare
+  Claude alias does not match. The `opencode-model:` key is stripped from
+  Claude Code's copy, so it never reaches that CLI.
+
+  A value that is not in opencode's shape is dropped with a warning rather
+  than handed over, and that guard is load-bearing: on the opencode version
+  this repo's CI pins (2.0.29), an invalid model does not just lose the
+  key — opencode drops the **whole** `agents.<name>` entry, so the project's
+  reviewer would disappear from the config entirely.
+
 Each of the three fields is independent — clearing one leaves the other two
 on the same row untouched. All three are resolved on the **primary** (where
 the DB lives) at session-spawn time and threaded through the spawn request

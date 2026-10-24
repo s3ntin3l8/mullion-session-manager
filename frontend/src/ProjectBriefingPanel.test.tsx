@@ -401,6 +401,31 @@ describe("ProjectBriefingPanel", () => {
       expect(screen.getByText("Save")).not.toBeDisabled();
     });
 
+    // Issue #1731 — the reviewer agent's starter template names the
+    // opencode-specific model key, so the feature is discoverable from the
+    // UI without reading the docs. It is commented out in the template, so
+    // it does not pin a model on anyone who uses it as-is.
+    it("offers the opencode-model key in the reviewer agent's starter template", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          get: () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+
+      await screen.findByPlaceholderText(/No pinned note set/);
+      await user.click(screen.getByText("Reviewer agent"));
+      await screen.findByPlaceholderText(/No project reviewer subagent set yet/);
+
+      await user.click(screen.getByText("Use starter template"));
+      const textarea = screen.getByDisplayValue(/name: my-project-reviewer/) as HTMLTextAreaElement;
+      expect(textarea.value).toContain("opencode-model:");
+      // The plain `model:` key is Claude Code's and stays as it was.
+      expect(textarea.value).toContain("model: inherit");
+    });
+
     // Issue #1082(b) — the "use Scaffold Mullion instead" pointer that
     // de-emphasizes free-text authoring now that #956's scaffold generation
     // exists. Shown for skill/reviewerAgent regardless of whether a value is

@@ -182,7 +182,14 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
           agents: {
             title: { model: "anthropic/claude-haiku-5-5" },
             // the inline reviewer-agent shape (deriveOpenCodeReviewerAgentConfig)
-            reviewer: { description: "d", mode: "subagent", system: "be careful" },
+            // — with the model a project's reviewer names through its
+            // `opencode-model:` frontmatter key (issue #1731).
+            reviewer: {
+              description: "d",
+              mode: "subagent",
+              system: "be careful",
+              model: "anthropic/claude-sonnet-4-5",
+            },
           },
           // The shape the adapter writes for an unattended Task Master worker.
           permission: { skill: { brainstorming: "deny" } },
@@ -209,6 +216,15 @@ describeIfOpencode("opencode v2 contract (Mullion's integration assumptions)", (
       description: "d",
       mode: "subagent",
       system: "be careful",
+    });
+    // Issue #1731 — and so does its MODEL. This is the assertion that
+    // matters: opencode's own config loader normalizes `provider/model` to
+    // `{providerID, model}`, so a project reviewer's `opencode-model:` key
+    // survives opencode's schema decode rather than being dropped on the
+    // way in. Verified live against the installed opencode 2.1.3.
+    expect(content?.agents?.reviewer?.model).toEqual({
+      providerID: "anthropic",
+      model: "claude-sonnet-4-5",
     });
   });
 
