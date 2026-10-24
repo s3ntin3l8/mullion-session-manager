@@ -610,6 +610,7 @@ function renderPane(
       claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
       codex: { defaultModel: null, reviewerModel: null },
       agy: { defaultModel: null, reviewerModel: null },
+      mcode: { defaultModel: null, reviewerModel: null },
       opencode: {
         implementerModel: null,
         reviewerModel: null,

@@ -483,7 +483,10 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         required: ["agent", "name", "enabled"],
         additionalProperties: false,
         properties: {
-          agent: { type: "string", enum: ["claude-code", "codex", "opencode", "agy"] },
+          agent: {
+            type: "string",
+            enum: ["claude-code", "codex", "opencode", "agy", "mcode"],
+          },
           name: { type: "string", minLength: 1 },
           enabled: { type: "boolean" },
         },

@@ -162,7 +162,7 @@ describe("GET /api/bundle-sync/status", () => {
     const body = res.json();
     expect(body.enabled).toBe(false);
     expect(body.bundleHash).toBeNull();
-    expect(body.clis).toHaveLength(4);
+    expect(body.clis).toHaveLength(5);
     for (const cli of body.clis) {
       expect(cli.skills.status).toBe("disabled");
       expect(cli.agents.status).toBe("disabled");

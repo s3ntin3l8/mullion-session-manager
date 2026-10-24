@@ -119,7 +119,7 @@ export interface NotificationEvent {
 // skills.ts — SkillInfo / SkillAgent / SkillScope
 // ---------------------------------------------------------------------------
 
-export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy";
+export type SkillAgent = "claude-code" | "codex" | "opencode" | "agy" | "mcode";
 export type SkillScope = "builtin" | "global" | "project";
 // Issue #885 — a "skill" is a `SKILL.md`-carrying directory (as before); an
 // "agent" is a Claude Code/opencode subagent definition file; a "command" is

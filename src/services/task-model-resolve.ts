@@ -146,11 +146,19 @@ export function resolveOpenCodeSmallModel(
   return null;
 }
 
-export type CliModelAgent = "claude-code" | "codex" | "agy";
+export type CliModelAgent = "claude-code" | "codex" | "agy" | "mcode";
 
 export { validateCliModel };
 
-const SETTINGS_KEY = { "claude-code": "claudeCode", codex: "codex", agy: "agy" } as const;
+const SETTINGS_KEY = {
+  "claude-code": "claudeCode",
+  codex: "codex",
+  agy: "agy",
+  // Issue: mcode support — mcode's model flag is `-m <provider/model>`
+  // (verified against mcode 0.6.12's own `--help`), the same shape the
+  // other CLI-model agents use, so it takes the same resolver chain.
+  mcode: "mcode",
+} as const;
 
 /**
  * Resolve the `--model` value for a Claude Code, Codex, or agy session. Same

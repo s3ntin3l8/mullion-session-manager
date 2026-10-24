@@ -37,7 +37,10 @@ const toggleSkillSchema = {
     required: ["agent", "name", "enabled"],
     additionalProperties: false,
     properties: {
-      agent: { type: "string", enum: ["claude-code", "codex", "opencode", "agy"] },
+      agent: {
+        type: "string",
+        enum: ["claude-code", "codex", "opencode", "agy", "mcode"],
+      },
       name: { type: "string", minLength: 1 },
       enabled: { type: "boolean" },
     },

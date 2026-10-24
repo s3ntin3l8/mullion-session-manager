@@ -44,6 +44,14 @@ function makeStatus(overrides: Partial<BundleSyncStatus> = {}): BundleSyncStatus
         skills: { status: "synced", root: "/home/user/.gemini/config/skills", count: 3 },
         agents: { status: "synced", root: "/home/user/.gemini/config/agents", count: 1 },
       },
+      // Issue: mcode support — mcode gets the bundle's skills but has no
+      // agent-rule concept, so its agents field is "n-a" like codex's.
+      {
+        cli: "mcode",
+        detected: true,
+        skills: { status: "synced", root: "/home/user/.minimax/skills", count: 3 },
+        agents: { status: "n-a", root: null, count: 0 },
+      },
     ],
     ...overrides,
   };
@@ -85,10 +93,16 @@ describe("Settings -> Sessions -> Bundle sync panel", () => {
     expect(screen.getByTestId("bundle-sync-row-opencode")).toBeInTheDocument();
     expect(screen.getByTestId("bundle-sync-row-codex")).toBeInTheDocument();
     expect(screen.getByTestId("bundle-sync-row-agy")).toBeInTheDocument();
+    // Issue: mcode support — mcode renders a row of its own.
+    expect(screen.getByTestId("bundle-sync-row-mcode")).toBeInTheDocument();
 
     // Codex's agents field is "n-a" — a dash, not a fourth "not synced" row.
     const codexRow = screen.getByTestId("bundle-sync-row-codex");
     expect(codexRow.textContent).toContain("—");
+
+    // mcode has no agent-rule concept either — same "n-a" treatment.
+    const mcodeRow = screen.getByTestId("bundle-sync-row-mcode");
+    expect(mcodeRow.textContent).toContain("—");
   });
 
   it("renders one clear top-level 'off' state instead of four per-CLI rows when disabled", async () => {

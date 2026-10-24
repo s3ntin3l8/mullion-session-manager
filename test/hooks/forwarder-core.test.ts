@@ -5,6 +5,7 @@ import {
 } from "../../src/services/hook-adapters/claude-code.js";
 import { codexAdapter } from "../../src/services/hook-adapters/codex.js";
 import { agyAdapter } from "../../src/services/hook-adapters/agy.js";
+import { mcodeAdapter, buildMcodeHooksJson } from "../../src/services/hook-adapters/mcode.js";
 import {
   buildForwarderMessage,
   detectGitCheckout,
@@ -42,6 +43,7 @@ import {
   mapCodexSubagentStop,
   mapCodexStop,
   mapCodexUserPromptSubmit,
+  mapMcodeEvent,
   parseHookStdin,
   siblingsFor,
 } from "../../src/hooks/forwarder-core.mjs";
@@ -2407,6 +2409,184 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
         }
       }
     }
+  });
+
+  it("mcode: every registered hook event's mapped kind(s) are declared in emits", () => {
+    // mcode's plugin hooks use the CLAUDE CODE dialect (mcode reads the
+    // Claude plugin format), so the payload shapes below are Claude Code's.
+    // The registered events are the ones mcode.ts's buildMcodeHooksJson
+    // declares.
+    const payloadsByEvent = {
+      SessionStart: [{ source: "startup" }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PreToolUse: [{ tool_name: "Bash", tool_input: { command: "ls" } }],
+      PostToolUse: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        {
+          tool_name: "Bash",
+          tool_input: { command: "git worktree add -b fix /tmp/wt" },
+          cwd: "/repo",
+        },
+      ],
+      PermissionRequest: [{ tool_name: "Bash", tool_input: { command: "npm test" } }],
+      Stop: [{}],
+      SessionEnd: [{ reason: "clear" }],
+    };
+
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        for (const kind of kindsOf(mapMcodeEvent(event, payload))) {
+          expect(mcodeAdapter.emits).toContain(kind);
+        }
+      }
+    }
+  });
+
+  it("mcode: every kind in emits is actually REACHABLE from a registered event", () => {
+    // The mirror image of the check above. `emits` feeds pty-manager's
+    // `hookEmits` and `HOOK_ADAPTER_EMITS_BY_BIN` — i.e. it is what the
+    // frontend advertises as reachable for an mcode session. A kind that no
+    // registered event can produce is a false promise (Hermes review,
+    // PR #1793: `notification`, `cwd_changed` and `compact` were claimed
+    // while the events that produce them — Notification, CwdChanged,
+    // PreCompact/PostCompact — were never registered).
+    const payloadsByEvent: Record<string, Record<string, unknown>[]> = {
+      SessionStart: [{ source: "startup" }],
+      UserPromptSubmit: [{ prompt: "fix the bug" }],
+      PreToolUse: [{ tool_name: "ExitPlanMode", tool_input: { plan: "do it" } }],
+      PostToolUse: [
+        { tool_name: "Write", tool_input: { file_path: "x" } },
+        {
+          tool_name: "Bash",
+          tool_input: { command: "git worktree add -b fix /tmp/wt" },
+          cwd: "/repo",
+        },
+      ],
+      PermissionRequest: [
+        { tool_name: "Bash", tool_input: { command: "npm test" } },
+        { tool_name: "AskUserQuestion", tool_input: { questions: [{ header: "h" }] } },
+        // ExitPlanMode's PermissionRequest is deliberately NOT a review_gate —
+        // it stays on the old fire-and-forget `permission_request` shape.
+        { tool_name: "ExitPlanMode", tool_input: { plan: "do it" } },
+      ],
+      Stop: [{}],
+      SessionEnd: [{ reason: "clear" }],
+    };
+
+    const reachable = new Set<string>();
+    for (const [event, payloads] of Object.entries(payloadsByEvent)) {
+      for (const payload of payloads) {
+        for (const kind of kindsOf(mapMcodeEvent(event, payload))) {
+          reachable.add(kind);
+        }
+      }
+    }
+
+    for (const kind of mcodeAdapter.emits) {
+      expect(reachable.has(kind), `mcode emits "${kind}" but no registered event produces it`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("mcode: the registered hook events are exactly the ones the parity payloads cover", () => {
+    // Guards against a hook being added to the plugin without a matching
+    // parity payload above — the same "no test payload declared for
+    // registered event" failure mode the claude-code case checks for.
+    const registered = Object.keys(JSON.parse(buildMcodeHooksJson("/shim")).hooks);
+    expect(registered.length).toBeGreaterThan(0);
+    for (const event of registered) {
+      expect(
+        [
+          "SessionStart",
+          "UserPromptSubmit",
+          "PreToolUse",
+          "PostToolUse",
+          "PermissionRequest",
+          "Stop",
+          "SessionEnd",
+        ],
+        `no test payload declared for registered mcode event ${event}`,
+      ).toContain(event);
+    }
+  });
+});
+
+describe("mapMcodeEvent (issue: mcode support)", () => {
+  it("maps a Stop event to the same progress/done kind Claude Code's Stop does", () => {
+    expect(mapMcodeEvent("Stop", {})).toEqual(mapClaudeCodeEvent("Stop", {}));
+  });
+
+  it("maps a PostToolUse on a file-editing tool to a file_change", () => {
+    const kinds = mapMcodeEvent("PostToolUse", {
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x" },
+    });
+    const list = Array.isArray(kinds) ? kinds : [kinds];
+    expect(list.some((m) => m.kind === "file_change")).toBe(true);
+  });
+
+  it("maps a PermissionRequest to a review_gate (the blocking gate)", () => {
+    const mapped = mapMcodeEvent("PermissionRequest", {
+      tool_name: "Bash",
+      tool_input: { command: "npm test" },
+    });
+    expect(mapped).toEqual({ kind: "review_gate", state: "waiting", prompt: expect.any(String) });
+  });
+
+  it("maps a SessionStart to session_start", () => {
+    expect(mapMcodeEvent("SessionStart", { source: "startup" })).toEqual(
+      mapClaudeCodeEvent("SessionStart", { source: "startup" }),
+    );
+  });
+
+  it("maps a UserPromptSubmit to turn_start (not a notification)", () => {
+    expect(mapMcodeEvent("UserPromptSubmit", { prompt: "hi" })).toEqual({ kind: "turn_start" });
+  });
+
+  it("stamps the agent envelope like the Claude Code mapper does", () => {
+    const mapped = mapMcodeEvent("PostToolUse", {
+      tool_name: "Write",
+      tool_input: { file_path: "/tmp/x" },
+      agent_id: "sub-1",
+      agent_type: "review",
+    });
+    const list = Array.isArray(mapped) ? mapped : [mapped];
+    const withEnvelope = list.find((m) => m.kind === "file_change");
+    expect(withEnvelope).toBeDefined();
+    expect((withEnvelope as { agentId?: string }).agentId).toBe("sub-1");
+  });
+
+  it("dispatches to the mcode branch from buildForwarderMessage", () => {
+    expect(buildForwarderMessage("mcode", "Stop", {})).toEqual({ kind: "progress", phase: "done" });
+  });
+
+  it("formats mcode's SessionStart reply in the Claude dialect", () => {
+    // mcode reads the CLAUDE CODE plugin format, so its SessionStart result
+    // dialect is Claude Code's: hookSpecificOutput.additionalContext, with
+    // hookEventName matching the event. Without an mcode case here the reply
+    // would be a bare {} and Mullion's briefing would never reach the agent.
+    expect(formatSessionStartOutput("mcode", "Project Briefing")).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: "Project Briefing",
+      },
+    });
+  });
+
+  it("formats a gate decision for mcode with the Claude Code dialect", () => {
+    // mcode's plugin hooks use the Claude Code dialect, so the approval
+    // shape is byte-identical to Claude Code's.
+    expect(formatGateDecision("mcode", "approved", undefined)).toEqual(
+      formatGateDecision("claude-code", "approved", undefined),
+    );
+    expect(formatGateDecision("mcode", "denied", "no")).toEqual(
+      formatGateDecision("claude-code", "denied", "no"),
+    );
+  });
+
+  it("formats a no_response gate decision as a bare {} (fall through to the agent's own prompt)", () => {
+    expect(formatGateDecision("mcode", "no_response", undefined)).toEqual({});
   });
 });
 

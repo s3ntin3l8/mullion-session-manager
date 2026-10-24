@@ -107,6 +107,19 @@ How this repo applies the conventions above — facts and commands, not rules.
   still safe: it refuses a review that is already running or already landed.
 - **Issues:** use the [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md)
   format.
+- **Spikes must be fully isolated from the host's real agent state.** A probe
+  that points an agent CLI at a copy/symlink farm of the user's real data
+  directory can fence the live runtime and abort the user's other sessions —
+  observed with mcode: a second mcode runtime started against a _shared_
+  `runtime-state.sqlite` made the incumbent runtime's
+  `Turn controller shutdown {reason:"runtime-shutdown"}` fire, aborting
+  sibling sessions seconds later. So a spike must use a **fully isolated data
+  dir with NO symlink to `~/.minimax`** (a plain `cp -a` copy is fine, but
+  the copy needs its own physical `v2/sqlite` — mcode refuses a symlinked
+  migration lock dir and a symlinked plugin root), and it **must not start a
+  runtime against shared sqlite/lease state**. When in doubt, probe the
+  agent's _documented_ surfaces (its own `--help`, its own source) rather than
+  by launching it.
 - **Codex:** an `AGENTS.override.md` would be read _instead of_ this file;
   `npm run check:scaffold-region-sync` (also a pre-commit hook) fails if one
   carries its own copy of the region.

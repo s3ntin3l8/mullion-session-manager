@@ -108,6 +108,9 @@ export interface CliModelSettings {
   claudeCode?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
   codex?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
   agy?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
+  // Issue: mcode support — mcode takes `-m <provider/model>`, same shape as
+  // the other CLI-model agents.
+  mcode?: { defaultModel?: string | null; reviewerModel?: string | null } | null;
   opencode?: { implementerModel?: string | null; reviewerModel?: string | null } | null;
 }
 
@@ -137,6 +140,9 @@ export const CLI_MODEL_ROLE_RESOLVERS: Record<
   agy: (s) => resolveCliModelRoles(s.agy?.defaultModel, s.agy?.reviewerModel),
   opencode: (s) =>
     resolveOpencodeModelRoles(s.opencode?.implementerModel, s.opencode?.reviewerModel),
+  // Issue: mcode support — mcode takes `-m <provider/model>`, the same shape
+  // the other CLI-model agents take, so it uses the same two-role resolver.
+  mcode: (s) => resolveCliModelRoles(s.mcode?.defaultModel, s.mcode?.reviewerModel),
 };
 
 /**

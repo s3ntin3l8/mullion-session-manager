@@ -156,6 +156,7 @@ export type {
   RemoveWorktreeReason,
   RemoveWorktreeResult,
   AgentRuleAgent,
+  BundleSyncCli,
   AgentRuleScope,
   AgentRuleStatus,
   AgentRuleTarget,
