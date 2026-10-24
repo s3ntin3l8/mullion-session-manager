@@ -373,6 +373,18 @@ describe("the CODEX-format plugin's mcode version floor", () => {
     expect(__testing.compareVersions("1.0.0", "0.6.12")).toBeGreaterThan(0);
   });
 
+  it("parses the version out of whatever mcode --version printed", () => {
+    // mcode prints just "0.6.13", but a wrapper may print a profile line
+    // first, and the version may carry a prefix. An output with no version
+    // in it is UNKNOWN, not a guess.
+    expect(__testing.parseMcodeVersion("0.6.13\n")).toBe("0.6.13");
+    expect(__testing.parseMcodeVersion("v0.6.13")).toBe("0.6.13");
+    expect(__testing.parseMcodeVersion("mcode 0.6.13")).toBe("0.6.13");
+    expect(__testing.parseMcodeVersion("profile: work\nmcode 0.6.13")).toBe("0.6.13");
+    expect(__testing.parseMcodeVersion("")).toBeNull();
+    expect(__testing.parseMcodeVersion("unknown")).toBeNull();
+  });
+
   it("supports the CODEX format from mcode 0.6.12 on", () => {
     // 0.6.12 is the floor because the CODEX plugin format AND the
     // format-aware auto-approval mapping are both present in 0.6.12's own

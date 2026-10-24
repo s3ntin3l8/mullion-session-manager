@@ -81,7 +81,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import type { HookAdapterContext, HookLaunchPlan } from "./types.js";
 import type { HookMessageKind } from "../hook-protocol.js";
 import { SHELL_METACHARACTERS_RE, shellQuote, buildModelFlag, resolveHooksDir } from "./shared.js";
@@ -174,19 +174,40 @@ export const MCODE_MIN_VERSION_FOR_CODEX_PLUGIN = "0.6.12";
  * in which case there is no mcode session to hook anyway. */
 let mcodeVersionCache: string | null | undefined;
 
-function resolveMcodeVersion(): string | null {
-  if (mcodeVersionCache !== undefined) return mcodeVersionCache;
-  try {
-    const out = execFileSync("mcode", ["--version"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    mcodeVersionCache = /^\d+\.\d+\.\d+/.exec(out)?.[0] ?? null;
-  } catch {
-    mcodeVersionCache = null;
+/** The in-flight version resolution, so concurrent installs share ONE spawn. */
+let mcodeVersionPromise: Promise<string | null> | undefined;
+
+/**
+ * Extracts a version from mcode's `--version` output.
+ *
+ * mcode prints just `0.6.13`, but the parse is deliberately TOLERANT: a
+ * wrapper may print a profile line first, and the version may carry a `v`
+ * prefix or a program name. An output that contains no version at all is
+ * reported as unknown rather than guessed at.
+ */
+export function parseMcodeVersion(output: string): string | null {
+  const match = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+  return match ? `${match[1]}.${match[2]}.${match[3]}` : null;
+}
+
+/**
+ * Resolves the host's mcode version, ASYNCHRONOUSLY.
+ *
+ * It is deliberately not synchronous: the install runs inside `prepareLaunch`,
+ * which is on the session-start path, and `mcode --version` costs ~300ms on
+ * this host — too long to block the server's event loop for. The promise is
+ * cached, so the spawn happens at most once per Mullion process.
+ */
+function resolveMcodeVersionAsync(): Promise<string | null> {
+  if (!mcodeVersionPromise) {
+    mcodeVersionPromise = new Promise((resolve) => {
+      execFile("mcode", ["--version"], { encoding: "utf8", timeout: 10_000 }, (err, stdout) => {
+        mcodeVersionCache = err ? null : parseMcodeVersion(String(stdout));
+        resolve(mcodeVersionCache);
+      });
+    });
   }
-  return mcodeVersionCache;
+  return mcodeVersionPromise;
 }
 
 /** Compares two dotted numeric versions. */
@@ -206,17 +227,25 @@ function compareVersions(a: string, b: string): number {
  * that `mcode --version` could not be run, which in practice means mcode is
  * not on PATH at all — and then there is no mcode session to hook. */
 export function mcodeSupportsCodexPlugin(): boolean {
-  const version = resolveMcodeVersion();
-  if (version === null) return true;
+  const version = mcodeVersionCache;
+  // UNKNOWN (not resolved yet, or unresolvable) is treated as supported: the
+  // only way it is unknown is that `mcode --version` could not be run, which
+  // in practice means mcode is not on PATH — and then there is no mcode
+  // session to hook.
+  if (version === undefined || version === null) return true;
   return compareVersions(version, MCODE_MIN_VERSION_FOR_CODEX_PLUGIN) >= 0;
 }
 
 /** Test seams for the version floor. */
 export const __testing = {
   compareVersions,
+  parseMcodeVersion,
   /** Forces the detected mcode version. `undefined` restores detection. */
   setMcodeVersion(version: string | null | undefined): void {
     mcodeVersionCache = version;
+    // Pin the promise too, so a later async resolution cannot overwrite the
+    // forced value.
+    mcodeVersionPromise = version === undefined ? undefined : Promise.resolve(version);
   },
 };
 
@@ -716,11 +745,13 @@ export function installMcodePlugin(): void {
   // the Claude-format plugin deliberately no longer carries
   // `PermissionRequest`, the hook would be registered NOWHERE and
   // skip-permissions would silently stop working. Say so, loudly, instead.
-  if (!mcodeSupportsCodexPlugin()) {
+  void resolveMcodeVersionAsync().then((version) => {
+    if (version === null) return; // unknown — nothing to say
+    if (compareVersions(version, MCODE_MIN_VERSION_FOR_CODEX_PLUGIN) >= 0) return;
     console.error(
-      `mcode hook adapter: the installed mcode is ${resolveMcodeVersion()}, which predates the CODEX plugin format (mcode ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN}+). That format is what lets mcode apply Mullion's permission answer, so PermissionRequest cannot be registered — skip-permissions will not work for mcode sessions on this host. Upgrade mcode to ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN} or newer.`,
+      `mcode hook adapter: the installed mcode is ${version}, which predates the CODEX plugin format (mcode ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN}+). That format is what lets mcode apply Mullion's permission answer, so PermissionRequest cannot be registered — skip-permissions will not work for mcode sessions on this host. Upgrade mcode to ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN} or newer.`,
     );
-  }
+  });
 
   // The shim first: the plugin's command line references it by path, so a
   // half-installed plugin would point at a missing script.
