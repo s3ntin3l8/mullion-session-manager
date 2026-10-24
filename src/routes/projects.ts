@@ -1163,16 +1163,35 @@ export async function projectsRoute(app: FastifyInstance) {
   // that it writes nothing at all: it is a read.
   //
   // Two routes, one decision:
-  //   - GET  /api/projects/:id/placement-preview — an existing project.
+  //   - GET  /api/projects/:id/placement-preview — an existing project. The
+  //     mode may be overridden with ?placement=…, because the question a UI
+  //     asks is "what would happen if this project were AUTO?", which is
+  //     usually NOT the mode the project is stored as (turning the mode ON
+  //     is the whole point of the control). Without the override the answer
+  //     would be about the stored mode — the opposite of what the user is
+  //     asking.
   //   - POST /api/projects/placement-preview    — a project that does not
   //     exist yet (the create-project modal asks BEFORE the row is saved),
   //     with the would-be host and mode in the body.
   //
   // The answer is a NOW reading: load moves between the preview and the
   // spawn, so the UI labels it as such.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { placement?: string } }>(
     "/api/projects/:id/placement-preview",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            // The shared mode vocabulary — the same enum the project's own
+            // create/PATCH schemas use, so a preview can never be asked
+            // about a mode the project could not actually be set to.
+            placement: { type: "string", enum: [...PLACEMENT_MODES] },
+          },
+        },
+      },
+    },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
@@ -1180,10 +1199,13 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
+      // The mode ASKED about — the picked one when the caller says so, the
+      // project's own when it does not.
+      const placement = (request.query.placement ?? project.placement) as PlacementMode;
       const decision = previewPlacement(app, {
-        project: { hostId: project.hostId, placement: project.placement },
+        project: { hostId: project.hostId, placement },
       });
-      return { placement: project.placement, ...decision };
+      return { placement, ...decision };
     },
   );
 

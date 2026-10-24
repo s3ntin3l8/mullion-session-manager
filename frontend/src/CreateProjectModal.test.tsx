@@ -206,6 +206,31 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
       placement: "auto",
     });
   });
+
+  it("asks about the mode the user PICKED, not the one the project is stored as", async () => {
+    // The bug this pins: the project is stored as "pinned", the user picks
+    // "Automatic" — so the preview must be asked about "auto". Asking the
+    // stored mode would answer the opposite of the question, and the user
+    // would see "pinned to the project's host" while choosing automatic.
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialPlacement="pinned"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /automatic/i }));
+
+    await waitFor(() => expect(api.getPlacementPreview).toHaveBeenCalled());
+    expect(vi.mocked(api.getPlacementPreview).mock.calls[0]).toEqual([1, "auto"]);
+  });
 });
 
 // Focused on the issue #28 phase 7 "use detected port" suggestion — the

@@ -28,8 +28,15 @@ export const projectsApi = {
   // Two shapes, one decision: the id-keyed one for a project that exists,
   // and the body-keyed one for the create-project modal, which asks BEFORE
   // the row is saved and therefore has no id to ask with.
-  getPlacementPreview: (id: number) =>
-    request<PlacementPreview>(`/api/projects/${id}/placement-preview`),
+  //
+  // The id-keyed one takes the mode to ask ABOUT, because the question a UI
+  // asks is "what would happen if this project were AUTO?" — usually NOT the
+  // mode the project is stored as (turning the mode on is the point of the
+  // control). Omit it and the server answers for the stored mode.
+  getPlacementPreview: (id: number, placement?: PlacementMode) =>
+    request<PlacementPreview>(
+      `/api/projects/${id}/placement-preview${placement ? `?placement=${placement}` : ""}`,
+    ),
 
   previewPlacement: (opts: { hostId: string; placement: PlacementMode }) =>
     request<PlacementPreview>("/api/projects/placement-preview", {

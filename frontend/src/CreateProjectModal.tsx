@@ -226,16 +226,20 @@ export function CreateProjectModal({
   // The placement PREVIEW — issue #1726 / roadmap 8.12.
   //
   // One question, two shapes: a project that exists is asked about by its
-  // id; a project that does not exist yet (this modal, in create mode) is
+  // id, and a project that does not exist yet (this modal, in create mode) is
   // asked about with the would-be host and mode. Both go to the server's
   // ONE decision function, so the answer is what would actually happen.
+  //
+  // The mode asked about is the one the user PICKED, never the project's
+  // stored one: turning the mode ON is the whole point of this control, so
+  // asking the stored mode would answer the opposite of the question.
   useAsyncData(
     () => {
-      if (isEdit && projectId !== undefined) return api.getPlacementPreview(projectId);
+      if (isEdit && projectId !== undefined) return api.getPlacementPreview(projectId, placement);
       // Create mode: the host the project would be pinned to. The preview
       // only cares about the mode in this path, but the host travels along
       // so the server can fall back to it.
-      return api.previewPlacement({ hostId, placement: "auto" });
+      return api.previewPlacement({ hostId, placement });
     },
     (result) => {
       setPreview(result);

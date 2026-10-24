@@ -236,8 +236,10 @@ path uses — so it cannot promise something the placement would not do. It
 is a **now** reading (load moves between the preview and the spawn), and it
 is answered without placing anything: a preview announces no decision and
 writes nothing. Two shapes, one decision: an existing project is asked
-about by its id, and the create-project dialog asks with the host and mode
-it would save, before the project exists.
+about by its id (with the mode it is being asked _about_, not the mode it
+is stored as — turning the mode on is the point of the control), and the
+create-project dialog asks with the host and mode it would save, before
+the project exists.
 
 The reason for a session that was _already_ placed is a different thing —
 that decision is made at spawn time, so it is

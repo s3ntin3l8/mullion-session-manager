@@ -310,6 +310,61 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("answers about the mode ASKED about, not the one the project is stored as", async () => {
+    // The question a UI asks is "what would happen if this project were
+    // AUTO?" — which is usually NOT the stored mode (turning the mode on is
+    // the point of the control). Without the override the answer would be
+    // about the stored mode: the opposite of what the user is asking.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "mode-override", cwd },
+    });
+    const { id } = created.json();
+
+    const stored = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(stored.json().placement).toBe("pinned");
+
+    const asked = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?placement=auto`,
+    });
+    expect(asked.statusCode).toBe(200);
+    expect(asked.json().placement).toBe("auto");
+    // The auto answer is a SCORED one — the considered table is populated,
+    // where the pinned answer scores nothing.
+    expect(Array.isArray(asked.json().considered)).toBe(true);
+    expect(asked.json().considered.length).toBeGreaterThan(0);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a preview for a mode outside the shared vocabulary", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "bad-mode-preview", cwd },
+    });
+    const { id } = created.json();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?placement=whatever`,
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("404s a preview for a project that does not exist", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/projects/999999/placement-preview" });
