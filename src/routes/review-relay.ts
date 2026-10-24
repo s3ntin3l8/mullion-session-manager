@@ -898,9 +898,12 @@ type LandedReview =
  */
 const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 
-// Best effort: the newest review by a bot account submitted after the run was
-// dispatched and pinned to the commit it was dispatched for. A GitHub failure
-// must not hide the Hermes status.
+// Best effort: the newest review by the reviewer's own bot account
+// (`reviewRelay.reviewerBotLogin`; empty = any bot, the same rule as
+// `reviewReader().base`) submitted after the run was dispatched and pinned to
+// the commit it was dispatched for. Another bot's review (claude[bot],
+// Copilot, ...) is not the relay's review and must not show as "posted". A
+// GitHub failure must not hide the Hermes status.
 async function findLandedReview(
   app: FastifyInstance,
   token: string,
@@ -909,12 +912,14 @@ async function findLandedReview(
 ): Promise<LandedReview> {
   if (!record) return { checked: false };
   const { dispatchedAt, headSha } = record;
+  const { reviewerBotLogin } = getStoredSettings(app.db).reviewRelay;
   try {
     const reviews = await listPullRequestReviews(token, t.owner, t.repo, t.prNumber);
     const landed = reviews
       .filter(
         (r) =>
           r.authorIsBot &&
+          (reviewerBotLogin === "" || r.author === reviewerBotLogin) &&
           r.commitId === headSha &&
           // The same "landed" definition the duplicate-review warning uses
           // (LANDED_REVIEW_STATES) — a DISMISSED review was retracted, so

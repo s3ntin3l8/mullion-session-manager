@@ -492,7 +492,10 @@ export interface AppSettings {
      * The shared workflow computes the same value (its `mention-trigger`
      * input plus "[bot]"), and both put it in the idempotency key: a
      * difference here means the two entry points stop deduplicating against
-     * each other. Empty = any bot's review counts (the old rule).
+     * each other. The same login decides whether a review "landed" in the
+     * relay's status (the pill and `review status`), so another bot's review
+     * of the head does not show as the relay's. Empty = any bot's review
+     * counts (the old rule).
      */
     reviewerBotLogin: string;
   };

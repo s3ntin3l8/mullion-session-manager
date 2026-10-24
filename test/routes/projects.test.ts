@@ -2070,7 +2070,7 @@ describe("projects route", () => {
             if (reviews === 1) return jsonResponse(200, []);
             return jsonResponse(200, [
               {
-                user: { login: "hermes[bot]", type: "Bot" },
+                user: { login: "s3ntin3l8-hermes[bot]", type: "Bot" },
                 state: "APPROVED",
                 commit_id: "sha41",
                 submitted_at: new Date().toISOString(),
@@ -2111,7 +2111,7 @@ describe("projects route", () => {
             url.includes("/pulls/41/reviews")
               ? jsonResponse(200, [
                   {
-                    user: { login: "hermes[bot]", type: "Bot" },
+                    user: { login: "s3ntin3l8-hermes[bot]", type: "Bot" },
                     state: "APPROVED",
                     commit_id: "sha41",
                     submitted_at: new Date().toISOString(),
@@ -2304,7 +2304,7 @@ describe("projects route", () => {
             url.includes("/pulls/41/reviews")
               ? jsonResponse(200, [
                   {
-                    user: { login: "hermes[bot]", type: "Bot" },
+                    user: { login: "s3ntin3l8-hermes[bot]", type: "Bot" },
                     state: "CHANGES_REQUESTED",
                     commit_id: "sha41",
                     submitted_at: new Date().toISOString(),
@@ -2324,7 +2324,7 @@ describe("projects route", () => {
           expect(res.json()).toMatchObject({
             state: "landed",
             verdict: "CHANGES_REQUESTED",
-            author: "hermes[bot]",
+            author: "s3ntin3l8-hermes[bot]",
             body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
             htmlUrl: "https://github.com/acme/widgets/pull/41#pullrequestreview-1",
           });

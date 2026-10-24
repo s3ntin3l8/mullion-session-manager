@@ -73,6 +73,7 @@ vi.mock("../../src/services/remote-host-client.js", async (orig) => ({
 
 import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
+import { applySettingsPatch } from "../../src/services/settings.js";
 import { closeDb } from "../../src/db/client.js";
 import { GitHubApiError } from "../../src/services/github-fetch.js";
 import { projects, sessions, tasks } from "../../src/db/schema.js";
@@ -994,6 +995,36 @@ describe("review-request routes", () => {
           checked: true,
           review: { author: "s3ntin3l8-hermes[bot]", state: "APPROVED", commitId: "ccccccc3" },
         },
+      });
+    });
+
+    describe("whose review counts as landed (#1756)", () => {
+      const otherBotOnHead = {
+        author: "claude[bot]",
+        authorIsBot: true,
+        state: "APPROVED",
+        commitId: "ccccccc3",
+        submittedAt: new Date(1_000_900).toISOString(),
+      };
+
+      it("ignores another bot's review on the same head", async () => {
+        mocks.listPullRequestReviews.mockResolvedValue([otherBotOnHead]);
+        const res = await get(sessionId);
+        expect(res.json().github).toEqual({ checked: true, review: null });
+      });
+
+      it("counts any bot when reviewerBotLogin is empty", async () => {
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
+        try {
+          mocks.listPullRequestReviews.mockResolvedValue([otherBotOnHead]);
+          const res = await get(sessionId);
+          expect(res.json().github).toMatchObject({
+            checked: true,
+            review: { author: "claude[bot]" },
+          });
+        } finally {
+          applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]" } });
+        }
       });
     });
 
