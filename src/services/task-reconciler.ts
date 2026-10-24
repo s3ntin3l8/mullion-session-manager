@@ -675,8 +675,18 @@ function turnFinishedSinceClaim(
   info: SessionInfo | null,
   task: { claimedAt: Date | null },
 ): boolean {
-  if (info === null || info.lastTurnEndedAt === null || task.claimedAt === null) return false;
-  return info.lastTurnEndedAt >= task.claimedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+  if (info === null || info.workFinishedAt === null || task.claimedAt === null) return false;
+  // Issue #1735 — `workFinishedAt`, not `lastTurnEndedAt`. The latter says a
+  // turn ENDED (which a machine-woken turn does too, and which drives the
+  // session's derived `finished` status, `agentTurnInFlight` and the
+  // "Finished" ping). The former says the agent's WORK is done — which is
+  // the only thing this gate is about.
+  //
+  // Without that distinction a session that loops internally tripped this
+  // gate MID-LOOP: the task advanced to `reviewing` while the worker was
+  // still working, and the review agent judged an incomplete diff in the
+  // same worktree the worker was still writing to.
+  return info.workFinishedAt >= task.claimedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
 }
 
 // How long a worker's finished turn may sit behind a still-"running"

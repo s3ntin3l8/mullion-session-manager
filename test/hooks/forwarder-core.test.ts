@@ -112,6 +112,31 @@ describe("mapClaudeCodeStop", () => {
       backgroundTasks: [],
     });
   });
+
+  // Issue #1735 — `session_crons` is Claude Code's own list of the
+  // scheduled wakeups that will wake this session later (CronCreate,
+  // ScheduleWakeup, /loop), empty when none are scheduled. It is what
+  // separates "the worker is done" from "the worker is about to keep
+  // working".
+  it("reports wakeupsPending from session_crons", () => {
+    expect(mapClaudeCodeStop({ session_crons: [] })).toEqual({
+      kind: "progress",
+      phase: "done",
+      wakeupsPending: false,
+    });
+    expect(mapClaudeCodeStop({ session_crons: [{ id: "cron-1" }] })).toEqual({
+      kind: "progress",
+      phase: "done",
+      wakeupsPending: true,
+    });
+  });
+
+  it("omits wakeupsPending when the payload carries no session_crons", () => {
+    // An absent field must not be read as "there is a wakeup coming" —
+    // the field is optional upstream.
+    const message = mapClaudeCodeStop({});
+    expect(Object.hasOwn(message as object, "wakeupsPending")).toBe(false);
+  });
 });
 
 describe("mapClaudeCodePostToolUse", () => {

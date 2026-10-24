@@ -25,6 +25,23 @@ export interface ProgressHookMessage {
   backgroundTasks?: BackgroundTask[];
   /** Free-text detail for the current phase (e.g. retry context). */
   detail?: string;
+  /**
+   * Issue #1735 — whether the session has scheduled wakeups still to come.
+   *
+   * Claude Code's `Stop` payload carries `session_crons` ("Session-scoped
+   * cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake this
+   * session later. Empty array when none are scheduled."), and a
+   * `loop_wakeup` turn is exactly a ScheduleWakeup firing.
+   *
+   * This is what tells "the work is done" from "the session is about to be
+   * woken again to keep working" — see turnEndMeansWorkFinished, which
+   * combines it with the turn's source.
+   *
+   * Absent means "not reported", which is treated as "nothing pending":
+   * the field is optional upstream, and a client that does not send it must
+   * not be read as "there is a wakeup coming".
+   */
+  wakeupsPending?: boolean;
 }
 
 export interface BackgroundTask {
@@ -298,7 +315,8 @@ export interface TurnStartHookMessage {
 }
 
 /**
- * Issue #1735 — whether a turn ENDED the agent's work, given who authored it.
+ * Issue #1735 — whether a turn end means the agent's WORK is done, so the
+ * task may advance to `reviewing`.
  *
  * The reconciler's `in_progress -> reviewing` transition fires when the
  * worker's turn has "genuinely ended" (task-reconciler.ts's
@@ -308,25 +326,41 @@ export interface TurnStartHookMessage {
  * working, and letting the review agent judge an incomplete diff in the
  * same worktree.
  *
- * The distinguishing property is not "interactive vs not" — it is "**a
- * machine re-woke this turn mid-work**":
+ * TWO SIGNALS, because neither alone is enough:
  *
- *  - `user` — a human's turn. It ended.
+ * - `source` — WHO authored the turn. Claude Code's `UserPromptSubmit`
+ *   reports it: `user`, `sdk`, `system`, `loop_wakeup`, `schedule_wakeup`
+ *   or `poll_event`.
+ * - `wakeupsPending` — whether the session has scheduled wakeups still to
+ *   come. Claude Code's `Stop` payload carries `session_crons` ("Session-
+ *   scoped cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake
+ *   this session later. Empty array when none are scheduled."), and a
+ *   `loop_wakeup` is exactly a ScheduleWakeup firing.
+ *
+ * The distinguishing property is not "interactive vs not" — it is "**is
+ * this session going to wake again**":
+ *
+ *  - a human's turn (`user`) ended, and nothing is pending → the work is
+ *    done.
  *  - `sdk` — a non-interactive entrypoint (`-p` / Agent SDK), which is
- *    EXACTLY how Task Master's own workers run. It must latch: if it did
- *    not, Task Master would never reach `reviewing` at all.
- *  - `loop_wakeup` — a `/loop` wake mid-work. The work did NOT end.
- *  - `schedule_wakeup` — a scheduled fire (CronCreate/routine). The work
- *    did NOT end.
- *  - `poll_event` — the poll-event channel's enqueue-time pass, before the
- *    delivery's outcome exists. The work did NOT end.
- *  - `system` — "peer/channel messages, task notifications,
- *    auto-continuation" — auto-continuation is precisely the mid-loop case.
+ *    EXACTLY how Task Master's own workers run. It must count as done: if
+ *    it did not, Task Master would never reach `reviewing` at all.
+ *  - a machine-woken turn (`loop_wakeup`, `schedule_wakeup`, `poll_event`,
+ *    `system`) whose session has a wakeup still pending → the work is NOT
+ *    done; the session is about to be woken again to keep working.
+ *  - a machine-woken turn with NOTHING pending → the work IS done. This is
+ *    the `/loop`'s FINAL iteration: the agent armed one more wakeup every
+ *    iteration but the last, so the final turn ends with an empty
+ *    `session_crons` — and the task must be able to advance.
  *
- * An ABSENT source latches, because that is today's behaviour: on a Claude
- * Code that does not send the field, nothing changes.
+ * An ABSENT source counts as "done", because that is today's behaviour: the
+ * field is still rolling out upstream ("Payloads may omit it while the
+ * field rolls out"), and no other CLI sends one.
  */
-export function turnSourceEndsTurn(source: string | undefined | null): boolean {
+export function turnEndMeansWorkFinished(
+  source: string | undefined | null,
+  wakeupsPending: boolean,
+): boolean {
   if (source === undefined || source === null) return true;
   switch (source) {
     case "user":
@@ -336,11 +370,13 @@ export function turnSourceEndsTurn(source: string | undefined | null): boolean {
     case "schedule_wakeup":
     case "poll_event":
     case "system":
-      return false;
+      // Machine-woken: the work is only done if nothing is going to wake
+      // this session again.
+      return !wakeupsPending;
     default:
-      // An unknown value is treated as "not a machine injection" — latching
-      // is today's behaviour, and a new upstream value must not silently
-      // stop Task Master's worker->review handoff.
+      // An unknown value is treated as "not a machine injection" — a new
+      // upstream value must not silently stop Task Master's worker->review
+      // handoff.
       return true;
   }
 }

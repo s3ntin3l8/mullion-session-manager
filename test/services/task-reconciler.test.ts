@@ -417,8 +417,20 @@ function fakeInfo(overrides: Partial<Record<string, unknown>> = {}) {
     compactState: "idle",
     subagentCount: 0,
     lastTurnEndedAt: null,
+    // Issue #1735 — the reconciler's worker->review gate reads
+    // `workFinishedAt` (the last turn end that meant "the agent's work is
+    // done"), not `lastTurnEndedAt` (when a turn ended at all). Derived
+    // from the same override so the existing fixtures keep their meaning
+    // — "the turn finished → the gate opens" — while a test that is
+    // specifically about the work-finished signal can override it
+    // independently.
+    workFinishedAt: null,
     outstandingBackgroundTasks: [],
     ...overrides,
+    workFinishedAt:
+      "workFinishedAt" in overrides
+        ? (overrides.workFinishedAt as number | null)
+        : ((overrides.lastTurnEndedAt as number | null) ?? null),
   };
 }
 
@@ -1043,17 +1055,35 @@ describe("reconcileTasks", () => {
 
   // Issue #1735 — the reconciler's half of the turn-source rule.
   //
-  // The gate opens on "the worker's turn genuinely ended", which is
-  // `lastTurnEndedAt` being latched. A machine-woken turn (a `/loop` wake,
-  // a scheduled fire, a poll pass, an auto-continuation) no longer latches
-  // it — so a session that loops internally no longer advances the task to
-  // "reviewing" MID-LOOP, with the review agent judging an incomplete diff
-  // in the same worktree the worker was still writing.
-  it("does not advance a task whose turn was never latched as ended", async () => {
+  // The gate opens on "the worker's WORK is done", which is
+  // `workFinishedAt` being latched — NOT on `lastTurnEndedAt`, which only
+  // says a turn ended. A machine-woken turn with a wakeup still pending
+  // ends the turn but not the work, so a session that loops internally no
+  // longer advances the task to "reviewing" MID-LOOP, with the review
+  // agent judging an incomplete diff in the same worktree the worker was
+  // still writing.
+  it("does not advance a task whose work never finished", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
     vi.spyOn(app.pty, "get").mockReturnValue({
-      toInfo: () => fakeInfo({ lastTurnEndedAt: null }),
+      toInfo: () => fakeInfo({ lastTurnEndedAt: null, workFinishedAt: null }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    await app.close();
+  });
+
+  it("does not advance a task whose turn ended but whose work did not", async () => {
+    // The mid-loop case: the turn ended (so lastTurnEndedAt is latched and
+    // the session reads as `finished`), but the work did not — the agent
+    // armed another wakeup and the session is about to be woken again.
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now(), workFinishedAt: null }),
     } as never);
 
     await reconcileTasks(app);

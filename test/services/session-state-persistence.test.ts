@@ -366,9 +366,9 @@ describe("applyStoredState", () => {
 
     it("restores who authored the turn", () => {
       // A resumed session must keep judging its next `progress: done`
-      // against the right source: an UNKNOWN source latches, and latching
-      // a machine-woken turn is exactly the mid-loop advance this exists
-      // to prevent.
+      // against the right source: a machine-woken turn with a wakeup still
+      // pending does NOT mark the work as finished, and that is exactly the
+      // mid-loop advance this exists to prevent.
       const r = makeSourceRig();
       applyStoredState(r.host, fullState({ turnPromptSource: "loop_wakeup" }), FILE);
       expect(r.source).toBe("loop_wakeup");

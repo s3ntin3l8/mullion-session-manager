@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseHookMessage,
   KNOWN_BROWSER_ACTIONS,
-  turnSourceEndsTurn,
+  turnEndMeansWorkFinished,
 } from "../../src/services/hook-protocol.js";
 import { agentActionSchema } from "../../src/routes/browser-automation.js";
 
@@ -715,36 +715,53 @@ describe("parseHookMessage", () => {
     });
   });
 
-  // Issue #1735 — the rule that decides whether a turn ENDED the work.
-  describe("turnSourceEndsTurn", () => {
-    it("latches for a human's turn and for the non-interactive entrypoint", () => {
-      // `sdk` is how Task Master's own workers run: if it did not latch,
-      // Task Master would never reach `reviewing` at all.
-      expect(turnSourceEndsTurn("user")).toBe(true);
-      expect(turnSourceEndsTurn("sdk")).toBe(true);
+  // Issue #1735 — the rule that decides whether a turn end means the
+  // agent's WORK is done (which is what the reconciler's worker->review
+  // gate asks).
+  describe("turnEndMeansWorkFinished", () => {
+    it("is finished for a human's turn, with or without a pending wakeup", () => {
+      expect(turnEndMeansWorkFinished("user", false)).toBe(true);
+      expect(turnEndMeansWorkFinished("user", true)).toBe(true);
     });
 
-    it("does NOT latch for a machine-woken turn", () => {
+    it("is finished for the non-interactive entrypoint", () => {
+      // `sdk` is how Task Master's own workers run: if it did not count,
+      // Task Master would never reach `reviewing` at all.
+      expect(turnEndMeansWorkFinished("sdk", false)).toBe(true);
+    });
+
+    it("is NOT finished for a machine-woken turn that still has a wakeup pending", () => {
       // These are the turns that used to trip the worker->review gate
       // MID-LOOP, while the worker was still writing the diff the review
       // agent then judged.
-      expect(turnSourceEndsTurn("loop_wakeup")).toBe(false);
-      expect(turnSourceEndsTurn("schedule_wakeup")).toBe(false);
-      expect(turnSourceEndsTurn("poll_event")).toBe(false);
-      expect(turnSourceEndsTurn("system")).toBe(false);
+      for (const source of ["loop_wakeup", "schedule_wakeup", "poll_event", "system"]) {
+        expect(turnEndMeansWorkFinished(source, true)).toBe(false);
+      }
     });
 
-    it("latches for an ABSENT source — that is today's behaviour", () => {
+    it("IS finished for a machine-woken turn with nothing pending", () => {
+      // The `/loop`'s FINAL iteration: the agent armed one more wakeup
+      // every iteration but the last, so the final turn ends with an empty
+      // `session_crons` — and the task must be able to advance.
+      for (const source of ["loop_wakeup", "schedule_wakeup", "poll_event", "system"]) {
+        expect(turnEndMeansWorkFinished(source, false)).toBe(true);
+      }
+    });
+
+    it("is finished for an ABSENT source — that is today's behaviour", () => {
       // The field is still rolling out upstream, and no other CLI sends
       // one: on those, nothing changes.
-      expect(turnSourceEndsTurn(undefined)).toBe(true);
-      expect(turnSourceEndsTurn(null)).toBe(true);
+      expect(turnEndMeansWorkFinished(undefined, false)).toBe(true);
+      expect(turnEndMeansWorkFinished(null, false)).toBe(true);
+      // Even with a wakeup pending: an absent source means the CLI did not
+      // tell us, and today's behaviour is "carry on".
+      expect(turnEndMeansWorkFinished(undefined, true)).toBe(true);
     });
 
-    it("latches for an unknown source", () => {
+    it("is finished for an unknown source", () => {
       // A new upstream value must not silently stop Task Master's
       // worker->review handoff.
-      expect(turnSourceEndsTurn("something-new")).toBe(true);
+      expect(turnEndMeansWorkFinished("something-new", true)).toBe(true);
     });
   });
 

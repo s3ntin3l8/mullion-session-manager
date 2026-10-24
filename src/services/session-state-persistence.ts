@@ -58,6 +58,7 @@ export type StoredStateFields = Pick<
   | "questionHeader"
   | "questionAt"
   | "lastTurnEndedAt"
+  | "workFinishedAt"
   | "lastAssistantMessage"
   | "currentTodo"
   | "backgroundTasks"
@@ -227,6 +228,11 @@ export function applyStoredState(
   if (s.questionHeader !== undefined) set.questionHeader(s.questionHeader);
   if (s.questionAt !== undefined) set.questionAt(s.questionAt);
   if (s.lastTurnEndedAt !== undefined) attention.lastTurnEndedAt = s.lastTurnEndedAt;
+  // Issue #1735 — the "the work is done" signal, restored with the "a turn
+  // ended" one: the reconciler's worker->review gate reads it, and a
+  // restored session must reach the same conclusion it would have reached
+  // before the restart.
+  if (s.workFinishedAt !== undefined) attention.workFinishedAt = s.workFinishedAt;
   if (s.lastAssistantMessage !== undefined) set.lastAssistantMessage(s.lastAssistantMessage);
   if (s.currentTodo !== undefined) set.currentTodo(s.currentTodo);
   // Issue #428 — the persisted `backgroundTasksAt` itself is NOT restored (a
@@ -252,8 +258,9 @@ export function applyStoredState(
   }
   // Issue #1735 — who authored the turn in flight. Restored so a resumed
   // session judges its next `progress: done` against the right source: an
-  // unknown source LATCHES, and latching a machine-woken turn is exactly
-  // the mid-loop advance this exists to prevent.
+  // unknown source counts as "the work is done", but a machine-woken one
+  // with a wakeup still pending does not — and that is exactly the
+  // mid-loop advance this exists to prevent.
   if (typeof s.turnPromptSource === "string") {
     host.setTurnPromptSource?.(s.turnPromptSource);
   }

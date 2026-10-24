@@ -1254,6 +1254,8 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      // Issue #1735 — the last turn end that meant "the work is done".
+      workFinishedAt: this.attention.workFinishedAt,
       // Issue #1735 — who authored the turn in flight; persisted so a
       // resumed session keeps judging its next turn end against the right
       // source.
@@ -2233,6 +2235,14 @@ export class Session {
       },
       set turnPromptSource(v) {
         self.attention.turnPromptSource = v;
+      },
+      // Issue #1735 — the last turn end that meant "the agent's work is
+      // done". See AttentionTracker.workFinishedAt's own doc comment.
+      get workFinishedAt() {
+        return self.attention.workFinishedAt;
+      },
+      set workFinishedAt(v) {
+        self.attention.workFinishedAt = v;
       },
       get turnEndPingSent() {
         return self.attention.turnEndPingSent;
@@ -3633,6 +3643,8 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      // Issue #1735 — the last turn end that meant "the work is done".
+      workFinishedAt: this.attention.workFinishedAt,
       backgroundTasks: this.attention.backgroundTasks,
       backgroundTasksAt: this.attention.backgroundTasksAt,
       outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.attention.backgroundTasks),

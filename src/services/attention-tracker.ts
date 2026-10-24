@@ -127,6 +127,23 @@ export class AttentionTracker {
   // this CLI does not send one — and an unknown source LATCHES, which is
   // today's behaviour.
   turnPromptSource: string | null = null;
+
+  // Issue #1735 — the timestamp of the last turn end that meant "the
+  // agent's WORK is done", as opposed to `lastTurnEndedAt` above, which
+  // says when a turn ended AT ALL.
+  //
+  // The two differ exactly once: a machine-woken turn (a `/loop` wake, a
+  // scheduled fire, a poll pass, an auto-continuation) ends the turn but
+  // not the work — the session is about to be woken again to keep going.
+  // The reconciler's `in_progress -> reviewing` gate reads THIS one, so a
+  // session that loops internally no longer advances mid-loop and lets the
+  // review agent judge an incomplete diff in the worktree the worker is
+  // still writing to.
+  //
+  // `lastTurnEndedAt` stays unconditional — it also drives the derived
+  // `finished` status, `agentTurnInFlight` and the "Finished" ping, and a
+  // machine-woken turn ends just as really as a human's.
+  workFinishedAt: number | null = null;
   // Issue #428 — see SessionInfo.backgroundTasks/.backgroundTasksAt's own
   // doc comments.
   backgroundTasks: BackgroundTask[] = [];
