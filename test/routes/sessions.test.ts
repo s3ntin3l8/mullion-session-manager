@@ -997,6 +997,42 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("does NOT suspend a LOCAL session because ANOTHER host is unreachable", async () => {
+      // The guard is per-HOST: one dead machine must not make another
+      // machine's rows look suspended. With a single host in the app, code
+      // that suspended every row on any host failure would still pass —
+      // so this case puts a dead remote host AND a live local session in the
+      // SAME app.
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "sleepy-laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const remote = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active", hostId })
+        .returning()
+        .get();
+      const local = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .get();
+
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      const byId = new Map<number, { sessionStatus: string; resolvedHostId: string }>(
+        list.json().map((s: { id: number }) => [s.id, s]),
+      );
+      expect(byId.get(remote.id)?.sessionStatus).toBe("suspended");
+      expect(byId.get(local.id)?.sessionStatus).not.toBe("suspended");
+      expect(byId.get(local.id)?.resolvedHostId).toBe("local");
+
+      await app.close();
+    });
+
     it("leaves a session on a HEALTHY host alone", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
