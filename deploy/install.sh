@@ -663,9 +663,16 @@ install_root_port() {
     port="${port%$'\r'}"
     while [[ "$port" == [[:space:]]* ]]; do port="${port#[[:space:]]}"; done
     while [[ "$port" == *[[:space:]] ]]; do port="${port%[[:space:]]}"; done
+    # At most one matching quote character from each end — the same trim the
+    # installer does for MULLION_ROLE (L206): a value written as
+    # PORT="4001" must read as 4001, not as 4001".
     case "$port" in
       \"*) port="${port#\"}" ;;
       \'*) port="${port#\'}" ;;
+    esac
+    case "$port" in
+      *\") port="${port%\"}" ;;
+      *\') port="${port%\'}" ;;
     esac
   fi
   printf '%s\n' "${port:-3000}"

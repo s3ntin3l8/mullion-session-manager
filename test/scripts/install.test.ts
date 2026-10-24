@@ -831,6 +831,38 @@ sed -n "/<key>$LEAF<\\/key>/{n;s/.*<string>\\(.*\\)<\\/string>.*/\\1/p;}" "$FILE
       expect(stderr).not.toMatch(/BOTH bind port/);
     });
 
+    it("reads a quoted PORT the way the installer reads a quoted MULLION_ROLE", async () => {
+      // PORT="4001" must read as 4001 — the same trim the installer does for
+      // MULLION_ROLE. A stray trailing quote would make a real collision
+      // read as none (and print the quote in the warning).
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      const otherHome = freshMullionHome();
+      skipDownload(mullionHome);
+      fs.writeFileSync(path.join(otherHome, ".env"), 'PORT="4001"\n');
+      seedOtherLaunchdJob("com.mullion.agent", otherHome);
+
+      const { stderr } = await runScript(["--role", "primary", mullionHome]);
+
+      expect(stderr).not.toMatch(/BOTH bind port/);
+      expect(stderr).not.toMatch(/4001"/);
+    });
+
+    it("still warns when a quoted PORT collides with this root's port", async () => {
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      const otherHome = freshMullionHome();
+      skipDownload(mullionHome);
+      fs.writeFileSync(path.join(otherHome, ".env"), 'PORT="3000"\n');
+      seedOtherLaunchdJob("com.mullion.agent", otherHome);
+
+      const { stderr } = await runScript(["--role", "primary", mullionHome]);
+
+      expect(stderr).toMatch(/BOTH bind port 3000/);
+    });
+
     it("boots the other role's job out when its root is this root spelled through a symlink", async () => {
       // The same directory reached by two paths is still the same install
       // root — a symlinked path must not read as "a different root" and skip
