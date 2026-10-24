@@ -134,8 +134,13 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       finish(null);
     }, options.timeoutMs);
 
+    // NOTE: the SIGKILL escalation timer is deliberately NOT cleared here.
+    // An 'error' on the child (a SIGTERM that failed with EPERM, say) does
+    // not mean the child is gone — it means our attempt to end it failed. If
+    // the deadline has already fired, the child may well still be alive and
+    // still needs escalating to SIGKILL. The timer is cleared on 'close',
+    // which is the event that actually means the child is gone.
     child.on("error", (err) => {
-      clearKillTimer();
       options.onError?.(err);
       finish(null);
     });

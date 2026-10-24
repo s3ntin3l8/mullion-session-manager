@@ -175,6 +175,35 @@ describe("runShellCapture", () => {
     await assertion;
   });
 
+  // The regression this pins: after the deadline has fired and the child has
+  // been SIGTERMed, an 'error' on the child (a SIGTERM that failed with
+  // EPERM, say) must NOT cancel the pending SIGKILL escalation. The child
+  // ignored our cooperative attempt to end it, and it may well still be
+  // alive — cancelling the escalation there leaves the runaway shell running.
+  it("still escalates to SIGKILL when the child errors after the deadline", async () => {
+    vi.useFakeTimers();
+    const kill = vi.fn();
+    const { child, handlers } = fakeChild({ kill, exitCode: null, signalCode: null });
+    spawnMock.mockImplementation(() => child);
+
+    const onError = vi.fn();
+    const promise = runShellCapture({ ...baseOptions, onError });
+    const assertion = expect(promise).resolves.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(baseOptions.timeoutMs);
+    expect(kill).toHaveBeenCalledTimes(1); // SIGTERM
+
+    // The kill failed. The child may still be running.
+    handlers.error?.(new Error("kill EPERM"));
+    expect(onError).toHaveBeenCalledTimes(1);
+
+    // The escalation is still armed — the child is still alive.
+    await vi.advanceTimersByTimeAsync(baseOptions.killEscalationMs);
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+
+    await assertion;
+  });
+
   // Real timers here: the point is whether the escalation timer HOLDS THE
   // PROCESS OPEN, which is what `hasRef()` reports.
   const captureTimers = async (

@@ -30,11 +30,9 @@ import { buildSessionEnv } from "./session-env.js";
 import { runShellCapture } from "./shell-spawn.js";
 
 // A login shell that blocks would hang the probe, so it gets a deadline —
-// and then a SIGKILL escalation, because a timeout firing means it already
-// ignored our attempt to end it cooperatively. (`killed`/`exitCode` don't
-// tell us this: Node sets `killed` once a signal is successfully SENT, not
-// once the process has actually died — `exitCode`/`signalCode` both staying
-// `null` is the real "still alive" signal.)
+// and then a SIGKILL escalation. `shell-spawn.ts` owns that machinery and
+// explains why the escalation exists; these are only the two numbers this
+// caller picks.
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_KILL_ESCALATION_MS = 2_000;
 
