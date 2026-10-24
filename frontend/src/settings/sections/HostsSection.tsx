@@ -274,10 +274,6 @@ export function HostsSection() {
     });
   };
 
-  // Issue #1725 — the local host's row is rendered separately from the
-  // registered ones (it is not editable), but it can still be PARKED.
-  // `localHost` itself is declared above, next to the other state.
-
   return (
     <>
       <GroupHeading
@@ -314,7 +310,7 @@ export function HostsSection() {
                 </span>
               )}
               <SecondaryButton
-                onClick={() => localHost && toggleDrain({ ...localHost, id: LOCAL_HOST_ID })}
+                onClick={() => localHost && toggleDrain(localHost)}
                 disabled={!localHost}
               >
                 {localHost?.drained ? "Unpark" : "Park"}
