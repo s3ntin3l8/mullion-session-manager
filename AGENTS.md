@@ -63,6 +63,16 @@ How this repo applies the conventions above — facts and commands, not rules.
 - **Worktrees:** `make wt name=<slug>` creates `.wt/<slug>` off the latest
   `origin/main` and runs `npm ci` in the repo root **and** in `frontend/`. A
   worktree made by hand needs both `npm ci`s before it can build or test.
+- **This clone is shared, so its automatic gc is off.** A background `git gc`
+  in a clone that several agents push to concurrently can delete a loose
+  object that a concurrent write is creating — the failure surfaces far from
+  the cause, as a commit that cannot complete, naming a _missing_ object
+  rather than a corrupt one ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
+  `gc.auto 0` is set on the clone (`make git-safe`, which `make wt` runs for
+  you); `git fetch` is what would otherwise trigger the background gc, and
+  this repo fetches a lot. Run `git gc` deliberately, when no agent is
+  pushing. `make git-doctor` reports the damage if it ever happens;
+  `make git-doctor APPLY=1` repairs it.
 - **The pre-push gate** is what `.pre-commit-config.yaml` actually wires to
   the `pre-push` stage: `typecheck` (both workspaces, path-scoped), a
   repo-wide `prettier --check` (covers `frontend/` too), the two vitest
