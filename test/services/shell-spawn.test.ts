@@ -267,7 +267,15 @@ describe("runShellCapture", () => {
   it("still escalates to SIGKILL when the child errors after the deadline", async () => {
     vi.useFakeTimers();
     const kill = vi.fn();
-    const { child, handlers } = fakeChild({ kill, exitCode: null, signalCode: null });
+    // `pid` set, so the error path's "a child that started" branch really
+    // runs here: the escalation is already armed, so arming it again is a
+    // no-op and the SIGKILL still comes — and the SIGTERM is NOT sent twice.
+    const { child, handlers } = fakeChild({
+      kill,
+      pid: 4321,
+      exitCode: null,
+      signalCode: null,
+    });
     spawnMock.mockImplementation(() => child);
 
     const onError = vi.fn();
@@ -280,6 +288,8 @@ describe("runShellCapture", () => {
     // The kill failed. The child may still be running.
     handlers.error?.(new Error("kill EPERM"));
     expect(onError).toHaveBeenCalledTimes(1);
+    // The child has already been asked to stop — no second SIGTERM.
+    expect(kill).toHaveBeenCalledTimes(1);
 
     // The escalation is still armed — the child is still alive.
     await vi.advanceTimersByTimeAsync(baseOptions.killEscalationMs);

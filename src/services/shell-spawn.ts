@@ -139,6 +139,18 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       }
     };
 
+    // Whether we have already asked the child to stop. The deadline sends the
+    // SIGTERM, and a late 'error' must not send a second one — the child has
+    // already been asked, and the escalation is what follows it up.
+    let signalled = false;
+
+    // Asks the child to stop (SIGTERM), once.
+    const requestStop = () => {
+      if (signalled) return;
+      signalled = true;
+      kill(); // SIGTERM
+    };
+
     // A child that is still alive is one whose `exitCode` and `signalCode` are
     // both `null`. (`killed`/`exitCode` don't tell us this: Node sets `killed`
     // once a signal is successfully SENT, not once the process has actually
@@ -163,7 +175,7 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
 
     const timer = setTimeout(() => {
       options.onTimeout?.();
-      kill(); // SIGTERM
+      requestStop();
       armEscalation();
       finish(null);
     }, options.timeoutMs);
@@ -187,7 +199,7 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       // has no child to end: `pid` is undefined precisely because it never
       // started.
       if (spawned && isAlive()) {
-        kill();
+        requestStop();
         armEscalation();
       }
 
