@@ -424,9 +424,13 @@ function fakeInfo(overrides: Partial<Record<string, unknown>> = {}) {
     // — "the turn finished → the gate opens" — while a test that is
     // specifically about the work-finished signal can override it
     // independently.
-    workFinishedAt: null,
     outstandingBackgroundTasks: [],
     ...overrides,
+    // Assigned LAST and only once — it is derived from the same override so
+    // the existing fixtures keep their meaning ("the turn finished → the
+    // gate opens"), while a test that is specifically about the
+    // work-finished signal can override it independently. (Assigning it
+    // above the spread as well would just be an overwritten property.)
     workFinishedAt:
       "workFinishedAt" in overrides
         ? (overrides.workFinishedAt as number | null)

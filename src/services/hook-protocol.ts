@@ -353,15 +353,22 @@ export interface TurnStartHookMessage {
  *    iteration but the last, so the final turn ends with an empty
  *    `session_crons` — and the task must be able to advance.
  *
- * An ABSENT source counts as "done", because that is today's behaviour: the
- * field is still rolling out upstream ("Payloads may omit it while the
- * field rolls out"), and no other CLI sends one.
+ * An ABSENT source is NOT automatically "done". The `source` field is still
+ * rolling out upstream, and Claude Code 2.1.286's `UserPromptSubmit` emitter
+ * omits it while its `Stop` still sends `session_crons` — so on that host an
+ * absent source is the LIVE case, and treating it as "done" would make the
+ * gate never consult the one signal that host does send. An absent source
+ * therefore falls back to the wakeup half of the rule: the work is done
+ * unless something is scheduled to wake the session again.
+ *
+ * (That is a deliberate reading of "the work is done" rather than "a turn
+ * ended": the reconciler's gate asks the first question, and an absent
+ * source says nothing about it.)
  */
 export function turnEndMeansWorkFinished(
   source: string | undefined | null,
   wakeupsPending: boolean,
 ): boolean {
-  if (source === undefined || source === null) return true;
   switch (source) {
     case "user":
     case "sdk":
@@ -374,10 +381,14 @@ export function turnEndMeansWorkFinished(
       // this session again.
       return !wakeupsPending;
     default:
-      // An unknown value is treated as "not a machine injection" — a new
+      // An absent source, or an unknown one.
+      //
+      // An unknown source is treated as "not a machine injection" — a new
       // upstream value must not silently stop Task Master's worker->review
-      // handoff.
-      return true;
+      // handoff. An ABSENT source falls through to the wakeup half, because
+      // a Claude Code that does not send the field at all still sends
+      // `session_crons`, and that is the signal that must not be ignored.
+      return source === undefined || source === null ? !wakeupsPending : true;
   }
 }
 
@@ -682,6 +693,19 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
       };
     }
     result.detail = payload.detail;
+  }
+  // Issue #1735 — `wakeupsPending` has to survive the wire, or the handler
+  // always sees `undefined` and the reconciler's gate never consults the
+  // signal at all. This validator rebuilds the message from a WHITELIST, so
+  // a field that is not read here simply never arrives.
+  if (payload.wakeupsPending !== undefined) {
+    if (typeof payload.wakeupsPending !== "boolean") {
+      return {
+        ok: false,
+        error: "progress requires 'wakeupsPending' to be a boolean when present",
+      };
+    }
+    result.wakeupsPending = payload.wakeupsPending;
   }
   return { ok: true, message: result };
 }

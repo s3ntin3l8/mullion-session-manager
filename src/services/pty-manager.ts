@@ -1406,6 +1406,9 @@ export class Session {
     this.questionHeader = null;
     this.questionAt = null;
     this.attention.lastTurnEndedAt = null;
+    // Issue #1735 — and the "the work is done" stamp with it: a fresh
+    // identity has done no work yet.
+    this.attention.workFinishedAt = null;
     this.agentPromptAt = null;
     this.attention.turnEndPingSent = false;
     this.attention.backgroundTasks = [];
@@ -3173,6 +3176,13 @@ export class Session {
     // doc comment.
     let changed = this.attention.lastTurnEndedAt !== null;
     this.attention.lastTurnEndedAt = null;
+    // Issue #1735 — the "the work is done" stamp belongs to the PREVIOUS
+    // turn, exactly like `lastTurnEndedAt` above. Leaving it behind would
+    // keep the reconciler's worker->review gate open during the NEW turn —
+    // the same premature advance this signal exists to prevent, reached by
+    // the other door.
+    if (this.attention.workFinishedAt !== null) changed = true;
+    this.attention.workFinishedAt = null;
     this.attention.turnEndPingSent = false;
     // Issue #428 — same reasoning as turn_start's own clear: the backgroundTasks
     // snapshot belongs to the finished turn, so it's stale too.

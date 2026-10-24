@@ -692,6 +692,29 @@ describe("parseHookMessage", () => {
     });
   });
 
+  describe("progress", () => {
+    // Issue #1735 — `wakeupsPending` has to SURVIVE the wire: the
+    // validator rebuilds the message from a whitelist, so a field it does
+    // not read simply never arrives — and the handler would then always
+    // see `undefined`.
+    it("carries wakeupsPending through the wire", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", wakeupsPending: true }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "progress", phase: "done", wakeupsPending: true },
+      });
+    });
+
+    it("rejects a non-boolean wakeupsPending", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", wakeupsPending: "yes" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("turn_start", () => {
     it("accepts a turn_start with no fields", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "turn_start" }));
@@ -748,14 +771,15 @@ describe("parseHookMessage", () => {
       }
     });
 
-    it("is finished for an ABSENT source — that is today's behaviour", () => {
-      // The field is still rolling out upstream, and no other CLI sends
-      // one: on those, nothing changes.
+    it("falls back to the wakeup half for an ABSENT source", () => {
+      // Claude Code 2.1.286's UserPromptSubmit emitter omits `source` while
+      // its Stop still sends `session_crons` — so an absent source is the
+      // LIVE case on that host, and treating it as "done" would mean the
+      // gate never consults the one signal that host does send.
       expect(turnEndMeansWorkFinished(undefined, false)).toBe(true);
       expect(turnEndMeansWorkFinished(null, false)).toBe(true);
-      // Even with a wakeup pending: an absent source means the CLI did not
-      // tell us, and today's behaviour is "carry on".
-      expect(turnEndMeansWorkFinished(undefined, true)).toBe(true);
+      expect(turnEndMeansWorkFinished(undefined, true)).toBe(false);
+      expect(turnEndMeansWorkFinished(null, true)).toBe(false);
     });
 
     it("is finished for an unknown source", () => {
