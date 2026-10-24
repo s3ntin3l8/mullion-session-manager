@@ -132,3 +132,35 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 // reconstruction of an ephemeral control from a live session list can
 // recognize this prefix without duplicating the string.
 export const DOCKER_STACK_SESSION_NAME_PREFIX = "docker-stack:";
+
+// ---------------------------------------------------------------------------
+// db/schema.ts — PLACEMENT_MODES / PlacementMode (issue #1723, roadmap 8.9)
+// ---------------------------------------------------------------------------
+//
+// The placement mode of a project: "pinned" (the default — every session
+// under the project runs on the project's own host) or "auto" (an eligible
+// host is chosen per session; see services/placement.ts).
+//
+// Declared HERE rather than in each side that needs it, because four
+// places have to agree on this vocabulary: the column's enum, the two JSON
+// schemas on the project routes, and the frontend's own type. A typo in
+// one of them would silently mean "pinned" — the safe default, which makes
+// a typo invisible rather than loud. One declaration, one meaning.
+//
+// All four read it from here: the first three off the list below, the
+// frontend's type off the PlacementMode derived from that same list — so
+// none of the four is a separate spelling that could drift from the rest.
+export const PLACEMENT_MODES = ["pinned", "auto"] as const;
+
+// The MODE type is DERIVED from the list, never spelled out beside it (the
+// TaskStatus/TASK_STATUSES precedent above). Two hand-written spellings of
+// one vocabulary can drift, and a drifted pair fails silently: the backend
+// would accept a mode the frontend's type does not know, or the other way
+// round — with the column's enum and the routes' JSON schemas on the
+// backend's side of the split. Deriving makes that impossible by
+// construction rather than by discipline, and tsc is what checks it (the
+// tsconfig covers src/**, so this line is compiled by the type gate).
+//
+// Consumers import the type from HERE, not from src/shared/types.ts — one
+// import path for the list and the type it yields.
+export type PlacementMode = (typeof PLACEMENT_MODES)[number];

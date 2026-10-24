@@ -33,7 +33,7 @@ import type {
   TabletPaneCap,
   RelayReviewState,
 } from "../../../src/shared/types.js";
-import type { TaskStatus } from "../../../src/shared/constants.js";
+import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult };
 export type {
@@ -213,6 +213,16 @@ export interface Project {
   // "local" for this same process, or a registered remote host's id (issue
   // #26). Every session under a project inherits its host.
   hostId: string;
+  // Issue #1723 / roadmap 8.9 — the placement mode: "pinned" (the default —
+  // every session under this project runs on its host) or "auto" (an
+  // eligible host is chosen per session). Not rendered anywhere yet — the
+  // Fleet UI is #1726; this is the same deliberate forward-plumbing as
+  // `lastSeenAt` on the host list. NOT optional: the column is notNull with
+  // a default, so every row carries it.
+  //
+  // The type itself is the shared one (src/shared/types.ts), so a mode
+  // added on the backend cannot drift here.
+  placement: PlacementMode;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -2223,6 +2233,18 @@ export interface CreateProjectDirOptions {
   createDir?: boolean;
   // Only takes effect when this request actually creates the directory.
   gitInit?: boolean;
+}
+
+// The placement mode as an OPT-IN on creation — issue #1723 / roadmap 8.9.
+// "auto" lets each of the project's sessions land on an eligible host of
+// its own; absent means the column's "pinned" default.
+//
+// The mode is the SHARED one: PlacementMode, derived from PLACEMENT_MODES in
+// src/shared/constants.ts — the very declaration the column's enum and the
+// routes' JSON schemas use. One vocabulary, one source, and the frontend
+// cannot drift from the backend because there is nothing to drift from.
+export interface CreateProjectPlacementOptions {
+  placement?: PlacementMode;
 }
 
 // Extra fields the backend only includes when `createDir` was requested —

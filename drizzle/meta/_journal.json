@@ -540,6 +540,13 @@
       "when": 1792848055589,
       "tag": "0076_rainy_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "6",
+      "when": 1792860018630,
+      "tag": "0077_moaning_joystick",
+      "breakpoints": true
     }
   ]
 }

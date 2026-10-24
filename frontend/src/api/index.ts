@@ -100,6 +100,7 @@ export type {
   CleanupSource,
   Project,
   CreateProjectDirOptions,
+  CreateProjectPlacementOptions,
   CreateProjectResult,
   DiscoveredProject,
   HostHealthStatus,

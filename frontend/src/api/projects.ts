@@ -7,6 +7,7 @@ import { request } from "./client.js";
 import type {
   Project,
   CreateProjectDirOptions,
+  CreateProjectPlacementOptions,
   CreateProjectResult,
   DiscoveredProject,
   ProjectUrl,
@@ -17,7 +18,14 @@ import type { Launcher } from "../../../src/shared/types.js";
 export const projectsApi = {
   listProjects: () => request<Project[]>("/api/projects"),
 
-  createProject: (name: string, cwd: string, hostId?: string, opts?: CreateProjectDirOptions) =>
+  createProject: (
+    name: string,
+    cwd: string,
+    hostId?: string,
+    // Issue #1723 / roadmap 8.9 — the placement opt-in rides in the same
+    // bag, so #1726's UI does not have to widen this file again.
+    opts?: CreateProjectDirOptions & CreateProjectPlacementOptions,
+  ) =>
     request<CreateProjectResult>("/api/projects", {
       method: "POST",
       body: JSON.stringify({
@@ -26,6 +34,7 @@ export const projectsApi = {
         ...(hostId ? { hostId } : {}),
         ...(opts?.createDir ? { createDir: true } : {}),
         ...(opts?.gitInit ? { gitInit: true } : {}),
+        ...(opts?.placement ? { placement: opts.placement } : {}),
       }),
     }),
 
@@ -48,6 +57,8 @@ export const projectsApi = {
         | "injectProjectBriefing"
         | "injectWorkflowConventions"
         | "suppressConventionsInjectionAfterScaffold"
+        // Issue #1723 / roadmap 8.9 — the placement mode is writable too.
+        | "placement"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>
