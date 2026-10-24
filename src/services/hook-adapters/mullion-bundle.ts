@@ -796,9 +796,14 @@ export function stripOpenCodeModelKey(raw: string): string {
  * opencode, or null when there is none to apply.
  *
  * The value is validated against opencode's own `provider/model` shape
- * BEFORE it is emitted: an invalid value is dropped here, with a warning,
- * rather than handed to opencode — where the key would silently disappear
- * (v2.1.3) or, on the older loader, take the whole config down with it.
+ * BEFORE it is emitted, and that validation is LOAD-BEARING rather than
+ * cosmetic — on the opencode version this repo's CI pins (2.0.29) an
+ * invalid model does not merely lose the key: opencode drops the WHOLE
+ * `agents.<name>` entry, so the project's reviewer would disappear from the
+ * config entirely and the session would silently have no reviewer agent at
+ * all. (On the newer 2.1.3 only the key is dropped.) Dropping the value
+ * here, with a warning, is what keeps a malformed one from taking the
+ * reviewer's whole entry down with it.
  */
 function resolveOpenCodeReviewerModel(raw: string | undefined): string | null {
   if (raw === undefined) return null;

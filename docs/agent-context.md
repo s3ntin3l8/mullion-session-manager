@@ -126,10 +126,14 @@ for. See "Scaffolding it into the repo instead" below.
   Claude Code's copy is that CLI's native agent format, where `model:` is a
   first-class key (`inherit` matches the spawning conversation), while
   opencode's `agents.<name>.model` accepts only `provider/model` — a bare
-  Claude alias does not match, and opencode drops the key. The
-  `opencode-model:` key is stripped from Claude Code's copy, so it never
-  reaches that CLI. A value that is not in opencode's shape is dropped with a
-  warning rather than handed over.
+  Claude alias does not match. The `opencode-model:` key is stripped from
+  Claude Code's copy, so it never reaches that CLI.
+
+  A value that is not in opencode's shape is dropped with a warning rather
+  than handed over, and that guard is load-bearing: on the opencode version
+  this repo's CI pins (2.0.29), an invalid model does not just lose the
+  key — opencode drops the **whole** `agents.<name>` entry, so the project's
+  reviewer would disappear from the config entirely.
 
 Each of the three fields is independent — clearing one leaves the other two
 on the same row untouched. All three are resolved on the **primary** (where

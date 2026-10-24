@@ -336,15 +336,22 @@ function parseFlatFrontmatterFields(
     // below already strips exactly the leading whitespace `\s*` used to
     // consume, so capturing it into the group and trimming it afterward
     // produces the identical `value`.
-    const kv = /^(name|description|opencode-model):(.*)$/.exec(line);
+    // `name`/`description` keep the original strict pattern; the new
+    // `opencode-model` key ALSO tolerates whitespace before its colon, so it
+    // parses exactly what stripOpenCodeModelKey removes. Without that
+    // alignment a valid-YAML `opencode-model : x` would be stripped from
+    // Claude Code's copy and never parsed at all — a silent no-op, with no
+    // model and no warning.
+    const kv = /^(?:(name|description):(.*)|(opencode-model)\s*:(.*))$/.exec(line);
     if (!kv) continue;
-    const value = kv[2].trim();
+    const value = (kv[2] ?? kv[4]).trim();
     if (/^[|>][+-]?\d?$/.test(value)) continue; // block-scalar indicator, unsupported
     const unquoted = stripYamlScalarQuotes(value);
     if (unquoted.length === 0) continue;
-    if (kv[1] === "name" && name === null) name = unquoted;
-    if (kv[1] === "description" && description === null) description = unquoted;
-    if (kv[1] === "opencode-model" && opencodeModel === null) opencodeModel = unquoted;
+    const key = kv[1] ?? kv[3];
+    if (key === "name" && name === null) name = unquoted;
+    if (key === "description" && description === null) description = unquoted;
+    if (key === "opencode-model" && opencodeModel === null) opencodeModel = unquoted;
   }
   return { name, description, opencodeModel };
 }

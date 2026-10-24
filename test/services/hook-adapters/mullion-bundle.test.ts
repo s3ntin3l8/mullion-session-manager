@@ -462,6 +462,22 @@ You are reviewing a change in this project.
     expect(result!.contents).toContain("mode: subagent");
   });
 
+  it("parses a valid-YAML `opencode-model : x` — the shape stripOpenCodeModelKey removes", () => {
+    // The parser and the stripper must agree. When they did not, a
+    // whitespace-before-colon key was stripped from Claude Code's copy and
+    // never parsed at all: a silent no-op, with no model and no warning.
+    const spaced = `---
+name: my-project-reviewer
+description: Reviews diffs for this project's own invariants.
+opencode-model : anthropic/claude-sonnet-4-5
+---
+
+You are reviewing a change in this project.
+`;
+    const result = deriveOpenCodeReviewerAgentConfig(spaced);
+    expect(result!.config.model).toBe("anthropic/claude-sonnet-4-5");
+  });
+
   it("DROPS a bare Claude alias rather than handing it to opencode", () => {
     // opencode's own config loader drops a value that is not
     // `provider/model` — verified live against opencode 2.1.3, where
@@ -501,6 +517,7 @@ describe("stripOpenCodeModelKey (issue #1731)", () => {
     const raw = `---
 name: my-project-reviewer
 description: d
+model: inherit
 opencode-model: anthropic/claude-sonnet-4-5
 ---
 
@@ -510,7 +527,10 @@ The body mentions opencode-model: on purpose.
     expect(stripped).not.toContain("opencode-model: anthropic/claude-sonnet-4-5");
     expect(stripped).toContain("name: my-project-reviewer");
     expect(stripped).toContain("description: d");
-    // The BODY is not frontmatter — a mention there must survive.
+    // The plain `model:` key is Claude Code's OWN field and must survive:
+    // stripping it would silently cost Claude Code the reviewer's own model.
+    expect(stripped).toContain("model: inherit");
+    // The body is not frontmatter — a mention there must survive.
     expect(stripped).toContain("The body mentions opencode-model: on purpose.");
   });
 
@@ -524,6 +544,7 @@ The body mentions opencode-model: on purpose.
       reviewerAgent: `---
 name: my-project-reviewer
 description: d
+model: inherit
 opencode-model: anthropic/claude-sonnet-4-5
 ---
 
@@ -537,7 +558,9 @@ body
     expect(reviewer).toBeDefined();
     expect(reviewer!.contents).not.toContain("opencode-model:");
     // Claude Code's own `model:` key is untouched — it is that CLI's native
-    // field, not opencode's.
+    // field, not opencode's, and stripping it would silently cost Claude
+    // Code the reviewer's own model.
+    expect(reviewer!.contents).toContain("model: inherit");
     expect(reviewer!.contents).toContain("description: d");
   });
 });
