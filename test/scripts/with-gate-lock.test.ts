@@ -151,13 +151,24 @@ describe.skipIf(!hasFlock)("with-gate-lock.sh", () => {
     expect(lockIsHeld()).toBe(false);
   });
 
-  it("removes its holder file on exit and ignores a stale one", () => {
-    const holder = `${lockPath()}.holder`;
+  it("removes its holder file on exit", () => {
     run(["true"]);
-    expect(fs.existsSync(holder)).toBe(false);
-    fs.writeFileSync(holder, "pid 999999 in /nowhere since long ago\n");
-    const second = run(["true"]); // lock is free: no waiting message, then cleaned up
-    expect(second.status).toBe(0);
+    expect(fs.existsSync(`${lockPath()}.holder`)).toBe(false);
+  });
+
+  it("reports an unknown holder instead of trusting a stale holder file", async () => {
+    // A SIGKILLed wrapper leaves its holder file behind. Hold the lock from a
+    // plain `flock` (which writes no holder file of its own) with a stale file
+    // naming a dead pid, and check the waiter does not repeat that name.
+    const holder = `${lockPath()}.holder`;
+    fs.writeFileSync(holder, "pid 999999 in /long/gone since yesterday\n");
+    const blocker = spawn("flock", [lockPath(), "sleep", "1.5"], { detached: true });
+    started.push(blocker);
+    await sleepMs(400);
+    const waiter = run(["true"]);
+    expect(waiter.status).toBe(0);
+    expect(waiter.stderr).toContain("holder unknown");
+    expect(waiter.stderr).not.toContain("/long/gone");
     expect(fs.existsSync(holder)).toBe(false);
   });
 });

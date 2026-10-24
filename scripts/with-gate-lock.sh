@@ -55,7 +55,7 @@ echo "pid $$ in $PWD since $(date -Is)" >"$holder"
 # running. The traps go in BEFORE the spawn (guarded on `child`) so there is no
 # window where a TERM kills the wrapper and orphans the command.
 child=
-# shellcheck disable=SC2329  # invoked indirectly, from the traps below
+# shellcheck disable=SC2317,SC2329  # invoked indirectly, from the traps below
 forward() { [ -z "$child" ] || kill -s "$1" "$child" 2>/dev/null || true; }
 trap 'forward TERM' TERM
 trap 'forward INT' INT
