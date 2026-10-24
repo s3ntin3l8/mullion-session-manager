@@ -723,6 +723,106 @@ exit 0
       expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
     });
 
+    // Pre-seeds the OTHER role's launchd job definition in the fake home, as
+    // an earlier install of that role would have written it. Its
+    // MULLION_HOME is what tells the installer which install root the other
+    // job belongs to (issue #1800).
+    function seedOtherLaunchdJob(label: string, otherHome: string): string {
+      const dir = path.join(fakeHome, "Library", "LaunchAgents");
+      fs.mkdirSync(dir, { recursive: true });
+      const p = path.join(dir, `${label}.plist`);
+      fs.writeFileSync(
+        p,
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MULLION_HOME</key>
+    <string>${otherHome}</string>
+  </dict>
+</dict>
+</plist>
+`,
+      );
+      return p;
+    }
+
+    // Every job reports as loaded, so the other-role teardown is the branch
+    // under test.
+    function writeLoadedLaunchctlShim(): void {
+      writeShim(
+        binDir,
+        "launchctl",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/launchctl.log"
+exit 0
+`,
+      );
+    }
+
+    it("leaves the other role's job alone when it is installed in a DIFFERENT install root", async () => {
+      // Issue #1800 — two roles in two install roots (two .env files, two
+      // SESSIONS_DIRs, two ports) can coexist on one host. Booting the other
+      // one out (and deleting its plist) would destroy a working, unrelated
+      // deployment.
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      const otherHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const otherPlist = seedOtherLaunchdJob("com.mullion.agent", otherHome);
+
+      const { stdout } = await runScript(["--role", "primary", mullionHome]);
+
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      expect(
+        log.some((line) => line.includes("bootout") && line.includes("com.mullion.agent")),
+      ).toBe(false);
+      // The other role's definition is left on disk.
+      expect(fs.existsSync(otherPlist)).toBe(true);
+      expect(stdout).toMatch(/Leaving com\.mullion\.agent alone/);
+    });
+
+    it("boots the other role's job out when it is installed in THIS install root", async () => {
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const otherPlist = seedOtherLaunchdJob("com.mullion.agent", mullionHome);
+
+      await runScript(["--role", "primary", mullionHome]);
+
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
+      // Same install root, same .env, same PORT — the definition goes too.
+      expect(fs.existsSync(otherPlist)).toBe(false);
+    });
+
+    it("boots the other role's job out when its install root cannot be determined", async () => {
+      // No MULLION_HOME to read (an unreadable or pre-#1718 definition):
+      // fail safe — tear it down, exactly as before the scoping.
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const otherPlist = path.join(fakeHome, "Library", "LaunchAgents", "com.mullion.agent.plist");
+      fs.mkdirSync(path.dirname(otherPlist), { recursive: true });
+      fs.writeFileSync(otherPlist, "<plist><dict></dict></plist>");
+
+      await runScript(["--role", "primary", mullionHome]);
+
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
+      expect(fs.existsSync(otherPlist)).toBe(false);
+    });
+
     it("writes the agent plist for --role agent", async () => {
       writeDarwinShim();
       const mullionHome = freshMullionHome();
@@ -779,6 +879,93 @@ esac
 `,
       );
       await runScript(["--role", "primary", mullionHome]);
+      const log = readSystemctlLog();
+      expect(log).toContainEqual("--user disable --now mullion-agent.service");
+    });
+
+    // Pre-seeds the OTHER role's systemd unit in the fake home, as an
+    // earlier install of that role would have written it. Its
+    // EnvironmentFile= says which install root the other unit belongs to
+    // (issue #1800).
+    function seedOtherSystemdUnit(unitName: string, otherHome: string): string {
+      const dir = path.join(fakeHome, ".config", "systemd", "user");
+      fs.mkdirSync(dir, { recursive: true });
+      const p = path.join(dir, unitName);
+      fs.writeFileSync(
+        p,
+        `[Unit]
+Description=Mullion (other role)
+
+[Service]
+WorkingDirectory=${otherHome}/current
+EnvironmentFile=${otherHome}/.env
+`,
+      );
+      return p;
+    }
+
+    it("leaves the other role's unit enabled when it is installed in a DIFFERENT install root", async () => {
+      // Issue #1800 — the systemd counterpart of the launchd scoping: two
+      // roles in two install roots can coexist on one host.
+      const mullionHome = freshMullionHome();
+      const otherHome = freshMullionHome();
+      skipDownload(mullionHome);
+      seedOtherSystemdUnit("mullion-agent.service", otherHome);
+      // The shim reports the other unit as active, so the teardown branch is
+      // the one under test.
+      writeShim(
+        binDir,
+        "systemctl",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/systemctl.log"
+case "$*" in
+  *"is-active mullion-agent.service"*)
+    exit 0
+    ;;
+  *is-enabled*|*is-active*)
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+      );
+
+      const { stdout } = await runScript(["--role", "primary", mullionHome]);
+
+      const log = readSystemctlLog();
+      expect(log).not.toContainEqual("--user disable --now mullion-agent.service");
+      expect(stdout).toMatch(/Leaving mullion-agent\.service enabled/);
+    });
+
+    it("disables the other role's unit when it is installed in THIS install root", async () => {
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      seedOtherSystemdUnit("mullion-agent.service", mullionHome);
+      writeShim(
+        binDir,
+        "systemctl",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/systemctl.log"
+case "$*" in
+  *"is-active mullion-agent.service"*)
+    exit 0
+    ;;
+  *is-enabled*|*is-active*)
+    exit 1
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`,
+      );
+
+      await runScript(["--role", "primary", mullionHome]);
+
       const log = readSystemctlLog();
       expect(log).toContainEqual("--user disable --now mullion-agent.service");
     });
