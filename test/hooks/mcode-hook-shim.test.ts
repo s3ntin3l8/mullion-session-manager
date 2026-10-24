@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { buildMcodeHooksJson } from "../../src/services/hook-adapters/mcode.js";
 
 // The shim is a plain POSIX shell script (like forwarder-shim.sh), so it is
 // exercised by RUNNING it — with a stub forwarder standing in for Mullion's
@@ -35,6 +36,9 @@ function runShim(args: {
   env?: Record<string, string | undefined>;
   stdin?: string;
   argv?: string[];
+  /** Run an arbitrary command line through `sh -c`, the way mcode runs a
+   * hook's `command` (mcode's own runner shells out to `sh -c`). */
+  commandLine?: string;
 }): {
   stdout: string;
   stderr: string;
@@ -46,12 +50,19 @@ function runShim(args: {
   }
   // spawnSync (not execFileSync) so the child's stderr is readable on SUCCESS
   // too — the stub forwarder reports what it was handed on stderr.
-  const ret = spawnSync("sh", [SHIM_PATH, ...(args.argv ?? [])], {
-    env,
-    input: args.stdin ?? "",
-    encoding: "utf8",
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+  const ret = args.commandLine
+    ? spawnSync("sh", ["-c", args.commandLine], {
+        env,
+        input: args.stdin ?? "",
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      })
+    : spawnSync("sh", [SHIM_PATH, ...(args.argv ?? [])], {
+        env,
+        input: args.stdin ?? "",
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
   return {
     stdout: ret.stdout ?? "",
     stderr: ret.stderr ?? "",
@@ -89,6 +100,42 @@ describe("mcode-hook-shim.sh", () => {
     const result = runShim({ env: { TMPDIR: tmpDir } });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('"decision":"allow"');
+  });
+
+  it("runs the EXACT command the plugin declares, through sh -c", () => {
+    // The end-to-end guard for the bug class this PR hit: a hook command that
+    // cannot run fails SILENTLY (the hook is simply never delivered), so the
+    // command string is verified by EXECUTING it, the way mcode's runner does
+    // (mcode shells out to `sh -c <command>`).
+    //
+    // The first version of this plugin's command was
+    //   "<node>" "<shim>.sh" mcode <Event>
+    // which asks node to load a POSIX shell script — node rejects it with
+    // ERR_UNKNOWN_FILE_EXTENSION, and because the shim's own fail-open path
+    // never starts, EVERY mcode hook was disabled.
+    writeFileSync(
+      path.join(tmpDir, "mullion-hook.json"),
+      JSON.stringify({
+        socket: "/tmp/hooks.sock",
+        token: "tok-abc",
+        forwarderPath,
+        nodePath: process.execPath,
+      }),
+    );
+
+    const hooks = JSON.parse(buildMcodeHooksJson(SHIM_PATH));
+    const command: string = hooks.hooks.SessionStart[0].hooks[0].command;
+
+    // The declared command must not name node (the shim is not a JS module).
+    expect(command).not.toContain("node");
+
+    const result = runShim({ env: { TMPDIR: tmpDir }, commandLine: command });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('"decision":"allow"');
+    // The forwarder must have been reached with the agent + event argv.
+    expect(result.stderr).toContain("ARGV=mcode,SessionStart");
+    expect(result.stderr).toContain("SOCKET=/tmp/hooks.sock");
+    expect(result.stderr).toContain("TOKEN=tok-abc");
   });
 
   it("fails open with an empty JSON object when the handoff file is missing", () => {
