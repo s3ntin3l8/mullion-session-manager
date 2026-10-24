@@ -16,6 +16,8 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 const MODELS = ["anthropic/claude-sonnet-4-5", "openrouter/minimax-m3"];
 const AGY_MODELS = ["gemini-3.1-pro-high", "claude-sonnet-4-6"];
 const CODEX_MODELS = ["gpt-6-astra", "gpt-5.6-sol"];
+// Issue #1784 — mcode's catalog is `provider/model` ids.
+const MCODE_MODELS = ["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"];
 
 describe("Settings -> Models", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -33,6 +35,9 @@ describe("Settings -> Models", () => {
       }
       if (url === "/api/codex/models" && method === "GET") {
         return Promise.resolve(jsonResponse(200, CODEX_MODELS));
+      }
+      if (url === "/api/mcode/models" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, MCODE_MODELS));
       }
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
@@ -231,6 +236,20 @@ describe("Settings -> Models", () => {
     await user.selectOptions(select, "gemini-3.1-pro-high");
 
     await expectPatch({ agy: { defaultModel: "gemini-3.1-pro-high" } });
+  });
+
+  // Issue #1784 — the MiniMax Code group reads mcode's own catalog.
+  it("populates the MiniMax Code select from /api/mcode/models and PATCHes the choice", async () => {
+    const user = userEvent.setup();
+    render(<ModelsSection />);
+
+    const select = screen.getByRole("combobox", { name: "MiniMax Code implementer model" });
+    await waitFor(() =>
+      expect(within(select).getByText("minimax/MiniMax-M3.1-Flash")).toBeInTheDocument(),
+    );
+    await user.selectOptions(select, "minimax/MiniMax-M3.1-Flash");
+
+    await expectPatch({ mcode: { defaultModel: "minimax/MiniMax-M3.1-Flash" } });
   });
 
   it("selecting an opencode model PATCHes settings.opencode with the chosen key only", async () => {

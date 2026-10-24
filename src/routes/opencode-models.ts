@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { listAgyModels, listCodexModels, listOpenCodeModels } from "../services/opencode-models.js";
+import { listMcodeModels } from "../services/mcode-models.js";
 
 export async function opencodeModelsRoute(app: FastifyInstance) {
   app.get("/api/opencode/models", async (_request, reply) => {
@@ -22,5 +23,15 @@ export async function opencodeModelsRoute(app: FastifyInstance) {
   app.get("/api/codex/models", async (_request, reply) => {
     reply.type("application/json");
     return await listCodexModels();
+  });
+
+  // Issue #1784 — mcode's model catalog. Unlike the three above this is NOT a
+  // shell-out: `mcode provider list --json` hardcodes an empty model list for
+  // mcode's own MiniMax providers, so the catalog is read from mcode's
+  // `config.yaml` instead (see src/services/mcode-models.ts for the full
+  // reasoning). Same bare-array contract.
+  app.get("/api/mcode/models", async (_request, reply) => {
+    reply.type("application/json");
+    return await listMcodeModels();
   });
 }

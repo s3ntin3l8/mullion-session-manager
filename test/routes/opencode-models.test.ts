@@ -14,6 +14,14 @@ vi.mock("../../src/services/opencode-models.js", () => ({
   listCodexModels: vi.fn().mockResolvedValue(["gpt-6-astra", "gpt-5.6-sol"]),
 }));
 
+// Issue #1784 — mcode's catalog comes from its own config.yaml, so it lives in
+// its own service module (src/services/mcode-models.ts) and is mocked here for
+// the same reason as the three above: the route takes no arguments, so there is
+// no seam to inject a fixture through.
+vi.mock("../../src/services/mcode-models.js", () => ({
+  listMcodeModels: vi.fn().mockResolvedValue(["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"]),
+}));
+
 import { buildApp } from "../../src/app.js";
 
 describe("GET /api/opencode/models", () => {
@@ -51,6 +59,21 @@ describe("GET /api/codex/models", () => {
     const response = await app.inject({ method: "GET", url: "/api/codex/models" });
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual(["gpt-6-astra", "gpt-5.6-sol"]);
+    await app.close();
+  });
+});
+
+// Issue #1784 — mcode's catalog. Same bare-array contract as the three above;
+// the ids are `provider/model`, the shape mcode's `-m, --model` flag takes.
+describe("GET /api/mcode/models", () => {
+  it("returns a bare array of provider/model ids", async () => {
+    const app = await buildApp();
+    const response = await app.inject({ method: "GET", url: "/api/mcode/models" });
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toEqual(["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"]);
     await app.close();
   });
 });

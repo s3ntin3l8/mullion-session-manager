@@ -125,7 +125,7 @@ export const MCODE_PLUGIN_MARKER_CONTENT =
  * 0.6.12's own source. `MAVIS_PROFILE` is mcode's own, but it only appears
  * in mcode's env-propagation allowlist, never in the CLI's data-dir
  * resolution, so honouring it would risk the same silent miss. */
-function resolveMcodeDataDir(): string {
+export function resolveMcodeDataDir(): string {
   const base = process.env.MINIMAX_DATA_DIR?.trim() || process.env.MAVIS_DATA_DIR?.trim();
   if (base) return base;
   return path.join(os.homedir(), ".minimax");

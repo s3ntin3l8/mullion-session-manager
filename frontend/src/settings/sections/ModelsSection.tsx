@@ -72,6 +72,9 @@ export function ModelsSection() {
   const opencode = useCatalog(api.listOpenCodeModels);
   const agy = useCatalog(api.listAgyModels);
   const codex = useCatalog(api.listCodexModels);
+  // Issue #1784 — mcode's catalog, read from mcode's own config.yaml by the
+  // backend (GET /api/mcode/models).
+  const mcode = useCatalog(api.listMcodeModels);
 
   const setOpencode = (
     key: "implementerModel" | "reviewerModel" | "defaultSmallModel",
@@ -232,6 +235,38 @@ export function ModelsSection() {
           : opencode.status === "ready" && opencode.models.length === 0
             ? "No models found. Check that opencode is installed and has a provider configured."
             : "Applies to opencode sessions only. A task can override these with Model:, Reviewer-Model:, or SmallModel: lines."}
+      </p>
+
+      <div style={{ paddingTop: 12 }}>
+        <GroupHeading title="MiniMax Code" />
+      </div>
+      <ModelPicker
+        label="Implementer model"
+        ariaLabel="MiniMax Code implementer model"
+        desc="Model for new MiniMax Code sessions and Task Master workers."
+        value={settings.mcode?.defaultModel ?? null}
+        options={mcode.models.map((value) => ({ value }))}
+        defaultLabel="mcode default"
+        allowCustom
+        onChange={(v) => updateSettings({ mcode: { defaultModel: v } })}
+      />
+      <ModelPicker
+        label="Reviewer model"
+        ariaLabel="MiniMax Code reviewer model"
+        desc="Model for sessions that review tasks. Empty uses the implementer model."
+        value={settings.mcode?.reviewerModel ?? null}
+        options={mcode.models.map((value) => ({ value }))}
+        defaultLabel="Same as implementer"
+        allowCustom
+        onChange={(v) => updateSettings({ mcode: { reviewerModel: v } })}
+        warning={reviewerModelWarning("mcode", installedRoles)}
+      />
+      <p style={hintStyle}>
+        {mcode.status === "error"
+          ? "Couldn't load the MiniMax Code model list. Try reopening Settings, or use Custom…."
+          : mcode.status === "ready" && mcode.models.length === 0
+            ? "No models found. Check that mcode is installed and signed in, or use Custom…."
+            : "Adds -m to new MiniMax Code sessions and Task Master workers. The list comes from mcode's own config.yaml; a task's Model: / Reviewer-Model: line overrides it."}
       </p>
     </>
   );
