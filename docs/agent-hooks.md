@@ -765,6 +765,16 @@ directory, and in its own format, because mcode's hook-result parser only
 auto-applies an "allow" unconditionally for a CODEX-format plugin (the
 permission paragraph below has the detail).
 
+**Mullion's mcode support is POSIX-only, and is not claimed to work on
+Windows.** Its hook path is a shell script — `src/hooks/mcode-hook-shim.sh`,
+`#!/bin/sh` — and mcode runs a hook command through `sh -c`; every hook shim in
+`src/hooks/` is POSIX, and the tree has no `.cmd` or `.ps1` shim at all.
+Independently of that, mcode's **CODEX** plugin dialect runs a hook command
+through `cmd.exe` on Windows rather than a POSIX shell, and mcode's
+plugin-format support is unverified there. So on Windows this integration is
+_unsupported and unverified_ — which is a different claim from _known-broken_,
+and the honest one.
+
 **That makes mcode 0.6.12 the floor.** The CODEX plugin format and the
 format-aware auto-approval mapping are both present in **0.6.12**'s own bundle
 — verified by reading its chunks, not only 0.6.13's — so the floor is the
