@@ -20,7 +20,10 @@ vi.mock("../../src/services/host-registry.js", () => ({
 }));
 
 vi.mock("../../src/services/remote-host-client.js", () => ({
-  getRemoteHostClient: () => ({ ping: pingMock }),
+  // The capacity poll (issue #1721) rides on the same client; a null report
+  // means "an agent build without the capacity route" and keeps the sweep
+  // free of noise.
+  getRemoteHostClient: () => ({ ping: pingMock, resolveCapacity: async () => null }),
 }));
 
 vi.mock("../../src/services/settings.js", async (importOriginal) => {
@@ -91,6 +94,28 @@ describe("HostHeartbeatTracker: recovery detection", () => {
   });
 });
 
+/**
+ * The sweep is fire-and-forget (startHostHeartbeat's runSweep does not await
+ * it), so its promise chain — the ping, the capacity poll, the recovery
+ * report — settles a few microtask turns AFTER the timer advance that
+ * triggered it, and a single advance does not flush all of them.
+ *
+ * So advance the clock until the expectation holds (or the budget runs out),
+ * which is what the assertion actually means: "the recovery is reported".
+ */
+async function waitForAssertion(assertion: () => void, budgetMs = 5_000): Promise<void> {
+  const stepMs = 10;
+  for (let waited = 0; waited <= budgetMs; waited += stepMs) {
+    try {
+      assertion();
+      return;
+    } catch {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    }
+  }
+  assertion();
+}
+
 describe("startHostHeartbeat: onHostRecovered", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -111,24 +136,28 @@ describe("startHostHeartbeat: onHostRecovered", () => {
     const onHostRecovered = vi.fn();
     const app = {
       db: {},
-      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     } as unknown as FastifyInstance;
 
-    const cleanup = startHostHeartbeat(app, undefined, onHostRecovered);
+    const cleanup = startHostHeartbeat(app, undefined, undefined, onHostRecovered);
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
     expect(onHostRecovered).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000); // second miss
+    await vi.advanceTimersByTimeAsync(0);
     expect(onHostRecovered).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000); // the host is back
-    expect(onHostRecovered).toHaveBeenCalledTimes(1);
-    expect(onHostRecovered).toHaveBeenCalledWith("h1");
+    await waitForAssertion(() => {
+      expect(onHostRecovered).toHaveBeenCalledTimes(1);
+      expect(onHostRecovered).toHaveBeenCalledWith("h1");
+    });
 
     // Still online on the next sweep — no further recovery.
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(onHostRecovered).toHaveBeenCalledTimes(1);
+    await waitForAssertion(() => expect(onHostRecovered).toHaveBeenCalledTimes(1));
 
     cleanup();
   });
@@ -144,21 +173,25 @@ describe("startHostHeartbeat: onHostRecovered", () => {
     });
     const app = {
       db: {},
-      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
+      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
       config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
     } as unknown as FastifyInstance;
 
-    const cleanup = startHostHeartbeat(app, undefined, onHostRecovered);
+    const cleanup = startHostHeartbeat(app, undefined, undefined, onHostRecovered);
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(0);
     expect(onHostRecovered).not.toHaveBeenCalled();
 
     pingMock.mockResolvedValue(true);
     await vi.advanceTimersByTimeAsync(30_000);
 
     // Both hosts recovered; the throwing one did not stop the other.
-    expect(onHostRecovered).toHaveBeenCalledWith("h1");
-    expect(onHostRecovered).toHaveBeenCalledWith("h2");
+    await waitForAssertion(() => {
+      expect(onHostRecovered).toHaveBeenCalledWith("h1");
+      expect(onHostRecovered).toHaveBeenCalledWith("h2");
+    });
     cleanup();
   });
 });
@@ -189,17 +222,21 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
     await app.ready();
 
     await vi.advanceTimersByTimeAsync(0); // first sweep: the host misses
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconfigureEvents).not.toHaveBeenCalled();
     expect(reconfigureFanout).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000); // second miss
+    await vi.advanceTimersByTimeAsync(0);
     expect(reconfigureEvents).not.toHaveBeenCalled();
     expect(reconfigureFanout).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000); // the host is back
 
-    expect(reconfigureEvents).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
-    expect(reconfigureFanout).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
+    await waitForAssertion(() => {
+      expect(reconfigureEvents).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
+      expect(reconfigureFanout).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
+    });
 
     await app.close();
   });
