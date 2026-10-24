@@ -1860,7 +1860,7 @@ export function SessionRow({
       {remoteHostName && (
         <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
           <HostsIcon size={10} />
-          {remoteHostName}
+          <span className="session-host-badge-name">{remoteHostName}</span>
         </span>
       )}
     </span>

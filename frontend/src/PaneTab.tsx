@@ -382,7 +382,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         {!narrow && remoteHostName && (
           <span className="pane-tab-host-badge" title={`Runs on host: ${remoteHostName}`}>
             <HostsIcon size={9} />
-            {remoteHostName}
+            <span className="pane-tab-host-badge-name">{remoteHostName}</span>
           </span>
         )}
         {unreadCount > 0 && unreadIconKind && (

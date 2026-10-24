@@ -969,7 +969,19 @@
   font-size: 9.5px;
   color: var(--dim);
   opacity: 0.75;
+  min-width: 0;
+  /* A long host name must not push the row wider than the sidebar — the
+     same cap the row's other chips use (100-110px). The NAME ellipsis
+     inside it; the icon never shrinks. */
+  max-width: 110px;
+}
+.session-host-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.session-host-badge svg {
   flex-shrink: 0;
 }
 .session-status-label.killed {

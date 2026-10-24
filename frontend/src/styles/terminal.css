@@ -189,7 +189,18 @@
   font-size: 9px;
   color: var(--dim);
   opacity: 0.75;
+  min-width: 0;
+  /* Same cap as the sidebar's own host badge: a long host name must not
+     push the tab wider than the space it has. */
+  max-width: 110px;
+}
+.pane-tab-host-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.pane-tab-host-badge svg {
   flex-shrink: 0;
 }
 /* Rich statuses (issue: extend surfaced session statuses) — the four new
