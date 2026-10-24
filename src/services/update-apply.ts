@@ -342,7 +342,9 @@ function runLaunchctl(
       // already-loaded label.
       resolve({
         ok: false,
-        message: `the launchctl deadline (${LAUNCHCTL_TIMEOUT_MS}ms) was already exhausted before launchctl ${args[0]}`,
+        message:
+          `the launchctl deadline was already exhausted before launchctl ${args[0]} ` +
+          `(only ${remaining}ms of the ${LAUNCHCTL_TIMEOUT_MS}ms budget was left)`,
       });
       return;
     }

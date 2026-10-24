@@ -20,6 +20,8 @@ const spawnCalls: Array<{ command: string; args: string[] }> = [];
 let launchctlExitCode = 0;
 /** Which launchctl calls, if any, never exit — a hung launchctl. */
 let launchctlHangsOn: string[] = [];
+/** How long a given launchctl call takes before it exits, in ms. */
+let launchctlDelaysMs: Record<string, number> = {};
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -40,7 +42,7 @@ vi.mock("node:child_process", async (importOriginal) => {
       // survive that call (and then stay silent — a killed child never
       // emits "close").
       child.kill = () => true;
-      setImmediate(() => {
+      const finish = () => {
         // A hung launchctl: the calls we were told to hang never exit.
         if (command === "launchctl" && launchctlHangsOn.includes(args[0] ?? "")) {
           return;
@@ -54,7 +56,16 @@ vi.mock("node:child_process", async (importOriginal) => {
         // the fake has to emit both (a real child emits "close" once its
         // stdio has drained).
         child.emit("close", code);
-      });
+      };
+
+      // A SLOW launchctl: it takes its time and then succeeds, which is how
+      // the budget for the second call is spent down.
+      const delay = command === "launchctl" ? (launchctlDelaysMs[args[0] ?? ""] ?? 0) : 0;
+      if (delay > 0) {
+        setTimeout(finish, delay);
+      } else {
+        setImmediate(finish);
+      }
       return child;
     },
   };
@@ -97,6 +108,7 @@ describe("spawnSelfUpdate", async () => {
     spawnCalls.length = 0;
     launchctlExitCode = 0;
     launchctlHangsOn = [];
+    launchctlDelaysMs = {};
   });
 
   afterEach(() => {
@@ -254,6 +266,70 @@ describe("spawnSelfUpdate", async () => {
       fs.rmSync(home, { recursive: true, force: true });
     }
   }, 30_000);
+
+  // Issue #1791 — the budget the message reports, and the floor's value.
+  //
+  // A SLOW bootout (it succeeds, but takes most of the budget) is what pins
+  // both: the bootstrap is left with a PARTIAL budget, so its timeout message
+  // must report that partial budget rather than the constant — and if the
+  // budget it is left with is under the floor, the bootstrap must not be
+  // spawned at all.
+  it("reports the PARTIAL budget a slow bootout left, not the whole one", async () => {
+    setPlatform("darwin");
+    // 8s of the 10s budget: the bootstrap is left with ~2s, comfortably
+    // above the floor, so it IS attempted and then times out on what is
+    // actually left.
+    launchctlDelaysMs = { bootout: 8_000 };
+    // ...and the bootstrap then hangs, so its own (partial) budget is what
+    // runs out.
+    launchctlHangsOn = ["bootstrap"];
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-partial-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      // ~2s left, not 10s: the message reports the budget the call had.
+      // (Reverting it to the constant prints "10000ms" and reds this.)
+      expect(result.message).toMatch(/timed out after 1\d{3}ms/);
+      // ...and the bootstrap was attempted (it had budget to try).
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(1);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  it("short-circuits when a slow bootout left less than the floor", async () => {
+    setPlatform("darwin");
+    // 9.5s of the 10s budget: the bootstrap is left with ~500ms — under the
+    // floor — so it must NOT be spawned at all (starting it and killing it
+    // at once could still register the job).
+    launchctlDelaysMs = { bootout: 9_500 };
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-floor-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(result.message).toMatch(/already exhausted/);
+      // The bootstrap was never attempted.
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(0);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 40_000);
 
   it("still uses systemd-run on linux", async () => {
     setPlatform("linux");
