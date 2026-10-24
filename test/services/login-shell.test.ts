@@ -68,29 +68,26 @@ describe("runLoginShell", () => {
     expect(await runLoginShell("mcode --version")).toBeNull();
   });
 
-  // The regression this pins: on the deadline, the probe kills the child. A
-  // stand-in for `spawn` may have no `kill` at all — and an unguarded
-  // `child.kill()` inside a TIMER callback throws an UNHANDLED exception,
-  // which is fatal to the whole process, not just to the probe. That is
-  // exactly what happened when `test/plugins/hooks.test.ts` replaced
-  // `node:child_process`'s `spawn` with a stand-in: the full suite reported
-  // "TypeError: child.kill is not a function" as an uncaught exception.
-  it("resolves null on the deadline without throwing, even for a child with no kill()", async () => {
-    vi.useFakeTimers();
+  it("resolves null when the shell printed nothing", async () => {
+    const handlers: Record<string, () => void> = {};
     spawnMock.mockImplementation(() => ({
       stdout: { on: vi.fn(), off: vi.fn() },
-      on: vi.fn(),
-      // No `kill` at all — the shape a test double takes.
-      exitCode: null,
+      on: (event: string, fn: () => void) => {
+        handlers[event] = fn;
+      },
+      kill: vi.fn(),
+      exitCode: 0,
       signalCode: null,
     }));
 
-    const promise = runLoginShell("mcode --version");
-    const assertion = expect(promise).resolves.toBeNull();
+    const promise = runLoginShell("command -v nothing-here");
+    handlers.close?.();
 
-    // Past the probe's 5s deadline AND its 2s SIGKILL escalation.
-    await vi.advanceTimersByTimeAsync(8_000);
-
-    await assertion;
+    expect(await promise).toBeNull();
   });
+
+  // The deadline path — a kill-less child, an unguarded `child.kill()` inside
+  // a timer callback, an UNHANDLED exception — belongs to the shared helper
+  // now (issue #1833), so it is tested there:
+  // `test/services/shell-spawn.test.ts`.
 });
