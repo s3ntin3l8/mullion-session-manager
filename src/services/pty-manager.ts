@@ -904,6 +904,31 @@ export class Session {
   // itself.
   private hooksProven = false;
 
+  // Issue #1734 — Codex's session rollout file path, as reported by the
+  // `SessionStart` hook's `transcript_path` (forwarder-core.mjs's
+  // mapCodexSessionStart carries it through the hook protocol). Codex's
+  // hook payloads carry NO error, status or usage field at all, and codex
+  // does not fire `Stop` for a turn that failed — so a provider rate limit
+  // is invisible to every hook, and the rollout file is the only place
+  // codex records it (as a machine-readable `codex_error_info`). This path
+  // is what lets the backend read that file; see codex-rate-limit.ts.
+  //
+  // `null` for every non-codex session, and for a codex session whose
+  // `SessionStart` hook has not fired yet (or never will — codex skips all
+  // command hooks until the user grants `/hooks` trust; see
+  // hook-adapters/codex.ts's file header).
+  private codexTranscriptPath: string | null = null;
+
+  // Issue #1734 — the codex turn whose rate-limit failure has already been
+  // reported for this session. Codex records the failure in the rollout, and
+  // the rollout's LAST completed turn keeps saying so until the next turn
+  // completes — so without this, every sweep tick would re-report the same
+  // failure and restart the rate-limit grace window forever. Keyed by codex's
+  // own turn id, so a NEW rate-limited turn is still reported (and restarts
+  // the window, which matches the "a fresh rate_limit resets the clock"
+  // model task-rate-limit-grace.ts documents).
+  private reportedCodexRateLimitTurnId: string | null = null;
+
   // Issue #323: state file persistence — tracks whether a state file was
   // successfully read and applied on construction.
   private stateRestored: boolean = false;
@@ -1141,6 +1166,8 @@ export class Session {
       modes: this.modes,
       emitEvent: (kind, payload) => this.emitEvent(kind, payload),
       stampRestoredLatches: () => this.stampRestoredLatches(),
+      // Issue #1734 — restore Codex's rollout path from the state file.
+      setCodexTranscriptPath: (path) => this.setCodexTranscriptPath(path),
     };
   }
 
@@ -1217,6 +1244,9 @@ export class Session {
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
       termModes: this.modes.snapshot(),
+      // Issue #1734 — Codex's rollout path, so a codex session that survives
+      // a Mullion restart keeps being watched for provider rate limits.
+      codexTranscriptPath: this.codexTranscriptPath,
     };
   }
 
@@ -2305,6 +2335,35 @@ export class Session {
    */
   markHooksProven(): void {
     this.hooksProven = true;
+  }
+
+  /**
+   * Issue #1734 — records Codex's session rollout file path, as reported by
+   * the `SessionStart` hook's `transcript_path`.
+   *
+   * Idempotent, like markHooksProven above: codex's `SessionStart` fires
+   * once per session, and re-reporting the same path is a no-op.
+   */
+  setCodexTranscriptPath(path: string): void {
+    this.codexTranscriptPath = path;
+  }
+
+  /** Issue #1734 — the rollout file path, or null when there is none. */
+  getCodexTranscriptPath(): string | null {
+    return this.codexTranscriptPath;
+  }
+
+  /**
+   * Issue #1734 — the codex turn whose rate-limit failure has already been
+   * reported, so the sweep reports each failed turn exactly once.
+   */
+  getReportedCodexRateLimitTurnId(): string | null {
+    return this.reportedCodexRateLimitTurnId;
+  }
+
+  /** Issue #1734 — see getReportedCodexRateLimitTurnId. */
+  setReportedCodexRateLimitTurnId(turnId: string | null): void {
+    this.reportedCodexRateLimitTurnId = turnId;
   }
 
   /**
@@ -4006,6 +4065,42 @@ export class PtyManager {
    * posture as every other per-id lookup in this class. */
   markHooksProven(id: string): void {
     this.sessions.get(id)?.markHooksProven();
+  }
+
+  /** Issue #1734 — see Session.setCodexTranscriptPath's doc comment. Same
+   * "unknown id is quietly ignored" posture as emitHookEvent above. */
+  setCodexTranscriptPath(id: string, path: string): void {
+    this.sessions.get(id)?.setCodexTranscriptPath(path);
+  }
+
+  /**
+   * Issue #1734 — the live sessions that could carry a codex rollout path,
+   * for the rate-limit sweep (src/services/codex-rate-limit.ts).
+   *
+   * Returns only the ids of sessions that actually HAVE a rollout path, so
+   * the sweep's per-tick file reads are limited to codex sessions that have
+   * reported one. A session's own state is otherwise untouched.
+   */
+  codexTranscriptPathSessions(): Array<{ id: string; transcriptPath: string }> {
+    const out: Array<{ id: string; transcriptPath: string }> = [];
+    for (const [id, session] of this.sessions) {
+      const path = session.getCodexTranscriptPath();
+      if (path !== null) out.push({ id, transcriptPath: path });
+    }
+    return out;
+  }
+
+  /**
+   * Issue #1734 — the codex turn whose rate-limit failure this session has
+   * already reported, so the sweep reports each failed turn exactly once.
+   */
+  reportedCodexRateLimitTurnId(id: string): string | null {
+    return this.sessions.get(id)?.getReportedCodexRateLimitTurnId() ?? null;
+  }
+
+  /** Issue #1734 — see reportedCodexRateLimitTurnId. */
+  setReportedCodexRateLimitTurnId(id: string, turnId: string | null): void {
+    this.sessions.get(id)?.setReportedCodexRateLimitTurnId(turnId);
   }
 
   /** Issue #178 — see Session.resolveGate's doc comment. A no-op (never

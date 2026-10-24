@@ -63,6 +63,19 @@ export type StoredStateFields = Pick<
   | "backgroundTasks"
 > & {
   termModes?: StoredTermModes;
+  // Issue #1734 — Codex's session rollout file path, as reported by the
+  // `SessionStart` hook's `transcript_path`. Deliberately NOT part of the
+  // `Pick<SessionInfo, ...>` above: it is internal plumbing (it names a file
+  // on this host), not UI-facing session state, so it must never leak into
+  // the `SessionInfo` API payload — the same posture `termModes` takes.
+  // Optional, so a `.state.json` written before this field existed still
+  // parses and falls back to today's in-memory default.
+  //
+  // Restored so a codex session that survives a Mullion restart keeps being
+  // watched: codex's `SessionStart` fires once per codex session, so without
+  // this the rollout path — and with it the only visible rate-limit signal —
+  // would be lost for the rest of that session's life.
+  codexTranscriptPath?: string | null;
 };
 
 /** The plain Session fields applyStoredState assigns through `host.set`. */
@@ -99,6 +112,12 @@ export interface StoredStateHost {
   emitEvent(kind: "review_gate", payload: Record<string, unknown>): void;
   /** H6 — baseline each non-idle latch's `*At` (Session.stampRestoredLatches). */
   stampRestoredLatches(): void;
+  /**
+   * Issue #1734 — restore Codex's session rollout path (see
+   * StoredStateFields' own comment). Optional so a host that does not track
+   * it simply skips the restore.
+   */
+  setCodexTranscriptPath?(path: string): void;
 }
 
 export interface ApplyStoredStateOptions {
@@ -190,6 +209,14 @@ export function applyStoredState(
   if (Array.isArray(s.backgroundTasks)) attention.setBackgroundTasks(s.backgroundTasks);
   host.stampRestoredLatches();
   if (opts.restoreTermModes) host.modes.restore(s.termModes);
+  // Issue #1734 — Codex's rollout path. Restored on BOTH the readStateFile
+  // and the spawn()-reattach paths: on a reattach the codex process (and so
+  // its rollout file) is the SAME one, so the path is still correct; and
+  // codex's `SessionStart` — which would otherwise be the only way to learn
+  // it — does not fire again for a session that is already running.
+  if (typeof s.codexTranscriptPath === "string" && s.codexTranscriptPath.length > 0) {
+    host.setCodexTranscriptPath?.(s.codexTranscriptPath);
+  }
   // `turnEndPingSent` isn't persisted either, so it would otherwise restore to
   // its class default `false` — wrong when the restored state is an ended,
   // fully-drained turn (the ORIGINAL process already sent that ping; "not yet

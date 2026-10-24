@@ -5,7 +5,11 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
-import type { ReviewGateHookMessage, BrowserActionHookMessage } from "../services/hook-protocol.js";
+import type {
+  ReviewGateHookMessage,
+  BrowserActionHookMessage,
+  SessionStartHookMessage,
+} from "../services/hook-protocol.js";
 import type { Page } from "playwright";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
@@ -469,6 +473,24 @@ function handleConnection(
           // startup splash render exposed to the exact false positive #275
           // fixed. See Session.markHooksProven's doc comment.
           app.pty.markHooksProven(sessionId);
+          // Issue #1734 — Codex's `SessionStart` payload carries the session's
+          // rollout file path (`transcript_path`). Codex's hook payloads carry
+          // no error, status or usage field at all, and codex does not fire
+          // `Stop` for a turn that failed — so the rollout file is the only
+          // place a provider rate limit is visible for codex, and this is
+          // what lets the backend read it. Absent for every other CLI.
+          //
+          // The explicit cast matches this file's own idiom (see the
+          // review_gate case above): HookMessage's `UnknownHookMessage`
+          // fallback has a `kind: string` plus a `[key: string]: unknown`
+          // index signature, so TS cannot narrow `result.message` to just
+          // SessionStartHookMessage from `kind === "session_start"` alone.
+          // Safe: the protocol layer's validator only ever produces a real
+          // SessionStartHookMessage for this kind.
+          const sessionStart = result.message as SessionStartHookMessage;
+          if (sessionStart.transcriptPath !== undefined) {
+            app.pty.setCodexTranscriptPath(sessionId, sessionStart.transcriptPath);
+          }
           const seed = app.pty.consumeSeed(sessionId);
           // Issue #405 — composed alongside the seed above, never in place
           // of it: consumeSeed() is single-use and already serves the

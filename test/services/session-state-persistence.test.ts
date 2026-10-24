@@ -270,6 +270,53 @@ describe("applyStoredState", () => {
     });
   });
 
+  describe("codexTranscriptPath (issue #1734)", () => {
+    const codexTranscriptPath = "/home/u/.codex/sessions/2026/10/24/rollout-abc.jsonl";
+
+    function makePathRig(): Rig & { transcriptPath: string | null } {
+      const r = makeRig();
+      const extended: Rig & { transcriptPath: string | null } = {
+        ...r,
+        transcriptPath: null,
+      };
+      extended.host = {
+        ...r.host,
+        setCodexTranscriptPath: (path: string) => {
+          extended.transcriptPath = path;
+        },
+      };
+      return extended;
+    }
+
+    it("restores the path on the readStateFile path", () => {
+      const r = makePathRig();
+      applyStoredState(r.host, fullState({ codexTranscriptPath }), FILE);
+      expect(r.transcriptPath).toBe(codexTranscriptPath);
+    });
+
+    it("restores the path on the spawn()-reattach path too", () => {
+      // On a reattach the codex process — and so its rollout file — is the
+      // SAME one, so the path is still correct. And codex's `SessionStart`
+      // does not fire again, so this is the only way to keep watching a
+      // codex session that outlived a Mullion restart.
+      const r = makePathRig();
+      applyStoredState(r.host, fullState({ codexTranscriptPath }), RESPAWN);
+      expect(r.transcriptPath).toBe(codexTranscriptPath);
+    });
+
+    it("leaves the path alone when the state file has none", () => {
+      const r = makePathRig();
+      applyStoredState(r.host, fullState(), FILE);
+      expect(r.transcriptPath).toBeNull();
+    });
+
+    it("ignores an empty path", () => {
+      const r = makePathRig();
+      applyStoredState(r.host, fullState({ codexTranscriptPath: "" }), FILE);
+      expect(r.transcriptPath).toBeNull();
+    });
+  });
+
   it("stamps latches after every field/background-task restore, in both modes", () => {
     for (const opts of [FILE, RESPAWN]) {
       const r = makeRig();

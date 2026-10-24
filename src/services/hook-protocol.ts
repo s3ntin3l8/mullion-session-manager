@@ -132,10 +132,23 @@ export interface NotificationResolvedHookMessage {
  * asks whether a seed prompt was stashed for this session id (issue #271's
  * promote flow stashes one for the NEW session it creates). Unlike
  * `promote_request`, this is answered immediately, not queued — see
- * hooks.ts's handling. */
+ * hooks.ts's handling.
+ *
+ * Issue #1734 — `transcriptPath` is Codex's own `transcript_path`: the
+ * absolute path of the session's rollout file
+ * (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`). Codex's hook payloads
+ * carry no error, status, or usage field at all — their schemas are
+ * `additionalProperties: false` — so a provider rate limit is invisible to
+ * every hook. The rollout file is where codex records it, as a
+ * machine-readable `codex_error_info` rather than a display string, and
+ * that is the only place a rate limit can be seen for codex. Carrying the
+ * path is what lets the backend read it.
+ *
+ * Absent for every other CLI, and for codex versions that do not send it. */
 export interface SessionStartHookMessage {
   kind: "session_start";
   source?: string;
+  transcriptPath?: string;
 }
 
 export interface PermissionRequestHookMessage {
@@ -999,9 +1012,21 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       if (payload.source !== undefined && !isString(payload.source)) {
         return { ok: false, error: "session_start requires 'source' to be a string when present" };
       }
+      // Issue #1734 — Codex's `transcript_path`. Optional and only ever set
+      // by codex; absent stays absent, so the other CLIs' payloads are
+      // unaffected.
+      if (payload.transcriptPath !== undefined && !isString(payload.transcriptPath)) {
+        return {
+          ok: false,
+          error: "session_start requires 'transcriptPath' to be a string when present",
+        };
+      }
       const result: SessionStartHookMessage = { kind: "session_start" };
       if (isString(payload.source)) {
         result.source = payload.source;
+      }
+      if (isString(payload.transcriptPath)) {
+        result.transcriptPath = payload.transcriptPath;
       }
       return { ok: true, message: result };
     }
