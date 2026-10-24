@@ -22,13 +22,16 @@ describe("deriveHostStatus (issue #246)", () => {
   it("shows amber/warn for a degraded heartbeat status", () => {
     const host = makeHost({ health: "degraded", lastCheckedAt: "2026-01-01T00:00:10.000Z" });
     const display = deriveHostStatus(host, NO_CLICK);
-    expect(display).toEqual({ dot: "warn", label: "degraded", color: "var(--y)" });
+    expect(display).toEqual({ dot: "warn", label: "missed a ping", color: "var(--y)" });
   });
 
-  it("shows red/off for an offline heartbeat status", () => {
+  it("shows a hollow 'unreachable' for an offline heartbeat status", () => {
+    // Issue #1727 — the backend cannot tell a sleeping host from an
+    // unreachable one, so the UI says what is knowable ("unreachable") and
+    // does not dress it as a failure ("offline", in red).
     const host = makeHost({ health: "offline", lastCheckedAt: "2026-01-01T00:00:10.000Z" });
     const display = deriveHostStatus(host, NO_CLICK);
-    expect(display).toEqual({ dot: "off", label: "offline", color: "var(--r)" });
+    expect(display).toEqual({ dot: "off", label: "unreachable", color: "var(--dim)" });
   });
 
   it("shows 'testing…' while a click is in flight, overriding a disagreeing heartbeat", () => {
@@ -64,14 +67,18 @@ describe("deriveHostStatus (issue #246)", () => {
     const click: PingState = { status: "online", lastCheckedAtSnapshot: t1 };
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
-      label: "offline",
-      color: "var(--r)",
+      label: "unreachable",
+      color: "var(--dim)",
     });
   });
 
   it("falls back to the click's own result for a still-pending host (poller hasn't swept yet)", () => {
     const host = makeHost({ health: "pending", lastCheckedAt: null });
     const click: PingState = { status: "offline", lastCheckedAtSnapshot: null };
+    // The CLICK's own verdict keeps the old wording and the red — the user
+    // just tested this host by hand and it did not answer. Issue #1727's
+    // wording change is about the heartbeat's "we could not reach it", not
+    // about an explicit, freshly-observed failure.
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
       label: "offline",
@@ -106,8 +113,8 @@ describe("deriveHostStatus (issue #246)", () => {
     // wrongly treated this as fresh since clickToken > earlierServerToken.
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
-      label: "offline",
-      color: "var(--r)",
+      label: "unreachable",
+      color: "var(--dim)",
     });
   });
 });

@@ -953,6 +953,10 @@ describe("Dock", () => {
             command: "npm run dev",
             kind: "dock",
             status: "active",
+            // Issue #1727 — the session's host: the raw column (null = inherits
+            // its project's) and the resolved one the host badge shows.
+            hostId: null,
+            resolvedHostId: "local",
           }),
           makeSession({
             id: 30,
@@ -960,6 +964,10 @@ describe("Dock", () => {
             command: "npm run second-dev",
             kind: "dock",
             status: "active",
+            // Issue #1727 — the session's host: the raw column (null = inherits
+            // its project's) and the resolved one the host badge shows.
+            hostId: null,
+            resolvedHostId: "local",
           }),
         ];
         localStorage.setItem("crs.dockPaneSplitRatio", JSON.stringify({ "3": 0.6 }));
@@ -2306,6 +2314,10 @@ describe("Dock", () => {
           command:
             "docker compose -p 'ghost' --project-directory '/x/ghost' logs -f --tail=200 'web'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2343,6 +2355,10 @@ describe("Dock", () => {
             name: "docker-logs:sanctuary-web",
             command: dockerControl().command,
             status: "active",
+            // Issue #1727 — the session's host: the raw column (null = inherits
+            // its project's) and the resolved one the host badge shows.
+            hostId: null,
+            resolvedHostId: "local",
           });
           useDashboardStore.setState({
             projects: [PROJECT],
@@ -2376,6 +2392,10 @@ describe("Dock", () => {
           command:
             "docker compose -p 'ghost' --project-directory '/x/ghost' logs -f --tail=200 'web'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         const deleteSession = vi.fn().mockResolvedValue(undefined);
         useDashboardStore.setState({
@@ -2418,6 +2438,10 @@ describe("Dock", () => {
           name: "docker-logs:sanctuary-worker-1",
           command: "docker compose -p 'sanctuary' logs -f --tail=200 'worker'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2441,6 +2465,10 @@ describe("Dock", () => {
           name: "docker-logs:sanctuary-web-1",
           command: "docker compose -p 'sanctuary' logs -f --tail=200 'web'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2466,6 +2494,10 @@ describe("Dock", () => {
           name: "docker-logs:my-custom-name",
           command: "docker compose -p 'sanctuary' logs -f --tail=200 'worker'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2496,6 +2528,10 @@ describe("Dock", () => {
           name: "docker-stack:sanctuary",
           command: rebuildCommand,
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2542,6 +2578,10 @@ describe("Dock", () => {
           name: "docker-logs:ghost-web-1",
           command: "docker compose -p 'ghost' logs -f --tail=200 'web'",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2816,6 +2856,10 @@ describe("Dock", () => {
         previewBranch: null,
         kind: "dock",
         status: "active",
+        // Issue #1727 — the session's host: the raw column (null = inherits
+        // its project's) and the resolved one the host badge shows.
+        hostId: null,
+        resolvedHostId: "local",
         createdAt: "2026-01-01T00:00:00.000Z",
         lastAttachedAt: null,
         alive: true,
@@ -3197,6 +3241,10 @@ describe("Dock", () => {
           previewBranch: null,
           kind: "dock",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
           createdAt: "2026-01-01T00:00:00.000Z",
           lastAttachedAt: null,
           alive: true,
@@ -3635,6 +3683,10 @@ describe("Dock", () => {
           command: "npm run dev",
           kind: "dock",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         }),
         makeSession({
           id: 30,
@@ -3642,6 +3694,10 @@ describe("Dock", () => {
           command: "npm run second-dev",
           kind: "dock",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         }),
       ];
       useDashboardStore.setState({
@@ -3693,6 +3749,10 @@ describe("Dock", () => {
           command: "npm run dev",
           kind: "dock",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         }),
         makeSession({
           id: 30,
@@ -3700,6 +3760,10 @@ describe("Dock", () => {
           command: "npm run second-dev",
           kind: "dock",
           status: "active",
+          // Issue #1727 — the session's host: the raw column (null = inherits
+          // its project's) and the resolved one the host badge shows.
+          hostId: null,
+          resolvedHostId: "local",
         }),
       ];
       useDashboardStore.setState({

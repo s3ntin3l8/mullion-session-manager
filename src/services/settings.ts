@@ -749,6 +749,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoFocusOnAttention: false,
     notificationMatrix: {
       exited: { notify: false, sound: false, autoFocus: false },
+      // Issue #1727 — "suspended" (the host did not answer). Off by
+      // default, and deliberately: a laptop that fell asleep is not an
+      // event worth a notification. The frontend's own mirror of this
+      // matrix is exhaustiveness-checked, so it HAD to grow the entry —
+      // this side is typed `Record<string, ...>`, so it would have drifted
+      // silently without this line (the same shape as the
+      // awaiting_question gap above).
+      suspended: { notify: false, sound: false, autoFocus: false },
       api_error: { notify: true, sound: false, autoFocus: false },
       tool_failure: { notify: true, sound: false, autoFocus: false },
       awaiting_permission: { notify: true, sound: false, autoFocus: false },

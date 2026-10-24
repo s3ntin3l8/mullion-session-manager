@@ -66,6 +66,85 @@ describe("deriveSessionStatus", () => {
     });
   });
 
+  // Issue #1727 / roadmap 8.13 — the SUSPENDED status: the host did not
+  // answer. It exists so that "the host is asleep" never renders as "the
+  // work is gone", and so it never renders as "idle" either (which is what
+  // the idle/no-signal defaults would say).
+  describe("the host did not answer (issue #1727)", () => {
+    it("reports suspended/dormant for a session whose host is unreachable", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        info: BASE,
+      });
+      expect(derived).toEqual({
+        status: "suspended",
+        severity: "dormant",
+        detail: "host unreachable — may still be running",
+        attentionRequired: false,
+      });
+    });
+
+    it("is NOT 'exited' — the work may still be running on that machine", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        info: BASE,
+      });
+      expect(derived.status).not.toBe("exited");
+      // "dormant", not "gone" — "gone" is what the board's exited column
+      // means, and the session is emphatically not gone.
+      expect(derived.severity).not.toBe("gone");
+    });
+
+    it("is not an attention state — a sleeping laptop is not an event", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        info: BASE,
+      });
+      expect(derived.attentionRequired).toBe(false);
+    });
+
+    it("does not outrank the agent-activity axis' own 'blocked' states", () => {
+      // With an unreachable host NOTHING was observed, so the derivation
+      // reports suspended rather than guessing at an activity state. What it
+      // must NOT do is report 'exited' — that is the collapse this status
+      // exists to prevent.
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        info: { ...BASE, permissionState: "pending" },
+      });
+      expect(derived.status).toBe("suspended");
+    });
+
+    it("does not override a session that was killed or exited BEFORE the host went quiet", () => {
+      // The liveness axis wins: a session that is already over is over,
+      // whatever happened to its host afterwards.
+      for (const dbStatus of ["killed", "exited"] as const) {
+        const derived = deriveSessionStatus({
+          dbStatus,
+          hostReachable: false,
+          info: BASE,
+        });
+        expect(derived.status).toBe("exited");
+        expect(derived.severity).toBe("gone");
+      }
+    });
+
+    it("changes nothing when the field is absent — the reconciler's call sites keep today's behaviour", () => {
+      const withField = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: true,
+        info: BASE,
+      });
+      const withoutField = deriveSessionStatus({ dbStatus: "active", info: BASE });
+      expect(withoutField).toEqual(withField);
+      expect(withoutField.status).toBe("idle");
+    });
+  });
+
   describe("liveness axis", () => {
     it("reports exited/gone for a DB-killed session regardless of live activity", () => {
       expect(derive({ activity: "working", permissionState: "pending" }, "killed")).toEqual({

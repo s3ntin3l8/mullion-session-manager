@@ -789,6 +789,16 @@ export interface Session {
   // "exited" = the program ended on its own (caught by the backend's
   // reconciler), distinct from "killed" (explicit user action).
   status: "active" | "killed" | "exited";
+  // Issue #1722 / roadmap 8.8 — the host THIS session lives on, as a raw DB
+  // column: null means "inherits its project's host". Reaches REST through
+  // withLiveInfo's `...row` spread.
+  hostId: string | null;
+  // Issue #1727 / roadmap 8.13 — the session's EFFECTIVE host: its own when
+  // it has one, its project's when it inherits. Resolved SERVER-side (the
+  // rule lives in one place — session-live-info.ts's resolveSessionHostId),
+  // so the frontend never re-derives it. This is what the per-session host
+  // badge shows.
+  resolvedHostId: string;
   createdAt: string;
   lastAttachedAt: string | null;
   alive: boolean;

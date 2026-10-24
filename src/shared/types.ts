@@ -32,6 +32,7 @@
 
 export type SessionStatus =
   | "exited" // process gone (DB says killed/exited, or PtyManager has no live handle)
+  | "suspended" // the host did not answer — the session may still be running (issue #1727)
   | "awaiting_permission" // a tool-permission dialog is blocking the agent
   | "awaiting_plan" // an ExitPlanMode plan is ready for human review
   | "awaiting_review_gate" // Mullion's own blocking PreToolUse gate is waiting

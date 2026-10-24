@@ -77,6 +77,9 @@ const requestSplit = vi.fn();
 function storeState() {
   return {
     sessions: [session, ...extraSessions],
+    // Issue #1727 — the fleet's hosts, for the per-session host badge (which
+    // reads the store non-reactively, like the sidebar's own badge).
+    hosts: [{ id: "mac-mini", name: "mac-mini" }],
     projects,
     gitStatuses,
     sessionGitStatuses,
@@ -158,6 +161,10 @@ const BASE_SESSION: Session = {
   previewBranch: null,
   kind: "terminal",
   status: "active",
+  // Issue #1727 — the session's host: the raw column (null = inherits
+  // its project's) and the resolved one the host badge shows.
+  hostId: null,
+  resolvedHostId: "local",
   createdAt: "2026-01-01T00:00:00.000Z",
   lastAttachedAt: "2026-01-01T00:00:00.000Z",
   alive: true,
@@ -298,6 +305,46 @@ describe("PaneTab", () => {
     render(<PaneTab {...makeProps()} />);
 
     expect(screen.getByText("Idle")).toBeInTheDocument();
+  });
+
+  // Issue #1727 / roadmap 8.13 — the per-session host badge on the tab. The
+  // sidebar's own badge has the same contract; these three pin it on this
+  // surface too.
+  describe("the host badge (issue #1727)", () => {
+    it("names the host a REMOTE session runs on", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "mac-mini" };
+      render(<PaneTab {...makeProps()} />);
+
+      expect(screen.getByText("mac-mini")).toBeInTheDocument();
+    });
+
+    it("shows NOTHING for a local session", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "local" };
+      render(<PaneTab {...makeProps()} />);
+
+      expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
+      expect(document.querySelector(".pane-tab-host-badge")).toBeNull();
+    });
+
+    it("falls back to the host id when the fleet does not know that host", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "unknown-host" };
+      render(<PaneTab {...makeProps()} />);
+
+      expect(screen.getByText("unknown-host")).toBeInTheDocument();
+    });
+
+    it("hides the badge on a narrow tab, like the status badge", () => {
+      // The tab has no room for it below the narrow threshold — the same
+      // rule the status badge and the branch label follow.
+      vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue({
+        width: 100,
+      } as DOMRect);
+      session = { ...BASE_SESSION, resolvedHostId: "mac-mini" };
+
+      render(<PaneTab {...makeProps()} />);
+
+      expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
+    });
   });
 
   it("hides the status badge when the tab mounts already narrower than the threshold", () => {

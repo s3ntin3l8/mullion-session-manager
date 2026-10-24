@@ -173,6 +173,36 @@
   color: var(--dim);
   background: transparent;
 }
+/* Issue #1727 / roadmap 8.13 — "suspended" (the host did not answer) and
+   the host badge. The suspended badge matches the sidebar's own
+   .session-status-label.suspended: dim, no fill, no alert — a sleeping
+   laptop is not an event, and the work may still be running there. */
+.pane-tab-badge.suspended {
+  color: var(--dim);
+  background: transparent;
+}
+/* The host a session runs on — quiet, and only for a non-local one. */
+.pane-tab-host-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  color: var(--dim);
+  opacity: 0.75;
+  min-width: 0;
+  /* Same cap as the sidebar's own host badge: a long host name must not
+     push the tab wider than the space it has. */
+  max-width: 110px;
+}
+.pane-tab-host-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-tab-host-badge svg {
+  flex-shrink: 0;
+}
 /* Rich statuses (issue: extend surfaced session statuses) — the four new
    tones sessionStatus.ts's STATUS_PRESENTATION table can produce, matching
    the sidebar's own .session-status-label.<tone>/.session-dot-<tone>

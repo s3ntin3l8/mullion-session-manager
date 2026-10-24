@@ -664,6 +664,41 @@ wrong machine's honest answer ("I have no such session") would read as
 A session's host is fixed at creation; moving a running session between
 hosts is not attempted.
 
+### Seeing where a session lives
+
+A session's **effective** host travels with it: the API answers with
+`resolvedHostId` — the session's own host, or its project's when the column
+is `NULL` — resolved on the server, where the rule already lives. The raw
+column stays as it is, so both facts are visible and neither is ambiguous.
+
+In the UI, a session on a **remote** host carries a small, quiet host badge
+next to its status (its sidebar row and its pane tab): a dim host icon and
+the host's name. A **local** session carries nothing — the sidebar already
+shows a per-_project_ host badge, and the per-session badge is for the case
+that matters once automatic placement lands: one project's sessions on
+_different_ hosts.
+
+### A sleeping host is not a dead session
+
+When a host does not answer, the sessions on it are reported as
+**suspended** — not _exited_, and not _idle_:
+
+- **Not exited.** The work may still be running on that machine. The backend
+  cannot tell a sleeping host from an unreachable one, so it says what it
+  knows: the host did not answer.
+- **Not idle.** The idle fallback would be indistinguishable from a session
+  that is genuinely idle and alive — the silence of a sleeping laptop and
+  the silence of a finished turn look the same otherwise.
+- **Not an alert.** A suspended session is `dormant`, so it does not ring
+  the tab, badge the favicon, or fire a desktop notification. A laptop that
+  fell asleep is not an event.
+
+The state is honest about its own limits: the host's health dot says
+**unreachable** rather than _offline_, and a sleeping machine should not
+look like a broken one. It returns to the live state on its own — the
+session list is refreshed every few seconds, so the first refresh after the
+host wakes brings the real status back.
+
 ## Agent updates
 
 Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)

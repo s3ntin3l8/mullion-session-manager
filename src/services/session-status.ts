@@ -43,6 +43,11 @@ export type { SessionStatus, SessionSeverity };
 // of leaving a status with an undefined severity at runtime.
 const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   exited: "gone",
+  // Issue #1727 — a session on a host that did not answer. "dormant", NOT
+  // "gone": the work may well still be running on that machine — a sleeping
+  // laptop is the normal case, and reporting it as gone would tell the user
+  // their session died when it did not.
+  suspended: "dormant",
   awaiting_permission: "blocked",
   awaiting_plan: "blocked",
   awaiting_review_gate: "blocked",
@@ -144,6 +149,16 @@ export interface DeriveSessionStatusInput {
   /** The DB row's own `status` column — records intent, not live process
    * state. See this module's header comment and CLAUDE.md. */
   dbStatus: "active" | "killed" | "exited";
+  /**
+   * Whether the host this session lives on ANSWERED — issue #1727.
+   *
+   * `false` means the host was unreachable, so nothing about the session
+   * itself could be established. It is OPTIONAL and defaults to "reachable",
+   * so the call sites that never talk to a remote host (the reconciler, the
+   * attention tracker) keep today's behaviour without knowing this field
+   * exists.
+   */
+  hostReachable?: boolean;
   info: Pick<
     SessionInfo,
     | "activity"
@@ -220,6 +235,7 @@ export function defaultDeriveStatusInfo(
  */
 export function deriveSessionStatus({
   dbStatus,
+  hostReachable,
   info,
 }: DeriveSessionStatusInput): DerivedSessionStatus {
   // --- Liveness axis wins outright: dbStatus is the DB row's own recorded
@@ -249,6 +265,25 @@ export function deriveSessionStatus({
   // module existed.
   if (dbStatus === "killed" || dbStatus === "exited") {
     return make("exited", formatExitedDetail(info.endedReason, info.exitCode));
+  }
+
+  // --- The host did not answer (issue #1727) ---
+  //
+  // AFTER the liveness axis above, on purpose: a session that was killed or
+  // exited BEFORE its host went away is still exited — the host being
+  // unreachable says nothing about a session that is already over.
+  //
+  // Before every agent-activity check below, on purpose too: with an
+  // unreachable host there IS no agent activity to report (nothing was
+  // observed), so the idle/no-signal defaults would render a sleeping
+  // laptop's session as "Idle" — indistinguishable from a session that is
+  // genuinely idle and alive. That is the lie this status exists to stop.
+  //
+  // It is deliberately NOT "exited": the work may still be running on that
+  // machine. The backend cannot tell a sleeping host from an unreachable
+  // one, so the detail says what is actually knowable.
+  if (hostReachable === false) {
+    return make("suspended", "host unreachable — may still be running");
   }
 
   // --- Agent-activity axis, in precedence order. ---
