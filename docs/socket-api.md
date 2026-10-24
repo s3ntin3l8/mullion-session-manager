@@ -444,18 +444,25 @@ session-scoped caller already fully controls via `command` itself. `model`/
 the parent's own model/smallModel when omitted is opencode-only (see
 [`docs/cli.md`](cli.md#session)'s own caveat that the CLI has no flag for
 either today; only the MCP `spawn_child_session` tool or a raw socket
-client can set them). **`kind`, `skipPermissions`, and `env` are
-additionally stripped for a SESSION-scoped caller** (`kind`/`skipPermissions`:
-independent review, PR #426; `env`: issue #822): all three are
-privilege-adjacent — `skipPermissions` disables permission prompts,
-`kind:"dock"` hides the child from the normal per-project session list, and
-`env` lets the caller inject arbitrary child-process environment — and a
-session-scoped connection's hook token is inherited by every subprocess an
-agent spawns, so letting it set any of the three would let an
-already-compromised or merely misbehaving subprocess grant itself a
-strictly more privileged, less visible, or differently-configured session
-than its own. Full scope keeps all three, matching `sessions.create`'s own
-behavior for that scope.
+client can set them). **`kind` and `env` are additionally stripped for a
+SESSION-scoped caller** (`kind`: independent review, PR #426; `env`: issue
+#822): both are privilege-adjacent — `kind:"dock"` hides the child from the
+normal per-project session list, and `env` lets the caller inject arbitrary
+child-process environment — and a session-scoped connection's hook token is
+inherited by every subprocess an agent spawns, so letting it set either
+would let an already-compromised or merely misbehaving subprocess grant
+itself a less visible or differently-configured session than its own. Full
+scope keeps both, matching `sessions.create`'s own behavior for that scope.
+
+**`skipPermissions` IS forwarded at session scope (issue #1733), but it can
+only ever NARROW.** The parent's own posture is the ceiling: leave the field
+out and the child inherits the parent's value exactly; pass `true` and the
+child gets it only if the parent already runs with permissions skipped; pass
+`false` and the child is narrowed to prompts-on. A session-scoped caller can
+therefore never grant itself — or a child — MORE permission than its own
+session has, which is what made stripping it necessary in the first place
+(PR #426). The cap is applied server-side in the `sessions.spawn_child`
+handler, where the connection's scope and the parent's row are both in hand.
 Server-side validation (not just this op's own scope check) additionally
 enforces: the parent must be in the target project (always true here,
 since the project IS derived from the parent), the parent must not itself

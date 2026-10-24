@@ -291,18 +291,25 @@ either way, the child always shows in the sidebar.
 This is a genuine child session — it survives if you're later killed
 (`sessions.parentSessionId`'s FK detaches it rather than taking it down with
 you) — not the same thing as a `Task`-tool subagent, which has no session,
-no PTY, and nothing this op could target. From inside a session, `kind` and
-`skipPermissions` are silently ignored even if you pass them — a child you
-spawn always starts as an ordinary, visible `terminal` session with
-permission prompts on. Only a full-scope caller (an operator running
-`mullion mcp`/CLI directly with `MULLION_AUTH_TOKEN`) can set either — unless
-this host has in-app auth disabled entirely (see the scope caveat near the
-top of this file), in which case every connection, including yours, already
-resolves to full scope and both take effect. If a child you spawn needs to
-act unattended (edit files, run tests, commit) rather than just sit and wait
-for a human, pass `skipPermissions: true` (or check whether it actually took
-effect on this host before assuming it stalled on a permission prompt nobody
-is watching).
+no PTY, and nothing this op could target. From inside a session, `kind` is
+silently ignored even if you pass it — a child you spawn always starts as an
+ordinary, visible `terminal` session. Only a full-scope caller (an operator
+running `mullion mcp`/CLI directly with `MULLION_AUTH_TOKEN`) can set it —
+unless this host has in-app auth disabled entirely (see the scope caveat near
+the top of this file), in which case every connection, including yours,
+already resolves to full scope and it takes effect.
+
+`skipPermissions` IS honoured from inside a session, but only ever as far as
+your own session's posture allows: **a child can never be more permissive
+than the session that spawned it.** Leave it out and the child inherits your
+posture exactly. Pass `true` and the child gets it if — and only if — _you_
+already run with permissions skipped; pass `false` and the child is narrowed
+to prompts-on whatever you do. So if you are already unattended, a
+delegated child is unattended too, and if you are not, no child you spawn
+can act as if you were. If a child you spawn needs to act unattended (edit
+files, run tests, commit) rather than just sit and wait for a human, pass
+`skipPermissions: true` — and check whether it actually took effect on this
+host before assuming it stalled on a permission prompt nobody is watching.
 
 **Model overrides.** `model` (MCP) / `--model` (CLI) sets the child's model:
 opencode's own `provider/model` string, or the bare `--model` value for a
