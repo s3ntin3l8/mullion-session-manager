@@ -345,7 +345,7 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
-  it("rejects a preview for a mode outside the shared vocabulary", async () => {
+  it("rejects a GET preview for a mode outside the shared vocabulary", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
     const created = await app.inject({
@@ -396,7 +396,7 @@ describe("projects route", () => {
     await app.close();
   });
 
-  it("rejects a preview for a mode outside the shared vocabulary", async () => {
+  it("rejects a POST preview for a mode outside the shared vocabulary", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
