@@ -74,13 +74,39 @@ describe("fix-node-pty-helper.mjs", () => {
     expect(stdout).not.toContain("spawn-helper");
   });
 
-  it("is a no-op when node-pty has no prebuilds (the Linux case)", async () => {
-    // node-pty is not installed at all.
+  it("is a no-op when node-pty is not installed at all", async () => {
+    // No node-pty in the tree.
     await expect(execFileAsync(process.execPath, [SCRIPT, root])).resolves.toBeTruthy();
 
     // node-pty is installed, but with no prebuilds directory.
     fs.mkdirSync(path.join(root, "node_modules", "node-pty"), { recursive: true });
     await expect(execFileAsync(process.execPath, [SCRIPT, root])).resolves.toBeTruthy();
+  });
+
+  it("fixes the darwin-only prebuild tree that a Linux install really has", async () => {
+    // npm extracts the WHOLE node-pty tarball on every platform, so a Linux
+    // install has prebuilds/darwin-arm64 and prebuilds/darwin-x64 at 644 —
+    // they are simply never exec'd there. The script still chmods them
+    // (harmless), and this is the path that actually runs on Linux.
+    const arm = seedPrebuild("darwin-arm64", 0o644);
+    const intel = seedPrebuild("darwin-x64", 0o644);
+
+    const { stdout } = await execFileAsync(process.execPath, [SCRIPT, root]);
+
+    expect(execBits(arm)).toBe(0o755);
+    expect(execBits(intel)).toBe(0o755);
+    expect(stdout).toContain("made 2 spawn-helper executable");
+  });
+
+  it("leaves a helper that is already executable by its owner alone", async () => {
+    // 0o744 is executable enough for posix_spawnp — widening it to 0o755
+    // would hand group/other the exec bit for nothing.
+    const helper = seedPrebuild("darwin-arm64", 0o744);
+
+    const { stdout } = await execFileAsync(process.execPath, [SCRIPT, root]);
+
+    expect(execBits(helper)).toBe(0o744);
+    expect(stdout).not.toContain("spawn-helper");
   });
 
   it("does not touch pty.node (a dlopen'd module needs no executable bit)", async () => {

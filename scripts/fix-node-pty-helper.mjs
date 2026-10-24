@@ -29,8 +29,10 @@ const root = path.resolve(process.argv[2] ?? path.join(scriptDir, ".."));
 
 const prebuildsDir = path.join(root, "node_modules", "node-pty", "prebuilds");
 
-// No prebuilds at all: node-pty was built from source (the Linux case), or
-// node-pty is not installed. Both are normal, not errors.
+// No prebuilds at all: node-pty is not installed (or a future version ships
+// no prebuilds). Not the Linux case — npm extracts the WHOLE tarball on
+// every platform, so the darwin helpers are present on Linux too (they are
+// simply never exec'd there).
 if (!existsSync(prebuildsDir)) {
   process.exit(0);
 }
@@ -42,8 +44,12 @@ for (const entry of readdirSync(prebuildsDir, { withFileTypes: true })) {
   if (!existsSync(helper)) continue;
   // Only `spawn-helper` is exec'd; `pty.node` is dlopen'd and needs no
   // executable bit.
+  //
+  // "Executable" here means EXECUTABLE BY ITS OWNER (0o100), which is what
+  // posix_spawnp needs: a helper that is already 0o744 (owner + group)
+  // must not be widened to 0o755.
   const mode = statSync(helper).mode & 0o777;
-  if ((mode & 0o111) === 0o111) continue;
+  if ((mode & 0o100) !== 0) continue;
   chmodSync(helper, 0o755);
   fixed.push(path.join(entry.name, "spawn-helper"));
 }
