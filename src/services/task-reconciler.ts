@@ -790,10 +790,15 @@ async function checkReviewingGate(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   info: SessionInfo | null,
+  // Issue #1724 — the host that HOLDS the task's worktree: the review
+  // session's own host, which after placement is the worker's and not
+  // necessarily the project's. Asking the project's host about a
+  // directory it does not have would always report "no commits".
+  hostId: string,
 ): Promise<{ ok: true } | { ok: false; failureReason: string }> {
   if (!task.baseSha || !task.worktreePath) return { ok: true };
 
-  const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+  const statusResult = await resolveHostGitStatus(app, hostId, task.worktreePath);
   if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
     return { ok: true };
   }
@@ -864,6 +869,12 @@ async function hasCommitsPastBase(
   app: FastifyInstance,
   project: typeof projects.$inferSelect,
   task: typeof tasks.$inferSelect,
+  // Issue #1724 — the host that HOLDS the task's worktree, which after
+  // placement is the worker's own host and not necessarily the project's.
+  // Resolving the worktree against the project's host would ask the wrong
+  // machine about a directory it does not have — always false, so the
+  // salvage never fires and a placed worker with commits stays in grace.
+  hostId: string,
 ): Promise<boolean> {
   if (!task.baseSha || !task.worktreePath) return false;
   // No more host restriction here (issue #1100 — resolveHostGitStatus is
@@ -874,7 +885,7 @@ async function hasCommitsPastBase(
   // reached: "failing the task is worse than keeping it alive" is the same
   // fail-safe regardless of host.
   try {
-    const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+    const statusResult = await resolveHostGitStatus(app, hostId, task.worktreePath);
     if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
       return false;
     }
@@ -1026,7 +1037,7 @@ async function maybeOpenDraftPR(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
 ): Promise<void> {
-  const result = await openDraftPRForTask(app, task, project);
+  const result = await openDraftPRForTask(app, task, project, resolveTaskWorkerHost(app, task));
   if (!result.ok) {
     // dirty-tree/no-worktree/remote-not-supported are ordinary, expected
     // outcomes here (a task barely out of its worker's last turn very
@@ -4515,7 +4526,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   resolvedTaskMaster.enabled &&
                   ((liveDerived.status === "finished" && turnFinishedSinceClaim(liveInfo, task)) ||
                     isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime())) &&
-                  (await hasCommitsPastBase(app, project, task));
+                  (await hasCommitsPastBase(app, project, task, hostId));
               }
             }
             if (now > deadline && !salvage) {
@@ -4732,7 +4743,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   resolvedTaskMaster.rateLimitGraceMinutes,
                 );
                 if (inGrace) {
-                  const hasCommits = await hasCommitsPastBase(app, project, task);
+                  const hasCommits = await hasCommitsPastBase(app, project, task, hostId);
                   if (!hasCommits) {
                     // Durable signal + no live api_error + no commits =
                     // stay in grace. The agent's quota may still
@@ -4750,7 +4761,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
 
             // See the matching gate/comment on the claimed -> reviewing
             // branch above — same "don't strand it in reviewing" reasoning.
-            const gate = await checkReviewingGate(app, task, project, info);
+            const gate = await checkReviewingGate(app, task, project, info, hostId);
             if (!gate.ok) {
               await failReviewingGate(
                 app,

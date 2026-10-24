@@ -113,6 +113,11 @@ async function preparePromotion(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRow,
+  // Issue #1724 — the host that HOLDS the task's worktree, which after
+  // placement is the worker session's host and not necessarily the
+  // project's. Defaults to the project's own host, which is where the
+  // worktree was before placement existed.
+  worktreeHostId: string = project.hostId,
 ): Promise<
   { ok: true; repoRef: GitHubRepoRef; token: string } | { ok: false; outcome: PromoteFailure }
 > {
@@ -144,7 +149,9 @@ async function preparePromotion(
   // failure, so it's folded into the same "no-worktree" reason the local
   // `status === null` branch below already uses, not surfaced as a
   // permanent-sounding remote-not-supported.
-  const statusResult = await resolveHostGitStatus(app, project.hostId, task.worktreePath);
+  // Issue #1724 — the worktree's host, not the project's: after placement
+  // the task's worktree lives where its worker session was placed.
+  const statusResult = await resolveHostGitStatus(app, worktreeHostId, task.worktreePath);
   if (!statusResult.ok) {
     if (statusResult.reason === "unsupported") {
       return {
@@ -268,10 +275,15 @@ async function pushForPromotion(
   task: TaskRow,
   project: ProjectRow,
   token: string,
+  // Issue #1724 — the host that holds the task's worktree; see
+  // preparePromotion's own comment.
+  worktreeHostId: string = project.hostId,
 ): Promise<PromoteFailure | null> {
+  // Issue #1724 — the branch lives in the task's WORKTREE, so it is pushed
+  // from the host that holds it.
   const pushResult = await pushHostBranch(
     app,
-    project.hostId,
+    worktreeHostId,
     task.worktreePath!,
     task.branchName!,
     token,
@@ -442,13 +454,15 @@ export async function openDraftPRForTask(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRow,
+  // Issue #1724 — the worktree's host; see preparePromotion's own comment.
+  worktreeHostId?: string,
 ): Promise<PromoteOutcome> {
-  const prepared = await preparePromotion(app, task, project);
+  const prepared = await preparePromotion(app, task, project, worktreeHostId);
   if (!prepared.ok) return prepared.outcome;
   const { repoRef, token } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, project, token);
+    const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
     if (pushFailure) return pushFailure;
     // #782 — this branch makes NO other GitHub call today (it returns
     // task.prUrl/prNumber straight from the DB row), so this omits
@@ -502,7 +516,7 @@ export async function openDraftPRForTask(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, project, token);
+  const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ true);
@@ -521,13 +535,15 @@ export async function promoteTaskToPR(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRow,
+  // Issue #1724 — the worktree's host; see preparePromotion's own comment.
+  worktreeHostId?: string,
 ): Promise<PromoteOutcome> {
-  const prepared = await preparePromotion(app, task, project);
+  const prepared = await preparePromotion(app, task, project, worktreeHostId);
   if (!prepared.ok) return prepared.outcome;
   const { repoRef, token } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, project, token);
+    const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
     if (pushFailure) return pushFailure;
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
@@ -581,7 +597,7 @@ export async function promoteTaskToPR(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, project, token);
+  const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ false);

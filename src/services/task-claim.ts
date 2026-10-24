@@ -12,7 +12,7 @@ import {
   resolveTaskWorkerHost,
   withLiveStatus,
 } from "./session-live-info.js";
-import { parseHostCwds, projectCwdOnHost } from "./placement.js";
+import { parseHostCwds, projectCwdOnHost, resolvePlacement } from "./placement.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -273,7 +273,26 @@ export async function dispatchClaimedTask(
   const seedCapable = commandSupportsSeed(command);
 
   const branchName = task.branchName ?? deriveTaskBranchName(task);
-  const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(project.cwd, branchName);
+
+  // The placement is decided HERE, once, because the worktree is cut on
+  // the chosen host (#1724) — so the orphan check below has to ask THAT
+  // host whether a previous attempt left something behind, and the
+  // predicted path has to be the one under THAT host's project root.
+  // Deciding it here and passing the host down also means the decision is
+  // made once, not twice (the fleet's readings could change between two
+  // calls, and the worktree and the session must agree on the host).
+  const placement = resolvePlacement(app, {
+    project: {
+      hostId: project.hostId,
+      placement: project.placement,
+      cwd: project.cwd,
+      hostCwds: project.hostCwds,
+    },
+    unattended: true,
+  });
+  const placementCwd =
+    projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds)) ?? project.cwd;
+  const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(placementCwd, branchName);
 
   const taskMasterConfig = resolveTaskMasterConfig(app);
   const maxConcurrent = taskMasterConfig.maxConcurrent;
@@ -370,10 +389,12 @@ export async function dispatchClaimedTask(
   // The one place that is NOT project-scoped is the live-status read after
   // the spawn — the row exists by then, so it uses the SESSION's host.
   try {
-    const backend = resolveBackend(app, project.hostId);
+    // The PLACEMENT host — the worktree is cut there, so that is where a
+    // previous attempt would have left one.
+    const backend = resolveBackend(app, placement.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
     const clearResult = await backend.clearOrphanedTaskWorktree(
-      project.cwd,
+      placementCwd,
       predictedWorktreePath,
       branchName,
     );
@@ -416,7 +437,9 @@ export async function dispatchClaimedTask(
         ? taskCommitTitlePath(
             await resolveSessionsDirWithFallback(app, backend, {
               taskId: task.id,
-              hostId: project.hostId,
+              // Issue #1724 — the session's OWN sessions dir, on the host
+              // the session RUNS (the placement host), not the project's.
+              hostId: placement.hostId,
             }),
             task.id,
           )
@@ -465,6 +488,11 @@ export async function dispatchClaimedTask(
       nameLocked: true,
       model,
       smallModel,
+      // Issue #1724 — the host and the reason decided above, so the
+      // worktree, the session and the row all agree on one host and one
+      // explanation.
+      hostId: placement.hostId,
+      placementReason: placement.reason,
       // Mark this session as an unattended Task Master worker so the
       // opencode and codex adapters deny superpowers skills that gate on
       // a human in the loop (brainstorming / writing-plans /
@@ -487,14 +515,16 @@ export async function dispatchClaimedTask(
       return { ok: false, reason: "spawn-failed" };
     }
 
+    // Issue #1724 — the host that RAN the spawn is the placement host, so
+    // that is the host whose version skew matters here.
     const seedDelivered = resolveSeedDelivered(
       seedCapable,
-      project.hostId,
+      placement.hostId,
       result.initialPromptApplied,
     );
     if (seedCapable && !seedDelivered) {
       app.log.warn(
-        { taskId, hostId: project.hostId, command },
+        { taskId, hostId: placement.hostId, command },
         "task dispatch: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
       );
     }
@@ -881,7 +911,10 @@ export async function retryTask(
         ? taskCommitTitlePath(
             await resolveSessionsDirWithFallback(app, backend, {
               taskId: task.id,
-              hostId: project.hostId,
+              // Issue #1724 — the retry runs on the host that holds the
+              // task's worktree, so that is the host whose sessions dir
+              // the commit title path belongs to.
+              hostId: workerHostId,
             }),
             task.id,
           )
@@ -915,13 +948,12 @@ export async function retryTask(
       return { ok: false, reason: "spawn-failed" };
     }
 
-    // Local-hosted only (this function refuses remote projects outright,
-    // above) — no version-skew risk, so resolveSeedDelivered's remote
-    // branch is unreachable here. Used anyway for one consistent definition
-    // of "seedDelivered" across every spawn site.
+    // Issue #1724 — the retry runs on the worker host (it resumes the
+    // task's worktree, which lives there), so that is the host whose
+    // version skew matters here.
     const seedDelivered = resolveSeedDelivered(
       seedCapable,
-      project.hostId,
+      workerHostId,
       result.initialPromptApplied,
     );
 

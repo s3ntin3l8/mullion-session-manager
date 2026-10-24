@@ -370,6 +370,11 @@ export type CreateSessionParams = CreateSessionBody & {
   //
   // NOT part of CreateSessionBody: no public route sets it. Task Master only.
   hostId?: string;
+  // Issue #1724 — WHY the session is on that host, when the caller decided
+  // it (Task Master's claim path decides the placement before the worktree
+  // is cut, so the two cannot disagree). The row records it, so the
+  // decision can be explained rather than re-derived.
+  placementReason?: string;
 };
 
 export type CreateSessionResult =
@@ -955,7 +960,9 @@ function resolveSessionPlacement(
       placement: {
         hostId: params.hostId,
         cwd: mapped ?? project.cwd,
-        reason: `placed by the caller on ${params.hostId} (it must share a host with another session)`,
+        reason:
+          params.placementReason ??
+          `placed by the caller on ${params.hostId} (it must share a host with another session)`,
       },
     };
   }
