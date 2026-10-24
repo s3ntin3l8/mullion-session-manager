@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // Mock setup mirrors test/routes/devices.test.ts's own (see that file's
 // header for why the order matters — `vi.mock` calls here MUST come before
 // any import that could transitively load "node-pty" or "node:child_process").
@@ -81,7 +81,7 @@ describe("devices discovery + pair-and-connect routes", () => {
   // suite stays deterministic — bonjour-service is mocked out above, and
   // the route never reads from a real responder anyway.
   function seedDiscovery(
-    app: Awaited<ReturnType<typeof buildTestApp>>,
+    app: Awaited<ReturnType<typeof buildTestAppOnPlatform>>,
     payload: {
       id?: string;
       name?: string;

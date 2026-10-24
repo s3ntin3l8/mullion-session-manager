@@ -45,9 +45,13 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // socket. A macOS device scope is tracked separately.
   //
   // So the panel is gated OFF on a platform that cannot support it, and the
-  // gate says WHY: every device route answers 400 with "the device panel is
-  // not supported on darwin (it is Linux-only)" instead of the raw
-  // `spawn systemctl ENOENT` a macOS operator would otherwise hit.
+  // gate says WHY: every route that CREATES or STARTS a device answers 400
+  // with "the device panel is not supported on darwin (it is Linux-only)"
+  // instead of the raw `spawn systemctl ENOENT` a macOS operator would
+  // otherwise hit. The READ routes and the TEARDOWN routes stay open on
+  // purpose — they were never gated on DEVICE_ENABLED either, and an
+  // operator must be able to stop a device even where the panel cannot
+  // create one.
   //
   // The platform is read HERE, at registration time, not at module load —
   // the same posture getScopeBackend() takes (src/services/scope/index.ts),

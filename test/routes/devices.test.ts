@@ -755,7 +755,9 @@ describe("devices routes", () => {
     });
 
     describe("clipboard action (issue #1422)", () => {
-      const createDeviceWithController = async (app: Awaited<ReturnType<typeof buildTestApp>>) => {
+      const createDeviceWithController = async (
+        app: Awaited<ReturnType<typeof buildTestAppOnPlatform>>,
+      ) => {
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
