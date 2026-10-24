@@ -248,10 +248,12 @@ describe("terminal route (/ws/terminal)", () => {
       `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
     );
     await waitForOpenOrClose(ws);
-    // waitUntil() takes only the check (it polls with setImmediate and
-    // throws after 50 tries) — a second argument here would be a
-    // superfluous one, which is exactly what CodeQL flagged.
-    await waitUntil(() => clientSpy.mock.calls.length > 0);
+    // waitUntilReal(), not waitUntil(): the latter polls with setImmediate
+    // and gives up after 50 fast tries, so it would flake the moment an
+    // await lands in the attach path. This one keeps the wall-clock bound
+    // the original 5s timeout meant (and its timeout argument is used, so
+    // CodeQL's superfluous-trailing-arguments stays quiet).
+    await waitUntilReal(() => clientSpy.mock.calls.length > 0, 5000);
 
     expect(clientSpy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
     expect(clientSpy.mock.calls.map((call) => call[1])).not.toContain("local");
