@@ -784,11 +784,14 @@ export function deriveOpenCodeReviewerAgentConfig(raw: string): {
 export function stripOpenCodeModelKey(raw: string): string {
   const match = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(raw);
   if (!match) return raw;
-  const kept = match[2]
-    .split(/\r?\n/)
-    .filter((line) => !/^opencode-model\s*:/.test(line))
-    .join("\n");
-  return `${match[1]}${kept}${match[3]}${raw.slice(match[0].length)}`;
+  const lines = match[2].split(/\r?\n/);
+  const kept = lines.filter((line) => !/^opencode-model\s*:/.test(line));
+  // Nothing was filtered → return the input BYTE-IDENTICAL. Rebuilding it
+  // unconditionally would rewrite a CRLF frontmatter with lone LFs even
+  // though no line was touched — a gratuitous change to a file whose
+  // content we did not mean to alter.
+  if (kept.length === lines.length) return raw;
+  return `${match[1]}${kept.join("\n")}${match[3]}${raw.slice(match[0].length)}`;
 }
 
 /**

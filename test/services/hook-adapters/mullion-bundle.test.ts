@@ -539,6 +539,22 @@ The body mentions opencode-model: on purpose.
     expect(stripOpenCodeModelKey(raw)).toBe(raw);
   });
 
+  it("returns a CRLF frontmatter byte-identical when no line was filtered", () => {
+    // Rebuilding it unconditionally would rewrite the CRLF line endings with
+    // lone LFs — a gratuitous change to a file whose content we did not mean
+    // to alter.
+    const raw = "---\r\nname: my-project-reviewer\r\ndescription: d\r\nmodel: inherit\r\n---\r\n\r\nbody\r\n";
+    expect(stripOpenCodeModelKey(raw)).toBe(raw);
+  });
+
+  it("still removes the key from a CRLF frontmatter that HAS one", () => {
+    const raw =
+      "---\r\nname: my-project-reviewer\r\ndescription: d\r\nopencode-model: anthropic/claude-sonnet-4-5\r\n---\r\n\r\nbody\r\n";
+    const stripped = stripOpenCodeModelKey(raw);
+    expect(stripped).not.toContain("opencode-model:");
+    expect(stripped).toContain("name: my-project-reviewer");
+  });
+
   it("is what composeClaudeSessionBundle applies to the reviewer copy", () => {
     const files = composeClaudeSessionBundle("/tmp/does-not-matter", {
       reviewerAgent: `---
