@@ -857,17 +857,25 @@ else
 fi
 
 if [ "$ROLE" = "primary" ]; then
+  # Absolute paths, not repo-relative ones: on the clone path the operator
+  # stands in the checkout and `deploy/…` resolves, but on the clone-free
+  # path (deploy/mullion-install.sh) they ran this from wherever they liked,
+  # and the files live under the install root. $MULLION_HOME/current/deploy/…
+  # resolves on BOTH paths — the release tarball ships deploy/ (see
+  # scripts/assemble-release-tarball.sh), and `current` points at it.
   cat <<EOF
 
-Next steps (see deploy/README.md):
-  - Point Traefik at this host (deploy/traefik-dynamic.yml).
-  - Wire up your forwardAuth middleware (deploy/authentik-middleware-example.yml).
+Next steps (see $MULLION_HOME/current/deploy/README.md):
+  - Point Traefik at this host ($MULLION_HOME/current/deploy/traefik-dynamic.yml).
+  - Wire up your forwardAuth middleware ($MULLION_HOME/current/deploy/authentik-middleware-example.yml).
   - Check GET /health and /api/server-info once Traefik is routing.
 EOF
 else
+  # docs/ is NOT part of the release payload (only deploy/ is), so this one
+  # cites the repository rather than a path that only exists in a checkout.
   cat <<EOF
 
-Next steps (see docs/multi-host.md):
+Next steps (see https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/multi-host.md):
   - If you used self-registration (Path 1 in $MULLION_HOME/.env), this
     agent should already be self-registering with the primary — check
     Settings -> Hosts on the primary for a new "enrolled" host, or watch

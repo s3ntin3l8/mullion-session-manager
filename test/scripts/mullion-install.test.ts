@@ -40,6 +40,7 @@ let scratchDir: string;
 let tarballPath: string;
 let checksumPath: string;
 let argsFile: string;
+let curlLog: string;
 
 /**
  * The curl stub serves the three calls the bootstrap makes and refuses
@@ -48,6 +49,11 @@ let argsFile: string;
  */
 const CURL_STUB = `#!/usr/bin/env bash
 set -euo pipefail
+# Every invocation is recorded, so a test can assert that the bootstrap did
+# NOT reach the network at all — a "fails early" claim that is otherwise
+# unpinned: the same stderr and exit status would come out of a script that
+# had already downloaded the release.
+printf '%s\\n' "$*" >>"$MULLION_TEST_CURL_LOG"
 out=""
 url=""
 prev=""
@@ -111,6 +117,7 @@ function runBootstrap(args: string[], env: Record<string, string> = {}) {
       MULLION_TEST_TARBALL: tarballPath,
       MULLION_TEST_CHECKSUM: checksumPath,
       MULLION_TEST_INSTALLER_ARGS: argsFile,
+      MULLION_TEST_CURL_LOG: curlLog,
       ...env,
     },
   });
@@ -136,6 +143,7 @@ beforeEach(() => {
   tarballPath = path.join(outDir, TARBALL_NAME);
   checksumPath = path.join(outDir, `${TARBALL_NAME}.sha256`);
   argsFile = path.join(tmpDir, "installer-args.txt");
+  curlLog = path.join(tmpDir, "curl.log");
 
   for (const dir of [binDir, fixtureDir, outDir, scratchDir]) {
     fs.mkdirSync(dir, { recursive: true });
@@ -247,5 +255,9 @@ describe("deploy/mullion-install.sh", () => {
     expect(failure.stderr).toContain("no install root given");
     expect(failure.stdout).toContain("usage: mullion-install.sh");
     expect(fs.existsSync(argsFile)).toBe(false);
+    // The whole point of the early check: the release was never resolved and
+    // the tarball was never fetched. Asserting only the stderr and the exit
+    // status would not catch a script that diagnosed it AFTER downloading.
+    expect(fs.existsSync(curlLog)).toBe(false);
   });
 });
