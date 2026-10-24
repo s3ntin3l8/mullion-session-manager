@@ -47,9 +47,8 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // So the panel is gated OFF on a platform that cannot support it, and the
   // gate says WHY: every device route answers 400 with "the device panel is
   // not supported on darwin (it is Linux-only)" instead of the raw
-  // `spawn systemctl ENOENT` a macOS operator would otherwise hit. The
-  // platform is a parameter so a test can exercise both sides of the gate on
-  // any host.
+  // `spawn systemctl ENOENT` a macOS operator would otherwise hit.
+  //
   // The platform is read HERE, at registration time, not at module load —
   // the same posture getScopeBackend() takes (src/services/scope/index.ts),
   // and the reason a test can exercise the gate on any host by stubbing
