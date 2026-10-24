@@ -2444,6 +2444,102 @@ describe("projects route", () => {
           expect(prs[0].relayReview).toMatchObject({ state: "requested" });
         });
 
+        describe("the list routes never wait on GitHub for the relay's state (#1744)", () => {
+          const listedPr = (relayReview?: Record<string, unknown>) => ({
+            number: 41,
+            title: "PR 41",
+            htmlUrl: "https://github.com/acme/widgets/pull/41",
+            author: "me",
+            headSha: "sha41",
+            headBranch: "feat",
+            baseBranch: "main",
+            ciStatus: null,
+            actionsRuns: [],
+            isDraft: false,
+            updatedAt: null,
+            reviewDecision: null,
+            mergeable: null,
+            mergeStateStatus: null,
+            reviewers: [],
+            requestedReviewers: [],
+            unresolvedThreads: null,
+            commentCount: null,
+            reviewStateKnown: false,
+            ciFetched: false,
+            prPhase: "unknown" as const,
+            ...(relayReview ? { relayReview } : {}),
+          });
+
+          async function seed(relayReview?: Record<string, unknown>) {
+            const { setRepoPRsStatus } = await import("../../src/services/github.js");
+            setRepoPRsStatus("acme", "widgets", {
+              prs: [listedPr(relayReview)],
+              prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+            });
+          }
+
+          async function listBoth() {
+            let reviewCalls = 0;
+            mockGithub(gqlPr(41), (url) => {
+              if (!url.includes("/pulls/41/reviews")) return null;
+              reviewCalls += 1;
+              return jsonResponse(200, []);
+            });
+            const app = await makeApp();
+            const { id } = await connectedProject(app);
+            const batch = await app.inject({
+              method: "GET",
+              url: `/api/projects/git-refs?ids=${id}`,
+            });
+            const list = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+            return {
+              batchPr: batch.json().prs[String(id)].prs[0],
+              listPr: list.json().prs[0],
+              reviewCalls: () => reviewCalls,
+            };
+          }
+
+          it("serves the poller's annotation without a single review lookup", async () => {
+            vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+            const landed = {
+              state: "landed",
+              runId: "run_1",
+              dispatchedAt: new Date(relayRun.dispatchedAt).toISOString(),
+              landedChecked: true,
+              author: "s3ntin3l8-hermes[bot]",
+              verdict: "APPROVED",
+            };
+            await seed(landed);
+            const { batchPr, listPr, reviewCalls } = await listBoth();
+            expect(batchPr.relayReview).toMatchObject(landed);
+            expect(listPr.relayReview).toMatchObject(landed);
+            expect(reviewCalls()).toBe(0);
+          });
+
+          it("shows a review requested since the last poll as requested, with no lookup", async () => {
+            // The cached annotation describes an older run; the in-memory run
+            // index knows better, and the poller's next tick says if it landed.
+            vi.mocked(getReviewRunForPr).mockReturnValue({ ...relayRun, runId: "run_2" });
+            await seed({
+              state: "landed",
+              runId: "run_1",
+              dispatchedAt: "2026-01-01T00:00:00.000Z",
+              landedChecked: true,
+              verdict: "APPROVED",
+            });
+            const { batchPr, listPr, reviewCalls } = await listBoth();
+            for (const pr of [batchPr, listPr]) {
+              expect(pr.relayReview).toMatchObject({
+                state: "requested",
+                runId: "run_2",
+                landedChecked: false,
+              });
+              expect(pr.relayReview.verdict).toBeUndefined();
+            }
+            expect(reviewCalls()).toBe(0);
+          });
+        });
+
         it("leaves a PR the relay knows nothing about untouched", async () => {
           // The run index is in-memory: a PR this Mullion never dispatched a
           // review for must come back exactly as it was — no `relayReview`
