@@ -12,6 +12,7 @@ import { devicePlugin } from "./plugins/device.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
 import { sshAgentPlugin } from "./plugins/ssh-agent.js";
+import { suspendWatcherPlugin } from "./plugins/suspend-watcher.js";
 import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
@@ -312,6 +313,14 @@ export async function buildApp() {
   await app.register(loggingPlugin);
   await app.register(sensible);
   await app.register(securityPlugin);
+
+  // Issue #1719 (roadmap 8.5) — decorates app.suspendWatcher, the one
+  // process-wide watcher that reports "this host just came back from a
+  // suspend". Registered for BOTH roles, and BEFORE ptyPlugin and
+  // agentEnrollmentPlugin, which both subscribe to it: the keep-awake needs
+  // to re-arm after a sleep, and an agent needs to revalidate its
+  // credential (which may have been rotated while it slept).
+  await app.register(suspendWatcherPlugin);
 
   // Issue #1006 — the frontend's global 429 gate (frontend/src/api/client.ts)
   // tells a global-bucket 429 apart from a per-route one by comparing the

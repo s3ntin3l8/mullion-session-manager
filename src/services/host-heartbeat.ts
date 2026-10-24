@@ -54,13 +54,56 @@ export class HostHeartbeatTracker {
     };
   }
 
-  recordSuccess(hostId: string): void {
+  /**
+   * Records a successful contact.
+   *
+   * Returns TRUE when this contact is a RECOVERY — the host had been
+   * UNREACHABLE for at least two consecutive pings and is reachable again.
+   *
+   * Issue #1719 (roadmap 8.5) — a host that goes offline and comes back has
+   * almost certainly been asleep: macOS suspends a laptop's processes and
+   * severs its network without a FIN, so the primary's sockets to it are
+   * half-open. A half-open socket never emits "close", so the reconnect
+   * loops that re-arm on "close" never run — the connection stays wedged
+   * until something forces it. The heartbeat is the one thing that DOES
+   * notice the host came back, so it reports the transition.
+   *
+   * WHY TWO MISSES AND NOT ONE: a single missed ping is often one dropped
+   * packet, and tearing down a working connection on that basis would
+   * penalise a healthy host for a hiccup — and each teardown resets the
+   * subscription's reconnect backoff. Two consecutive misses mean the
+   * network really was down, which is what leaves a socket half-open.
+   *
+   * WHY NOT ONLY "offline" (three misses): a macOS laptop's idle sleep can
+   * be as short as a minute, and the keep-awake's power assertion does not
+   * survive a deliberate lid close. A host that was closed for a minute
+   * must still be recovered from.
+   *
+   * THE BAND BETWEEN THE TWO THRESHOLDS: the AGENT's own suspend detection
+   * fires at 3 x 15s = 45s (suspend-detect.ts), while this recovery needs
+   * two consecutive 30s pings = ~60s. So a sleep of 45-59s is shorter than
+   * this trigger can see. It is still covered, by the agent rather than by
+   * the primary: on resume the agent revalidates its credential, which
+   * POSTs /api/internal/register with its hostId, and the primary's
+   * enrollment route force-reconnects that host's event subscription on the
+   * way past (routes/enrollment.ts's renew branch). So the two thresholds
+   * cover each other — but they are not derived from one constant, and
+   * anyone changing either one should know about the other.
+   *
+   * A first contact ("pending" -> "online") is NOT a recovery: there is no
+   * earlier unreachable state to recover from, and no half-open socket that
+   * predates this tracker entry.
+   */
+  recordSuccess(hostId: string): boolean {
+    const prev = this.state.get(hostId);
+    const wasUnreachable = (prev?.missed ?? 0) >= 2;
     this.state.set(hostId, {
       status: "online",
       missed: 0,
       lastSeenAt: Date.now(),
       lastCheckedAt: Date.now(),
     });
+    return wasUnreachable;
   }
 
   recordFailure(hostId: string): void {
@@ -143,11 +186,15 @@ async function sweepHost(
   hostId: string,
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
-): Promise<void> {
+): Promise<boolean> {
   let reachable = false;
+  // Whether this contact is a RECOVERY — the host had been unreachable for
+  // at least two consecutive pings and is reachable again (see
+  // HostHeartbeatTracker.recordSuccess). The caller acts on it.
+  let recovered = false;
   try {
     reachable = await getRemoteHostClient(app, hostId).ping();
-    if (reachable) tracker.recordSuccess(hostId);
+    if (reachable) recovered = tracker.recordSuccess(hostId);
     else tracker.recordFailure(hostId);
   } catch (err) {
     // getRemoteHostClient throws synchronously if the row vanished
@@ -157,7 +204,7 @@ async function sweepHost(
     tracker.recordFailure(hostId);
   }
 
-  if (!reachable) return;
+  if (!reachable) return false;
 
   try {
     const report = await getRemoteHostClient(app, hostId).resolveCapacity();
@@ -169,7 +216,7 @@ async function sweepHost(
         { hostId },
         "[host-heartbeat] the agent does not report capacity (no /internal/capacity route)",
       );
-      return;
+      return recovered;
     }
     // The report comes from a REMOTE host, so its sampledAt is untrusted
     // input: a body without a parseable timestamp (a non-Mullion service
@@ -188,12 +235,15 @@ async function sweepHost(
       "[host-heartbeat] the capacity poll failed, keeping the last known numbers",
     );
   }
+
+  return recovered;
 }
 
 async function sweep(
   app: FastifyInstance,
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
+  onHostRecovered?: (hostId: string) => void,
 ): Promise<void> {
   const allHosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID);
   const hostIds = new Set(allHosts.map((h) => h.id));
@@ -204,7 +254,25 @@ async function sweep(
   // still awaiting its first registration call — pinging it would just
   // render every pending row "offline" every cycle instead of "pending".
   const remoteHosts = allHosts.filter((h) => h.baseUrl !== null);
-  await Promise.all(remoteHosts.map((host) => sweepHost(app, host.id, tracker, capacityTracker)));
+  const recovered: string[] = [];
+  await Promise.all(
+    remoteHosts.map(async (host) => {
+      if (await sweepHost(app, host.id, tracker, capacityTracker)) recovered.push(host.id);
+    }),
+  );
+
+  // Issue #1719 (roadmap 8.5) — report the recovery AFTER the sweep, so the
+  // host is confirmed reachable before anything is torn down and rebuilt.
+  // Each callback is isolated: one host's failed reconnect must not stop the
+  // next host's from being attempted.
+  if (!onHostRecovered) return;
+  for (const hostId of recovered) {
+    try {
+      onHostRecovered(hostId);
+    } catch (err) {
+      app.log.error({ err, hostId }, "[host-heartbeat] failed to handle a recovered host");
+    }
+  }
 }
 
 /**
@@ -212,11 +280,17 @@ async function sweep(
  * as startGitHubPRPoller (github-pr-poller.ts). `tracker` is injectable for
  * tests that want to drive/inspect state directly without waiting on a
  * real timer.
+ *
+ * `onHostRecovered` is called with each host id that comes back from being
+ * unreachable (at least two consecutive missed pings) to reachable — see
+ * HostHeartbeatTracker.recordSuccess's own doc comment for why that
+ * transition matters (issue #1719).
  */
 export function startHostHeartbeat(
   app: FastifyInstance,
   tracker?: HostHeartbeatTracker,
   capacityTracker?: HostCapacityTracker,
+  onHostRecovered?: (hostId: string) => void,
 ): () => void {
   const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
   app.hostHeartbeatTracker = hostHeartbeatTracker;
@@ -251,7 +325,7 @@ export function startHostHeartbeat(
   function runSweep() {
     if (sweepInFlight) return;
     sweepInFlight = true;
-    sweep(app, hostHeartbeatTracker, hostCapacityTracker)
+    sweep(app, hostHeartbeatTracker, hostCapacityTracker, onHostRecovered)
       .catch((err) => {
         app.log.error({ err }, "[host-heartbeat] sweep failed");
       })

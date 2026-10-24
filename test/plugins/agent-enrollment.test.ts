@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import type * as SuspendDetectModule from "../../src/services/suspend-detect.js";
 import { buildApp } from "../../src/app.js";
 
 // Issue #245 / roadmap 7.1 — the agent-side half of self-registration.
@@ -10,6 +11,37 @@ import { buildApp } from "../../src/app.js";
 // retry/backoff and renewal-401-fallback paths that
 // test/integration/multi-host.test.ts's two-real-buildApp() harness can't
 // easily inject (Hermes review, PR #528).
+//
+// Issue #1719 (roadmap 8.5) — the resume path is exercised here too. The
+// suspend watcher itself is MOCKED (not the detection, which
+// test/services/suspend-detect.test.ts covers): what matters here is that
+// the agent's resume handler runs, so the test drives the listeners directly
+// rather than waiting out a wall-clock gap.
+const { resumeListeners } = vi.hoisted(() => ({
+  resumeListeners: [] as ((event: { sleptMs: number }) => void)[],
+}));
+
+vi.mock("../../src/services/suspend-detect.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SuspendDetectModule>();
+  return {
+    ...actual,
+    startSuspendWatcher: () => ({
+      onResume(listener: (event: { sleptMs: number }) => void) {
+        resumeListeners.push(listener);
+        return () => {
+          const index = resumeListeners.indexOf(listener);
+          if (index >= 0) resumeListeners.splice(index, 1);
+        };
+      },
+      stop: () => {},
+    }),
+  };
+});
+
+/** Simulates a resume: every registered listener is told the host is back. */
+function fireResume(sleptMs = 8 * 60 * 60 * 1000): void {
+  for (const listener of [...resumeListeners]) listener({ sleptMs });
+}
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -40,6 +72,7 @@ describe("agentEnrollmentPlugin", () => {
     process.env.MULLION_ENROLLMENT_TOKEN = "bootstrap-secret";
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
+    resumeListeners.length = 0;
   });
 
   afterEach(() => {
@@ -50,6 +83,8 @@ describe("agentEnrollmentPlugin", () => {
     delete process.env.MULLION_ENROLLMENT_TOKEN;
     delete process.env.PROJECTS_ROOTS;
     delete process.env.SESSIONS_DIR;
+    delete process.env.MULLION_HOME;
+    delete process.env.MULLION_AGENT_TOKEN;
   });
 
   it("registers on boot via the real onReady hook and sets app.agentSession", async () => {
@@ -193,6 +228,176 @@ describe("agentEnrollmentPlugin", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(app.agentSession).toBeUndefined();
+  });
+
+  // Issue #1719 (roadmap 8.5) — sleep/wake credential recovery.
+  describe("sleep/wake credential recovery", () => {
+    let mullionHome: string;
+
+    beforeEach(() => {
+      mullionHome = fs.mkdtempSync(path.join(os.tmpdir(), "agent-enrollment-home-"));
+      process.env.MULLION_HOME = mullionHome;
+    });
+
+    afterEach(() => {
+      fs.rmSync(mullionHome, { recursive: true, force: true });
+    });
+
+    // The bullet #1719 was written for: an agent whose credential was
+    // rotated while it slept must re-establish a valid credential instead of
+    // failing permanently. Before #1719 the bootstrap token was read from the
+    // env file ONCE, at boot, so a rotated value was retried forever and the
+    // agent was stranded until someone restarted it.
+    it("re-reads the env file and retries with a ROTATED bootstrap credential after a 401", async () => {
+      // The operator rotated the secret on the primary and updated the
+      // agent's own .env — the file the launchd launcher sources.
+      fs.writeFileSync(
+        path.join(mullionHome, ".env"),
+        "MULLION_ENROLLMENT_TOKEN=rotated-secret\n", // pragma: allowlist secret
+        "utf8",
+      );
+
+      fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValue(
+        jsonResponse(200, {
+          host_id: "host-rotated",
+          session_id: "sess-rotated",
+          session_secret: "secret-rotated", // pragma: allowlist secret
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      try {
+        await app.ready();
+        await waitUntil(() => app.agentSession !== undefined, 10_000);
+
+        expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+        const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+        // The first attempt used the credential this process booted with…
+        expect(firstBody.token).toBe("bootstrap-secret");
+        // …and the retry used the ROTATED one, picked up from the env file —
+        // with no restart of the agent.
+        expect(secondBody.token).toBe("rotated-secret");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("keeps retrying the SAME credential when the env file has not changed", async () => {
+      fs.writeFileSync(
+        path.join(mullionHome, ".env"),
+        "MULLION_ENROLLMENT_TOKEN=bootstrap-secret\n",
+        "utf8",
+      );
+
+      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
+
+      const app = await buildApp();
+      try {
+        await app.ready();
+        await waitUntil(() => fetchMock.mock.calls.length >= 2, 10_000);
+
+        const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+        const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
+        expect(firstBody.token).toBe("bootstrap-secret");
+        expect(secondBody.token).toBe("bootstrap-secret");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("revalidates the credential immediately on resume, rather than waiting for the renewal tick", async () => {
+      // A FRESH Response per call: a Response's body can only be read once,
+      // so a shared instance would make the second (resume) call fail on the
+      // body rather than on anything this test is about.
+      fetchMock.mockImplementation(() =>
+        jsonResponse(200, {
+          host_id: "host-resume",
+          session_id: "sess-resume",
+          session_secret: "secret-resume", // pragma: allowlist secret
+          // A LONG TTL: the renewal timer is half an hour away, so anything
+          // that revalidates promptly did so because of the resume, not
+          // because the renewal happened to be due.
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      try {
+        await app.ready();
+        await waitUntil(() => app.agentSession !== undefined);
+        fetchMock.mockClear();
+
+        fireResume();
+
+        await waitUntil(() => fetchMock.mock.calls.length >= 1, 5000);
+        const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+        // The revalidation renews the EXISTING session (its id), not a fresh
+        // bootstrap registration.
+        expect(body.token).toBe("sess-resume");
+        expect(body.hostId).toBe("host-resume");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("refreshes a ROTATED static MULLION_AGENT_TOKEN on resume, so the inbound gate accepts the primary again", async () => {
+      // A manual-token-only agent: it never calls out to the primary, so it
+      // has no session to renew — but the primary presents ITS token to this
+      // agent, and the inbound gate (routes/internal.ts) compares it against
+      // app.config. A rotated token would leave the agent unable to serve
+      // the primary until it restarted.
+      delete process.env.MULLION_PRIMARY_URL;
+      delete process.env.MULLION_ENROLLMENT_TOKEN;
+      process.env.MULLION_AGENT_TOKEN = "static-token-1";
+      fs.writeFileSync(
+        path.join(mullionHome, ".env"),
+        "MULLION_AGENT_TOKEN=static-token-2\n", // pragma: allowlist secret
+        "utf8",
+      );
+
+      const app = await buildApp();
+      try {
+        await app.ready();
+        expect(app.config.MULLION_AGENT_TOKEN).toBe("static-token-1");
+
+        fireResume();
+
+        await waitUntil(() => app.config.MULLION_AGENT_TOKEN === "static-token-2", 5000);
+        expect(app.config.MULLION_AGENT_TOKEN).toBe("static-token-2");
+        // A static-token agent never calls out — the refresh is entirely
+        // local.
+        expect(fetchMock).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("does nothing on a resume once the agent is shutting down", async () => {
+      fetchMock.mockImplementation(() =>
+        jsonResponse(200, {
+          host_id: "host-stopped",
+          session_id: "sess-stopped",
+          session_secret: "secret-stopped", // pragma: allowlist secret
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      );
+
+      const app = await buildApp();
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+
+      await app.close();
+      // Cleared AFTER the close: the close itself makes the best-effort
+      // deregister call, which is not what this test is about.
+      fetchMock.mockClear();
+
+      fireResume();
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   // Issue #248 / roadmap 7.3 — graceful deregistration.

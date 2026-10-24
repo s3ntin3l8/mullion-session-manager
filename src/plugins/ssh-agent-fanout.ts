@@ -16,8 +16,18 @@ export const sshAgentFanoutPlugin = fp(async (app: FastifyInstance) => {
   // enrollment mutations) call on any change that could affect the
   // desired fan-out set, mirroring app.reconfigureRemoteEventSubscriptions'
   // own convention (plugins/event-store.ts).
-  app.decorate("reconfigureSshAgentFanout", () => {
-    fanout.reconcile();
+  //
+  // Issue #1719 — `forceReconnect` mirrors the events subscriber's own
+  // option: it tears a host's fan-out down and reopens it even though it is
+  // still desired. The host-heartbeat plugin uses it when a host comes back
+  // from a suspend. Unlike the events subscription, this fan-out is NOT
+  // strictly dependent on it: the mux (ssh-agent-mux.ts) PINGs every 15s and
+  // terminates a connection whose PONG does not arrive within 10s, so a
+  // half-open socket here is torn down and reconnected by the fan-out's own
+  // machinery within ~25s. The force-reconnect recovers sooner and does not
+  // rely on that detection.
+  app.decorate("reconfigureSshAgentFanout", (opts?: { forceReconnect?: string[] }) => {
+    fanout.reconcile({ forceReconnect: opts?.forceReconnect });
   });
 
   // Boot-time reconcile: a server that starts with a bridge already
@@ -39,6 +49,6 @@ export const sshAgentFanoutPlugin = fp(async (app: FastifyInstance) => {
 
 declare module "fastify" {
   interface FastifyInstance {
-    reconfigureSshAgentFanout: () => void;
+    reconfigureSshAgentFanout: (opts?: { forceReconnect?: string[] }) => void;
   }
 }

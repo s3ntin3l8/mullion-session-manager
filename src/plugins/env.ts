@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import env from "@fastify/env";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseEnv } from "node:util";
 import {
   DEFAULT_DEVICE_EMULATOR_GPU,
@@ -457,6 +458,24 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Issue #1719 (roadmap 8.5) — whether this host holds a `caffeinate`
+    // power assertion while it has live sessions, so an idle macOS laptop
+    // does not suspend mid-work. Default ON: a machine that suspends while a
+    // build is running silently stops making progress, which is the exact
+    // failure this setting exists to prevent. Set it to `false` on a host
+    // whose owner would rather the machine sleep than hold a power
+    // assertion — e.g. a battery-powered laptop on a long train ride.
+    // Inert off macOS (there is no `caffeinate` there, and the service
+    // no-ops).
+    //
+    // A plain boolean, like every other boolean here: env-schema's AJV
+    // coerces only the strings "true" and "false", so `0` is NOT a valid
+    // value — it fails the schema, which fails the env plugin, which fails
+    // the boot. Write `false`.
+    MULLION_KEEP_AWAKE: {
+      type: "boolean",
+      default: true,
+    },
     // Gates autonomous Task Master behavior — the background watcher's
     // GitHub ingest + auto-claim, and the claim/approve endpoints. Default
     // OFF, same "real feature, off by default" posture the roadmap
@@ -907,6 +926,52 @@ export function loadDotenvOverrides(path = ".env"): NodeJS.Dict<string> {
   return parseEnv(readFileSync(path, "utf8"));
 }
 
+// Issue #1719 (roadmap 8.5) — re-reads the env file ON DEMAND, so a
+// long-running process can pick up a value an operator changed while it was
+// running.
+//
+// WHY THIS EXISTS: an agent's bootstrap credential is read from this file
+// once, at boot. If an admin rotates the credential on the primary while the
+// agent's laptop is ASLEEP, the agent comes back holding a value the primary
+// no longer accepts — and retries it forever, because nothing ever re-reads
+// the file. The agent is then permanently stranded until someone restarts it.
+// This helper is what lets the agent notice the new value and recover
+// WITHOUT a redeploy — the whole point of #1719's "re-establishes a valid
+// credential instead of failing permanently" bullet.
+//
+// WHICH FILE: the same file the launcher sources. scripts/run-with-env.sh
+// (the launchd job's exec target) reads "$MULLION_HOME/.env", so that is the
+// file an operator edits on an installed agent; a dev checkout has no
+// MULLION_HOME and uses the ".env" at cwd — the same default
+// loadDotenvOverrides() uses. The resolution deliberately mirrors the
+// launcher rather than inventing a path of its own.
+//
+// Same shape as loadDotenvOverrides: a missing file yields an empty result
+// rather than an error.
+//
+// Returns the PARSED values only — it does NOT write into process.env and
+// does NOT mutate app.config. The caller decides what to do with a changed
+// value (see agent-enrollment.ts's own credential-recovery path).
+//
+// `mullionHome` is the install root the running process already holds in
+// app.config. When it is set, THAT install's .env is read — "$MULLION_HOME/
+// .env", the file scripts/run-with-env.sh sources and the file an operator
+// edits. When it is empty (a dev checkout), the ".env" at cwd is used, and
+// that default path is NEVER read under test: a test run must not be able to
+// pick up the developer's real .env and present its secrets to a primary.
+export function reloadDotenvOverrides(mullionHome?: string): NodeJS.Dict<string> {
+  if (mullionHome && mullionHome.length > 0) {
+    return readDotenvFile(join(mullionHome, ".env"));
+  }
+  if (process.env.NODE_ENV === "test") return {};
+  return readDotenvFile(".env");
+}
+
+function readDotenvFile(path: string): NodeJS.Dict<string> {
+  if (!existsSync(path)) return {};
+  return parseEnv(readFileSync(path, "utf8"));
+}
+
 export const envPlugin = fp(async (app) => {
   await app.register(env, {
     schema: schema,
@@ -1005,6 +1070,7 @@ declare module "fastify" {
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
       MULLION_SERVICE_UNIT: string;
+      MULLION_KEEP_AWAKE: boolean;
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;

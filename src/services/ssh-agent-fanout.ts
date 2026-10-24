@@ -74,8 +74,21 @@ export interface SshAgentFanoutHandle {
    * explicitly from routes/agent-bridge.ts (bridge connect/disconnect) and
    * routes/hosts.ts / routes/enrollment.ts (host enrollment mutations),
    * mirroring startRemoteEventSubscriber's own call-site convention.
+   *
+   * `forceReconnect` tears a host's fan-out down and reopens it immediately
+   * even though it is still desired — the same escape hatch the events
+   * subscriber has. Issue #1719 (roadmap 8.5) is the reason it is needed
+   * here now: a host that went to sleep leaves its socket HALF-OPEN (the
+   * network vanished without a FIN), and the host-heartbeat notices the host
+   * came back and forces the reconnect.
+   *
+   * Note this fan-out is NOT strictly dependent on it: the mux
+   * (ssh-agent-mux.ts) PINGs every 15s and terminates a connection whose
+   * PONG does not arrive within 10s, so a half-open socket here is torn
+   * down and reconnected by this module's own machinery within ~25s. The
+   * force-reconnect recovers sooner and does not rely on that detection.
    */
-  reconcile: () => void;
+  reconcile: (opts?: { forceReconnect?: Iterable<string> }) => void;
   /** Closes every open/pending fan-out connection and stops all reconnect
    * attempts. Call from the plugin's `onClose` hook. */
   stop: () => void;
@@ -384,7 +397,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
     });
   }
 
-  function reconcile(): void {
+  function reconcile(opts?: { forceReconnect?: Iterable<string> }): void {
     if (stopped) return;
 
     const desiredIds =
@@ -396,8 +409,16 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
           )
         : new Set<string>();
 
+    // Issue #1719 (roadmap 8.5) — a host whose socket was severed by a
+    // suspend is half-open, so its "close" event may never arrive and the
+    // reconnect below is never scheduled on its own. Forcing its teardown
+    // here makes the normal "open a fan-out for every desired host" pass
+    // below reconnect it with a fresh socket. (The mux's own PING/PONG
+    // detection usually gets there first — see reconcile()'s doc comment.)
+    const forceReconnect = new Set(opts?.forceReconnect ?? []);
+
     for (const [hostId, f] of fanouts) {
-      if (!desiredIds.has(hostId)) {
+      if (!desiredIds.has(hostId) || forceReconnect.has(hostId)) {
         closeFanout(f);
         fanouts.delete(hostId);
       }

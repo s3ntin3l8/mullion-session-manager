@@ -158,6 +158,53 @@ describe("startSshAgentFanout — connection lifecycle", () => {
     expect(socket.closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  // Issue #1719 (roadmap 8.5) — a host that went to sleep leaves its socket
+  // HALF-OPEN (the network vanished without a FIN), so the "close" handler
+  // that schedules the reconnect never fires and the fan-out stays wedged on
+  // a dead socket. The heartbeat notices the host came back and forces the
+  // reconnect through this option.
+  it("forceReconnect tears a host's fan-out down and reopens it, even though it is still desired", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a"), fakeHost("agent-b")]);
+    const sockets = [new MockSocket(), new MockSocket(), new MockSocket()];
+    let i = 0;
+    openSshAgentStreamMock.mockImplementation(() => sockets[i++]);
+    const app = fakeApp(1);
+
+    const handle = startSshAgentFanout(app);
+    handle.reconcile();
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(2);
+
+    handle.reconcile({ forceReconnect: ["agent-a"] });
+
+    // agent-a's old socket was closed…
+    expect(sockets[0].closeSpy).toHaveBeenCalledTimes(1);
+    // …and a FRESH one was opened for it, because it is still a desired host.
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(3);
+    expect(getRemoteHostClientMock).toHaveBeenLastCalledWith(app, "agent-a");
+    // agent-b was left alone.
+    expect(sockets[1].closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("forceReconnect does not disturb a host that is not named", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a"), fakeHost("agent-b")]);
+    // Three sockets: one per host on the first reconcile, and a replacement
+    // for agent-a on the forced one.
+    const sockets = [new MockSocket(), new MockSocket(), new MockSocket()];
+    let i = 0;
+    openSshAgentStreamMock.mockImplementation(() => sockets[i++]);
+    const app = fakeApp(1);
+
+    const handle = startSshAgentFanout(app);
+    handle.reconcile();
+
+    handle.reconcile({ forceReconnect: ["agent-a"] });
+
+    expect(sockets[1].closeSpy).not.toHaveBeenCalled();
+    // Only agent-a was redialed.
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(3);
+    expect(getRemoteHostClientMock).toHaveBeenLastCalledWith(app, "agent-a");
+  });
+
   it("does not dial a SCHEDULED reconnect if the bridge disconnected while it was waiting — checked fresh on every attempt, not just when the HostFanout was created", () => {
     listHostsMock.mockReturnValue([fakeHost("agent-a")]);
     const socket = new MockSocket();

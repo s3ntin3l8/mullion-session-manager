@@ -239,9 +239,10 @@ window.
 
 This is deliberately **status-only**: unlike `DELETE /api/hosts/:id
 ?cascade=true` above, it never terminates the host's live sessions. Every
-dtach session an agent hosts is bootstrapped into its own `systemd-run`
-scope specifically so it survives an agent process restart (see
-`deploy/mullion-agent.service`) — and this shutdown hook fires on _every_
+dtach session an agent hosts is bootstrapped into its own detached scope
+specifically so it survives an agent process restart — a `systemd-run` scope
+on Linux, a detached `dtach` master on macOS (see `deploy/mullion-agent.service`
+and the macOS scope backend) — and this shutdown hook fires on _every_
 graceful `SIGTERM`, including a routine restart during a redeploy, not only
 a permanent decommission. Cascade-terminating sessions there would kill
 them on every routine restart, defeating that guarantee; an admin who
@@ -260,6 +261,93 @@ A manually-registered, static-token-only host has no session credential and
 therefore no deregistration call to make at all — it degrades silently to
 heartbeat-only detection, exactly as it did before self-registration
 existed.
+
+### macOS agents: sleep and wake
+
+macOS **suspends** a laptop's processes when it sleeps; it does not kill
+them. A Mullion agent on a sleeping Mac therefore comes back with its
+processes intact — the live sessions are still there, in their detached
+`dtach` scopes — but with its network severed and every timer it had pending
+overdue. Three consequences follow, and they are worth separating because
+they are often confused.
+
+**1. A sleeping agent makes no progress.** Its sessions are alive but
+_stalled_: the agent's process is not running, so nothing it drives is
+either. So "offload work to an idle machine" realistically means "offload to
+a machine that is **open**". A sleeping host is not spare capacity, and the
+fleet UI will show it as such.
+
+**2. The primary notices, and reconnects.** The heartbeat ("Health
+monitoring" above) misses three pings — about 90 seconds at the 30s default —
+and the host reads **offline**. That is health only: it is in-memory state,
+and it never touches a session row. A sleeping host's sessions read
+**unknown**, never `dead` and never `exited` — the same rule as any other
+unreachable agent, and the reason a network blip never looks like every
+session on that host died.
+
+Because a sleep severs the network **without a FIN**, the primary's sockets
+to that host are _half-open_: they report as open and never emit `close`,
+which is the only event the reconnect loops re-arm on. So when the heartbeat
+sees the host come back, it forces those connections closed and reopened
+(the same `forceReconnect` path a rotated credential uses). Without that, the
+host would show as online while the primary's connection to it stayed wedged
+on a dead socket.
+
+**3. The agent revalidates its credential.** An agent's session credential
+can be revoked or rotated while it sleeps. On waking, it revalidates
+immediately rather than waiting for its next renewal tick — a credential TTL
+is measured in hours, and a host that slept for a night would otherwise come
+back holding a credential that had already expired.
+
+If the credential was rotated on the primary, the agent re-reads its own
+`.env` (the file `scripts/run-with-env.sh` sources) and picks up the new
+value, so it recovers **without a redeploy**. Rotate the secret on the
+primary and update the agent's `.env`; the agent notices on its next wake.
+An agent whose `.env` still holds the old value simply keeps retrying with
+it, exactly as it would have before.
+
+#### Keeping an open Mac awake
+
+macOS idles an idle laptop into sleep, and a sleeping machine runs nothing.
+While it has live sessions, Mullion holds a `caffeinate` power assertion so
+an **open** Mac does not idle-sleep mid-work:
+
+```
+caffeinate -dimsu -w <pid>
+```
+
+The assertion is held **only while there are live sessions** — an idle but
+installed agent still lets the laptop sleep. Set `MULLION_KEEP_AWAKE=false` in
+the agent's `.env` to turn it off entirely (useful on a battery-powered
+laptop on a long train ride).
+
+Note what this does **not** do: `caffeinate` cannot keep a machine awake
+with its **lid closed**. macOS suspends a closed lid regardless of any power
+assertion (unless the machine is in clamshell mode — closed, plugged in, and
+running an external display). For a closed-lid host, configure the machine
+itself:
+
+```
+sudo pmset -a sleep 0     # never sleep on idle
+sudo pmset -a womp 1      # wake on network access
+```
+
+Both change the _user's_ power settings and need `sudo`, so Mullion
+documents them rather than running them. `pmset -a sleep 0` is the one that
+matters for an unattended agent: it stops the idle-sleep that would
+otherwise suspend the host between tasks.
+
+#### What to check on real hardware
+
+None of the above can be established on Linux CI — a lid-close suspend, a
+`caffeinate` power assertion and `pmset`'s sleep policy only exist on a Mac.
+`scripts/macos-sleep-wake-check.sh` checks what it can without an install
+(does `caffeinate` hold an assertion, does it release it when terminated,
+what is the host's sleep policy, do the launchd templates still carry the
+keys the deployment depends on, does a `dtach` master survive a
+suspend/resume proxy), and measures whether the monotonic clock advances
+across a real suspend — the one question the code deliberately refuses to
+assume. The rest is the checklist in the validation issue.
 
 ## Request signing
 
@@ -523,3 +611,11 @@ alternative, and how the two compose.
   logs a shadow warning at boot whenever this shadowing happens, so it's
   visible in logs even though Settings' own `connected` status doesn't
   distinguish it from a session actually using the bridge.
+- **A sleeping macOS agent is not spare capacity.** macOS suspends a
+  closed-lid laptop regardless of Mullion's `caffeinate` assertion, and the
+  suspended agent makes no progress at all — its sessions are alive but
+  stalled. Mullion holds the assertion only while there are live sessions
+  (so an _open_ Mac does not idle-sleep mid-work) and reconnects the
+  primary's connections when the host wakes, but only the operator's own
+  `pmset` settings can keep a **closed-lid** host running. See "macOS agents:
+  sleep and wake" above.

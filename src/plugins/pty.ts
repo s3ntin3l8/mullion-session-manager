@@ -10,6 +10,7 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { readAgentBundleDisabled } from "../services/agent-bundle-state.js";
 import { isAuthEnabled } from "../services/auth.js";
+import { startKeepAwake } from "../services/keep-awake.js";
 import { PtyManager } from "../services/pty-manager.js";
 import {
   resolveSshAuthSock,
@@ -688,6 +689,28 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate("pty", manager);
 
+  // Issue #1719 (roadmap 8.5) — keep an idle macOS host awake while it has
+  // live sessions. Starts on BOTH roles: an agent host runs sessions exactly
+  // like a primary does, and it is the agent that is most likely to be a
+  // laptop somebody closes the lid on.
+  //
+  // Inert everywhere but macOS, and no-ops when MULLION_KEEP_AWAKE=false — see
+  // services/keep-awake.ts for why it is an app-level child armed on live
+  // sessions rather than an always-on launchd job.
+  const keepAwake = startKeepAwake(app);
+  // Arm it NOW rather than waiting for the first 10s tick: a host that
+  // BOOTS with live sessions (a primary restarting with running work, or an
+  // agent that re-adopts a surviving scope) would otherwise hold no power
+  // assertion for those first seconds — long enough for an idle-sleep to
+  // land in the middle of a build.
+  keepAwake.sync();
+  const unsubscribeResume = app.suspendWatcher.onResume(() => {
+    // The caffeinate child is suspended with the app and resumes with it,
+    // but the arm/disarm STATE can be stale across the gap — so recompute
+    // it rather than trusting whatever was true before the sleep.
+    keepAwake.sync();
+  });
+
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
   // Re-entrancy guards (6.4/#217) — both reconcilers now make GitHub round
   // trips (reconcileExitedSessions via its #282 task-failed hook,
@@ -887,6 +910,8 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
+    unsubscribeResume();
+    keepAwake.stop();
     manager.killAll();
     // Deliberately no rmSync of a fallback sessionsDir here: sessions
     // run in transient systemd scopes precisely so they survive a restart,
