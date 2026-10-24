@@ -1062,6 +1062,33 @@ as its last argument, because the shared forwarder is invoked as
 missing. `hookSpecificOutput.hookEventName` must match the event name — the
 Claude-dialect replies Mullion already emits satisfy that.
 
+**Verified end to end against the SHIPPED two-plugin layout.** The run above
+installed a single plugin, so one thing it could not show is what happens with
+the layout Mullion actually ships — the Claude-format plugin **and** the
+CODEX-format one side by side. A second run did exactly that, against a real
+mcode 0.6.13 driving a real Mullion:
+
+| What it had to establish                                                            | Observed                                                                                                                                                                           |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| the CODEX plugin's `PermissionRequest` fires while the Claude plugin is also loaded | **yes** — Mullion received `session_start`, `turn_start` and `review_gate`, in that order                                                                                          |
+| there is **no double gate**                                                         | **one** `review_gate` for the turn — the Claude-format plugin does not register `PermissionRequest`, so only the CODEX one asks                                                    |
+| mcode **applies** the allow                                                         | the gate was auto-approved ("auto-approving review gate — mcode session spawned with skip-permissions"), the command **ran**, and **no** `◆ Approval required` appeared in the TUI |
+| the Claude plugin's other events still fire                                         | `session_start` and `turn_start` both arrived                                                                                                                                      |
+| the MCP server is visible and **answers**                                           | the session called `mullion.list_sessions` and the call **returned** — the whole `mcode-process → MCP child → MullionClient` chain, against a live Mullion                         |
+
+The probe ran against a **fully isolated** mcode profile — its own data dir, its
+own physical `v2/sqlite/`, its own empty `v2/runtime-owner-leases/` and `run/`,
+and **no symlink** to `~/.minimax` (see `AGENTS.md`: a second mcode runtime
+against a shared `runtime-state.sqlite` fences the incumbent and aborts the
+user's other sessions). The credential was an **independent** `mcode login`
+inside that profile — a separate OAuth grant with its own path-bound record key
+and its own refresh token, verified different from the live one. A _copied_
+credential re-keys on refresh and signs the live account out; an independent
+login cannot.
+
+The live host's `config.yaml` and `permission.json` were byte-identical before
+and after, and the live mcode processes were unaffected.
+
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
 `terminationReason === "error"`), `PreToolUse`
