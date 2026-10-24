@@ -191,6 +191,70 @@ describe("projects route", () => {
     fs.rmSync(homeCwd, { recursive: true, force: true });
   });
 
+  // Issue #1723 / roadmap 8.9 — the placement opt-in. "pinned" is the
+  // default, so nothing changes until a user asks for "auto".
+  it("defaults a new project to the pinned placement mode", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-placement-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "pinned-project", cwd },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().placement).toBe("pinned");
+
+    const listed = await app.inject({ method: "GET", url: "/api/projects" });
+    expect(listed.json()[0].placement).toBe("pinned");
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("opts a project into automatic placement on create, and back out of it on PATCH", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-placement-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "auto-project", cwd, placement: "auto" },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().placement).toBe("auto");
+
+    const { id } = created.json();
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { placement: "pinned" },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().placement).toBe("pinned");
+
+    const optedIn = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { placement: "auto" },
+    });
+    expect(optedIn.statusCode).toBe(200);
+    expect(optedIn.json().placement).toBe("auto");
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects an unknown placement mode", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-placement-"));
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "bad-placement", cwd, placement: "whatever" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("lists projects in case-insensitive alphabetical order", async () => {
     const app = await buildApp();
 

@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 // keeps working unchanged.
 // TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
 // import, not `import type`.
-import { TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
+import { PLACEMENT_MODES, TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
 
 export { TASK_STATUSES, type TaskStatus };
 
@@ -146,6 +146,20 @@ export const bridges = sqliteTable("bridges", {
 // project's sessions on one machine and some on another. Project-scoped
 // operations keep resolving through THIS column; session-scoped ones
 // resolve through `sessions.hostId` (see sessions' own comment).
+//
+// Issue #1723 / roadmap 8.9 — the PLACEMENT mode.
+//
+// "pinned" (the default) keeps today's behaviour EXACTLY: every session
+// under the project runs on the project's own host (projects.hostId).
+// "auto" opts the project into automatic placement: an eligible host is
+// chosen per session (services/placement.ts's chooseHost) and recorded on
+// the session row (sessions.hostId, issue #1722), so the choice is
+// per-session and inspectable afterwards.
+//
+// Nothing changes for an existing project until someone turns it on —
+// the column defaults to "pinned". A placement is an OPTIMIZATION, never
+// a gate: when no host is eligible, the project's own host is used and
+// the spawn succeeds anyway (see placement.ts's own fallback rule).
 export const projects = sqliteTable("projects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -154,6 +168,10 @@ export const projects = sqliteTable("projects", {
     .notNull()
     .default("local")
     .references(() => hosts.id),
+  // Issue #1723 / roadmap 8.9 — "pinned" (the default) or "auto"; see the
+  // block comment above. The modes come from PLACEMENT_MODES (the shared
+  // declaration every other spelling of them uses).
+  placement: text("placement", { enum: PLACEMENT_MODES }).notNull().default("pinned"),
   // Where this project's dev server listens — issue #28. A bare port
   // ("5173") or a full "scheme://host:port" URL; the preview proxy
   // (src/plugins/preview-proxy.ts) parses this to find the upstream.

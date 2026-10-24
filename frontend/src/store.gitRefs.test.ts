@@ -27,6 +27,7 @@ const PROJECT_1: Project = {
   name: "one",
   cwd: "/home/x/one",
   hostId: "local",
+  placement: "pinned",
   devServerUrl: null,
   detectedDevServerPort: null,
   currentBranch: null,

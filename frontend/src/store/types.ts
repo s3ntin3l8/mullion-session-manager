@@ -2,6 +2,7 @@ import type {
   AppSettings,
   CodexHookTrust,
   CreateProjectDirOptions,
+  CreateProjectPlacementOptions,
   CreateProjectResult,
   Device,
   DiscoveredDevice,
@@ -82,7 +83,9 @@ export interface ProjectsSlice {
     name: string,
     cwd: string,
     hostId?: string,
-    opts?: CreateProjectDirOptions,
+    // Issue #1723 / roadmap 8.9 — the placement opt-in rides in the same
+    // bag (see CreateProjectPlacementOptions).
+    opts?: CreateProjectDirOptions & CreateProjectPlacementOptions,
   ) => Promise<CreateProjectResult>;
   updateProject: (
     id: number,
@@ -103,6 +106,8 @@ export interface ProjectsSlice {
         | "injectProjectBriefing"
         | "injectWorkflowConventions"
         | "suppressConventionsInjectionAfterScaffold"
+        // Issue #1723 / roadmap 8.9 — the placement mode is writable too.
+        | "placement"
       >
     > &
       CreateProjectDirOptions,
