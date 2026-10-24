@@ -181,15 +181,15 @@ function worktrees() {
 function rebuildIndex(worktreePath, force) {
   const stagedRaw = gitRaw(["-C", worktreePath, "diff", "--cached", "--name-only", "-z"]);
   const dirtyRaw = gitRaw(["-C", worktreePath, "diff", "--name-only", "-z"]);
+  const stagedPaths = stagedRaw === null ? [] : nulSplit(stagedRaw);
 
   if (stagedRaw === null || dirtyRaw === null) {
     console.log(`  ${worktreePath}: could not read the index — rebuilding without a check`);
   } else {
-    const staged = nulSplit(stagedRaw);
     const dirty = new Set(nulSplit(dirtyRaw));
     // Staged AND changed again in the working tree: the staged content is
     // not in the working tree, so re-staging would discard it.
-    const lost = staged.filter((p) => dirty.has(p));
+    const lost = stagedPaths.filter((p) => dirty.has(p));
     if (lost.length > 0 && !force) {
       console.log(
         `  ${worktreePath}: SKIPPED — these paths are staged and have changed again in the` +
@@ -201,7 +201,6 @@ function rebuildIndex(worktreePath, force) {
     }
   }
 
-  const stagedPaths = stagedRaw === null ? [] : nulSplit(stagedRaw);
   try {
     git(["-C", worktreePath, "read-tree", "HEAD"]);
     if (stagedPaths.length > 0) {
