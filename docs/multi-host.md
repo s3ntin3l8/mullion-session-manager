@@ -310,6 +310,70 @@ in-memory state only, never written to the `hosts` table — an unreachable
 primary restart resets every host back to "pending" until the next sweep,
 same as a fresh boot.
 
+## Capacity reporting
+
+Issue [#1721](https://github.com/s3ntin3l8/mullion-session-manager/issues/1721)
+/ roadmap 8.7 — the fleet has a _health_ signal, but no _capacity_ signal, so
+"put the work on the idle machine" is still a manual decision. An agent now
+reports its capacity, and the primary keeps it next to the health signal.
+
+**The route.** `GET /internal/capacity` on the agent, behind the same gate as
+every other `/internal/*` route (bearer token plus HMAC signature, or the
+static-Bearer path for a manually-registered host):
+
+```json
+{
+  "platform": "darwin",
+  "logicalCores": 16,
+  "loadAverage1m": 2.1,
+  "memory": { "totalBytes": 34359738368, "freeBytes": 21474836480 },
+  "sessions": { "tracked": 3, "alive": 3 },
+  "sampledAt": "2026-10-24T10:00:00.000Z"
+}
+```
+
+`logicalCores` is `os.availableParallelism()` — how much the box can actually
+run in parallel, which accounts for a cgroup CPU limit. It is deliberately
+**not** the System Resources page's `logicalCores` (that one counts
+`os.cpus().length`, what the box advertises). The session counts are this
+host's own in-memory session tracking: how many it knows about, and how many
+are alive.
+
+**One measurement, two callers.** The agent measures itself with
+`measureHostCapacity()` (`src/services/host-capacity.ts`) and so does the
+primary — so a local host's numbers and an agent's numbers are comparable by
+construction, not by two implementations that happen to agree today.
+
+**No second timer.** The capacity poll rides the health sweep above: one
+`/health` ping and one `/internal/capacity` call per tick, on the same
+interval, in the same fan-out.
+
+**Capacity never decides health.** The health verdict comes from the `/health`
+ping alone. An agent build that predates the capacity route answers `404`,
+which means _"this build does not report capacity"_ — never _"this host is
+broken"_, and the health dot does not flap. Any other failure (timeout,
+unreachable, 5xx) leaves the last known numbers in place, stale, and is
+logged.
+
+**In memory only.** Like the health state, capacity is never written to the
+`hosts` table: it is a live reading, not an intent, and a persisted number
+would look durable long after the machine filled up. A primary restart starts
+with no capacity knowledge; the first sweep repopulates it. A host that stops
+reporting keeps its last known numbers together with their `sampledAt`, so
+the UI can show them as stale (that UI is issue
+[#1726](https://github.com/s3ntin3l8/mullion-session-manager/issues/1726)).
+
+**What a host is.** The agent also self-reports its platform
+(`process.platform`) at enrollment and at every renewal, and the primary
+records it in `hosts.platform` — free-form and informational, exactly like
+`bridges.platform`. An agent build that predates the field leaves it null,
+which is a legitimate state, not a defect. Nothing branches on it.
+
+`GET /api/hosts` carries both: `platform` per host, and `capacity` per host
+(`null` when the host does not report any). The local host's capacity is
+measured on demand on every request — it has no remote poll to ride, and the
+primitives are cheap.
+
 ## Agent updates
 
 Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)
