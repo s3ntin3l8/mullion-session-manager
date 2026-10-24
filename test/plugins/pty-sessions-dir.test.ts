@@ -33,6 +33,7 @@ import {
 import { SESSIONS_DIR_HISTORY_LIMIT } from "../../src/services/sessions-dir-history.js";
 import { envPlugin } from "../../src/plugins/env.js";
 import { dbPlugin } from "../../src/plugins/db.js";
+import { suspendWatcherPlugin } from "../../src/plugins/suspend-watcher.js";
 import { buildApp } from "../../src/app.js";
 
 // A configured dir long enough to push the worst-case socket path past the
@@ -650,12 +651,16 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     try {
       // A bare Fastify rather than buildApp(): the warning is emitted while
       // the pty plugin REGISTERS, so the spy has to be in place before that —
-      // and registering the three plugins by hand keeps the test light (no
+      // and registering the plugins by hand keeps the test light (no
       // server, no control socket) while still booting the real plugin.
       const app = Fastify({ logger: { level: "warn" } });
       const warn = vi.spyOn(app.log, "warn");
       await app.register(envPlugin);
       await app.register(dbPlugin);
+      // suspendWatcherPlugin decorates app.suspendWatcher, which ptyPlugin
+      // subscribes to (the keep-awake re-arms after a resume) — same
+      // ordering dependency src/app.ts documents for the real boot.
+      await app.register(suspendWatcherPlugin);
       await app.register(ptyPlugin);
       await app.ready();
       const reported = warn.mock.calls.filter((call) =>

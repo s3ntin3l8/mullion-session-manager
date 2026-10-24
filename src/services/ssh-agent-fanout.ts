@@ -74,8 +74,17 @@ export interface SshAgentFanoutHandle {
    * explicitly from routes/agent-bridge.ts (bridge connect/disconnect) and
    * routes/hosts.ts / routes/enrollment.ts (host enrollment mutations),
    * mirroring startRemoteEventSubscriber's own call-site convention.
+   *
+   * `forceReconnect` tears a host's fan-out down and reopens it immediately
+   * even though it is still desired — the same escape hatch the events
+   * subscriber has. Issue #1719 (roadmap 8.5) is the reason it is needed
+   * here now: a host that went to sleep leaves its socket HALF-OPEN (the
+   * network vanished without a FIN), so the "close" handler that schedules
+   * the reconnect never fires, and the fan-out stays wedged on a dead
+   * socket until the process restarts. The heartbeat notices the host came
+   * back and forces the reconnect.
    */
-  reconcile: () => void;
+  reconcile: (opts?: { forceReconnect?: Iterable<string> }) => void;
   /** Closes every open/pending fan-out connection and stops all reconnect
    * attempts. Call from the plugin's `onClose` hook. */
   stop: () => void;
@@ -384,7 +393,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
     });
   }
 
-  function reconcile(): void {
+  function reconcile(opts?: { forceReconnect?: Iterable<string> }): void {
     if (stopped) return;
 
     const desiredIds =
@@ -396,8 +405,15 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
           )
         : new Set<string>();
 
+    // Issue #1719 (roadmap 8.5) — a host whose socket was severed by a
+    // suspend is half-open, so its "close" event never arrives and the
+    // reconnect below is never scheduled. Forcing its teardown here makes
+    // the normal "open a fan-out for every desired host" pass below
+    // reconnect it with a fresh socket.
+    const forceReconnect = new Set(opts?.forceReconnect ?? []);
+
     for (const [hostId, f] of fanouts) {
-      if (!desiredIds.has(hostId)) {
+      if (!desiredIds.has(hostId) || forceReconnect.has(hostId)) {
         closeFanout(f);
         fanouts.delete(hostId);
       }

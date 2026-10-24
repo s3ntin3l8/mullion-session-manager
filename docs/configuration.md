@@ -253,6 +253,7 @@ unset for a `make dev` source checkout.
 | `MULLION_HOME`         | _(empty)_                           | absolute path to the versioned-release install root (the parent of `releases/`, the `current` symlink, and `data/`); empty means a dev checkout — the update checker (`GET /api/updates/check`) still works, but applying an update (`POST /api/updates/apply`) refuses without this set |
 | `MULLION_UPDATE_REPO`  | `s3ntin3l8/mullion-session-manager` | `owner/repo` polled for the latest GitHub Release by the update checker; override only for a fork publishing releases elsewhere                                                                                                                                                          |
 | `MULLION_SERVICE_UNIT` | _(empty)_                           | override for the systemd `--user` unit `self-update.sh` restarts after applying an update; empty autodetects it from this process's own `/proc/self/cgroup` at apply time — set only if a host's cgroup layout defeats autodetection                                                     |
+| `MULLION_KEEP_AWAKE`   | `true`                              | whether this host holds a `caffeinate` power assertion while it has live sessions, so an idle macOS laptop does not suspend mid-work (issue #1719); set it to `0` on a host whose owner would rather the machine sleep than hold a power assertion — inert off macOS                     |
 
 ## Per-session (injected at spawn, not `@fastify/env`-validated)
 

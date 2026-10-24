@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import os from "node:os";
+import { reloadDotenvOverrides, resolveDotenvPath } from "./env.js";
 
 // Issue #245 / roadmap 7.1 — the agent-side half of agent-initiated
 // registration. Agent-role-only, and inert unless both MULLION_PRIMARY_URL
@@ -119,10 +120,64 @@ async function callDeregister(app: FastifyInstance, session: AgentSession): Prom
 
 export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   if (app.config.MULLION_ROLE !== "agent") return;
-  if (!app.config.MULLION_PRIMARY_URL || !app.config.MULLION_ENROLLMENT_TOKEN) return;
 
   let renewTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
+  // Guards against two concurrent renewals. The ordinary renewal timer and
+  // the resume-triggered revalidation below can otherwise both be in flight
+  // at once — a laptop that resumes exactly as its renewal timer fires — and
+  // two overlapping renewals would race on app.agentSession and the renewal
+  // timer itself.
+  let renewInFlight = false;
+
+  // Issue #1719 (roadmap 8.5) — the credential this agent holds is read from
+  // the env file ONCE, at boot (env.ts's loadDotenvOverrides). An admin who
+  // rotates it on the primary while this laptop is ASLEEP leaves the agent
+  // holding a value the primary no longer accepts — and because nothing ever
+  // re-reads the file, the agent retries that dead value forever and is
+  // permanently stranded until someone restarts it.
+  //
+  // This re-reads the file and refreshes the credentials the process holds,
+  // so the agent recovers WITHOUT a redeploy — the whole point of #1719's
+  // "re-establishes a valid credential instead of failing permanently" bullet.
+  //
+  // BOTH agent flavours are covered, including the manual-token-only one
+  // (no MULLION_ENROLLMENT_TOKEN, which returns early further down):
+  //   - MULLION_ENROLLMENT_TOKEN is the BOOTSTRAP credential this agent
+  //     presents to the primary to obtain a session.
+  //   - MULLION_AGENT_TOKEN is the STATIC credential the primary presents to
+  //     this agent, checked by routes/internal.ts against app.config. A
+  //     rotated static token leaves the agent unable to SERVE the primary
+  //     until it restarts, so app.config has to be refreshed too — updating
+  //     only the bootstrap token would leave the inbound gate rejecting the
+  //     primary's new token.
+  function refreshCredentialsFromEnvFile(): boolean {
+    const reloaded = reloadDotenvOverrides(resolveDotenvPath(app.config.MULLION_HOME));
+    let changed = false;
+
+    const agentToken = reloaded.MULLION_AGENT_TOKEN;
+    if (agentToken && agentToken !== app.config.MULLION_AGENT_TOKEN) {
+      app.config.MULLION_AGENT_TOKEN = agentToken;
+      changed = true;
+    }
+
+    const enrollmentToken = reloaded.MULLION_ENROLLMENT_TOKEN;
+    if (enrollmentToken && enrollmentToken !== app.config.MULLION_ENROLLMENT_TOKEN) {
+      app.config.MULLION_ENROLLMENT_TOKEN = enrollmentToken;
+      changed = true;
+    }
+
+    if (changed) {
+      app.log.info("[agent-enrollment] credentials refreshed from the env file");
+    }
+    return changed;
+  }
+
+  // A rejected credential may simply be a stale copy of a rotated one. The
+  // error message is the only signal available: callRegister's own throw.
+  function isUnauthorized(err: unknown): boolean {
+    return err instanceof Error && /\bHTTP 401\b/.test(err.message);
+  }
 
   function scheduleRenewal(session: AgentSession) {
     app.agentSession = session;
@@ -139,8 +194,10 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
 
   async function renew(): Promise<void> {
     if (stopped) return;
+    if (renewInFlight) return;
     const current = app.agentSession;
     if (!current) return;
+    renewInFlight = true;
     try {
       const renewed = await callRegister(app, { token: current.sessionId, hostId: current.hostId });
       // Recheck after the await — onClose (a real app.close() mid-renewal,
@@ -164,6 +221,8 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
         "[agent-enrollment] session renewal failed, falling back to bootstrap re-registration",
       );
       void registerWithRetry();
+    } finally {
+      renewInFlight = false;
     }
   }
 
@@ -179,6 +238,20 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
         scheduleRenewal(session);
         return;
       } catch (err) {
+        // Issue #1719 — a 401 means the credential was REJECTED, which for a
+        // sleeping host is most often a stale copy of a rotated one. Re-read
+        // the env file once and, if the value actually changed, retry
+        // immediately with the fresh one instead of burning the backoff on a
+        // value already proven bad. (A second 401 with an unchanged token
+        // falls through to the normal backoff — the retry only ever fires
+        // when the file really did change, so this cannot spin.)
+        if (isUnauthorized(err) && refreshCredentialsFromEnvFile()) {
+          app.log.info(
+            "[agent-enrollment] bootstrap credential changed on disk, retrying immediately",
+          );
+          attempt++;
+          continue;
+        }
         const delay =
           REGISTER_RETRY_DELAYS_MS[Math.min(attempt, REGISTER_RETRY_DELAYS_MS.length - 1)];
         app.log.warn(
@@ -189,6 +262,43 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
         attempt++;
       }
     }
+  }
+
+  // Issue #1719 (roadmap 8.5) — the host just came back from a suspend.
+  // Everything the agent holds may have gone stale while it slept: the
+  // session credential on the primary's side, and the bootstrap/static
+  // credential this process read from the env file at boot. So: refresh the
+  // credentials first, then revalidate immediately rather than waiting for
+  // the next renewal tick — which, for a credential TTL measured in hours,
+  // could be far too late.
+  //
+  // Registered for EVERY agent, including the manual-token-only one that
+  // returns early below: a manual-token agent holds no session to renew, but
+  // its static token can still have been rotated, and its inbound gate
+  // (routes/internal.ts) reads app.config.
+  const unsubscribeResume = app.suspendWatcher.onResume(() => {
+    if (stopped) return;
+    refreshCredentialsFromEnvFile();
+    app.log.info("[agent-enrollment] resumed from a suspend, revalidating the credential");
+    if (app.agentSession) {
+      void renew();
+    } else if (app.config.MULLION_PRIMARY_URL && app.config.MULLION_ENROLLMENT_TOKEN) {
+      // Only an ENROLLING agent re-registers from scratch. A manual-token-only
+      // agent has no session to establish and no bootstrap credential to
+      // present — its whole credential is the static token the refresh above
+      // already picked up, so there is nothing to register.
+      void registerWithRetry();
+    }
+  });
+
+  if (!app.config.MULLION_PRIMARY_URL || !app.config.MULLION_ENROLLMENT_TOKEN) {
+    // Manual-token-only agent (today's flow, unchanged): it never calls out
+    // to the primary, so there is no session to renew — but the resume
+    // handler above still refreshes its static token.
+    app.addHook("onClose", () => {
+      unsubscribeResume();
+    });
+    return;
   }
 
   // Fire-and-forget from onReady — must not delay listen() the way a
@@ -207,6 +317,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // "degrades to heartbeat-only detection with no error" requirement.
   app.addHook("onClose", async () => {
     stopped = true;
+    unsubscribeResume();
     if (renewTimer) clearTimeout(renewTimer);
     const session = app.agentSession;
     app.agentSession = undefined;
