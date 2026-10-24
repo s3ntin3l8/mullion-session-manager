@@ -1013,6 +1013,36 @@ describe("review-request routes", () => {
         expect(res.json().github).toEqual({ checked: true, review: null });
       });
 
+      it("matches the reviewer's login case-insensitively", async () => {
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "S3ntin3l8-Hermes[bot]" } });
+        try {
+          mocks.listPullRequestReviews.mockResolvedValue([
+            { ...otherBotOnHead, author: "s3ntin3l8-hermes[bot]" },
+          ]);
+          const res = await get(sessionId);
+          expect(res.json().github).toMatchObject({
+            checked: true,
+            review: { author: "s3ntin3l8-hermes[bot]" },
+          });
+        } finally {
+          applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]" } });
+        }
+      });
+
+      it("logs the other bot whose review was ignored", async () => {
+        const warn = vi.spyOn(app.log, "warn");
+        try {
+          mocks.listPullRequestReviews.mockResolvedValue([otherBotOnHead]);
+          await get(sessionId);
+          expect(warn).toHaveBeenCalledWith(
+            expect.objectContaining({ authors: ["claude[bot]"] }),
+            expect.stringContaining("ignoring review"),
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       it("counts any bot when reviewerBotLogin is empty", async () => {
         applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
         try {

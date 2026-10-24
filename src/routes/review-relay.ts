@@ -898,6 +898,12 @@ type LandedReview =
  */
 const LANDED_REVIEW_STATES = new Set(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"]);
 
+// GitHub logins are case-insensitive, so a stored `S3ntin3l8-Hermes[bot]` must
+// still match the account's canonical login. Empty = any bot (the old rule).
+function isReviewerLogin(author: string, reviewerBotLogin: string): boolean {
+  return reviewerBotLogin === "" || author.toLowerCase() === reviewerBotLogin.toLowerCase();
+}
+
 // Best effort: the newest review by the reviewer's own bot account
 // (`reviewRelay.reviewerBotLogin`; empty = any bot, the same rule as
 // `reviewReader().base`) submitted after the run was dispatched and pinned to
@@ -919,7 +925,7 @@ async function findLandedReview(
       .filter(
         (r) =>
           r.authorIsBot &&
-          (reviewerBotLogin === "" || r.author === reviewerBotLogin) &&
+          isReviewerLogin(r.author, reviewerBotLogin) &&
           r.commitId === headSha &&
           // The same "landed" definition the duplicate-review warning uses
           // (LANDED_REVIEW_STATES) — a DISMISSED review was retracted, so
@@ -930,6 +936,23 @@ async function findLandedReview(
           Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
       )
       .at(-1);
+    if (!landed) {
+      // Another bot's review of this head is visible on GitHub but is not the
+      // relay's: say so, or "requested" with a posted review looks like a bug.
+      const ignored = reviews.filter(
+        (r) =>
+          r.authorIsBot &&
+          !isReviewerLogin(r.author, reviewerBotLogin) &&
+          r.commitId === headSha &&
+          LANDED_REVIEW_STATES.has(r.state),
+      );
+      if (ignored.length > 0) {
+        app.log.warn(
+          { authors: [...new Set(ignored.map((r) => r.author))], reviewerBotLogin },
+          "review-status: ignoring review(s) by other bots (not reviewRelay.reviewerBotLogin)",
+        );
+      }
+    }
     return {
       checked: true,
       review: landed
@@ -1207,7 +1230,7 @@ export function reviewReader(
             // applies the same rule (its `mention-trigger` input plus
             // "[bot]"), and the two must agree or their idempotency keys
             // diverge and the same range can be dispatched twice.
-            (reviewerBotLogin === "" || r.author === reviewerBotLogin) &&
+            isReviewerLogin(r.author, reviewerBotLogin) &&
             // A landed review, not merely a non-dismissed one: a PENDING
             // (draft) review never landed, and using it as the base would
             // skip part of the diff.
