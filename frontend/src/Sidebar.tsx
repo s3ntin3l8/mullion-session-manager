@@ -1853,13 +1853,16 @@ export function SessionRow({
             &#9201;
           </span>
         )}
-        {remoteHostName && (
-          <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
-            <HostsIcon size={10} />
-            {remoteHostName}
-          </span>
-        )}
       </span>
+      {/* The host badge is a SIBLING of the status label, not a child of it:
+          the label ellipsis-overflows its own box (overflow: hidden), so a
+          badge inside it would be clipped by a long status detail. */}
+      {remoteHostName && (
+        <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
+          <HostsIcon size={10} />
+          {remoteHostName}
+        </span>
+      )}
     </span>
   );
 

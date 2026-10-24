@@ -233,6 +233,25 @@ describe("SessionRow", () => {
       expect(document.querySelector(".session-host-badge")).toBeNull();
     });
 
+    it("sits OUTSIDE the status label's ellipsis box", () => {
+      // The status label ellipsis-overflows its own box (overflow: hidden),
+      // so a badge INSIDE it would be clipped by a long status detail. The
+      // badge is a sibling of the label, inside the group.
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      const badge = document.querySelector(".session-host-badge");
+      expect(badge).not.toBeNull();
+      expect(badge?.closest(".session-status-label")).toBeNull();
+      expect(badge?.closest(".session-status-group")).not.toBeNull();
+    });
+
     it("falls back to the host id when the fleet does not know that host", () => {
       render(
         <SessionRow

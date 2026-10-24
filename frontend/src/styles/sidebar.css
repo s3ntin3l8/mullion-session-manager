@@ -870,7 +870,9 @@
 }
 /* The idle ring — and, since issue #1727, the SUSPENDED ring too: both say
    "not running as far as we can tell", and one rule means the two can never
-   drift apart. */
+   drift apart. A suspended session deliberately does NOT get the exited
+   dot: its host did not answer, and the work may well still be running
+   there. */
 .session-dot-idle,
 .session-dot-suspended {
   width: 7px;
@@ -970,10 +972,6 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Issue #1727 — "suspended": the host did not answer. A hollow dim ring —
-   the same shape as the idle dot ("not running as far as we can tell"),
-   and deliberately NOT the exited dot: the work may still be running on
-   that machine. */
 .session-status-label.killed {
   color: var(--r);
   opacity: 0.85;
