@@ -99,4 +99,21 @@ describe("QuotaBadge", () => {
     render(<QuotaBadge quota={quota()} command="/bin/bash -l" />);
     expect(screen.queryByTestId("quota-badge")).not.toBeInTheDocument();
   });
+
+  it("says how old the reading is, so a stale one cannot look live", () => {
+    // The snapshot is taken when the server last polled Runway; with
+    // polling off (or Runway unreachable) it can be hours old while still
+    // being the last thing known. The chip must not present it as current.
+    const old = new Date(Date.now() - 3 * 60 * 60_000).toISOString();
+    render(<QuotaBadge quota={quota({ fetchedAt: old })} command="claude" />);
+    const badge = screen.getByTestId("quota-badge");
+    expect(badge.getAttribute("title")).toContain("3 h ago");
+  });
+
+  it("says the reading is current when it was just taken", () => {
+    const fresh = new Date(Date.now() - 5_000).toISOString();
+    render(<QuotaBadge quota={quota({ fetchedAt: fresh })} command="claude" />);
+    const badge = screen.getByTestId("quota-badge");
+    expect(badge.getAttribute("title")).toContain("just now");
+  });
 });

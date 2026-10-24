@@ -158,6 +158,27 @@ describe("the Runway quota quarantine (issue #29)", () => {
     expect(isAgentQuarantined(app, "claude")).toBe(false);
   });
 
+  it("lifts a standing quarantine by itself once its window closes", () => {
+    // The other half of the same rule: the quarantine is raised while the
+    // window is still running, and it lifts BY ITSELF when the window
+    // closes — no poll, no operator action. The card's own reset time is
+    // the release, so this must not wait for the next reading.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const future = new Date(Date.now() + 60_000).toISOString();
+      applyRunwaySnapshot(
+        app,
+        snapshot([{ providerId: "anthropic", pctUsed: 100, resetAt: future }]),
+      );
+      expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(isAgentQuarantined(app, "claude")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases an agent the snapshot no longer mentions", () => {
     // Runway stopped reporting the provider: an agent that is not being
     // watched must not stay quarantined on the strength of an old reading.
@@ -293,6 +314,99 @@ describe("the Runway quota quarantine (issue #29)", () => {
         vi.setSystemTime(Date.now() + 31 * 60_000);
         const result = await pollRunwayQuota(app);
         expect(result.quarantinedAgents).toEqual([]);
+        expect(isAgentQuarantined(app, "claude")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("releases a quarantine when Runway has been unreachable past the ceiling", async () => {
+      // The same hole with polling ON: the reading cannot be refreshed
+      // while Runway is down, and a card that reported no `reset_at` has no
+      // release of its own — so without a staleness ceiling the entry would
+      // strand the agent's tasks for good, which is the one outcome this
+      // feature must never produce.
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 60 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+        // Runway is down: the previous reading stands, for now.
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+        vi.setSystemTime(Date.now() + 29 * 60_000);
+        await pollRunwayQuota(app);
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+        // Past the ceiling the reading can no longer be refreshed, so the
+        // quarantine it rests on is released.
+        vi.setSystemTime(Date.now() + 31 * 60_000);
+        const result = await pollRunwayQuota(app);
+        expect(result.quarantinedAgents).toEqual([]);
+        expect(isAgentQuarantined(app, "claude")).toBe(false);
+        vi.unstubAllGlobals();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the quarantine while Runway keeps confirming it", async () => {
+      // The other side of the ceiling: a reading that still reports the
+      // provider as exhausted is a fresh confirmation, so the quarantine
+      // must NOT lapse. Otherwise the ceiling would release a genuinely
+      // exhausted provider every half hour and the next claim would go
+      // straight onto a provider with nothing left.
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 60 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+
+        vi.setSystemTime(Date.now() + 31 * 60_000);
+        vi.stubGlobal(
+          "fetch",
+          vi.fn().mockResolvedValue({
+            ok: true,
+            json: async () => ({ limits: [{ provider_id: "anthropic", pct_used: 100 }] }),
+          }),
+        );
+        const result = await pollRunwayQuota(app);
+        expect(result.quarantinedAgents).toEqual(["claude"]);
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+        vi.unstubAllGlobals();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not lapse between polls when the poll interval is long", async () => {
+      // The ceiling is the LARGER of the fixed half hour and twice the
+      // poll interval. With a one-hour poll, a half-hour ceiling would
+      // release a healthy provider's quarantine in the gap between two
+      // polls — and the next claim would land on an exhausted provider.
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 3600 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+
+        // 40 minutes later — past the fixed half hour, but inside two poll
+        // intervals, so the quarantine stands.
+        vi.setSystemTime(Date.now() + 40 * 60_000);
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+        // Two full intervals without a confirmation: released.
+        vi.setSystemTime(Date.now() + 2 * 60 * 60_000 + 60_000);
         expect(isAgentQuarantined(app, "claude")).toBe(false);
       } finally {
         vi.useRealTimers();

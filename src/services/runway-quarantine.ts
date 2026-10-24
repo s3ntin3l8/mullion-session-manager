@@ -39,6 +39,18 @@ interface AgentQuarantine {
   resetAt: Date | null;
   /** When the quarantine was recorded. */
   since: Date;
+  /**
+   * When a reading last CONFIRMED this quarantine.
+   *
+   * Not the same as `since`: `since` is kept across polls so the UI can
+   * show how long the agent has been out, while this one moves with every
+   * successful reading that still reports the provider as exhausted. It is
+   * what makes "the reading can no longer be refreshed" answerable — an
+   * entry whose card reported no reset time has no release of its own, so
+   * without this it could only ever be released by a reading that says
+   * "fine", and a Runway that is down never says that.
+   */
+  confirmedAt: Date;
 }
 
 /**
@@ -55,13 +67,19 @@ const quarantined = new Map<string, AgentQuarantine>();
 let lastPolledAt: number | null = null;
 
 /**
- * How long a quarantine may stand when NOTHING can refresh or lift it.
+ * How long a quarantine may stand on a reading that cannot be refreshed.
  *
- * Only reachable with polling OFF: an entry whose card reported no
- * `reset_at` has no release path of its own, and with no poll coming there
- * is nothing that could ever lift it. Half an hour is long enough for a
- * genuinely exhausted provider to be seen, and short enough that a stale
- * reading cannot strand an agent's tasks for the rest of the day.
+ * Only entries whose card reported NO reset time are affected: an entry
+ * with a known reset lifts on its own when the window closes, so it never
+ * needs this ceiling. An entry without one has exactly two possible
+ * releases — a later reading that says the provider is fine, or this
+ * ceiling. Without it, a Runway that is unreachable (or a polling that is
+ * switched off) would leave the agent quarantined for good, which is the
+ * one outcome this feature must never produce.
+ *
+ * Half an hour is long enough for a genuinely exhausted provider to be
+ * seen, and short enough that a stale reading cannot strand an agent's
+ * tasks for the rest of the day.
  */
 const MAX_STALE_QUARANTINE_MS = 30 * 60_000;
 
@@ -82,6 +100,34 @@ export function agentForProvider(app: FastifyInstance, providerId: string): stri
 }
 
 /**
+ * How long a quarantine may stand on a reading that can no longer be
+ * refreshed.
+ *
+ * The ceiling is the LARGER of the fixed half hour and twice the operator's
+ * poll interval. The interval matters: with a one-hour poll, a ceiling of
+ * half an hour would release a healthy provider's quarantine in the gap
+ * between two polls, and the next claim would go straight onto an exhausted
+ * provider. Twice the interval means one missed poll is tolerated and two
+ * in a row are not.
+ */
+function staleCeilingMs(app: FastifyInstance): number {
+  const pollSeconds = getStoredSettings(app.db).runway?.pollSeconds ?? 0;
+  return Math.max(MAX_STALE_QUARANTINE_MS, pollSeconds * 2 * 1000);
+}
+
+/**
+ * Whether an entry may no longer be trusted, because nothing can refresh
+ * the reading it rests on.
+ *
+ * An entry WITH a reset time is never stale: the reset lifts it on its
+ * own, so it stays exactly as long as the window says.
+ */
+function isStale(app: FastifyInstance, entry: AgentQuarantine, now: number): boolean {
+  if (entry.resetAt !== null) return false;
+  return now - entry.confirmedAt.getTime() >= staleCeilingMs(app);
+}
+
+/**
  * Whether an agent is currently quarantined.
  *
  * `agent` is the RESOLVED agent (the CLI command the task would run —
@@ -91,10 +137,19 @@ export function agentForProvider(app: FastifyInstance, providerId: string): stri
 export function isAgentQuarantined(app: FastifyInstance, agent: string): boolean {
   const entry = quarantined.get(agent);
   if (entry === undefined) return false;
+  const now = Date.now();
   // A window that has already reset lifts the quarantine without needing a
   // poll — the reset time is known, so waiting for the next poll to notice
   // would only strand the agent for longer than necessary.
-  if (entry.resetAt !== null && entry.resetAt.getTime() <= Date.now()) {
+  if (entry.resetAt !== null && entry.resetAt.getTime() <= now) {
+    quarantined.delete(agent);
+    return false;
+  }
+  // A reading that can no longer be refreshed lifts it too: the quarantine
+  // rests on that reading, and a Runway that is unreachable (or a polling
+  // that is switched off) will never contradict it. Holding it would
+  // strand the agent's tasks for good.
+  if (isStale(app, entry, now)) {
     quarantined.delete(agent);
     return false;
   }
@@ -170,10 +225,16 @@ export function applyRunwaySnapshot(app: FastifyInstance, limits: RunwayLimits):
     // Keep the ORIGINAL "since" when the same agent stays quarantined, so
     // the UI shows how long it has been out rather than resetting the clock
     // on every poll.
+    //
+    // `confirmedAt`, though, MOVES with every reading: this snapshot is a
+    // fresh confirmation that the provider is still exhausted, which is
+    // what keeps the quarantine off the staleness ceiling while Runway
+    // answers.
     quarantined.set(agent, {
       reason: info.reason,
       resetAt: info.resetAt,
       since: existing?.since ?? now,
+      confirmedAt: limits.fetchedAt,
     });
   }
 
@@ -225,20 +286,16 @@ export async function pollRunwayQuota(
     // Configured but polling is OFF: keep the current reading, refresh
     // nothing.
     //
-    // An entry with a KNOWN reset still lifts on its own — the reset time is
-    // known, so `isAgentQuarantined` releases it when the window closes.
-    // An entry with NO reset (a card that reported no `reset_at`) has no
-    // release path at all: no poll will ever refresh it, and nothing else
-    // would lift it. So it is released on a staleness timer instead — past
-    // that, a reading that cannot be refreshed is not worth acting on, and
-    // holding it would strand the agent's tasks indefinitely.
-    const staleBefore = Date.now() - MAX_STALE_QUARANTINE_MS;
+    // Nothing can refresh the reading from here on, so the entries that
+    // rest on it are pruned: an entry with a KNOWN reset still lifts on its
+    // own (the reset time is known, so `isAgentQuarantined` releases it
+    // when the window closes), and an entry with NO reset goes on the
+    // staleness ceiling — it has no other release, and holding it would
+    // strand the agent's tasks indefinitely.
     let released = false;
-    for (const [agent, entry] of [...quarantined]) {
-      if (entry.resetAt === null && entry.since.getTime() <= staleBefore) {
-        quarantined.delete(agent);
-        released = true;
-      }
+    for (const agent of [...quarantined.keys()]) {
+      // False means the entry was dropped (a passed reset, or staleness).
+      if (!isAgentQuarantined(app, agent)) released = true;
     }
     return {
       changed: released,
@@ -269,6 +326,14 @@ export async function pollRunwayQuota(
     } catch {
       // Same posture: one malformed card must not take the sweep down.
     }
+  }
+  // Entries the reading could NOT refresh go on the staleness ceiling. With
+  // a successful poll this prunes nothing — the snapshot just re-confirmed
+  // the entries it still reports as exhausted — but when Runway is
+  // unreachable for long enough, the entries it cannot confirm are
+  // released rather than held for good.
+  for (const agent of [...quarantined.keys()]) {
+    isAgentQuarantined(app, agent);
   }
   const after = [...quarantined.keys()];
   const changed = before.size !== after.length || after.some((agent) => !before.has(agent));

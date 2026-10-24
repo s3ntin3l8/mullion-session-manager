@@ -2,6 +2,7 @@ import type { RunwayQuota } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
 import {
   runwayQuotaDotClass,
+  runwayReadingAge,
   summarizeRunwayQuota,
   type RunwayQuotaSummary,
 } from "../lib/sidebarStatus.js";
@@ -62,11 +63,17 @@ export function QuotaBadge({
     : summary.pctUsed === null
       ? "quota ?"
       : `quota ${Math.round(summary.pctUsed)}%`;
+  // The reading's age travels with it. The snapshot is taken when the
+  // server last polled Runway, so with polling off — or Runway
+  // unreachable — it can be hours old while still being the last thing
+  // known. Without the age the chip reads as live, and a stale reading
+  // must never look fresh.
+  const age = runwayReadingAge(quota.fetchedAt);
   const title = summary.out
-    ? `Runway: ${summary.providerId} is out of quota — Mullion will not claim a task onto ${summary.agent}.`
+    ? `Runway: ${summary.providerId} is out of quota — Mullion will not claim a task onto ${summary.agent}. Reading ${age}.`
     : summary.pctUsed === null
-      ? `Runway: no usage percentage reported for ${summary.providerId}.`
-      : `Runway: ${Math.round(summary.pctUsed)}% of the ${summary.providerId} quota used.`;
+      ? `Runway: no usage percentage reported for ${summary.providerId}. Reading ${age}.`
+      : `Runway: ${Math.round(summary.pctUsed)}% of the ${summary.providerId} quota used. Reading ${age}.`;
 
   return (
     <span className="session-quota-chip" title={title} data-testid="quota-badge">

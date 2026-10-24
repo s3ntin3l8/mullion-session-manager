@@ -153,6 +153,30 @@ export interface RunwayQuotaSummary {
   out: boolean;
 }
 
+// Issue #29 — how old a Runway reading is.
+//
+// The reading is a SNAPSHOT: it was taken when the server last polled
+// Runway, and with polling off (or Runway unreachable) it can be hours old
+// while still being the last thing known. A chip that renders "quota 12%"
+// with no age reads as live, which is exactly the impression a stale
+// reading must not give — so the age travels with the reading.
+//
+// Deliberately relative and locale-free: the absolute clock time is
+// timezone-dependent and cannot be asserted on, while "4 min ago" is
+// unambiguous about the thing that matters (freshness) and is stable in
+// tests.
+export function runwayReadingAge(fetchedAt: string, now: number = Date.now()): string {
+  const at = new Date(fetchedAt).getTime();
+  if (Number.isNaN(at)) return "unknown";
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
 export function summarizeRunwayQuota(
   agents: RunwayAgentQuota[],
   agent: string,
