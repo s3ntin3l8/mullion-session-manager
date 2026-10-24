@@ -129,6 +129,24 @@ export function mapClaudeCodeStop(payload) {
   if (payload && Array.isArray(payload.background_tasks)) {
     result.backgroundTasks = payload.background_tasks;
   }
+  // Issue #1735 — `session_crons` is Claude Code's own list of the
+  // scheduled wakeups that will wake this session later (CronCreate,
+  // ScheduleWakeup, /loop), and it is empty when none are scheduled.
+  //
+  // This is the half of the turn-source signal that says whether the
+  // session is ABOUT TO BE WOKEN AGAIN — the part a turn's `source` alone
+  // cannot tell you. A `/loop` arms one more wakeup every iteration but
+  // the last, so a mid-loop turn ends with a non-empty list and the
+  // FINAL one ends with an empty list. That difference is exactly what
+  // separates "the worker is done" from "the worker is about to keep
+  // working", and it is what stops the reconciler from advancing the task
+  // to `reviewing` mid-loop.
+  //
+  // Carried only when the array is actually present: an absent field must
+  // not be read as "there is a wakeup coming".
+  if (payload && Array.isArray(payload.session_crons)) {
+    result.wakeupsPending = payload.session_crons.length > 0;
+  }
   return result;
 }
 
@@ -603,8 +621,23 @@ export function mapClaudeCodeSessionEnd(payload) {
 // human prompt, before Claude processes it). No payload fields are needed:
 // TurnStartHookMessage carries none — see its own doc comment in
 // hook-protocol.ts for why this outranks waiting for `progress: generating`.
-export function mapClaudeCodeUserPromptSubmit() {
-  return { kind: "turn_start" };
+//
+// Issue #1735 — one payload field IS read now: Claude Code's `source`,
+// which says who authored the turn (`user`, `sdk`, `system`,
+// `loop_wakeup`, `schedule_wakeup`, `poll_event`). Without it a
+// machine-woken turn is byte-identical to a human's, and the reconciler's
+// worker->review transition fires MID-LOOP — reviewing an incomplete diff
+// while the worker is still writing it.
+//
+// The field is optional upstream ("Payloads may omit it while the field
+// rolls out"), so it is carried ONLY when present: an absent source must
+// stay absent, because the latch treats an unknown source as "latch", the
+// same as today's behaviour.
+export function mapClaudeCodeUserPromptSubmit(payload) {
+  const source = payload && typeof payload.source === "string" ? payload.source : undefined;
+  return source === undefined
+    ? { kind: "turn_start" }
+    : { kind: "turn_start", promptSource: source };
 }
 
 export function mapClaudeCodePreCompact(payload) {
@@ -701,7 +734,7 @@ function mapClaudeCodeEventCore(kind, payload) {
     case "SessionEnd":
       return mapClaudeCodeSessionEnd(payload);
     case "UserPromptSubmit":
-      return mapClaudeCodeUserPromptSubmit();
+      return mapClaudeCodeUserPromptSubmit(payload);
     case "PreCompact":
       return mapClaudeCodePreCompact(payload);
     case "PostCompact":

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseHookMessage, KNOWN_BROWSER_ACTIONS } from "../../src/services/hook-protocol.js";
+import {
+  parseHookMessage,
+  KNOWN_BROWSER_ACTIONS,
+  turnEndMeansWorkFinished,
+} from "../../src/services/hook-protocol.js";
 import { agentActionSchema } from "../../src/routes/browser-automation.js";
 
 describe("parseHookMessage", () => {
@@ -688,10 +692,100 @@ describe("parseHookMessage", () => {
     });
   });
 
+  describe("progress", () => {
+    // Issue #1735 — `wakeupsPending` has to SURVIVE the wire: the
+    // validator rebuilds the message from a whitelist, so a field it does
+    // not read simply never arrives — and the handler would then always
+    // see `undefined`.
+    it("carries wakeupsPending through the wire", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", wakeupsPending: true }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "progress", phase: "done", wakeupsPending: true },
+      });
+    });
+
+    it("rejects a non-boolean wakeupsPending", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "progress", phase: "done", wakeupsPending: "yes" }),
+      );
+      expect(result.ok).toBe(false);
+    });
+  });
+
   describe("turn_start", () => {
     it("accepts a turn_start with no fields", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "turn_start" }));
       expect(result).toEqual({ ok: true, message: { kind: "turn_start" } });
+    });
+
+    // Issue #1735 — the optional turn source.
+    it("accepts a turn_start with a promptSource", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "turn_start", promptSource: "loop_wakeup" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "turn_start", promptSource: "loop_wakeup" },
+      });
+    });
+
+    it("rejects a turn_start whose promptSource is not a string", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "turn_start", promptSource: 42 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  // Issue #1735 — the rule that decides whether a turn end means the
+  // agent's WORK is done (which is what the reconciler's worker->review
+  // gate asks).
+  describe("turnEndMeansWorkFinished", () => {
+    it("is finished for a human's turn, with or without a pending wakeup", () => {
+      expect(turnEndMeansWorkFinished("user", false)).toBe(true);
+      expect(turnEndMeansWorkFinished("user", true)).toBe(true);
+    });
+
+    it("is finished for the non-interactive entrypoint", () => {
+      // `sdk` is how Task Master's own workers run: if it did not count,
+      // Task Master would never reach `reviewing` at all.
+      expect(turnEndMeansWorkFinished("sdk", false)).toBe(true);
+    });
+
+    it("is NOT finished for a machine-woken turn that still has a wakeup pending", () => {
+      // These are the turns that used to trip the worker->review gate
+      // MID-LOOP, while the worker was still writing the diff the review
+      // agent then judged.
+      for (const source of ["loop_wakeup", "schedule_wakeup", "poll_event", "system"]) {
+        expect(turnEndMeansWorkFinished(source, true)).toBe(false);
+      }
+    });
+
+    it("IS finished for a machine-woken turn with nothing pending", () => {
+      // The `/loop`'s FINAL iteration: the agent armed one more wakeup
+      // every iteration but the last, so the final turn ends with an empty
+      // `session_crons` — and the task must be able to advance.
+      for (const source of ["loop_wakeup", "schedule_wakeup", "poll_event", "system"]) {
+        expect(turnEndMeansWorkFinished(source, false)).toBe(true);
+      }
+    });
+
+    it("falls back to the wakeup half for an ABSENT source", () => {
+      // Claude Code 2.1.286's UserPromptSubmit emitter omits `source` while
+      // its Stop still sends `session_crons` — so an absent source is the
+      // LIVE case on that host, and treating it as "done" would mean the
+      // gate never consults the one signal that host does send.
+      expect(turnEndMeansWorkFinished(undefined, false)).toBe(true);
+      expect(turnEndMeansWorkFinished(null, false)).toBe(true);
+      expect(turnEndMeansWorkFinished(undefined, true)).toBe(false);
+      expect(turnEndMeansWorkFinished(null, true)).toBe(false);
+    });
+
+    it("is finished for an unknown source", () => {
+      // A new upstream value must not silently stop Task Master's
+      // worker->review handoff.
+      expect(turnEndMeansWorkFinished("something-new", true)).toBe(true);
     });
   });
 

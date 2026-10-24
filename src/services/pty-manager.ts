@@ -1178,6 +1178,10 @@ export class Session {
       // Issue #1734 — restore Codex's rollout path from the state file.
       setCodexTranscriptPath: (path) => this.setCodexTranscriptPath(path),
       setCodexTranscriptHome: (home) => this.setCodexTranscriptHome(home),
+      // Issue #1735 — restore who authored the turn in flight.
+      setTurnPromptSource: (source) => {
+        this.attention.turnPromptSource = source;
+      },
     };
   }
 
@@ -1250,6 +1254,12 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      // Issue #1735 — the last turn end that meant "the work is done".
+      workFinishedAt: this.attention.workFinishedAt,
+      // Issue #1735 — who authored the turn in flight; persisted so a
+      // resumed session keeps judging its next turn end against the right
+      // source.
+      turnPromptSource: this.attention.turnPromptSource,
       lastAssistantMessage: this.lastAssistantMessage,
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
@@ -1396,6 +1406,9 @@ export class Session {
     this.questionHeader = null;
     this.questionAt = null;
     this.attention.lastTurnEndedAt = null;
+    // Issue #1735 — and the "the work is done" stamp with it: a fresh
+    // identity has done no work yet.
+    this.attention.workFinishedAt = null;
     this.agentPromptAt = null;
     this.attention.turnEndPingSent = false;
     this.attention.backgroundTasks = [];
@@ -2217,6 +2230,22 @@ export class Session {
       },
       set lastTurnEndedAt(v) {
         self.attention.lastTurnEndedAt = v;
+      },
+      // Issue #1735 — who authored the current turn. See
+      // AttentionTracker.turnPromptSource's own doc comment.
+      get turnPromptSource() {
+        return self.attention.turnPromptSource;
+      },
+      set turnPromptSource(v) {
+        self.attention.turnPromptSource = v;
+      },
+      // Issue #1735 — the last turn end that meant "the agent's work is
+      // done". See AttentionTracker.workFinishedAt's own doc comment.
+      get workFinishedAt() {
+        return self.attention.workFinishedAt;
+      },
+      set workFinishedAt(v) {
+        self.attention.workFinishedAt = v;
       },
       get turnEndPingSent() {
         return self.attention.turnEndPingSent;
@@ -3147,6 +3176,13 @@ export class Session {
     // doc comment.
     let changed = this.attention.lastTurnEndedAt !== null;
     this.attention.lastTurnEndedAt = null;
+    // Issue #1735 — the "the work is done" stamp belongs to the PREVIOUS
+    // turn, exactly like `lastTurnEndedAt` above. Leaving it behind would
+    // keep the reconciler's worker->review gate open during the NEW turn —
+    // the same premature advance this signal exists to prevent, reached by
+    // the other door.
+    if (this.attention.workFinishedAt !== null) changed = true;
+    this.attention.workFinishedAt = null;
     this.attention.turnEndPingSent = false;
     // Issue #428 — same reasoning as turn_start's own clear: the backgroundTasks
     // snapshot belongs to the finished turn, so it's stale too.
@@ -3617,6 +3653,8 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      // Issue #1735 — the last turn end that meant "the work is done".
+      workFinishedAt: this.attention.workFinishedAt,
       backgroundTasks: this.attention.backgroundTasks,
       backgroundTasksAt: this.attention.backgroundTasksAt,
       outstandingBackgroundTasks: filterOutstandingBackgroundTasks(this.attention.backgroundTasks),

@@ -793,6 +793,17 @@ export interface Session {
   elicitationState: "idle" | "pending";
   elicitationServer: string | null;
   lastTurnEndedAt: number | null;
+  /**
+   * Issue #1735 — the last turn end that meant "the agent's work is done",
+   * as opposed to `lastTurnEndedAt` (when a turn ended AT ALL). The
+   * reconciler's worker->review transition reads this one, so a session
+   * that loops internally does not advance mid-loop.
+   *
+   * Optional here: the frontend does not consume it, and making it
+   * required would churn every SessionInfo fixture for a field nothing in
+   * the UI reads.
+   */
+  workFinishedAt?: number | null;
   /** Issue #428 — mirrors pty-manager.ts's SessionInfo.outstandingBackgroundTasks
    * 1:1: already filtered to non-terminal entries server-side (see
    * background-tasks.ts's own predicate) — the frontend never re-derives,

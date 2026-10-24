@@ -25,6 +25,23 @@ export interface ProgressHookMessage {
   backgroundTasks?: BackgroundTask[];
   /** Free-text detail for the current phase (e.g. retry context). */
   detail?: string;
+  /**
+   * Issue #1735 — whether the session has scheduled wakeups still to come.
+   *
+   * Claude Code's `Stop` payload carries `session_crons` ("Session-scoped
+   * cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake this
+   * session later. Empty array when none are scheduled."), and a
+   * `loop_wakeup` turn is exactly a ScheduleWakeup firing.
+   *
+   * This is what tells "the work is done" from "the session is about to be
+   * woken again to keep working" — see turnEndMeansWorkFinished, which
+   * combines it with the turn's source.
+   *
+   * Absent means "not reported", which is treated as "nothing pending":
+   * the field is optional upstream, and a client that does not send it must
+   * not be read as "there is a wakeup coming".
+   */
+  wakeupsPending?: boolean;
 }
 
 export interface BackgroundTask {
@@ -281,6 +298,111 @@ export interface AgentSessionHookMessage {
  * `elicitationState`. */
 export interface TurnStartHookMessage {
   kind: "turn_start";
+  /**
+   * Issue #1735 — who authored the turn, as Claude Code's `UserPromptSubmit`
+   * reports it: `user`, `sdk`, `system`, `loop_wakeup`, `schedule_wakeup` or
+   * `poll_event`.
+   *
+   * Claude Code calls the field `source` on the wire; it is renamed here
+   * because `source` alone is ambiguous against this protocol's other
+   * messages (`SessionStartHookMessage.source` means "startup"/"resume").
+   *
+   * OPTIONAL: the field is still rolling out upstream ("Payloads may omit it
+   * while the field rolls out"), and no other CLI sends one — so an absent
+   * value means "unknown", never "user".
+   */
+  promptSource?: string;
+}
+
+/**
+ * Issue #1735 — whether a turn end means the agent's WORK is done, so the
+ * task may advance to `reviewing`.
+ *
+ * The reconciler's `in_progress -> reviewing` transition fires when the
+ * worker's turn has "genuinely ended" (task-reconciler.ts's
+ * `turnFinishedSinceClaim`). Before this, EVERY `progress: done` latched
+ * that end — so a session that loops internally tripped the gate
+ * MID-LOOP, advancing the task to `reviewing` while the worker was still
+ * working, and letting the review agent judge an incomplete diff in the
+ * same worktree.
+ *
+ * TWO SIGNALS, because neither alone is enough:
+ *
+ * - `source` — WHO authored the turn. Claude Code's `UserPromptSubmit`
+ *   reports it: `user`, `sdk`, `system`, `loop_wakeup`, `schedule_wakeup`
+ *   or `poll_event`.
+ * - `wakeupsPending` — whether the session has scheduled wakeups still to
+ *   come. Claude Code's `Stop` payload carries `session_crons` ("Session-
+ *   scoped cron tasks (CronCreate, ScheduleWakeup, /loop) that will wake
+ *   this session later. Empty array when none are scheduled."), and a
+ *   `loop_wakeup` is exactly a ScheduleWakeup firing.
+ *
+ * The distinguishing property is not "interactive vs not" — it is "**is
+ * this session going to wake again**":
+ *
+ *  - a human's turn (`user`) ended → the work is done. A pending wakeup does
+ *    NOT hold it back: a human's turn is the end of that turn's work
+ *    whatever else the session has scheduled.
+ *  - `sdk` — a non-interactive entrypoint (`-p` / Agent SDK), which is
+ *    EXACTLY how Task Master's own workers run. It must count as done: if
+ *    it did not, Task Master would never reach `reviewing` at all.
+ *  - a machine-woken turn (`loop_wakeup`, `schedule_wakeup`, `poll_event`,
+ *    `system`) whose session has a wakeup still pending → the work is NOT
+ *    done; the session is about to be woken again to keep working.
+ *  - a machine-woken turn with NOTHING pending → the work IS done. This is
+ *    the `/loop`'s FINAL iteration: the agent armed one more wakeup every
+ *    iteration but the last, so the final turn ends with an empty
+ *    `session_crons` — and the task must be able to advance.
+ *
+ *    Why an empty `session_crons` is enough for `poll_event` too, whose
+ *    source describes an ENQUEUE-time pass ("the hook fires when the host
+ *    submits an event, before its delivery ack exists"): the source
+ *    describes how the turn STARTED, but the `session_crons` this rule
+ *    reads comes from the turn's `Stop`, which fires at the turn's END. By
+ *    then the outcome exists, and the pending list is the state after the
+ *    turn finished — so an empty list really does mean nothing is going to
+ *    wake the session again.
+ *
+ * An ABSENT source is NOT automatically "done". The `source` field is still
+ * rolling out upstream, and Claude Code 2.1.286's `UserPromptSubmit` emitter
+ * omits it while its `Stop` still sends `session_crons` — so on that host an
+ * absent source is the LIVE case, and treating it as "done" would make the
+ * gate never consult the one signal that host does send. An absent source
+ * therefore falls back to the wakeup half of the rule: the work is done
+ * unless something is scheduled to wake the session again.
+ *
+ * (That is a deliberate reading of "the work is done" rather than "a turn
+ * ended": the reconciler's gate asks the first question, and an absent
+ * source says nothing about it.)
+ */
+export function turnEndMeansWorkFinished(
+  source: string | undefined | null,
+  wakeupsPending: boolean,
+): boolean {
+  switch (source) {
+    case "user":
+    case "sdk":
+      // A human's turn (or the non-interactive entrypoint) is the end of that
+      // turn's work, whatever else the session has scheduled: a pending
+      // wakeup does not hold it back.
+      return true;
+    case "loop_wakeup":
+    case "schedule_wakeup":
+    case "poll_event":
+    case "system":
+      // Machine-woken: the work is only done if nothing is going to wake
+      // this session again.
+      return !wakeupsPending;
+    default:
+      // An absent source, or an unknown one.
+      //
+      // An unknown source is treated as "not a machine injection" — a new
+      // upstream value must not silently stop Task Master's worker->review
+      // handoff. An ABSENT source falls through to the wakeup half, because
+      // a Claude Code that does not send the field at all still sends
+      // `session_crons`, and that is the signal that must not be ignored.
+      return source === undefined || source === null ? !wakeupsPending : true;
+  }
 }
 
 /** Issue: extend surfaced session statuses — Claude Code's PreCompact/
@@ -584,6 +706,19 @@ function validateProgress(payload: Record<string, unknown>): ParseHookMessageRes
       };
     }
     result.detail = payload.detail;
+  }
+  // Issue #1735 — `wakeupsPending` has to survive the wire, or the handler
+  // always sees `undefined` and the reconciler's gate never consults the
+  // signal at all. This validator rebuilds the message from a WHITELIST, so
+  // a field that is not read here simply never arrives.
+  if (payload.wakeupsPending !== undefined) {
+    if (typeof payload.wakeupsPending !== "boolean") {
+      return {
+        ok: false,
+        error: "progress requires 'wakeupsPending' to be a boolean when present",
+      };
+    }
+    result.wakeupsPending = payload.wakeupsPending;
   }
   return { ok: true, message: result };
 }
@@ -1050,8 +1185,22 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateCwdChanged(payload);
     case "agent_session":
       return validateAgentSession(payload);
-    case "turn_start":
-      return { ok: true, message: { kind: "turn_start" } };
+    case "turn_start": {
+      // Issue #1735 — the optional turn source. Absent stays absent (the
+      // field is still rolling out upstream), so a payload without it
+      // parses to exactly the message it did before.
+      if (payload.promptSource !== undefined && !isString(payload.promptSource)) {
+        return {
+          ok: false,
+          error: "turn_start requires 'promptSource' to be a string when present",
+        };
+      }
+      const result: TurnStartHookMessage = { kind: "turn_start" };
+      if (isString(payload.promptSource)) {
+        result.promptSource = payload.promptSource;
+      }
+      return { ok: true, message: result };
+    }
     case "compact":
       return validateCompact(payload);
     case "subagent":

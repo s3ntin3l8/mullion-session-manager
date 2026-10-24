@@ -97,6 +97,11 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
     questionHeader: info?.questionHeader ?? null,
     questionAt: info?.questionAt ?? null,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
+    // Issue #1735 — the last turn end that meant "the agent's work is
+    // done". The reconciler's worker->review gate reads this one (through
+    // the session's live info), so it has to travel the same path as
+    // `lastTurnEndedAt`.
+    workFinishedAt: info?.workFinishedAt ?? null,
     // Issue #428 — same live/in-memory, host-tracked-only fallback shape.
     backgroundTasks: info?.backgroundTasks ?? [],
     outstandingBackgroundTasks: info?.outstandingBackgroundTasks ?? [],

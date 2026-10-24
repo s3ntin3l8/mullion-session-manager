@@ -1665,6 +1665,117 @@ describe("PtyManager", () => {
       expect(reasons()).toContain("agent_prompt");
     });
 
+    // Issue #1735 — a machine-woken turn is not a turn END.
+    //
+    // Before this, EVERY `progress: done` latched the turn end, so a
+    // session that loops internally tripped the reconciler's
+    // `in_progress -> reviewing` gate MID-LOOP: the task advanced to
+    // "reviewing" while the worker was still writing, and the review agent
+    // judged an incomplete diff in the same worktree.
+    describe("the turn source decides whether the WORK finished (issue #1735)", () => {
+      async function sessionWith(): Promise<ReturnType<typeof manager.getOrCreate>> {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        return session;
+      }
+
+      it("latches the turn end UNCONDITIONALLY, even for a machine-woken turn", async () => {
+        // The latch also drives the derived `finished` status,
+        // `agentTurnInFlight` (and through it the control socket's 409 for a
+        // busy agent) and the "Finished" ping. A machine-woken turn ends
+        // just as really as a human's, so holding the latch back would
+        // break all three.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      });
+
+      it("does NOT mark the work finished for a machine-woken turn with a wakeup pending", async () => {
+        // The mid-loop case: the agent armed one more wakeup, so the
+        // session is about to be woken again to keep working. The
+        // reconciler's worker->review gate reads THIS signal, so the task
+        // does not advance mid-loop.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        session.emitHookEvent({ kind: "progress", phase: "done", wakeupsPending: true });
+        expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+        expect(session.toInfo().workFinishedAt).toBeNull();
+      });
+
+      it("DOES mark the work finished for a machine-woken turn with NOTHING pending", async () => {
+        // The `/loop`'s FINAL iteration: the agent armed one more wakeup
+        // every iteration but the last, so the final turn ends with an
+        // empty `session_crons` — and the task must be able to advance.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        session.emitHookEvent({ kind: "progress", phase: "done", wakeupsPending: false });
+        expect(session.toInfo().workFinishedAt).not.toBeNull();
+      });
+
+      it("DOES mark the work finished for a human's turn", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "user" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().workFinishedAt).not.toBeNull();
+      });
+
+      it("DOES mark the work finished for the non-interactive entrypoint", async () => {
+        // Task Master's own workers run through it: if it did not count,
+        // Task Master would never reach "reviewing" at all.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "sdk" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().workFinishedAt).not.toBeNull();
+      });
+
+      it("DOES mark the work finished when the source is absent — today's behaviour", async () => {
+        // The field is still rolling out upstream, and no other CLI sends
+        // one: on those, nothing changes.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().workFinishedAt).not.toBeNull();
+      });
+
+      it("clears the work-finished signal on the next turn", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "user" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().workFinishedAt).not.toBeNull();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "user" });
+        expect(session.toInfo().workFinishedAt).toBeNull();
+      });
+
+      it("still releases the permission/plan latches for a machine-woken turn", async () => {
+        // The agent DID move on, so the observational latches are released
+        // exactly as before.
+        const session = await sessionWith();
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "run the tests",
+        });
+        expect(session.toInfo().permissionState).not.toBe("idle");
+
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        expect(session.toInfo().permissionState).toBe("idle");
+      });
+
+      it("carries the source on the turn_start event, for the timeline", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        const event = session.getEvents().find((e) => e.kind === "status_change");
+        expect(event?.payload).toMatchObject({ phase: "generating", promptSource: "loop_wakeup" });
+      });
+    });
+
     it("beginAgentTurn does not run the attention 'userInput' clear", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -8676,6 +8787,7 @@ describe("Session state file persistence (issue #323)", () => {
         elicitationServer: null,
         lastTurnEndedAt: null,
         lastAssistantMessage: null,
+        turnPromptSource: "loop_wakeup",
       },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
@@ -8691,6 +8803,18 @@ describe("Session state file persistence (issue #323)", () => {
     // scenario, not a corrupt one) — subagentCount survives with an empty
     // registry rather than the restore failing or the count being zeroed.
     expect(info.subagents).toEqual([]);
+    // Issue #1735 — who authored the turn in flight survives the restart, so
+    // the restored session judges its next `progress: done` against the
+    // right source. Asserted BEHAVIOURALLY: the restored source is a
+    // machine wakeup, so a turn end with a wakeup still PENDING must not
+    // mark the work as finished — which is the whole point of carrying it
+    // across a restart.
+    session.emitHookEvent({ kind: "progress", phase: "done", wakeupsPending: true });
+    expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+    expect(session.toInfo().workFinishedAt).toBeNull();
+    // With nothing pending it is finished — the `/loop`'s final iteration.
+    session.emitHookEvent({ kind: "progress", phase: "done", wakeupsPending: false });
+    expect(session.toInfo().workFinishedAt).not.toBeNull();
   });
 
   it("restores a persisted subagent registry from state file, keyed correctly on reconstruction", () => {

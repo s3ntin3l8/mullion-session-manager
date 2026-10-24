@@ -59,8 +59,10 @@ import type {
   TodoHookMessage,
   SessionDiffHookMessage,
   ToolDoneHookMessage,
+  TurnStartHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
+import { turnEndMeansWorkFinished } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
 import type { NotificationEvent } from "../shared/types.js";
 import { isPathGitIgnoredCached } from "./git-ignore.js";
@@ -122,6 +124,19 @@ export interface SessionHookContext {
   currentTodo: { content: string; status: string } | null;
   lastTurnEndedAt: number | null;
   turnEndPingSent: boolean;
+  /**
+   * Issue #1735 — who authored the current turn, as the CLI's turn-start
+   * hook reported it. `null` means "unknown", and an unknown source LATCHES
+   * the turn end (today's behaviour). See
+   * hook-protocol.ts's turnSourceEndsTurn for the rule.
+   */
+  turnPromptSource: string | null;
+  /**
+   * Issue #1735 — the timestamp of the last turn end that meant "the
+   * agent's work is done". See AttentionTracker.workFinishedAt's own doc
+   * comment; the reconciler's worker->review gate reads this one.
+   */
+  workFinishedAt: number | null;
 
   backgroundTasks: BackgroundTask[];
   backgroundTasksAt: number | null;
@@ -393,6 +408,18 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // an honest "the Stop hook fired" signal even while background
         // work is outstanding — session-status.ts's deriveSessionStatus is
         // where the two axes combine, not here.
+        //
+        // Issue #1735 — this latch is UNCONDITIONAL. It also drives the
+        // session's derived `finished` status, `agentTurnInFlight` (and
+        // through it the control socket's 409 for a busy agent) and the
+        // "Finished" ping — a machine-woken turn ends just as really as a
+        // human's, and holding the latch back for one would break all
+        // three.
+        //
+        // What the turn source decides is NOT this latch but the SEPARATE
+        // `workFinishedAt` one below: whether that turn end means the
+        // agent's WORK is done, which is the only thing the reconciler's
+        // `in_progress -> reviewing` gate cares about.
         ctx.lastTurnEndedAt = Date.now();
         // A fresh latch is a NEW turn-end occurrence that deserves its
         // own single ping, even if a PRIOR latch's ping already fired and
@@ -400,6 +427,22 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // see turnEndPingSent's own doc comment).
         ctx.turnEndPingSent = false;
         ctx.resolveDeferredTurnEnd();
+
+        // Issue #1735 — the reconciler's gate.
+        //
+        // `workFinishedAt` is the timestamp of the last turn end that meant
+        // "the agent's work is done". It is set only when the turn end
+        // qualifies: a human's turn always does, and a machine-woken one
+        // does only when nothing is scheduled to wake the session again
+        // (Claude Code's `session_crons`).
+        //
+        // Both halves matter. The source alone cannot tell a mid-loop turn
+        // from the loop's FINAL one — both are `loop_wakeup` — and
+        // `session_crons` alone cannot tell a peer-delivered message (a
+        // `system` turn) from an auto-continuation.
+        if (turnEndMeansWorkFinished(ctx.turnPromptSource, progress.wakeupsPending === true)) {
+          ctx.workFinishedAt = ctx.lastTurnEndedAt;
+        }
       } else {
         // Settle-window cancel for `agentIdle` (attention-tracker.ts's
         // ATTENTION_SETTLE_MS) — a non-"done" phase (thinking/generating)
@@ -837,7 +880,8 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
   ],
   [
     "turn_start",
-    (ctx) => {
+    (ctx, message) => {
+      const turnStart = message as TurnStartHookMessage;
       // Issue: extend surfaced session statuses — a deterministic "a new
       // turn genuinely started" signal (Claude Code's UserPromptSubmit,
       // remapped — see forwarder-core.mjs). Releases every observational
@@ -874,13 +918,25 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       ctx.errorAt = null;
       ctx.errorDetail = null;
       ctx.lastTurnEndedAt = null;
+      // Issue #1735 — the "the work is done" signal is released with the
+      // "a turn ended" one: a new turn means the previous turn's end is no
+      // longer the current answer.
+      ctx.workFinishedAt = null;
       ctx.turnEndPingSent = false;
       // Issue #428 — a new turn invalidates the previous Stop's
       // backgroundTasks snapshot; Claude Code re-sends the full list on
       // the next Stop regardless, so there's nothing to preserve here.
       ctx.backgroundTasks = [];
       ctx.backgroundTasksAt = null;
-      ctx.emitEvent("status_change", { phase: "generating" });
+      // Issue #1735 — who authored THIS turn, latched for the turn-end
+      // check below. Carried only when the CLI sent one: an absent source
+      // means "unknown", and an unknown source latches (today's behaviour).
+      ctx.turnPromptSource = turnStart.promptSource ?? null;
+      ctx.emitEvent("status_change", {
+        phase: "generating",
+        // Issue #1735 — the timeline shows which kind of turn this was.
+        promptSource: ctx.turnPromptSource,
+      });
     },
   ],
   [

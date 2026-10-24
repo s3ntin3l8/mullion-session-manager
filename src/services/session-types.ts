@@ -435,6 +435,25 @@ export interface SessionInfo {
    * it's the ONLY attention trigger opencode/codex/agy have). In-memory
    * only, reset on respawn. */
   lastTurnEndedAt: number | null;
+  /**
+   * Issue #1735 — the timestamp of the last turn end that meant "the
+   * agent's WORK is done", as opposed to `lastTurnEndedAt` above, which
+   * says when a turn ended AT ALL.
+   *
+   * The two differ exactly once: a machine-woken turn (a `/loop` wake, a
+   * scheduled fire, a poll pass, an auto-continuation) ends the turn but
+   * not the work — the session is about to be woken again to keep going.
+   * The reconciler's `in_progress -> reviewing` gate reads THIS one, so a
+   * session that loops internally no longer advances mid-loop.
+   *
+   * `lastTurnEndedAt` stays unconditional: it also drives the derived
+   * `finished` status, `agentTurnInFlight` and the "Finished" ping, and a
+   * machine-woken turn ends just as really as a human's.
+   *
+   * Cleared on `turn_start` and respawn, same release path as
+   * `lastTurnEndedAt`.
+   */
+  workFinishedAt: number | null;
   /** Issue #428 — the raw `backgroundTasks` list off the most recent
    * `progress`/`subagent` hook message that carried one (present-only
    * update: a message with no `backgroundTasks` field, e.g. Claude Code's
