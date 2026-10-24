@@ -6,6 +6,7 @@ import {
   mergeSettings,
   DEFAULT_SETTINGS,
 } from "../../src/services/settings.js";
+import { SESSION_STATUSES } from "../../src/services/session-status.js";
 
 describe("deepMerge", () => {
   it("never writes a property name sourced from the patch, so __proto__ can't pollute", () => {
@@ -617,12 +618,19 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
   // SessionStatus union.
   // Issue #1727 added "suspended" (the host did not answer) → 17. This
   // matrix is the BACKEND's copy of the vocabulary, and it is typed
-  // `Record<string, ...>` — so nothing but this count kept it in step with
-  // the union. That is exactly the drift the frontend's exhaustiveness-
-  // checked mirror does catch.
-  it("has 17 entries — one per SessionStatus", () => {
+  // `Record<string, ...>` — so nothing but this assertion kept it in step
+  // with the union. That is exactly the drift the frontend's
+  // exhaustiveness-checked mirror does catch.
+  //
+  // Asserted against the STATUS LIST rather than a count: a count says
+  // "there are seventeen of them" without saying WHICH seventeen, so a
+  // matrix that dropped one status and gained another would still pass.
+  // The set equality says every status has an entry and no entry is
+  // invented — so the NEXT status added to the union fails this test until
+  // it gets one.
+  it("has one entry per SessionStatus — no more, no fewer", () => {
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
-    expect(Object.keys(matrix)).toHaveLength(17);
+    expect(Object.keys(matrix).sort()).toEqual([...SESSION_STATUSES].sort());
   });
 
   it("notificationMatrix defaults have correct notify values matching STATUS_PRESENTATION.defaultNotify", () => {
