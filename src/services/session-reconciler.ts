@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend, warnHostError } from "./session-backend.js";
@@ -33,10 +33,27 @@ import { recordTaskTransition } from "./task-state.js";
  * host is trusted).
  */
 export async function reconcileExitedSessions(app: FastifyInstance): Promise<void> {
+  // Issue #1722 / roadmap 8.8 — the host is the SESSION's own, not its
+  // project's: a session may live on a host of its own (placement), and
+  // this sweep asks EACH HOST for the liveness of ITS OWN sessions.
+  //
+  // Getting this wrong is destructive, not cosmetic: a session placed on
+  // host B while its project lives on host A would be checked against A,
+  // A would (correctly) report "no such session", and the reconciler
+  // would read the session as "dead" and terminate it — while it runs
+  // perfectly well on B. The same failure class as issue #1771.
+  //
+  // `coalesce` over a LEFT JOIN keeps the two fallbacks intact: a session
+  // with no host of its own inherits its project's, and a session whose
+  // project row is missing resolves to "local" — exactly as
+  // resolveProjectHostId does.
   const active = app.db
-    .select({ session: sessions, hostId: projects.hostId })
+    .select({
+      session: sessions,
+      hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+    })
     .from(sessions)
-    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
     .where(eq(sessions.status, "active"))
     .all();
   if (active.length === 0) return;

@@ -70,10 +70,10 @@ describe("filterHostOwnership", () => {
     return row.id;
   }
 
-  function seedSession(projectId: number): number {
+  function seedSession(projectId: number, hostId?: string): number {
     const [row] = app.db
       .insert(sessions)
-      .values({ projectId, command: "bash" })
+      .values({ projectId, command: "bash", ...(hostId === undefined ? {} : { hostId }) })
       .returning({ id: sessions.id })
       .all();
     return row.id;
@@ -95,6 +95,32 @@ describe("filterHostOwnership", () => {
     const sessionId = seedSession(projectId);
     const event = makeEvent({ sessionId });
     const result = filterHostOwnership(app, [{ event, sourceHostId: "remote-a" }]);
+    expect(result).toEqual([event]);
+  });
+
+  it("drops a remote event for a session PLACED on another host (issue #1722)", () => {
+    // The session's row names the host it lives on, which is NOT the host
+    // its project lives on. The reporting host is the project's host, so
+    // with the ownership check resolved through the PROJECT it would match
+    // — and a host could persist events for a session it does not own.
+    seedHost("remote-a");
+    seedHost("remote-b");
+    const projectId = seedProject("remote-a");
+    const sessionId = seedSession(projectId, "remote-b");
+    const event = makeEvent({ sessionId });
+
+    const result = filterHostOwnership(app, [{ event, sourceHostId: "remote-a" }]);
+    expect(result).toEqual([]);
+  });
+
+  it("keeps a remote event for a session PLACED on the reporting host (issue #1722)", () => {
+    seedHost("remote-a");
+    seedHost("remote-b");
+    const projectId = seedProject("remote-a");
+    const sessionId = seedSession(projectId, "remote-b");
+    const event = makeEvent({ sessionId });
+
+    const result = filterHostOwnership(app, [{ event, sourceHostId: "remote-b" }]);
     expect(result).toEqual([event]);
   });
 

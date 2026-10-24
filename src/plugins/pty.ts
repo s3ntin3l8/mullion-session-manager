@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
@@ -122,7 +122,16 @@ const DEV_SERVER_DETECT_INTERVAL_MS = 10_000;
 // sessionId -> projectId map, exactly the shape PtyManager.
 // sweepDevServerDetection expects — see that method's doc comment for why
 // Session/PtyManager can't do this DB join themselves.
-function findEligibleDevServerSessions(app: FastifyInstance): Map<string, number | null> {
+// Exported for the test that pins its eligibility rule (issue #1722) —
+// the rule CHANGED in that issue (the host is the session's own, not its
+// project's), so it needs a test that can call it directly.
+export function findEligibleDevServerSessions(app: FastifyInstance): Map<string, number | null> {
+  // Issue #1722 / roadmap 8.8 — eligibility is about the SESSION's own
+  // host: the sweep probes THIS process's PtyManager, so only a session
+  // that actually lives here can be probed. A session placed on a remote
+  // host (whose project may well live here) is not this process's to
+  // sweep. A session with no host of its own inherits its project's (the
+  // coalesce), so every pre-existing row keeps behaving exactly as before.
   const rows = app.db
     .select({ id: sessions.id, projectId: sessions.projectId })
     .from(sessions)
@@ -131,7 +140,7 @@ function findEligibleDevServerSessions(app: FastifyInstance): Map<string, number
       and(
         eq(sessions.kind, "terminal"),
         eq(sessions.status, "active"),
-        eq(projects.hostId, LOCAL_HOST_ID),
+        sql`coalesce(${sessions.hostId}, ${projects.hostId}) = ${LOCAL_HOST_ID}`,
         isNull(projects.devServerUrl),
       ),
     )

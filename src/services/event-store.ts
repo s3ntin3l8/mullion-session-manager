@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { inArray, eq } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { sessions, projects } from "../db/schema.js";
 import type { NotificationEvent } from "./pty-manager.js";
 import { getStoredSettings } from "./settings.js";
@@ -94,10 +94,19 @@ export function filterHostOwnership(
   const ownerBySessionId = new Map<number, string>();
   for (let i = 0; i < remoteSessionIds.length; i += OWNERSHIP_LOOKUP_CHUNK_SIZE) {
     const chunk = remoteSessionIds.slice(i, i + OWNERSHIP_LOOKUP_CHUNK_SIZE);
+    // Issue #1722 / roadmap 8.8 — the owning host is the SESSION's own
+    // (`sessions.hostId`) when it has one, and its project's otherwise —
+    // the same rule resolveSessionHostIds() applies. Without this, a host
+    // could persist events for a session that was placed on another host:
+    // the ownership check would compare against the PROJECT's host and find
+    // a match it should not.
     const ownerRows = app.db
-      .select({ sessionId: sessions.id, hostId: projects.hostId })
+      .select({
+        sessionId: sessions.id,
+        hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+      })
       .from(sessions)
-      .innerJoin(projects, eq(sessions.projectId, projects.id))
+      .leftJoin(projects, eq(sessions.projectId, projects.id))
       .where(inArray(sessions.id, chunk))
       .all();
     for (const row of ownerRows) ownerBySessionId.set(row.sessionId, row.hostId);

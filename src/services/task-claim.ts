@@ -7,7 +7,7 @@ import { projects, tasks } from "../db/schema.js";
 // those files' own doc comments for the createSessionRecord/killSession and
 // buildLiveInfo/withLiveInfo/withLiveStatus split.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { withLiveStatus } from "./session-live-info.js";
+import { resolveSessionHostId, withLiveStatus } from "./session-live-info.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -350,6 +350,20 @@ export async function dispatchClaimedTask(
   // comment (still on enqueueTask above) for why this try/catch exists and
   // what `committed` guards.
   let committed = false;
+  // Issue #1722 / roadmap 8.8 — the host below is the PROJECT's, and that
+  // is deliberate at every one of its uses in this function:
+  //
+  //   - the SPAWN host is the placement DECISION for this task's session.
+  //     Today that decision is "the task's project's host"; #1724 replaces
+  //     it with the placement policy's choice, and the session's row
+  //     records whatever it becomes (src/services/session-lifecycle.ts's
+  //     insertRow).
+  //   - the worktree and git operations are PROJECT-scoped (the task's
+  //     worktree lives on the project's host, whatever the session's own
+  //     host ends up being).
+  //
+  // The one place that is NOT project-scoped is the live-status read after
+  // the spawn — the row exists by then, so it uses the SESSION's host.
   try {
     const backend = resolveBackend(app, project.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
@@ -510,7 +524,16 @@ export async function dispatchClaimedTask(
     );
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-    const session = await withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: the row exists now,
+    // and the live status has to come from the host this session actually
+    // runs on (a placement policy may have put it somewhere other than the
+    // task's project).
+    const session = await withLiveStatus(
+      app,
+      result.row,
+      idleThresholdMs,
+      resolveSessionHostId(app, result.row),
+    );
     return { ok: true, session, seedDelivered };
   } catch (err) {
     if (committed) throw err;
@@ -714,6 +737,9 @@ export async function retryTask(
   // so it's expected to be clean; if it somehow isn't, this leaves it in
   // place rather than destroying anything, same posture as every other
   // caller of removeWorktreeIfClean.
+  // Issue #1722 / roadmap 8.8 — as in the worker path above: the
+  // worktree cleanup below is PROJECT-scoped (the task's worktree), and
+  // the spawn host is the placement decision #1724 owns.
   async function release(reason: string, worktreeToClean?: { path: string }): Promise<void> {
     if (worktreeToClean) {
       await resolveBackend(app, project.hostId)
@@ -908,7 +934,16 @@ export async function retryTask(
     );
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-    const session = await withLiveStatus(app, result.row, idleThresholdMs, project.hostId);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: the row exists now,
+    // and the live status has to come from the host this session actually
+    // runs on (a placement policy may have put it somewhere other than the
+    // task's project).
+    const session = await withLiveStatus(
+      app,
+      result.row,
+      idleThresholdMs,
+      resolveSessionHostId(app, result.row),
+    );
     return { ok: true, session, seedDelivered };
   } catch (err) {
     if (committed) throw err;

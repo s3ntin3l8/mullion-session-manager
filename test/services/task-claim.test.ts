@@ -341,6 +341,31 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // Issue #1722 / roadmap 8.8 — the session records the host it was
+  // spawned on. That is what lets every session-scoped operation find it
+  // again without deriving it from the project: today the two are the same
+  // host, but a placement policy (#1724) will be able to put a task's
+  // session somewhere else, and the row is what follows it there.
+  it("records the host the worker session was spawned on its row (issue #1722)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 72);
+
+    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    expect(outcome.ok).toBe(true);
+
+    const row = getTask(app, task.id);
+    const { sessions } = await import("../../src/db/schema.js");
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId)).all();
+    // The project's host — where the worker's worktree and its git
+    // operations live, and where the spawn was routed.
+    expect(session?.hostId).toBe("local");
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   // Task Master — the opencode adapter denies the superpowers skills that
   // gate on a human in the loop (brainstorming / writing-plans /
   // finishing-a-development-branch) when it sees a positive `taskId` on

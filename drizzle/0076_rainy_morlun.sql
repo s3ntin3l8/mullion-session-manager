@@ -1,0 +1,32 @@
+-- Hand-edited from drizzle-kit's generated output: `ALTER TABLE sessions ADD
+-- host_id text REFERENCES hosts(id)` would DECLARE the foreign key in the
+-- database, and this connection runs with `PRAGMA foreign_keys = ON`
+-- (src/db/client.ts), so it would be ENFORCED at runtime.
+--
+-- Unlike `projects.host_id` — where SQLite refused the clause outright
+-- (a NOT NULL DEFAULT plus an inline REFERENCES is not addable, see
+-- 0008_lovely_xavin.sql) — nothing here forces the hand-edit, so it is a
+-- deliberate choice, made for the same reason that migration made its own:
+-- the relation stays DECLARED in src/db/schema.ts for typing and
+-- documentation, and is not enforced at the SQLite level.
+--
+-- The reason: a host can legitimately hold a session whose project lives
+-- somewhere else (that is the whole point of issue #1722 — a placement
+-- policy may put some of a project's sessions on one machine and some on
+-- another). With the FK enforced, DELETE /api/hosts/:id for such a host
+-- would fail with an opaque SQLite constraint error instead of the
+-- repo's own "this host still has projects" one — and a host-delete guard
+-- for placed SESSIONS is a separate concern this migration does not take
+-- on. Without the enforcement, deleting such a host leaves its sessions
+-- pointing at a host that no longer exists, and the reconciler retires
+-- them on the next sweep — the self-healing path that already exists for
+-- a vanished host.
+--
+-- host_id is always server-set (the host a session was spawned on), never
+-- user input, and "local" is guaranteed to exist by the seed in
+-- 0008_lovely_xavin.sql — the same guarantees that migration relied on.
+--
+-- No backfill: NULL means "inherit the project's host", so every
+-- pre-existing row keeps resolving to exactly the host it resolved to
+-- before (issue #1722's first verification item).
+ALTER TABLE `sessions` ADD `host_id` text;

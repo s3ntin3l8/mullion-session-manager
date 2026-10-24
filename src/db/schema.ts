@@ -135,11 +135,17 @@ export const bridges = sqliteTable("bridges", {
 });
 
 // A project is just a folder new sessions get created in — now on a specific
-// host (issue #26). Every session under a project inherits its host; a
-// session has no hostId of its own since a project can't change host (cwd is
-// host-specific) and denormalizing here would only add drift risk. Defaults
-// to the seeded "local" host so every pre-#26 row backfills unambiguously —
-// see the migration for why this FK isn't enforced at the SQLite level.
+// host (issue #26). Defaults to the seeded "local" host so every pre-#26 row
+// backfills unambiguously — see the migration for why this FK isn't enforced
+// at the SQLite level.
+//
+// The project's host is where the PROJECT's work lives: its cwd, its git
+// operations, its files. It is NOT necessarily where a session of that
+// project runs — since issue #1722 (roadmap 8.8) a session records the host
+// it was actually spawned on, and a placement policy may put some of a
+// project's sessions on one machine and some on another. Project-scoped
+// operations keep resolving through THIS column; session-scoped ones
+// resolve through `sessions.hostId` (see sessions' own comment).
 export const projects = sqliteTable("projects", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   name: text("name").notNull(),
@@ -391,6 +397,24 @@ export const sessions = sqliteTable(
     projectId: integer("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    // Issue #1722 / roadmap 8.8 — the host THIS session lives on: written
+    // ONCE at creation (the same host the spawn was routed to) and never
+    // changed — migrating a running session between hosts is explicitly out
+    // of scope. A session's host is what makes a project able to have some
+    // sessions on one machine and some on another (the placement half,
+    // #1723-#1727).
+    //
+    // NULLABLE, and that is the whole backward-compatibility story: NULL
+    // means "inherit the project's host", so every pre-existing row keeps
+    // resolving to exactly the host it resolved to before — unambiguously,
+    // with no backfill and no drift. resolveSessionHostId()
+    // (src/services/session-live-info.ts) implements that fallback.
+    //
+    // The reference to `hosts.id` is declared here for typing and
+    // documentation and is NOT enforced at the SQLite level — the same
+    // trade-off `projects.hostId` makes (see the migration for why).
+    // host_id is always server-set, never user input.
+    hostId: text("host_id").references(() => hosts.id),
     // Cosmetic label the user can rename; falls back to `command` when unset.
     name: text("name"),
     // True only once the user has explicitly renamed this session (PATCH

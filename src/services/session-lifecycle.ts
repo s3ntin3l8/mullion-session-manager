@@ -31,7 +31,7 @@ import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveProjectHostId } from "./session-live-info.js";
+import { resolveSessionHostId } from "./session-live-info.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import {
   readProjectBriefing,
@@ -896,6 +896,11 @@ async function createSessionRecordInner(
     cwd,
     parent.parentId,
     sessionSettings.maxChildSessionsPerParent,
+    // The host this session is spawned on — the same value the spawn
+    // below is routed to (resolveBackend(app, project.hostId).spawn(...)).
+    // Issue #1722 / roadmap 8.8; 8.10 replaces it with the placement
+    // policy's choice.
+    project.hostId,
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
@@ -1031,6 +1036,15 @@ function insertRow(
   cwd: string | undefined,
   parentId: number | null,
   maxChildren: number,
+  // Issue #1722 / roadmap 8.8 — the host this session is being created
+  // ON, recorded on the row so every session-scoped operation can find it
+  // without deriving it from the project (a placement policy may put some
+  // of a project's sessions on one machine and some on another).
+  //
+  // The caller passes the SAME host the spawn is routed to, so the row and
+  // the live scope cannot disagree. 8.10 replaces that one argument with
+  // the placement policy's choice, and the row follows for free.
+  hostId: string,
 ): Step<{ row: SessionRow }> {
   const {
     projectId,
@@ -1059,6 +1073,10 @@ function insertRow(
         .insert(sessions)
         .values({
           projectId,
+          // Issue #1722 — the host this session lives on (see the parameter
+          // docs above). Written ONCE, here, inside the same transaction
+          // that enforces the live-child cap.
+          hostId,
           command,
           name: name ?? null,
           cwd: cwd ?? null,
@@ -1493,7 +1511,10 @@ export async function killSession(
       .run();
   }
 
-  const hostId = resolveProjectHostId(app, row.projectId);
+  // Issue #1722 / roadmap 8.8 — the SESSION's host: this terminate call
+  // ends the session's scope, and a scope lives on the host the session
+  // was spawned on — which is not necessarily its project's host.
+  const hostId = resolveSessionHostId(app, row);
 
   // A9 — kill/attach TOCTOU: flip the row to "killed" BEFORE awaiting the
   // host-side terminate call below, not after. Previously this update ran
