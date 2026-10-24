@@ -82,6 +82,129 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     }
   });
 
+  // Issue #1721 / roadmap 8.7 — the agent's own PLATFORM, recorded from its
+  // self-report at enrollment and refreshed at renewal. Free-form and
+  // informational; an agent build that predates the field simply does not
+  // send it.
+  it("records the agent's reported platform when it enrolls", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: "fleet-wide-secret",
+          baseUrl: "http://10.0.0.7:4000",
+          hostname: "fresh-box",
+          platform: "darwin",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(getHostRow(app, body.host_id)!.platform).toBe("darwin");
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
+  it("leaves the platform null when the agent reports none (an older build)", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: "fleet-wide-secret",
+          baseUrl: "http://10.0.0.7:4001",
+          hostname: "old-box",
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(getHostRow(app, body.host_id)!.platform).toBeNull();
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
+  it("refreshes the platform on a session renewal", async () => {
+    // The renewal path re-presents the agent's self-report, so the platform
+    // is not frozen at the first enrollment.
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      const registered = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: "fleet-wide-secret",
+          baseUrl: "http://10.0.0.9:4000",
+          hostname: "x",
+          platform: "linux",
+        },
+      });
+      const { host_id, session_id } = registered.json();
+      expect(getHostRow(app, host_id)!.platform).toBe("linux");
+
+      const renewed = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: session_id,
+          hostId: host_id,
+          baseUrl: "http://10.0.0.9:4000",
+          hostname: "x",
+          platform: "darwin",
+        },
+      });
+      expect(renewed.statusCode).toBe(200);
+      expect(getHostRow(app, host_id)!.platform).toBe("darwin");
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
+  it("leaves a recorded platform ALONE when a renewal reports none", async () => {
+    // An older agent build renewing must not ERASE what a newer build
+    // recorded earlier — an absent report is not a report of "no platform".
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+    try {
+      const app = await buildApp();
+      const registered = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: "fleet-wide-secret",
+          baseUrl: "http://10.0.0.9:4000",
+          hostname: "x",
+          platform: "darwin",
+        },
+      });
+      const { host_id, session_id } = registered.json();
+
+      const renewed = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: session_id,
+          hostId: host_id,
+          baseUrl: "http://10.0.0.9:4000",
+          hostname: "x",
+        },
+      });
+      expect(renewed.statusCode).toBe(200);
+      expect(getHostRow(app, host_id)!.platform).toBe("darwin");
+      await app.close();
+    } finally {
+      delete process.env.MULLION_ENROLLMENT_SECRET;
+    }
+  });
+
   it("401s an enroll attempt with the wrong secret, even with MULLION_ENROLLMENT_SECRET set", async () => {
     process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
     try {

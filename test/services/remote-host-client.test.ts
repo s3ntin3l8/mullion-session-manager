@@ -325,6 +325,50 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  // Issue #1721 / roadmap 8.7 — the agent's own capacity report, and the
+  // version-skew distinction that matters most here: a 404 means "this
+  // build has no capacity route", NOT "the host is broken" — so it comes
+  // back as null rather than as an error the caller might mistake for a
+  // health failure.
+  describe("resolveCapacity (issue #1721)", () => {
+    const report = {
+      platform: "darwin",
+      logicalCores: 16,
+      loadAverage1m: 2.1,
+      memory: { totalBytes: 34359738368, freeBytes: 21474836480 },
+      sessions: { tracked: 3, alive: 3 },
+      sampledAt: "2026-10-24T10:00:00.000Z",
+    };
+
+    it("resolves the agent's capacity report via GET /internal/capacity", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, report));
+      await expect(client().resolveCapacity()).resolves.toEqual(report);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/capacity",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer tok" }),
+        }),
+      );
+    });
+
+    it("returns null for a 404 — an agent build that predates the route", async () => {
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(client().resolveCapacity()).resolves.toBeNull();
+    });
+
+    it("still throws for any other 4xx, so the caller can tell it apart", async () => {
+      // A 403 is the agent REJECTING the request — a real failure, not an
+      // absent route.
+      fetchMock.mockResolvedValue(new Response("nope", { status: 403 }));
+      await expect(client().resolveCapacity()).rejects.toThrow(HostRequestError);
+    });
+
+    it("still throws for a 5xx, so the caller can tell it apart", async () => {
+      fetchMock.mockResolvedValue(new Response("boom", { status: 500 }));
+      await expect(client().resolveCapacity()).rejects.toThrow(HostUnreachableError);
+    });
+  });
+
   it("resolves a remote project's github owner/repo via /internal/github-repo (issue #27)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { owner: "o", repo: "r" }));
     await expect(client().resolveGitHubRepo("/x/y")).resolves.toEqual({ owner: "o", repo: "r" });

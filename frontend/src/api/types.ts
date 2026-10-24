@@ -336,6 +336,31 @@ export interface Host {
   // sweep has run since my Test click completed" apart from "the host was
   // last reachable at this time" (Hermes review, PR #524).
   lastCheckedAt: string | null;
+  // Issue #1721 / roadmap 8.7 — the host's own reported platform
+  // ("darwin" | "linux" | "win32" | …), free-form and informational. Null
+  // for a host that never reported one (a manually-added host, or an agent
+  // build that predates the field). Not rendered anywhere yet — the Fleet
+  // UI is #1726; this is the same deliberate forward-plumbing as
+  // lastSeenAt above.
+  platform?: string | null;
+  // The host's CAPACITY — how busy it is, in numbers comparable across
+  // hosts. Null when the host does not report capacity (an agent build
+  // without the route) or has not been polled yet. `sampledAt` is when the
+  // numbers were measured, so a stale reading can be shown as stale — the
+  // UI work is #1726.
+  capacity?: HostCapacity | null;
+}
+
+// Mirrors src/services/host-capacity.ts's HostCapacity 1:1 — issue #1721,
+// roadmap 8.7.
+export interface HostCapacity {
+  platform: string;
+  logicalCores: number;
+  loadAverage1m: number;
+  memory: { totalBytes: number; freeBytes: number };
+  sessions: { tracked: number; alive: number };
+  /** When the numbers were measured, ISO-8601. */
+  sampledAt: string;
 }
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue

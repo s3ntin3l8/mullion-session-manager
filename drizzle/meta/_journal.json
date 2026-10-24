@@ -526,6 +526,13 @@
       "when": 1792227235168,
       "tag": "0074_illegal_mandrill",
       "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "6",
+      "when": 1792836447980,
+      "tag": "0075_wide_valeria_richards",
+      "breakpoints": true
     }
   ]
 }

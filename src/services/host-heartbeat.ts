@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
+import { HostCapacityTracker } from "./host-capacity.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { resolveHeartbeatSeconds } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
@@ -116,29 +117,87 @@ export class HostHeartbeatTracker {
   }
 }
 
-async function sweep(app: FastifyInstance, tracker: HostHeartbeatTracker): Promise<void> {
+/**
+ * One host's turn in the sweep: the health ping, and — only if the host
+ * answered — its capacity.
+ *
+ * The two are deliberately SEPARATE calls with SEPARATE consequences
+ * (issue #1721 / roadmap 8.7):
+ *
+ *   - the ping decides the health verdict, and nothing else does;
+ *   - the capacity poll NEVER touches that verdict. A host that answers
+ *     404 on /internal/capacity is an agent build that predates the
+ *     route — "this host does not report capacity", not "this host is
+ *     broken". The same "absent is not broken" distinction
+ *     readTaskReviewFindings draws between "absent" and "404, the route
+ *     doesn't exist".
+ *
+ * Capacity is polled only after a successful ping: a host that is not
+ * reachable cannot report capacity, and skipping saves a doomed request.
+ * The cost of that shortcut is one sweep tick of staleness after a
+ * transient ping failure — which the staleness model already tolerates
+ * (a host that stops reporting keeps its last known numbers).
+ */
+async function sweepHost(
+  app: FastifyInstance,
+  hostId: string,
+  tracker: HostHeartbeatTracker,
+  capacityTracker: HostCapacityTracker,
+): Promise<void> {
+  let reachable = false;
+  try {
+    reachable = await getRemoteHostClient(app, hostId).ping();
+    if (reachable) tracker.recordSuccess(hostId);
+    else tracker.recordFailure(hostId);
+  } catch (err) {
+    // getRemoteHostClient throws synchronously if the row vanished
+    // between listHosts() and here (e.g. concurrent delete) — treat
+    // exactly like an unreachable ping rather than crashing the sweep.
+    app.log.warn({ err, hostId }, "[host-heartbeat] ping threw unexpectedly");
+    tracker.recordFailure(hostId);
+  }
+
+  if (!reachable) return;
+
+  try {
+    const report = await getRemoteHostClient(app, hostId).resolveCapacity();
+    if (report === null) {
+      // An agent build without the capacity route. Nothing is recorded, the
+      // health verdict above stands, and the previous numbers (if any) stay
+      // as they were — stale, but real.
+      app.log.debug(
+        { hostId },
+        "[host-heartbeat] the agent does not report capacity (no /internal/capacity route)",
+      );
+      return;
+    }
+    capacityTracker.record(hostId, report, Date.parse(report.sampledAt));
+  } catch (err) {
+    // A capacity failure NEVER affects the health verdict — it is
+    // advisory input to a placement policy, not a liveness signal. The
+    // previous numbers stay (stale); the next sweep tries again.
+    app.log.debug(
+      { err, hostId },
+      "[host-heartbeat] the capacity poll failed, keeping the last known numbers",
+    );
+  }
+}
+
+async function sweep(
+  app: FastifyInstance,
+  tracker: HostHeartbeatTracker,
+  capacityTracker: HostCapacityTracker,
+): Promise<void> {
   const allHosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID);
-  tracker.pruneMissing(new Set(allHosts.map((h) => h.id)));
+  const hostIds = new Set(allHosts.map((h) => h.id));
+  tracker.pruneMissing(hostIds);
+  capacityTracker.pruneMissing(hostIds);
 
   // A host row with baseUrl === null is an enrollment-created row (#245)
   // still awaiting its first registration call — pinging it would just
   // render every pending row "offline" every cycle instead of "pending".
   const remoteHosts = allHosts.filter((h) => h.baseUrl !== null);
-  await Promise.all(
-    remoteHosts.map(async (host) => {
-      try {
-        const online = await getRemoteHostClient(app, host.id).ping();
-        if (online) tracker.recordSuccess(host.id);
-        else tracker.recordFailure(host.id);
-      } catch (err) {
-        // getRemoteHostClient throws synchronously if the row vanished
-        // between listHosts() and here (e.g. concurrent delete) — treat
-        // exactly like an unreachable ping rather than crashing the sweep.
-        app.log.warn({ err, hostId: host.id }, "[host-heartbeat] ping threw unexpectedly");
-        tracker.recordFailure(host.id);
-      }
-    }),
-  );
+  await Promise.all(remoteHosts.map((host) => sweepHost(app, host.id, tracker, capacityTracker)));
 }
 
 /**
@@ -150,9 +209,17 @@ async function sweep(app: FastifyInstance, tracker: HostHeartbeatTracker): Promi
 export function startHostHeartbeat(
   app: FastifyInstance,
   tracker?: HostHeartbeatTracker,
+  capacityTracker?: HostCapacityTracker,
 ): () => void {
   const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
   app.hostHeartbeatTracker = hostHeartbeatTracker;
+  // Issue #1721 / roadmap 8.7 — the CAPACITY cache lives here too, on the
+  // same timer as the health sweep (there is deliberately no second timer:
+  // the capacity poll is one more call inside the sweep that already
+  // exists). In memory only — never the hosts table; see
+  // services/host-capacity.ts's own comment for why.
+  const hostCapacityTracker = capacityTracker ?? new HostCapacityTracker();
+  app.hostCapacityTracker = hostCapacityTracker;
 
   let timer: ReturnType<typeof setInterval> | null = null;
   // Reentrancy guard (Hermes review, PR #524): each ping already has its
@@ -177,7 +244,7 @@ export function startHostHeartbeat(
   function runSweep() {
     if (sweepInFlight) return;
     sweepInFlight = true;
-    sweep(app, hostHeartbeatTracker)
+    sweep(app, hostHeartbeatTracker, hostCapacityTracker)
       .catch((err) => {
         app.log.error({ err }, "[host-heartbeat] sweep failed");
       })
@@ -196,8 +263,12 @@ export function startHostHeartbeat(
     if (intervalSeconds <= 0) {
       // Forget every verdict so no host keeps showing a stale "online"
       // while nothing is checking it — the same "pending" state a server
-      // started with the heartbeat off reports.
+      // started with the heartbeat off reports. The capacity cache is
+      // cleared for the same reason: with the sweep off, its numbers are
+      // no longer being refreshed, and a stale reading must not be passed
+      // off as current.
       hostHeartbeatTracker.pruneMissing(new Set());
+      hostCapacityTracker.pruneMissing(new Set());
       return;
     }
     // Immediate first sweep (Hermes review, PR #524) — without this every
@@ -218,6 +289,7 @@ export function startHostHeartbeat(
   return () => {
     if (timer) clearInterval(timer);
     app.hostHeartbeatTracker = undefined;
+    app.hostCapacityTracker = undefined;
     app.reconfigureHostHeartbeat = undefined;
   };
 }
@@ -225,6 +297,9 @@ export function startHostHeartbeat(
 declare module "fastify" {
   interface FastifyInstance {
     hostHeartbeatTracker?: HostHeartbeatTracker;
+    // Issue #1721 / roadmap 8.7 — the in-memory capacity cache, filled by
+    // the same sweep that fills the health tracker above.
+    hostCapacityTracker?: HostCapacityTracker;
     reconfigureHostHeartbeat?: (intervalSeconds: number) => void;
   }
 }

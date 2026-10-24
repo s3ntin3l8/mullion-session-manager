@@ -190,6 +190,58 @@ describe("host-registry", () => {
       await app.close();
     });
 
+    // Issue #1721 / roadmap 8.7 — the agent's own reported platform, on
+    // both self-report paths (a claim of a pre-provisioned row and a fresh
+    // enrollment), and carried through to the summary the API returns.
+    it("claimHost records the agent's reported platform", async () => {
+      const app = await buildApp();
+      // A UNIQUE token: this describe block shares one on-disk DB across the
+      // whole file, and an earlier test already claims a host with the
+      // literal "shared-secret" — a reused literal would match THAT row
+      // instead of this test's own (the same collision the AS13 block below
+      // calls out).
+      const token = `platform-claim-${crypto.randomUUID()}`;
+      const created = createHost(app, {
+        name: "pre-provisioned",
+        baseUrl: "http://placeholder:0",
+        token,
+      });
+
+      claimHost(app, token, {
+        baseUrl: "http://192.168.1.50:4000",
+        hostname: "box-50",
+        platform: "darwin",
+      });
+
+      expect(getHostRow(app, created.id)!.platform).toBe("darwin");
+      expect(listHosts(app).find((h) => h.id === created.id)?.platform).toBe("darwin");
+      await app.close();
+    });
+
+    it("enrollHost records the agent's reported platform", async () => {
+      const app = await buildApp();
+      const result = enrollHost(app, {
+        // A unique baseUrl: enrollHost dedupes on it, so a literal would
+        // re-use a row an earlier test in this shared DB already enrolled.
+        baseUrl: `http://192.168.1.60:${crypto.randomUUID()}`,
+        hostname: "box-60",
+        platform: "linux",
+      });
+      expect(getHostRow(app, result.hostId)!.platform).toBe("linux");
+      expect(listHosts(app).find((h) => h.id === result.hostId)?.platform).toBe("linux");
+      await app.close();
+    });
+
+    it("leaves the platform null when the agent reports none", async () => {
+      const app = await buildApp();
+      const result = enrollHost(app, {
+        baseUrl: `http://192.168.1.61:${crypto.randomUUID()}`,
+        hostname: "box-61",
+      });
+      expect(getHostRow(app, result.hostId)!.platform).toBeNull();
+      await app.close();
+    });
+
     it("claimHost returns null when no row's token matches", async () => {
       const app = await buildApp();
       createHost(app, { name: "f", baseUrl: "http://f:1", token: "real-token" });

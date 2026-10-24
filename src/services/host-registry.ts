@@ -31,6 +31,12 @@ export interface HostSummary {
   // enrolled row for what it is, rather than looking identical to one an
   // admin deliberately added.
   origin: "manual" | "enrolled";
+  // Issue #1721 / roadmap 8.7 — the host's own reported platform
+  // ("darwin" | "linux" | "win32" | …), free-form and informational, same
+  // non-enforced posture as hosts.agentMetadata and bridges.platform. Null
+  // for a host that never reported one (a manually-added host, or an agent
+  // build that predates the field) — a legitimate state, not a defect.
+  platform: string | null;
   // baseUrl is only ever null for "local" — enrollHost/claimHost always
   // set it atomically from the agent's own self-reported registration
   // call, so an "enrolled" row is never actually created in a
@@ -82,6 +88,7 @@ function toSummary(row: HostRow): HostSummary {
     hasToken: row.authTokenEnc !== null && row.authTokenEnc !== "",
     createdAt: row.createdAt,
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
+    platform: row.platform,
   };
 }
 
@@ -202,6 +209,12 @@ export interface RegisterAgentInput {
   hostname: string;
   name?: string;
   capabilities?: unknown;
+  // Issue #1721 / roadmap 8.7 — the agent's own platform
+  // ("darwin" | "linux" | "win32" | …), reported free-form. Optional: an
+  // agent build that predates the field simply does not send it, and the
+  // column stays null. Never a gate — nothing branches on it (see
+  // bridges.platform's own posture).
+  platform?: string;
 }
 
 // Both halves of a session credential are generated with real entropy and
@@ -298,6 +311,10 @@ export function claimHost(
         hostname: input.hostname,
         capabilities: input.capabilities ?? null,
       }),
+      // Issue #1721 — the agent's own self-report. A claim (a
+      // manually-provisioned row an agent presents its token for) is still
+      // an agent self-report, so its platform is recorded here too.
+      platform: input.platform ?? null,
     })
     .where(eq(hosts.id, matchedRow.id))
     .run();
@@ -356,7 +373,15 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
     }
     app.db
       .update(hosts)
-      .set({ name: input.name?.trim() || input.hostname, agentMetadata: metadata })
+      .set({
+        name: input.name?.trim() || input.hostname,
+        agentMetadata: metadata,
+        // Issue #1721 — the platform is refreshed on every enrollment, not
+        // only on the first: an agent's platform does not change, but a
+        // RE-ENROLLED agent (a wiped install root re-registering against a
+        // row that survived) may report a different one.
+        platform: input.platform ?? null,
+      })
       .where(eq(hosts.id, existing.id))
       .run();
     return issueSession(app, existing.id);
@@ -371,6 +396,7 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       authTokenEnc: null,
       origin: "enrolled",
       agentMetadata: metadata,
+      platform: input.platform ?? null,
     })
     .run();
   return issueSession(app, id);
@@ -396,6 +422,33 @@ function findLiveSession(
   if (!timingSafeTokenMatch(presentedSessionId, decrypted)) return null;
   if (!row.sessionExpiresAt || row.sessionExpiresAt.getTime() <= Date.now()) return null;
   return row;
+}
+
+/**
+ * Records an agent's self-report on an EXISTING row, without touching its
+ * session credential (issue #1721 / roadmap 8.7).
+ *
+ * The renewal path (routes/enrollment.ts) re-presents the agent's current
+ * session id to get a fresh secret before its TTL expires; it used to
+ * ignore the registration body's self-report entirely, which meant the
+ * platform could never be refreshed on a host that was already enrolled.
+ * This is the seam that lets it be: the self-report is informational
+ * state, so it is written on its own, independently of the credential
+ * rotation.
+ *
+ * A field the caller does NOT supply is left exactly as it was — an
+ * older agent build that reports no platform must not ERASE the platform a
+ * newer build recorded earlier.
+ */
+export function recordHostSelfReport(
+  app: FastifyInstance,
+  hostId: string,
+  report: { platform?: string },
+): void {
+  const patch: { platform?: string } = {};
+  if (report.platform !== undefined && report.platform !== "") patch.platform = report.platform;
+  if (Object.keys(patch).length === 0) return;
+  app.db.update(hosts).set(patch).where(eq(hosts.id, hostId)).run();
 }
 
 /**

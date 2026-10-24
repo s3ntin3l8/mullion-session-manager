@@ -10,6 +10,7 @@ import {
   isUnsignedBodyPath,
   sign,
 } from "./request-signature.js";
+import type { HostCapacityReport } from "./host-capacity.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "./scaffold-generate.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
@@ -588,6 +589,25 @@ export class RemoteHostClient {
   // what's (and isn't — no idle timeout, no DB-backed anything) included.
   resolveConfig(): Promise<AgentConfig> {
     return this.request("/internal/config");
+  }
+
+  /**
+   * Issue #1721 / roadmap 8.7 — this agent's own capacity report.
+   *
+   * Returns null — NOT an error — when the agent answers 404, which is what
+   * an agent build that predates the route does. "This build does not
+   * report capacity" and "this host is broken" are different facts, and
+   * only the second one may ever affect a health verdict (see
+   * host-heartbeat.ts's sweep). Every other failure (timeout, unreachable,
+   * 5xx) propagates to the caller, which decides what to do with it.
+   */
+  async resolveCapacity(): Promise<HostCapacityReport | null> {
+    try {
+      return await this.request<HostCapacityReport>("/internal/capacity");
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) return null;
+      throw err;
+    }
   }
 
   // Issue #647 / roadmap 7.8 — mirrors GET /internal/updates/status; see

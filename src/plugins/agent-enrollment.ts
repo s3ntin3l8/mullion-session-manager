@@ -60,6 +60,14 @@ async function callRegister(
     baseUrl: resolveAdvertiseUrl(app),
     hostname: os.hostname(),
     name: app.config.MULLION_AGENT_NAME || undefined,
+    // Issue #1721 / roadmap 8.7 — the agent's own platform, free-form and
+    // informational ("darwin" | "linux" | "win32" | …). Sent on BOTH the
+    // first registration and every renewal: the same body carries both,
+    // so one field covers "what this host is" for the whole life of the
+    // enrollment. An older primary that strips the field (its schema is
+    // `additionalProperties: false`) simply records no platform — never a
+    // failed registration.
+    platform: process.platform,
   };
   const res = await fetch(
     `${app.config.MULLION_PRIMARY_URL.replace(/\/+$/, "")}/api/internal/register`,

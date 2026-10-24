@@ -65,6 +65,12 @@ export const hosts = sqliteTable("hosts", {
   // registration — informational only, nothing in this app's own logic
   // reads it back out yet.
   agentMetadata: text("agent_metadata"),
+  // Free-form, agent-reported ("darwin" | "linux" | "win32" | ...) —
+  // informational only, same non-enforced posture as hosts.agentMetadata and
+  // bridges.platform (issue #1721, roadmap 8.7). The agent self-reports it
+  // at enrollment AND at renewal; an older agent build that does not send
+  // it leaves this null, which is a legitimate state, not a defect.
+  platform: text("platform"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
