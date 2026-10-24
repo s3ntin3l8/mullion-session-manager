@@ -395,9 +395,16 @@ host is idle_.
 A session records the host it was spawned on — `sessions.hostId`, written
 **once** at creation and never changed (issue
 [#1722](https://github.com/s3ntin3l8/mullion-session-manager/issues/1722)
-/ roadmap 8.8). Every **session-scoped** operation follows that row: its live
-status, its scrollback, its process list, its scope's liveness, the review
-gate or attention acknowledgement waiting on it, the events it reports.
+/ roadmap 8.8). Every **session-scoped** operation follows that row: its
+terminal attach, its live status, its scrollback, its process list, its file
+uploads, its scope's liveness, the review gate, promote or attention
+acknowledgement waiting on it, the worktree it owns, and the events it
+reports.
+
+The one operation that stays with the **project** is the browser: the
+BrowserManager pools one Chromium **per project** (`browser-manager.ts`), so
+a session's browser is reached through its project's browser, whichever host
+that browser runs on.
 
 The column is **nullable, and `NULL` means "inherit the project's host"** —
 which is every session created before this change, and every session created
@@ -408,6 +415,9 @@ did: a project's host is where its sessions live.
 operations, its files, its worktree and its webhooks run on the project's own
 host, whatever host any one of its sessions happens to sit on. A session
 placed on a remote machine does not drag the project's git operations there.
+A _task's_ worktree and branch belong to the task's project, and follow it
+too — until the placement policy (#1724) decides otherwise for the task's
+session as well.
 
 The reason the distinction matters is destructive, not cosmetic: the
 reconciler asks a host for the liveness of the sessions it owns, and "dead"

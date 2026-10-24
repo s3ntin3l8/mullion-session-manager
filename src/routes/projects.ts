@@ -137,6 +137,7 @@ import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 
 interface CreateProjectBody {
   name: string;
@@ -423,7 +424,15 @@ async function resolveSessionCwdTargets(
 ): Promise<SessionCwdTarget[]> {
   if (sessionIds.length === 0) return [];
   const sessionRows = app.db
-    .select({ id: sessions.id, cwd: sessions.cwd, projectId: sessions.projectId })
+    .select({
+      id: sessions.id,
+      cwd: sessions.cwd,
+      projectId: sessions.projectId,
+      // Issue #1722 / roadmap 8.8 — the session's own host, so the target
+      // can be resolved from the row (resolveSessionHostId) rather than
+      // from the project.
+      hostId: sessions.hostId,
+    })
     .from(sessions)
     .where(inArray(sessions.id, sessionIds))
     .all();
@@ -488,7 +497,9 @@ async function resolveSessionCwdTargets(
         if (matched) cwd = matched.path;
       }
     }
-    targets.push({ sessionId: row.id, hostId: project.hostId, cwd });
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: each target is one
+    // session, and a session placed on a host of its own is acted on there.
+    targets.push({ sessionId: row.id, hostId: resolveSessionHostId(app, row), cwd });
   }
   return targets;
 }

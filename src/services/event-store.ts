@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq, inArray, sql } from "drizzle-orm";
 import { sessions, projects } from "../db/schema.js";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
 import type { NotificationEvent } from "./pty-manager.js";
 import { getStoredSettings } from "./settings.js";
 import {
@@ -37,7 +38,8 @@ export interface BufferedEvent {
    * since it can only ever fire for a session this process itself spawned).
    * Set to the reporting host's id for an event handed in by
    * remote-event-subscriber.ts, which MUST be verified against
-   * `sessions -> projects.hostId` before it's allowed to persist — see
+   * the session's OWN host (`sessions.hostId`, falling back to
+   * `sessions -> projects.hostId`) before it's allowed to persist — see
    * filterHostOwnership below. */
   sourceHostId: string | null;
 }
@@ -68,7 +70,7 @@ export interface EventWriter {
 const OWNERSHIP_LOOKUP_CHUNK_SIZE = 500;
 
 /** Resolves each remote-sourced event's session to its owning host (via
- * `sessions -> projects.hostId`, same join session-reconciler.ts's
+ * the session's own host, same join session-reconciler.ts's
  * reconcileExitedSessions already uses — `sessions` itself has no `hostId`
  * column) and drops any whose reporting host doesn't match. A buggy or
  * compromised agent could otherwise emit an arbitrary numeric `sessionId`
@@ -103,13 +105,22 @@ export function filterHostOwnership(
     const ownerRows = app.db
       .select({
         sessionId: sessions.id,
-        hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+        hostId: sql<string | null>`coalesce(${sessions.hostId}, ${projects.hostId})`,
       })
       .from(sessions)
       .leftJoin(projects, eq(sessions.projectId, projects.id))
       .where(inArray(sessions.id, chunk))
       .all();
-    for (const row of ownerRows) ownerBySessionId.set(row.sessionId, row.hostId);
+    for (const row of ownerRows) {
+      // Normalised, not assumed: the coalesce is NULL only if the LEFT
+      // JOIN misses (the NOT NULL project FK makes that impossible in
+      // practice, but "in practice" is not a type). Without this, a NULL
+      // would land in droppedWrongHost and log a FALSE security signal —
+      // "a host claimed a session it does not own" — for a row that simply
+      // resolved to no host at all. Same rule as
+      // resolveSessionHostId's own fallback.
+      ownerBySessionId.set(row.sessionId, row.hostId ?? LOCAL_HOST_ID);
+    }
   }
 
   // Split rather than one combined counter (Hermes review, PR #564 round

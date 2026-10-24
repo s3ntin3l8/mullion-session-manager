@@ -50,12 +50,17 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
   const active = app.db
     .select({
       session: sessions,
-      hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+      hostId: sql<string | null>`coalesce(${sessions.hostId}, ${projects.hostId})`,
     })
     .from(sessions)
     .leftJoin(projects, eq(sessions.projectId, projects.id))
     .where(eq(sessions.status, "active"))
-    .all();
+    .all()
+    // The coalesce is NULL only if the LEFT JOIN misses — which the
+    // NOT NULL project FK makes impossible in practice — but "in practice"
+    // is not a type: normalised here, so the grouping below always has a
+    // real host. Same rule as resolveSessionHostId's own fallback.
+    .map((row) => ({ ...row, hostId: row.hostId ?? LOCAL_HOST_ID }));
   if (active.length === 0) return;
 
   const byHost = new Map<string, typeof active>();

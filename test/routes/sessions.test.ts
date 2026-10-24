@@ -5216,6 +5216,36 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("routes a PLACED session's file upload to the session's host", async () => {
+      // The upload writes into the SESSION's cwd, and that path is on the
+      // host the session runs on.
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const remoteHostId = await createRemoteHost(app, "placed-upload");
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [placed] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", hostId: remoteHostId })
+        .returning()
+        .all();
+
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      spy.mockReturnValue({
+        uploadFile: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${placed.id}/uploads`,
+        headers: { "content-type": "application/octet-stream", "x-upload-filename": "a.pdf" },
+        payload: Buffer.from("data"),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(spy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
+      await app.close();
+    });
+
     it("records the host a NEW session was created on (issue #1722)", async () => {
       // The insert is what makes the column meaningful: the row records the
       // host the session was spawned on, written ONCE, so every

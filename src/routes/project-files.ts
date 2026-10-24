@@ -14,6 +14,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { getStoredSettings } from "../services/settings.js";
 import { isSiblingWorktreeCwd } from "../services/session-lifecycle.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 import {
   PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
@@ -169,7 +170,11 @@ export async function projectFilesRoute(app: FastifyInstance) {
       reply.badRequest("The session's directory is outside the project or no longer exists");
       return null;
     }
-    return { hostId: project.hostId, cwd: sessionCwd };
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: this is the session's
+    // OWN worktree (the branch above returned the project's cwd, which is
+    // the PROJECT's host), and the session's worktree is on the host the
+    // session runs on.
+    return { hostId: resolveSessionHostId(app, session), cwd: sessionCwd };
   }
 
   async function sessionRootAllowed(

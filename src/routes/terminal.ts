@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { SocketChannel, type SocketLike } from "../services/socket-channel.js";
 import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js";
@@ -528,10 +529,17 @@ export function resolveAndAttach(
     ...(row.env !== null ? envFromRow(row.env, sessionId, app.log) : {}),
   };
 
-  if (project.hostId === LOCAL_HOST_ID) {
+  // Issue #1722 / roadmap 8.8 — the SESSION's host: attaching reaches for
+  // the pty this session actually runs under, and a session placed on a
+  // host of its own (the placement half, #1724) has its pty THERE. With
+  // the host taken from the project, the attach would be proxied to the
+  // machine that does not hold the session — and the local attach would
+  // fail the same way the reconciler would.
+  const sessionHostId = resolveSessionHostId(app, row);
+  if (sessionHostId === LOCAL_HOST_ID) {
     attachSocketToSession(app, socket, attachOpts);
   } else {
-    proxyToRemoteAttach(app, socket, project.hostId, attachOpts);
+    proxyToRemoteAttach(app, socket, sessionHostId, attachOpts);
   }
   return { ok: true };
 }

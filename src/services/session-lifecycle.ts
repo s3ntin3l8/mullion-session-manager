@@ -860,6 +860,15 @@ async function createSessionRecordInner(
   if (!project) return { ok: false, reason: "unknown-project" };
   rb.hostId = project.hostId;
 
+  // Issue #1722 / roadmap 8.8 — THE host this session is created on, named
+  // once and used for everything that has to agree about it: the row the
+  // insert writes, the spawn the backend is resolved for, the seed stashed
+  // into it, and the worktree closures that clean up after it. Today it is
+  // the project's host — the placement decision; #1724 replaces THIS ONE
+  // value with the placement policy's choice, and the row, the spawn and
+  // the cleanups all follow it.
+  const placementHost = project.hostId;
+
   const parent = validateParent(app, params);
   if (!parent.ok) return parent.result;
 
@@ -896,18 +905,18 @@ async function createSessionRecordInner(
     cwd,
     parent.parentId,
     sessionSettings.maxChildSessionsPerParent,
-    // The host this session is spawned on — the same value the spawn
-    // below is routed to (resolveBackend(app, project.hostId).spawn(...)).
+    // The host this session is spawned on — the same value the spawn below
+    // is routed to (resolveBackend(app, placementHost).spawn(...)).
     // Issue #1722 / roadmap 8.8; 8.10 replaces it with the placement
     // policy's choice.
-    project.hostId,
+    placementHost,
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
   rb.hostId = project.hostId;
   rb.sessionId = created.id;
 
-  await stashSeedBestEffort(app, project, created.id, params.seedPrompt);
+  await stashSeedBestEffort(app, placementHost, created.id, params.seedPrompt);
 
   const spawnOpts = await resolveSpawnInputs(
     app,
@@ -917,12 +926,12 @@ async function createSessionRecordInner(
     created.id,
     sessionSettings,
   );
-  const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb);
+  const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 
   rb.spawned = true;
 
-  trackPreview(app, project, params, cwd, created.id);
+  trackPreview(app, project, params, cwd, created.id, placementHost);
 
   return {
     ok: true,
@@ -1041,9 +1050,11 @@ function insertRow(
   // without deriving it from the project (a placement policy may put some
   // of a project's sessions on one machine and some on another).
   //
-  // The caller passes the SAME host the spawn is routed to, so the row and
-  // the live scope cannot disagree. 8.10 replaces that one argument with
-  // the placement policy's choice, and the row follows for free.
+  // The caller (createSessionRecordInner — the ONLY production writer of a
+  // session row: `grep -rn "insert(sessions)" src/` finds this one) passes
+  // the SAME host the spawn is routed to, so the row and the live scope
+  // cannot disagree. 8.10 replaces the one argument with the placement
+  // policy's choice, and the row follows for free.
   hostId: string,
 ): Step<{ row: SessionRow }> {
   const {
@@ -1118,16 +1129,22 @@ function insertRow(
 // is a degraded promote, not a failed one.
 async function stashSeedBestEffort(
   app: FastifyInstance,
-  project: ProjectRow,
+  // Issue #1722 / roadmap 8.8 — the SESSION's host (the placement host),
+  // not the project's: the seed is stashed into the session that was just
+  // created.
+  hostId: string,
   sessionId: number,
   seedPrompt: string | undefined,
 ): Promise<void> {
   if (!seedPrompt || seedPrompt.length === 0) return;
   try {
-    await resolveBackend(app, project.hostId).stashSeed(String(sessionId), seedPrompt);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: the seed is stashed
+    // into the session that was just created, so it goes to the host that
+    // session runs on.
+    await resolveBackend(app, hostId).stashSeed(String(sessionId), seedPrompt);
   } catch (err) {
     app.log.warn(
-      { hostId: project.hostId, sessionId, err },
+      { hostId, sessionId, err },
       "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
     );
   }
@@ -1260,11 +1277,14 @@ async function spawnOrRollback(
   sessionId: number,
   spawnOpts: SpawnOpts,
   rb: CreateRollback,
+  // Issue #1722 / roadmap 8.8 — the host the session is spawned on (the
+  // placement host), not the project's: 8.10 replaces this one value.
+  placementHost: string,
 ): Promise<Step<{ initialPromptApplied: boolean | undefined }>> {
   const { injectAgentGuide, injectProjectBriefing, injectMullionBundle, taskId } = spawnOpts;
   let spawnResult;
   try {
-    spawnResult = await resolveBackend(app, project.hostId).spawn(spawnOpts);
+    spawnResult = await resolveBackend(app, placementHost).spawn(spawnOpts);
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
     // CreateSessionResult: nothing downstream currently needs to REACT to
@@ -1359,6 +1379,9 @@ function trackPreview(
   params: CreateSessionParams,
   cwd: string | undefined,
   sessionId: number,
+  // Issue #1722 / roadmap 8.8 — the host the session (and therefore its
+  // preview worktree) lives on: the placement host, not the project's.
+  placementHost: string,
 ): void {
   const { worktree, worktreeRefresh, projectId } = params;
   const effectiveCwd = cwd ?? project.cwd;
@@ -1371,7 +1394,10 @@ function trackPreview(
     worktreeRefresh: worktreeRefresh ?? false,
     parentCwd: previewParentCwd,
     projectId,
-    hostId: project.hostId,
+    // Issue #1722 — the SESSION's host (the placement host), so the
+    // preview worktree's sync/cleanup closures talk to the machine that
+    // actually holds it.
+    hostId: placementHost,
     // Issue #345 — host-routed closures, attached only for a remote host
     // (undefined for local, which keeps git-worktree.ts's own local fallback
     // and every existing local-path test unmodified). Never reject —
@@ -1389,14 +1415,14 @@ function trackPreview(
     // removeWarned/syncWarned (Hermes review) — per-closure state tracking
     // whether the LAST attempt already logged a failure, so a host that stays
     // down warns once per outage rather than once per 5s tick forever.
-    ...(project.hostId !== LOCAL_HOST_ID
+    ...(placementHost !== LOCAL_HOST_ID
       ? (() => {
           let removeWarned = false;
           let syncWarned = false;
           return {
             remove: async () => {
               try {
-                const result = await resolveBackend(app, project.hostId).removeWorktree(
+                const result = await resolveBackend(app, placementHost).removeWorktree(
                   effectiveCwd,
                   previewParentCwd,
                 );
@@ -1417,7 +1443,7 @@ function trackPreview(
             },
             sync: async () => {
               try {
-                const result = await resolveBackend(app, project.hostId).syncWorktree(
+                const result = await resolveBackend(app, placementHost).syncWorktree(
                   effectiveCwd,
                   previewBranch,
                 );

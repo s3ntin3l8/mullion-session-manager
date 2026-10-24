@@ -785,7 +785,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       let resumeAgentSessionId: string | undefined;
       let transferFailureWarning: string | null = null;
       let transferSuccessNote: string | null = null;
-      if (project.hostId === LOCAL_HOST_ID && adapterHasResumeSessionArgs(row.command)) {
+      // Issue #1722 / roadmap 8.8 — the SESSION's host: this reads the
+      // session's own live pty out of THIS process's PtyManager, so only a
+      // session that lives here has one.
+      if (
+        resolveSessionHostId(app, row) === LOCAL_HOST_ID &&
+        adapterHasResumeSessionArgs(row.command)
+      ) {
         const liveAgentSessionId = app.pty.get(String(sessionId))?.agentSessionId ?? null;
         if (liveAgentSessionId) {
           // `repoCwd`, not `sourceCwd` — #693's own fix exists because
@@ -969,20 +975,23 @@ export async function sessionsRoute(app: FastifyInstance) {
       // said no (persistent), unlike an unreachable host (possibly
       // transient).
       try {
-        await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
-          decision: "accepted",
-          worktreePath,
-          newSessionId: created.row.id,
-        });
+        await resolveBackend(app, resolveSessionHostId(app, row)).resolvePendingPromote(
+          String(sessionId),
+          {
+            decision: "accepted",
+            worktreePath,
+            newSessionId: created.row.id,
+          },
+        );
       } catch (err) {
         if (err instanceof HostRequestError) {
           app.log.warn(
-            { hostId: project.hostId, sessionId, err },
+            { hostId: resolveSessionHostId(app, row), sessionId, err },
             "resolvePendingPromote: host rejected the request",
           );
         } else {
           app.log.warn(
-            { hostId: project.hostId, sessionId, err },
+            { hostId: resolveSessionHostId(app, row), sessionId, err },
             "resolvePendingPromote: host unreachable",
           );
         }
@@ -1001,7 +1010,15 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       reply.code(201);
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      const liveStatus = await withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host: the row exists, so
+      // its live status has to come from the host it runs on (the same
+      // rule task-claim.ts's post-spawn read follows).
+      const liveStatus = await withLiveStatus(
+        app,
+        created.row,
+        idleThresholdMs,
+        resolveSessionHostId(app, created.row),
+      );
       return warnings.length > 0 ? { ...liveStatus, warnings } : liveStatus;
     } finally {
       promoting.delete(sessionId);
@@ -1327,7 +1344,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
 
       try {
-        const backend = resolveBackend(app, project.hostId);
+        // Issue #1722 / roadmap 8.8 — the SESSION's host: the upload writes
+        // into the SESSION's cwd, and that path is on the host the session
+        // runs on.
+        const backend = resolveBackend(app, resolveSessionHostId(app, row));
         const cwd = row.cwd ?? project.cwd;
         return isGenericFile
           ? await backend.uploadFile(cwd, request.body, fileName)
@@ -1337,7 +1357,10 @@ export async function sessionsRoute(app: FastifyInstance) {
         // (session-lifecycle.ts, reached via POST /api/sessions): an
         // unreachable host or an agent-side rejection is a gateway
         // failure, never a 500 — there's no row here to roll back.
-        app.log.error({ err, sessionId, hostId: project.hostId }, "session file upload failed");
+        app.log.error(
+          { err, sessionId, hostId: resolveSessionHostId(app, row) },
+          "session file upload failed",
+        );
         // The local backend tags an unusable `.mullion-uploads` (symlink/file)
         // with statusCode 409 — surface that as the client-visible conflict.
         if ((err as { statusCode?: number }).statusCode === 409) {
