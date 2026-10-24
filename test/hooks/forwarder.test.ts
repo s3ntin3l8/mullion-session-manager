@@ -94,14 +94,15 @@ function collectLines(server: net.Server, count: number): Promise<string[]> {
  * the child's exit.
  */
 function writeStdinAndClose(child: ChildProcess, stdin: string): void {
+  // The LISTENER is what suppresses the unhandled EPIPE — not a write
+  // callback. A write callback only receives the error as an argument; the
+  // stream still emits its 'error' event, and that event is what is fatal
+  // when nothing is listening for it.
   child.stdin.on("error", () => {
-    // The child exited before reading stdin. Expected in the "nothing to
+    // The child went away before reading stdin. Expected in the "nothing to
     // do" cases; the exit code is what the assertions are about.
   });
-  child.stdin.write(stdin, () => {
-    // The write callback carries the same failure the stream's `error` event
-    // does. Handling it here as well keeps the failure from surfacing twice.
-  });
+  child.stdin.write(stdin);
   child.stdin.end();
 }
 
@@ -241,10 +242,10 @@ describe("forwarder.mjs (issue #174)", () => {
   // the time the write happens — so the EPIPE is guaranteed rather than
   // load-dependent. If the fix ever regresses, the unhandled error makes
   // THIS RUN fail, which is exactly the symptom the issue is about.
-  it("survives a child that exits before the write lands (issue #1831)", async () => {
+  it("survives a child that exits before the write flushes (issue #1831)", async () => {
     // The race, made deterministic. The child stays alive long enough to
-    // ACCEPT the write, then exits — and the pending flush then fails with
-    // `EPIPE`. The write has to be bigger than the pipe buffer, or it
+    // ACCEPT the write, then exits — and the FLUSH, still pending, fails
+    // with `EPIPE`. The write has to be bigger than the pipe buffer, or it
     // completes before the child dies and there is no race at all, which is
     // why this only ever showed up under load.
     const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120)"], {
@@ -256,11 +257,20 @@ describe("forwarder.mjs (issue #174)", () => {
 
     expect(await exit).toBe(0);
 
-    // Give the pending flush time to fail. If that error were unhandled it
-    // would be an UNCAUGHT exception, and vitest fails the RUN for it —
-    // every assertion above still passes, which is exactly the symptom the
-    // issue reports.
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Wait for the flush to fail, rather than for a fixed span: the stream
+    // records the error on `.errored` whether or not anything is listening
+    // for the 'error' event, so polling it neither handles the error (which
+    // would hide the regression this test exists to catch) nor races it.
+    const deadline = Date.now() + 5_000;
+    while (child.stdin.errored === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    // The race really was provoked — and it was the EPIPE the unhandled
+    // exception came from. If that error were unhandled it would be an
+    // UNCAUGHT exception, and vitest fails the RUN for it: every assertion
+    // above still passes, which is exactly the symptom the issue reports.
+    expect((child.stdin.errored as NodeJS.ErrnoException | null)?.code).toBe("EPIPE");
   });
 
   it("exits cleanly (never throws) when the socket path doesn't exist", async () => {
