@@ -10,11 +10,17 @@
 # in-app Settings -> Server info "Update now" button
 # (POST /api/updates/apply), which uses scripts/self-update.sh instead.
 #
-# Run from within a checkout of this repo (it reads deploy/mullion.service /
-# deploy/mullion-agent.service as templates, relative to this script's own
-# location) — a fresh prod host does NOT need a full build toolchain-driven
-# checkout beyond that; the app itself is installed from the CI-built
-# release tarball, not built from this checkout.
+# Runs from a checkout of this repo OR from inside a release tarball — it
+# reads deploy/mullion.service / deploy/mullion-agent.service (and, on
+# macOS, deploy/launchd/*.plist) as templates, relative to this script's own
+# location, and it sources ../scripts/portable.sh the same way. Both
+# relative paths hold in a checkout AND in the release tarball, because the
+# tarball ships deploy/ beside scripts/ (see
+# scripts/assemble-release-tarball.sh). A fresh prod host therefore needs
+# NEITHER a build toolchain NOR a clone: deploy/mullion-install.sh fetches
+# the published release, verifies its checksum, and runs the copy of this
+# script that is inside it. The app itself is always installed from the
+# CI-built release tarball, never built from a checkout.
 #
 # Usage: deploy/install.sh [--role primary|agent] <mullion-home> [owner/repo]
 #   --role        primary (default) or agent — see deploy/README.md's env

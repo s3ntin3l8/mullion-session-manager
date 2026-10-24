@@ -197,6 +197,30 @@ For each host, Mullion resolves the session socket in this order
 This lets a host keep an intentional manual tunnel (or a pre-existing
 ambient agent) while other hosts use the same paired helper.
 
+### On macOS, tier 2 usually wins
+
+macOS's GUI launchd domain ships an ambient `SSH_AUTH_SOCK` of its own (a
+per-user socket under `/var/run/com.apple.launchd.*/Listeners`), so a Mac
+host almost always resolves to tier 2 and **never to tier 3**. Two
+consequences worth internalizing:
+
+- **A session on a Mac uses that Mac's own SSH agent** — its own `ssh-agent`
+  identities, or whatever a keyring like 1Password puts behind the socket.
+  The private key never leaves the Mac, and no helper is involved in that
+  path at all.
+- **A paired helper's keys are _not_ what a Mac-hosted session uses.** The
+  host logs the shadow warning at boot (tier 2 above), and Settings still
+  shows the bridge as `connected` — because the bridge really is connected;
+  it just is not the socket this host's sessions point at. On Linux the
+  ambient tier usually does not exist, so the bridge wins there.
+
+So a Mac that runs Mullion as an agent needs **no helper of its own** for its
+own sessions. It is still, however, a _compute_ host and not a _key_ host: the
+agent's own agent is never exposed to the primary — the primary's fan-out
+carries bridge traffic only, and an agent's resolved socket reaches the
+primary as diagnostics alone. To let the primary use the Mac's keys, use the
+[manual tunnel](#manual-tunnel-ssh--r) below.
+
 ## Troubleshooting
 
 - `ssh-add -l` reports no agent: start a new session after connecting the
