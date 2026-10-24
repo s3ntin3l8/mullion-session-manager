@@ -543,7 +543,8 @@ The body mentions opencode-model: on purpose.
     // Rebuilding it unconditionally would rewrite the CRLF line endings with
     // lone LFs — a gratuitous change to a file whose content we did not mean
     // to alter.
-    const raw = "---\r\nname: my-project-reviewer\r\ndescription: d\r\nmodel: inherit\r\n---\r\n\r\nbody\r\n";
+    const raw =
+      "---\r\nname: my-project-reviewer\r\ndescription: d\r\nmodel: inherit\r\n---\r\n\r\nbody\r\n";
     expect(stripOpenCodeModelKey(raw)).toBe(raw);
   });
 
