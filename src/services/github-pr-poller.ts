@@ -149,12 +149,13 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     try {
       status.prs = await annotateRelayReviewState(app, status.prs, { owner, repo }, token);
     } catch (err) {
-      // A rate limit or an unmintable token: the PR list is still good, so it
-      // is cached un-annotated. An unexpected error is a bug and stays loud.
-      if (!(err instanceof GitHubApiError)) throw err;
-      app.log.warn(
-        { detail: err.message, owner, repo },
-        "[github-pr-poller] the review relay's state is unavailable, leaving PRs un-annotated",
+      // The annotation is decorative: whatever goes wrong (a rate limit, an
+      // unmintable token, a bug), the PR list and the default-branch badge must
+      // still refresh, so the list is cached un-annotated. Logged at error
+      // level so a bug stays loud rather than reading as "no review".
+      app.log.error(
+        { err, owner, repo },
+        "[github-pr-poller] the review relay's state failed, caching PRs un-annotated",
       );
     }
     setRepoPRsStatus(owner, repo, status);

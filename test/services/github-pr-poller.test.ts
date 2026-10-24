@@ -216,15 +216,18 @@ describe("startGitHubPRPoller", () => {
       );
     });
 
-    it("caches the PRs un-annotated when GitHub fails, without failing the refresh", async () => {
-      mockAnnotateRelay.mockRejectedValue(new GitHubApiError("rate limited", 403));
+    it.each([
+      ["GitHub fails", () => new GitHubApiError("rate limited", 403)],
+      ["the annotation has a bug", () => new TypeError("boom")],
+    ])("caches the PRs un-annotated, loudly, when %s", async (_name, makeError) => {
+      mockAnnotateRelay.mockRejectedValue(makeError());
       await pollOnce();
       expect(setRepoPRsStatus).toHaveBeenCalledWith(
         "test-owner",
         "test-repo",
         expect.objectContaining({ prs: [{ number: 41 }] }),
       );
-      // The rest of the refresh still ran.
+      // The rest of the refresh still ran: the badge is not skipped.
       expect(mockRefreshDefaultBranchCi).toHaveBeenCalledTimes(1);
     });
   });

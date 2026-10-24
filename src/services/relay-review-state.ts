@@ -128,14 +128,21 @@ export type { RelayReviewState };
 const LANDED_MEMO_TTL_MS = 10_000;
 const MAX_LANDED_MEMO_ENTRIES = 500;
 //
-// A landed review is *terminal*: the PR poller asks every few seconds, and a
-// review that has landed does not un-land, so re-fetching it would cost one
-// GitHub call per relay-known PR per tick, forever. Only the cap evicts it.
+// The PR poller asks every few seconds, so a short TTL alone would cost one
+// GitHub call per relay-known PR per tick, forever. Two answers are therefore
+// settled enough to be re-checked only every LANDED_RECHECK_MS:
+//   - a landed review (it can still be dismissed on GitHub, so it is re-checked
+//     rarely rather than never — a dismissed review stops reading "landed");
+//   - a run so old (STALE_RUN_MS; Hermes keeps run status 24h) that a review
+//     is not coming, so an abandoned run costs a trickle, not a call per tick.
 // Anything else (still requested, or the lookup failed) keeps the short TTL.
+const LANDED_RECHECK_MS = 10 * 60_000;
+const STALE_RUN_MS = 24 * 60 * 60_000;
 interface LandedMemoEntry {
   landed: LandedReview;
   at: number;
-  terminal: boolean;
+  /** How long this answer holds; absent = LANDED_MEMO_TTL_MS. */
+  ttl: number;
 }
 const landedMemos = new WeakMap<FastifyInstance, Map<string, LandedMemoEntry>>();
 
@@ -161,13 +168,13 @@ function landedMemoFor(app: FastifyInstance): Map<string, LandedMemoEntry> {
  * are evicted instead, so the map cannot grow past the cap.
  */
 export function pruneLandedMemo(
-  memo: Map<string, { at: number; terminal?: boolean }>,
+  memo: Map<string, { at: number; ttl?: number }>,
   now: number,
   max: number = MAX_LANDED_MEMO_ENTRIES,
 ): void {
   if (memo.size <= max) return;
   for (const [key, entry] of memo) {
-    if (!entry.terminal && now - entry.at >= LANDED_MEMO_TTL_MS) memo.delete(key);
+    if (now - entry.at >= (entry.ttl ?? LANDED_MEMO_TTL_MS)) memo.delete(key);
   }
   if (memo.size <= max) return;
   const oldest = [...memo.entries()].sort((a, b) => a[1].at - b[1].at);
@@ -207,7 +214,7 @@ export async function getRelayReviewState(
   const cached = memo.get(memoKey);
   const now = Date.now();
   let landed: LandedReview;
-  if (cached && (cached.terminal || now - cached.at < LANDED_MEMO_TTL_MS)) {
+  if (cached && now - cached.at < cached.ttl) {
     // A HIT does NOT re-stamp the entry: a sliding window would let any
     // reader faster than the TTL pin the cached answer indefinitely — and
     // the PR list is refreshed on every webhook event, so a CI-active PR
@@ -215,7 +222,12 @@ export async function getRelayReviewState(
     landed = cached.landed;
   } else {
     landed = await findLandedReview(app, opts.token, { owner, repo, prNumber }, record);
-    memo.set(memoKey, { landed, at: now, terminal: isLanded(landed) });
+    const settled = isLanded(landed) || now - record.dispatchedAt > STALE_RUN_MS;
+    memo.set(memoKey, {
+      landed,
+      at: now,
+      ttl: settled ? LANDED_RECHECK_MS : LANDED_MEMO_TTL_MS,
+    });
     // The memo holds a review body per PR; drop the entries that can no
     // longer be hit, so it cannot grow with the process.
     pruneLandedMemo(memo, now);

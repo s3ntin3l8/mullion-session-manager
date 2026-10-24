@@ -70,14 +70,41 @@ afterEach(() => {
 
 describe("getRelayReviewState memo", () => {
   it("keeps a landed review past the TTL without re-fetching it (#1744)", async () => {
-    // The poller asks every few seconds; a review that landed does not
-    // un-land, so it must not cost a GitHub call per tick forever.
+    // The poller asks every few seconds; a landed review is settled enough to
+    // be re-checked only rarely, not once per tick.
     mocks.listPullRequestReviews.mockResolvedValue([hermesReview]);
     const app = makeApp();
     expect(await ask(app)).toMatchObject({ state: "landed", verdict: "APPROVED" });
-    vi.setSystemTime(Date.now() + 60 * 60_000);
+    vi.setSystemTime(Date.now() + 9 * 60_000);
     expect(await ask(app)).toMatchObject({ state: "landed", verdict: "APPROVED" });
     expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-checks a landed review eventually, so a dismissed one stops reading landed", async () => {
+    mocks.listPullRequestReviews
+      .mockResolvedValueOnce([hermesReview])
+      .mockResolvedValue([{ ...hermesReview, state: "DISMISSED" }]);
+    const app = makeApp();
+    expect(await ask(app)).toMatchObject({ state: "landed" });
+    vi.setSystemTime(Date.now() + 11 * 60_000);
+    expect(await ask(app)).toMatchObject({ state: "requested", landedChecked: true });
+    expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(2);
+  });
+
+  it("backs off on a run too old for a review to still be coming", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([]);
+    mocks.getReviewRunForPr.mockReturnValue({
+      ...run(),
+      dispatchedAt: Date.now() - 25 * 60 * 60_000,
+    });
+    const app = makeApp();
+    await ask(app);
+    vi.setSystemTime(Date.now() + 60_000);
+    await ask(app);
+    expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(Date.now() + 10 * 60_000);
+    await ask(app);
+    expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(2);
   });
 
   it("re-fetches a requested (not yet landed) review after the TTL", async () => {
@@ -117,17 +144,17 @@ describe("getRelayReviewState memo", () => {
 });
 
 describe("pruneLandedMemo", () => {
-  it("spares a terminal entry in the age sweep, but evicts it when over the cap", () => {
-    const memo = new Map<string, { at: number; terminal?: boolean }>([
-      ["old-terminal", { at: 0, terminal: true }],
-      ["old-requested", { at: 1 }],
+  it("honours each entry's own TTL in the age sweep, and still evicts the oldest over the cap", () => {
+    const memo = new Map<string, { at: number; ttl?: number }>([
+      ["old-long-ttl", { at: 0, ttl: 600_000 }],
+      ["old-short-ttl", { at: 1 }],
       ["fresh", { at: 20_000 }],
     ]);
     pruneLandedMemo(memo, 20_000, 2);
-    expect([...memo.keys()]).toEqual(["old-terminal", "fresh"]);
+    expect([...memo.keys()]).toEqual(["old-long-ttl", "fresh"]);
     memo.set("newer", { at: 20_001 });
     pruneLandedMemo(memo, 20_001, 2);
-    // Still over the cap after the sweep: the oldest goes, terminal or not.
+    // Still over the cap after the sweep: the oldest goes, long TTL or not.
     expect([...memo.keys()]).toEqual(["fresh", "newer"]);
   });
 });
