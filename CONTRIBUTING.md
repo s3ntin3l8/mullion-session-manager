@@ -25,6 +25,27 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
 - **Commit hooks:** `.pre-commit-config.yaml` uses file-based path scopes
   (`files:`) rather than generic `types_or:`, so a hook only checks the
   workspace it actually applies to.
+- **The clone's automatic gc is off** (`gc.auto 0`), because this clone is
+  shared by several agents that push concurrently and a background `git gc`
+  can destroy an object a concurrent write is creating
+  ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
+  `make wt` sets it for you; `make git-safe` does it on demand and is safe to
+  re-run. Loose objects then accumulate, so run `git gc` deliberately, when no
+  agent is pushing.
+  If the damage ever happens — a commit that will not complete, with an error
+  naming a _missing_ object — `make git-doctor` reports it, and
+  `make git-doctor APPLY=1` repairs it: the zero-byte objects are **moved**
+  (never deleted) into a quarantine inside `.git/`, the refs are restored from
+  the remote, and the affected worktree indexes are rebuilt. The rebuild
+  restores exactly the paths that were staged, so an unrelated untracked file
+  is never adopted — but it re-stages them from the working tree, so it
+  refuses to run when the index holds content that is _not_ in the working
+  tree (a partially staged file), because re-staging that would discard what
+  you staged. `FORCE=1` overrides that refusal. The exit code says what
+  happened: **0** the clone is whole, **1** it is still not whole, **2** it is
+  whole again but some objects could not be recovered (they were never
+  committed and are not on the remote, so nothing references them any more).
+  So `make git-doctor APPLY=1` is usable as a health check.
 
 ## Demo instance and screenshots
 
