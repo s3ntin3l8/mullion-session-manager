@@ -155,6 +155,11 @@ export interface McodeCatalogDiagnostics {
   /** Providers whose whitelist matched nothing, and the entries that were
    * dropped. */
   ignoredWhitelists: Array<{ providerId: string; entries: string[] }>;
+  /** Ids the launch path's allowlist refused, and the provider they came
+   * from. An id the launch path would drop is invisible in the picker — the
+   * same "the picker is empty and nobody can see why" symptom, so it is
+   * reported rather than swallowed. */
+  rejectedIds: Array<{ providerId: string; modelId: string; id: string }>;
 }
 
 /**
@@ -221,7 +226,10 @@ export function parseMcodeModelCatalog(
       const id = `${providerId}/${modelId}`;
       // The same allowlist the launch path applies, so a value the picker
       // offers is never one `resolveCliModel` would later drop at spawn time.
-      if (!validateCliModel(id)) continue;
+      if (!validateCliModel(id)) {
+        diagnostics?.rejectedIds.push({ providerId, modelId, id });
+        continue;
+      }
       if (seen.has(id)) continue;
       seen.add(id);
       models.push(id);
@@ -333,7 +341,10 @@ export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Prom
         // for THIS path and this file's mtime — so the entry is there.
         return cache?.models ?? [];
       }
-      const diagnostics: McodeCatalogDiagnostics = { ignoredWhitelists: [] };
+      const diagnostics: McodeCatalogDiagnostics = {
+        ignoredWhitelists: [],
+        rejectedIds: [],
+      };
       const models = parseMcodeModelCatalog(read.text, diagnostics);
       for (const ignored of diagnostics.ignoredWhitelists) {
         // A whitelist that matched nothing was dropped (see
@@ -343,6 +354,12 @@ export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Prom
           providerId: ignored.providerId,
           entries: ignored.entries,
         });
+      }
+      for (const rejected of diagnostics.rejectedIds) {
+        // The launch path's allowlist refused this id, so it is not offered
+        // in the picker. Naming it makes that visible instead of leaving the
+        // user with a model that has silently vanished.
+        console.debug("[mcode-models] dropped a model the launch path would refuse", rejected);
       }
       cache = { configPath, mtimeMs: read.mtimeMs, models };
       return models;

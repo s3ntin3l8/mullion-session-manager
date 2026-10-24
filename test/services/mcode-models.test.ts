@@ -171,10 +171,29 @@ provider:
       - "MiniMax-M4"
       - "MiniMax-M5"
 `;
-    const diagnostics = { ignoredWhitelists: [] };
+    const diagnostics = { ignoredWhitelists: [], rejectedIds: [] };
     expect(parseMcodeModelCatalog(config, diagnostics)).toEqual(["minimax/Allowed"]);
     expect(diagnostics.ignoredWhitelists).toEqual([
       { providerId: "minimax", entries: ["MiniMax-M4", "MiniMax-M5"] },
+    ]);
+  });
+
+  it("REPORTS a model the launch path's allowlist would refuse", () => {
+    // The same symptom as an ignored whitelist: the model is simply not in
+    // the picker, with no trace. An id over the allowlist's 128-char cap is
+    // the realistic case.
+    const longModelId = "M".repeat(140);
+    const config = `
+provider:
+  minimax:
+    models:
+      ${longModelId}: {}
+      Fine: {}
+`;
+    const diagnostics = { ignoredWhitelists: [], rejectedIds: [] };
+    expect(parseMcodeModelCatalog(config, diagnostics)).toEqual(["minimax/Fine"]);
+    expect(diagnostics.rejectedIds).toEqual([
+      { providerId: "minimax", modelId: longModelId, id: `minimax/${longModelId}` },
     ]);
   });
 
