@@ -897,6 +897,13 @@ type LandedComment =
          */
         attribution: "marked" | "fallback";
       } | null;
+      /**
+       * Other bots whose comments after the dispatch were skipped because they
+       * are not `reviewRelay.reviewerBotLogin` (issue #1847) — present only when
+       * nothing landed, so "nothing yet" next to a visibly posted comment can
+       * say whose it was (a typo'd login is otherwise a permanently empty status).
+       */
+      ignoredAuthors?: string[];
     }
   | { checked: false };
 
@@ -935,11 +942,13 @@ async function findLandedComment(
     const fallback = ours.at(-1);
     const landed = marked ?? fallback;
     const attribution = marked ? "marked" : "fallback";
-    if (!landed && newBotComments.length > 0) {
-      // Another bot's comment is visible on GitHub but is not the relay's: say
-      // so, or "nothing yet" next to a posted comment looks like a bug.
+    // Another bot's comment is visible on GitHub but is not the relay's: say so
+    // (in the log and in the payload), or "nothing yet" next to a posted
+    // comment looks like a bug.
+    const ignoredAuthors = landed ? [] : [...new Set(newBotComments.map((c) => c.author))];
+    if (ignoredAuthors.length > 0) {
       app.log.warn(
-        { authors: [...new Set(newBotComments.map((c) => c.author))], reviewerBotLogin },
+        { authors: ignoredAuthors, reviewerBotLogin },
         "triage-status: ignoring comment(s) by other bots (not reviewRelay.reviewerBotLogin)",
       );
     }
@@ -955,6 +964,7 @@ async function findLandedComment(
             ...(landed.htmlUrl !== undefined ? { htmlUrl: landed.htmlUrl } : {}),
           }
         : null,
+      ...(ignoredAuthors.length > 0 ? { ignoredAuthors } : {}),
     };
   } catch (err) {
     app.log.warn({ detail: (err as Error).message }, "triage-status: GitHub comment lookup failed");

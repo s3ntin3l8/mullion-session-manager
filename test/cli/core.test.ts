@@ -1864,9 +1864,9 @@ describe("runCommand", () => {
             github: {
               checked: true,
               comment: {
-                author: "dependabot[bot]",
+                author: "s3ntin3l8-hermes[bot]",
                 attribution: "fallback",
-                body: "Bump lodash from 1.0 to 2.0",
+                body: "Looks like a duplicate of #3.",
                 bodyTruncated: false,
                 createdAt: "2026-10-20T10:00:00Z",
               },
@@ -1876,7 +1876,28 @@ describe("runCommand", () => {
         const io = fakeIo();
         expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
         const out = io.written.join("");
-        expect(out).toContain("may not be ours");
+        expect(out).toContain(
+          "reviewer bot's newest comment, marker missing — may not be the triage",
+        );
+      });
+
+      it("says whose comment was ignored when nothing from the reviewer bot landed (#1847)", async () => {
+        const client = fakeClient({
+          request: vi.fn(async () => ({
+            runId: "run_triage",
+            repo: "acme/widgets",
+            prNumber: 12,
+            status: "completed",
+            github: { checked: true, comment: null, ignoredAuthors: ["dependabot[bot]"] },
+          })),
+        });
+        const io = fakeIo();
+        expect(await runCommand(["triage", "status", "--issue", "12"], { client, io })).toBe(0);
+        const out = io.written.join("");
+        expect(out).toContain("posted: nothing from a triage bot yet");
+        expect(out).toContain(
+          "ignored a comment by dependabot[bot] — not the configured reviewer bot",
+        );
       });
 
       it("status says when no triage run is known", async () => {

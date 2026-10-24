@@ -1416,7 +1416,12 @@ describe("review-request routes", () => {
         try {
           mocks.listIssueComments.mockResolvedValue([dependabot]);
           const res = await triageGet(sessionId, "?issueNumber=12");
-          expect(res.json().github).toEqual({ checked: true, comment: null });
+          // The payload says whose comment was skipped, so the operator can see why.
+          expect(res.json().github).toEqual({
+            checked: true,
+            comment: null,
+            ignoredAuthors: ["dependabot[bot]"],
+          });
           expect(warn).toHaveBeenCalledWith(
             expect.objectContaining({ authors: ["dependabot[bot]"] }),
             expect.stringContaining("ignoring comment"),

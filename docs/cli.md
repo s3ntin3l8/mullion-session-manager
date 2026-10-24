@@ -501,7 +501,9 @@ takes a run id and does not look at the project.
   instead, and the output says so — it may be another comment of that bot's
   rather than the triage (the issue-comment counterpart of a review has no
   head commit to pin it to). Another bot's comment is never reported when a
-  reviewer bot login is set.
+  reviewer bot login is set; when such a comment is why nothing shows up, the
+  output names its author ("ignored a comment by …"), which is also how a
+  mistyped login shows.
   `not_found` means this Mullion has no run for the issue (nothing was
   requested here, or the server restarted).
 - `triage stop <runId>` — stops a run **this session** dispatched (the same
