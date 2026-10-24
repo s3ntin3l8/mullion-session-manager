@@ -739,21 +739,31 @@ ways that both follow from mcode's own design.
 
 First, mcode **retired standalone user hooks** — custom hooks must belong to a
 Plugin (mcode's own wording: "Standalone user hooks are no longer supported.
-Custom hooks belong to Plugins."). Mullion therefore installs **one
-host-global plugin** at `~/.minimax/plugins/mullion/` (a `.claude-plugin/
-plugin.json` plus `hooks/hooks.json`), because mcode reads the **Claude Code
-plugin format**: the event names (`SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd`) and the
-payload shape
+Custom hooks belong to Plugins."). Mullion therefore installs **two
+host-global plugins** — `~/.minimax/plugins/mullion/` (a `.claude-plugin/
+plugin.json` plus `hooks/hooks.json`) and
+`~/.minimax/plugins/mullion-permission/` (a `.codex-plugin/plugin.json` plus
+`hooks/hooks.json`) — because mcode reads **two plugin formats**, and which one
+decides whether mcode applies Mullion's answer at all (see the permission
+paragraph below).
+
+The **Claude Code format** carries every event except one: `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`. The
+event names and the payload shape
 (`hook_event_name`, `tool_name`, `tool_input`, `cwd`, `session_id`) are
 Claude Code's. The registered events map through `mapMcodeEvent`
 (`forwarder-core.mjs`), which is the Claude Code mapping — reused rather than
 reimplemented, since the dialect is identical. `PostToolUse` is registered
 twice: once with a `Write|Edit|MultiEdit|NotebookEdit` matcher (→
 `file_change`) and once on `Bash` (→ `git_branch`/`cwd_changed`).
-`PermissionRequest` is registered with **no matcher** — it only fires for the
-tool call that actually needs a decision — and it is the blocking hook that
-carries both the review gate and the skip-permissions auto-approve.
+
+The **CODEX format** carries `PermissionRequest` and nothing else. It is the
+blocking hook — the one that carries both the review gate and the
+skip-permissions auto-approve — and it is registered with **no matcher**, so it
+only fires for the tool call that actually needs a decision. It lives in its own
+directory, and in its own format, because mcode's hook-result parser only
+auto-applies an "allow" unconditionally for a CODEX-format plugin (the
+permission paragraph below has the detail).
 
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
