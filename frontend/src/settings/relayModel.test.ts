@@ -39,6 +39,11 @@ describe("relayModel", () => {
       model: "llama3:70b",
       modelProvider: "openrouter",
     });
+    // Clearing the model part is "no model": the profile default.
+    expect(parseRelayModel("openrouter:", [], { modelProvider: "openrouter" })).toEqual({
+      model: PROFILE_DEFAULT_MODEL,
+      modelProvider: "",
+    });
     // Once the list has loaded, an unknown value is a custom bare model.
     expect(
       parseRelayModel("openrouter:not-listed", PROVIDERS, { modelProvider: "openrouter" }),

@@ -49,7 +49,11 @@ export function parseRelayModel(
   }
   const prefix = `${current.modelProvider}:`;
   if (current.modelProvider && providers.length === 0 && value.startsWith(prefix)) {
-    return { model: value.slice(prefix.length), modelProvider: current.modelProvider };
+    const model = value.slice(prefix.length);
+    // Clearing the model part leaves only the provider's prefix: that is "no
+    // model", i.e. the profile default, not an empty model under a provider.
+    if (model === "") return { model: PROFILE_DEFAULT_MODEL, modelProvider: "" };
+    return { model, modelProvider: current.modelProvider };
   }
   return { model: value, modelProvider: "" };
 }

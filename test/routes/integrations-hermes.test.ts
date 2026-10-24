@@ -177,6 +177,17 @@ describe("Hermes review relay integration routes", () => {
       expect(res.json().providers[0].models).toHaveLength(300);
     });
 
+    it("answers an available, empty list when no provider has anything to offer", async () => {
+      configure();
+      fetchMock.mockResolvedValue(
+        options([
+          { slug: "gemini", name: "Gemini", models: ["g"], authenticated: false },
+          { slug: "nous", name: "Nous", models: [] },
+        ]),
+      );
+      expect((await call("GET", URL)).json()).toEqual({ available: true, providers: [] });
+    });
+
     it("shares the cap between providers, so many of them stay a usable list", async () => {
       configure();
       const many = Array.from({ length: 300 }, (_, i) => `m${i}`);

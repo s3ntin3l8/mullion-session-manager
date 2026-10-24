@@ -31,10 +31,12 @@ const MODEL_OPTIONS_TIMEOUT_MS = 15_000;
 // provider (an aggregator lists thousands of models).
 const MODEL_OPTIONS_MAX_BYTES = 8_000_000;
 // More than this in one unsearchable dropdown is unusable; the Custom entry
-// covers the rest. The total is shared out between the providers, so fifteen
-// of them cannot add up to thousands of options.
+// covers the rest. The budget is shared out between the providers, so fifteen
+// of them cannot add up to thousands of options. Every provider keeps at least
+// MIN_MODELS_PER_PROVIDER, so past ~24 providers that floor wins and the list
+// can exceed the budget (it is a budget, not a hard total).
 const MAX_MODELS_PER_PROVIDER = 300;
-const MAX_MODELS_TOTAL = 600;
+const MODELS_BUDGET = 600;
 const MIN_MODELS_PER_PROVIDER = 25;
 /**
  * The setting's value for "use the Hermes profile's own model chain". It is
@@ -700,9 +702,10 @@ export async function listHermesModelOptions(app: FastifyInstance): Promise<Herm
       models,
     });
   }
+  if (usable.length === 0) return [];
   const perProvider = Math.min(
     MAX_MODELS_PER_PROVIDER,
-    Math.max(MIN_MODELS_PER_PROVIDER, Math.floor(MAX_MODELS_TOTAL / usable.length)),
+    Math.max(MIN_MODELS_PER_PROVIDER, Math.floor(MODELS_BUDGET / usable.length)),
   );
   return usable.map((p) => ({ ...p, models: p.models.slice(0, perProvider) }));
 }
