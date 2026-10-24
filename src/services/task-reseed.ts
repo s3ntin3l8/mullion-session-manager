@@ -172,9 +172,12 @@ export async function reseedTaskIfSessionExited(
   }
   // Same version-skew guard as task-claim.ts's own — see
   // resolveSeedDelivered's doc comment.
+  // Issue #1724 — the re-seed runs on the host that holds the task's
+  // worktree, so that is the host whose version skew matters here.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const seedDelivered = resolveSeedDelivered(
     seedCapable,
-    project.hostId,
+    workerHostId,
     result.initialPromptApplied,
   );
   if (!seedDelivered) {
@@ -183,7 +186,7 @@ export async function reseedTaskIfSessionExited(
         taskId: task.id,
         newSessionId: result.row.id,
         command: task.agentCommand,
-        hostId: project.hostId,
+        hostId: workerHostId,
         seedCapable,
       },
       seedCapable

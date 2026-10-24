@@ -243,12 +243,17 @@ export function resolveSessionHostId(
 export function resolveTaskWorkerHost(
   app: FastifyInstance,
   task: { sessionId: number | null; projectId: number },
+  // The project row, when the caller already has it. It is AUTHORITATIVE
+  // for the fallback: re-reading the project from the db would answer for
+  // whatever row carries that id — not necessarily the one the caller is
+  // working with, and in a test not even a row at all.
+  project?: { hostId: string },
 ): string {
   if (task.sessionId !== null) {
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
     if (row !== undefined) return resolveSessionHostId(app, row);
   }
-  return resolveProjectHostId(app, task.projectId);
+  return project?.hostId ?? resolveProjectHostId(app, task.projectId);
 }
 
 // Batch size for the inArray lookup below — same value and same reasoning as
