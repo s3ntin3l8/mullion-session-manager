@@ -76,14 +76,27 @@ export function runLoginShell(script: string): Promise<string | null> {
       resolve(value);
     };
 
+    // Killing is best-effort: the child may already be gone, and a test
+    // double standing in for `spawn` may not implement `kill` at all. An
+    // unguarded `child.kill()` here would throw inside a timer callback — an
+    // UNHANDLED exception, which is fatal to the process, not just to this
+    // probe.
+    const kill = (signal?: NodeJS.Signals) => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Already gone, or a stand-in without kill().
+      }
+    };
+
     const timer = setTimeout(() => {
-      child.kill(); // SIGTERM
+      kill(); // SIGTERM
       // Escalate to SIGKILL if the process is still alive after a short
       // grace period — a timeout firing means it already ignored our
       // attempt to end it cooperatively.
       killTimer = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
+          kill("SIGKILL");
         }
       }, PROBE_KILL_ESCALATION_MS);
       finish(null);
