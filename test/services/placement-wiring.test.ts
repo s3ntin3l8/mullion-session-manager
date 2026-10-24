@@ -214,6 +214,23 @@ describe("placement decides where a session runs (issue #1724)", () => {
     expect(row.hostId).toBe("local");
   });
 
+  it("refuses a caller-supplied host the project is not on, rather than using a path that is not there", async () => {
+    // A host the project is not on has no directory for the session, and
+    // the project's own path is not an answer — it does not exist there.
+    // So the create is refused, with a reason.
+    const { app, projectId, hostId } = await setup({ placement: "auto" });
+    const res = await createSessionRecord(app, {
+      projectId,
+      command: "bash",
+      unattended: true,
+      hostId,
+      // No cwd of the caller's own: there is nothing to run in.
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe("host-unknown-project");
+  });
+
   it("honours a caller-supplied host — the placement policy is not consulted", async () => {
     // Task Master's reviewer and rebase worker must run where the task's
     // worktree is, which is not a decision the policy gets to make.

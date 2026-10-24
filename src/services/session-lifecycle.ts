@@ -405,6 +405,10 @@ export type CreateSessionResult =
   | { ok: false; reason: "parent-wrong-project" }
   | { ok: false; reason: "parent-is-child" }
   | { ok: false; reason: "cwd-outside-project" }
+  // Issue #1724 — the session was pinned to a host the project is not on,
+  // and the caller supplied no directory of its own. There is nowhere for
+  // it to run: the project's own path does not exist on that host.
+  | { ok: false; reason: "host-unknown-project"; detail?: string }
   | { ok: false; reason: "child-cap-exceeded" }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
@@ -922,19 +926,37 @@ function resolveSessionPlacement(
   app: FastifyInstance,
   project: ProjectRow,
   params: CreateSessionParams,
-): SessionPlacement {
+):
+  | { ok: true; placement: SessionPlacement }
+  | { ok: false; reason: "host-unknown-project"; detail: string } {
   const hostCwds = parseHostCwds(project.hostCwds);
-  const cwdOn = (hostId: string): string =>
-    projectCwdOnHost(project, hostId, hostCwds) ?? project.cwd;
 
   if (params.hostId !== undefined) {
     // The caller knows better than the policy: this session has to be
     // somewhere specific. The reason says so, so the log does not read as a
     // decision nobody made.
+    //
+    // The directory comes from the CALLER when it supplied one — Task
+    // Master's reviewer points at the task's worktree, which lives on the
+    // host it was placed on — and from the map when it did not. When
+    // neither is available there is NO directory for this session on that
+    // host, and the project's own path is not an answer: it does not exist
+    // there. So the session is refused, with a reason.
+    const mapped = projectCwdOnHost(project, params.hostId, hostCwds);
+    if (mapped === null && params.cwd === undefined) {
+      return {
+        ok: false,
+        reason: "host-unknown-project",
+        detail: `the project has no path on host ${params.hostId}`,
+      };
+    }
     return {
-      hostId: params.hostId,
-      cwd: cwdOn(params.hostId),
-      reason: `placed by the caller on ${params.hostId} (it must share a host with another session)`,
+      ok: true,
+      placement: {
+        hostId: params.hostId,
+        cwd: mapped ?? project.cwd,
+        reason: `placed by the caller on ${params.hostId} (it must share a host with another session)`,
+      },
     };
   }
 
@@ -949,9 +971,14 @@ function resolveSessionPlacement(
   });
 
   return {
-    hostId: decision.hostId,
-    cwd: cwdOn(decision.hostId),
-    reason: decision.reason,
+    ok: true,
+    placement: {
+      hostId: decision.hostId,
+      // The policy only ever picks a host the project IS on (that is an
+      // eligibility rule), so this is never null here.
+      cwd: projectCwdOnHost(project, decision.hostId, hostCwds) ?? project.cwd,
+      reason: decision.reason,
+    },
   };
 }
 
@@ -988,7 +1015,11 @@ async function createSessionRecordInner(
   // decision carries the project's path ON THAT HOST — a session runs in a
   // directory, so the host and the directory have to agree, and the worktree
   // is cut from the project root ON THAT HOST.
-  const placement = resolveSessionPlacement(app, project, params);
+  const placementResult = resolveSessionPlacement(app, project, params);
+  if (!placementResult.ok) {
+    return { ok: false, reason: placementResult.reason, detail: placementResult.detail };
+  }
+  const placement = placementResult.placement;
   const placementHost = placement.hostId;
   rb.hostId = placementHost;
 

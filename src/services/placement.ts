@@ -180,22 +180,6 @@ export function serializeHostCwds(map: Record<string, string> | null | undefined
 }
 
 /**
- * The project's working directory ON a given host, falling back to the
- * project's own root when the map has nothing for it.
- *
- * For a host the project is not on, the fallback is the PROJECT's own root —
- * which is wrong for that host, and is why this is only for callers that
- * already know the host has the project (a session joining its worker's
- * host, say). `projectCwdOnHost` is the honest version: it returns null.
- */
-export function projectCwdForHost(
-  project: { hostId: string; cwd: string; hostCwds?: string | null },
-  hostId: string,
-): string {
-  return projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds)) ?? project.cwd;
-}
-
-/**
  * The project's working directory ON a given host — null when the project is
  * not there.
  *

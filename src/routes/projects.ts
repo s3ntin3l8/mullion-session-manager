@@ -142,6 +142,7 @@ import { resolveWorkflowConventionsText } from "../services/workflow-conventions
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
 import { parseHostCwds, serializeHostCwds } from "../services/placement.js";
+import { listHosts } from "../services/host-registry.js";
 
 interface CreateProjectBody {
   name: string;
@@ -243,6 +244,28 @@ interface DiscoveredProject extends DiscoveredCandidate {
   isRegistered: boolean;
 }
 
+/**
+ * The per-host cwd map's keys must name hosts we KNOW about.
+ *
+ * A typo in a host id would sit in the map forever: the host it names
+ * would never become a placement candidate (so the map would look like it
+ * did nothing), and if a host with that id were ever registered, it would
+ * silently start being one — with a path meant for something else.
+ *
+ * Returns the offending host id, or null when the map is fine.
+ */
+function unknownHostInCwds(
+  app: FastifyInstance,
+  map: Record<string, string> | null | undefined,
+): string | null {
+  if (map === null || map === undefined) return null;
+  const known = new Set(listHosts(app).map((host) => host.id));
+  for (const hostId of Object.keys(map)) {
+    if (!known.has(hostId)) return hostId;
+  }
+  return null;
+}
+
 const createProjectSchema = {
   body: {
     type: "object",
@@ -256,11 +279,15 @@ const createProjectSchema = {
       // placement; absent means the column's "pinned" default. The modes
       // come from PLACEMENT_MODES, the shared declaration.
       placement: { type: "string", enum: [...PLACEMENT_MODES] },
-      // Issue #1724 — the per-host cwd map. An object of absolute paths, one
+      // Issue #1724 — the per-host cwd map. An object of ABSOLUTE paths, one
       // per host; `null` means "this project lives on its own host only".
+      //
+      // The paths are absolute because they become a session's working
+      // directory on THAT host: a relative one would resolve against
+      // whatever the agent's cwd happened to be.
       hostCwds: {
         type: ["object", "null"],
-        additionalProperties: { type: "string", minLength: 1 },
+        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
         maxProperties: 32,
       },
       createDir: { type: "boolean" },
@@ -283,7 +310,7 @@ const updateProjectSchema = {
       // Issue #1724 — the per-host cwd map; see the column's own comment.
       hostCwds: {
         type: ["object", "null"],
-        additionalProperties: { type: "string", minLength: 1 },
+        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
         maxProperties: 32,
       },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
@@ -3707,6 +3734,10 @@ export async function projectsRoute(app: FastifyInstance) {
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { name, cwd, createDir, gitInit, placement, hostCwds } = request.body;
+      const unknownHost = unknownHostInCwds(app, hostCwds);
+      if (unknownHost !== null) {
+        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+      }
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
       if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
@@ -3854,6 +3885,10 @@ export async function projectsRoute(app: FastifyInstance) {
         gitInit,
         hostCwds,
       } = request.body;
+      const unknownHost = unknownHostInCwds(app, hostCwds);
+      if (unknownHost !== null) {
+        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+      }
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
