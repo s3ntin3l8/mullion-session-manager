@@ -90,6 +90,14 @@ describe("Settings -> Hosts", () => {
         hostsDb = hostsDb.filter((h) => h.id !== params.id);
         return jsonResponse(204);
       },
+      // Issue #1725 — the drain flag (park / un-park).
+      "PATCH /api/hosts/:id": ({ params, init }) => {
+        const host = hostsDb.find((h) => h.id === params.id);
+        if (!host) return jsonResponse(404, { message: "not found" });
+        const body = init?.body ? (JSON.parse(init.body as string) as { drained?: boolean }) : {};
+        if (typeof body.drained === "boolean") host.drained = body.drained;
+        return jsonResponse(200, host);
+      },
       "POST /api/hosts/:id/ping": () => jsonResponse(200, { online: false }),
       "GET /api/hosts/:id/config": ({ params }) =>
         jsonResponse(200, {
@@ -194,9 +202,7 @@ describe("Settings -> Hosts", () => {
 
       await waitFor(() => expect(hostsDb[0].drained).toBe(true));
     });
-  });
 
-  describe("the drain switch", () => {
     it("surfaces a failed park instead of leaving the row unchanged in silence", async () => {
       // The KebabMenu calls onClick() with no error handling of its own, so
       // a park that never reached the server would leave the user thinking

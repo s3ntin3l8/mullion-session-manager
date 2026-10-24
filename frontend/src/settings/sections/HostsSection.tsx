@@ -276,7 +276,7 @@ export function HostsSection() {
 
   // Issue #1725 — the local host's row is rendered separately from the
   // registered ones (it is not editable), but it can still be PARKED.
-  const localHost = hosts.find((h) => h.id === LOCAL_HOST_ID);
+  // `localHost` itself is declared above, next to the other state.
 
   return (
     <>
