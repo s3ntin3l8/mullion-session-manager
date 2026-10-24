@@ -79,6 +79,17 @@ export class HostHeartbeatTracker {
    * survive a deliberate lid close. A host that was closed for a minute
    * must still be recovered from.
    *
+   * THE BAND BETWEEN THE TWO THRESHOLDS: the AGENT's own suspend detection
+   * fires at 3 x 15s = 45s (suspend-detect.ts), while this recovery needs
+   * two consecutive 30s pings = ~60s. So a sleep of 45-59s is shorter than
+   * this trigger can see. It is still covered, by the agent rather than by
+   * the primary: on resume the agent revalidates its credential, which
+   * POSTs /api/internal/register with its hostId, and the primary's
+   * enrollment route force-reconnects that host's event subscription on the
+   * way past (routes/enrollment.ts's renew branch). So the two thresholds
+   * cover each other — but they are not derived from one constant, and
+   * anyone changing either one should know about the other.
+   *
    * A first contact ("pending" -> "online") is NOT a recovery: there is no
    * earlier unreachable state to recover from, and no half-open socket that
    * predates this tracker entry.

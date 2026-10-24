@@ -698,6 +698,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // services/keep-awake.ts for why it is an app-level child armed on live
   // sessions rather than an always-on launchd job.
   const keepAwake = startKeepAwake(app);
+  // Arm it NOW rather than waiting for the first 10s tick: a host that
+  // BOOTS with live sessions (a primary restarting with running work, or an
+  // agent that re-adopts a surviving scope) would otherwise hold no power
+  // assertion for those first seconds — long enough for an idle-sleep to
+  // land in the middle of a build.
+  keepAwake.sync();
   const unsubscribeResume = app.suspendWatcher.onResume(() => {
     // The caffeinate child is suspended with the app and resumes with it,
     // but the arm/disarm STATE can be stale across the gap — so recompute

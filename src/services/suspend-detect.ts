@@ -52,6 +52,15 @@ export const DEFAULT_SUSPEND_POLL_INTERVAL_MS = 15_000;
  * long synchronous git operation) reads as a resume — which is harmless
  * here (the resume handler only refreshes credentials and re-arms the
  * keep-awake), but it is not free.
+ *
+ * THE COMPLEMENTARY THRESHOLD is on the PRIMARY side: the heartbeat's
+ * "this host came back" trigger needs two consecutive missed pings (~60s at
+ * the 30s default), so a 45-59s suspend is shorter than the primary can
+ * see on its own. It is covered anyway — the agent's resume renewal
+ * reaches the primary's enrollment route, which force-reconnects that
+ * host's event subscription on the way past. The two thresholds are not
+ * derived from one constant; see host-heartbeat.ts's recordSuccess for the
+ * other half of that story.
  */
 export const SUSPEND_GAP_INTERVALS = 3;
 
