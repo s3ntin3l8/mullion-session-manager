@@ -28,6 +28,9 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     previewBranch: null,
     kind: "terminal",
     status: "active",
+    // Issue #1727 — the session's host fields (raw + resolved).
+    hostId: null,
+    resolvedHostId: "local",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastAttachedAt: "2026-01-01T00:00:00.000Z",
     alive: true,

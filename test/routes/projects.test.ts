@@ -255,6 +255,158 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new
+  // session land right now, and why?" It is the same decision the spawn
+  // path makes, so the answer cannot drift from what would happen.
+  it("previews the placement of an existing project", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "preview-project", cwd, placement: "auto" },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json();
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(preview.statusCode).toBe(200);
+    const body = preview.json();
+    expect(body.placement).toBe("auto");
+    expect(typeof body.hostId).toBe("string");
+    expect(body.reason.length).toBeGreaterThan(0);
+    // The comparison table rides along, so a UI can show WHY rather than
+    // just the winner.
+    expect(Array.isArray(body.considered)).toBe(true);
+    expect(body.fellBack).toBe(false);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("previews a PINNED project as pinned, without scoring anything", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "pinned-preview", cwd },
+    });
+    const { id } = created.json();
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().placement).toBe("pinned");
+    expect(preview.json().hostId).toBe("local");
+    expect(preview.json().considered).toEqual([]);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("answers about the mode ASKED about, not the one the project is stored as", async () => {
+    // The question a UI asks is "what would happen if this project were
+    // AUTO?" — which is usually NOT the stored mode (turning the mode on is
+    // the point of the control). Without the override the answer would be
+    // about the stored mode: the opposite of what the user is asking.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "mode-override", cwd },
+    });
+    const { id } = created.json();
+
+    const stored = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(stored.json().placement).toBe("pinned");
+
+    const asked = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?placement=auto`,
+    });
+    expect(asked.statusCode).toBe(200);
+    expect(asked.json().placement).toBe("auto");
+    // The auto answer is a SCORED one — the considered table is populated,
+    // where the pinned answer scores nothing.
+    expect(Array.isArray(asked.json().considered)).toBe(true);
+    expect(asked.json().considered.length).toBeGreaterThan(0);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a GET preview for a mode outside the shared vocabulary", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "bad-mode-preview", cwd },
+    });
+    const { id } = created.json();
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?placement=whatever`,
+    });
+    expect(res.statusCode).toBe(400);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("404s a preview for a project that does not exist", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/projects/999999/placement-preview" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("previews a project that does not exist YET (the create modal's question)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "local", placement: "auto" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().placement).toBe("auto");
+    expect(typeof res.json().hostId).toBe("string");
+    await app.close();
+  });
+
+  it("404s a preview for a host that is not registered", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "no-such-host", placement: "auto" },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("rejects a POST preview for a mode outside the shared vocabulary", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "local", placement: "whatever" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("lists projects in case-insensitive alphabetical order", async () => {
     const app = await buildApp();
 
@@ -2290,6 +2442,102 @@ describe("projects route", () => {
           expect(res.statusCode).toBe(200);
           const prs = res.json().prs[String(id)].prs as Array<{ relayReview?: unknown }>;
           expect(prs[0].relayReview).toMatchObject({ state: "requested" });
+        });
+
+        describe("the list routes never wait on GitHub for the relay's state (#1744)", () => {
+          const listedPr = (relayReview?: Record<string, unknown>) => ({
+            number: 41,
+            title: "PR 41",
+            htmlUrl: "https://github.com/acme/widgets/pull/41",
+            author: "me",
+            headSha: "sha41",
+            headBranch: "feat",
+            baseBranch: "main",
+            ciStatus: null,
+            actionsRuns: [],
+            isDraft: false,
+            updatedAt: null,
+            reviewDecision: null,
+            mergeable: null,
+            mergeStateStatus: null,
+            reviewers: [],
+            requestedReviewers: [],
+            unresolvedThreads: null,
+            commentCount: null,
+            reviewStateKnown: false,
+            ciFetched: false,
+            prPhase: "unknown" as const,
+            ...(relayReview ? { relayReview } : {}),
+          });
+
+          async function seed(relayReview?: Record<string, unknown>) {
+            const { setRepoPRsStatus } = await import("../../src/services/github.js");
+            setRepoPRsStatus("acme", "widgets", {
+              prs: [listedPr(relayReview)],
+              prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+            });
+          }
+
+          async function listBoth() {
+            let reviewCalls = 0;
+            mockGithub(gqlPr(41), (url) => {
+              if (!url.includes("/pulls/41/reviews")) return null;
+              reviewCalls += 1;
+              return jsonResponse(200, []);
+            });
+            const app = await makeApp();
+            const { id } = await connectedProject(app);
+            const batch = await app.inject({
+              method: "GET",
+              url: `/api/projects/git-refs?ids=${id}`,
+            });
+            const list = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+            return {
+              batchPr: batch.json().prs[String(id)].prs[0],
+              listPr: list.json().prs[0],
+              reviewCalls: () => reviewCalls,
+            };
+          }
+
+          it("serves the poller's annotation without a single review lookup", async () => {
+            vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
+            const landed = {
+              state: "landed",
+              runId: "run_1",
+              dispatchedAt: new Date(relayRun.dispatchedAt).toISOString(),
+              landedChecked: true,
+              author: "s3ntin3l8-hermes[bot]",
+              verdict: "APPROVED",
+            };
+            await seed(landed);
+            const { batchPr, listPr, reviewCalls } = await listBoth();
+            expect(batchPr.relayReview).toMatchObject(landed);
+            expect(listPr.relayReview).toMatchObject(landed);
+            expect(reviewCalls()).toBe(0);
+          });
+
+          it("shows a review requested since the last poll as requested, with no lookup", async () => {
+            // The cached annotation describes an older run; the in-memory run
+            // index knows better, and the poller's next tick says if it landed.
+            vi.mocked(getReviewRunForPr).mockReturnValue({ ...relayRun, runId: "run_2" });
+            await seed({
+              state: "landed",
+              runId: "run_1",
+              dispatchedAt: "2026-01-01T00:00:00.000Z",
+              landedChecked: true,
+              verdict: "APPROVED",
+            });
+            const { batchPr, listPr, reviewCalls } = await listBoth();
+            for (const pr of [batchPr, listPr]) {
+              expect(pr.relayReview).toMatchObject({
+                state: "requested",
+                runId: "run_2",
+                landedChecked: false,
+              });
+              expect(pr.relayReview.verdict).toBeUndefined();
+            }
+            expect(reviewCalls()).toBe(0);
+          });
         });
 
         it("leaves a PR the relay knows nothing about untouched", async () => {

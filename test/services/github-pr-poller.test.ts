@@ -15,6 +15,7 @@ const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
 const mockEnrich = vi.hoisted(() => vi.fn());
 const mockBroadcast = vi.hoisted(() => vi.fn());
 const mockMergeState = vi.hoisted(() => vi.fn());
+const mockAnnotateRelay = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/github.js", () => ({
   GitHubApiError: class extends Error {
@@ -35,6 +36,12 @@ vi.mock("../../src/services/github.js", () => ({
 // it's a stub so the poller's own wiring (enrich → push on change) is isolated.
 vi.mock("../../src/services/github-pr-reviews.js", () => ({
   enrichPrsWithReviewState: mockEnrich,
+}));
+
+// The relay's state has its own tests (relay-review-state.test.ts); here it is
+// a stub so the poller's wiring (annotate → cache) is isolated.
+vi.mock("../../src/services/relay-review-state.js", () => ({
+  annotateRelayReviewState: mockAnnotateRelay,
 }));
 
 vi.mock("../../src/services/github-ws-broadcast.js", () => ({
@@ -75,6 +82,7 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
   return { ...actual, getStoredSettings: () => actual.DEFAULT_SETTINGS };
 });
 
+import { GitHubApiError, setRepoPRsStatus } from "../../src/services/github.js";
 import { startGitHubPRPoller } from "../../src/services/github-pr-poller.js";
 
 function mockApp(rows: { id: number; cwd: string; hostId: string }[]): FastifyInstance {
@@ -99,6 +107,9 @@ describe("startGitHubPRPoller", () => {
     });
     mockEnrich.mockReset();
     mockEnrich.mockResolvedValue(undefined);
+    mockAnnotateRelay.mockReset();
+    mockAnnotateRelay.mockImplementation(async (_app, prs) => prs);
+    vi.mocked(setRepoPRsStatus).mockClear();
     mockBroadcast.mockReset();
     mockMergeState.mockReset();
     mockRefreshDefaultBranchCi.mockReset();
@@ -164,6 +175,61 @@ describe("startGitHubPRPoller", () => {
 
     cleanup();
     vi.useRealTimers();
+  });
+
+  // The relay's landed-review check is a GitHub call; it runs here so the
+  // routes only ever read the annotated cache (issue #1744).
+  describe("the review relay's state (issue #1744)", () => {
+    // Fresh per poll: the refresh replaces `status.prs` on the object it got.
+    const polled = () => ({
+      prs: [{ number: 41 }],
+      prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+    });
+
+    async function pollOnce() {
+      mockResolveGitHubToken.mockReturnValue("ghp_token");
+      mockGetRepoPRsStatus.mockResolvedValue(polled());
+      vi.useFakeTimers();
+      const cleanup = startGitHubPRPoller(mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]));
+      await vi.advanceTimersByTimeAsync(1);
+      // The refresh awaits the PR fetch, the enrichment and the annotation
+      // before it caches; let that chain finish.
+      await vi.waitFor(() => expect(setRepoPRsStatus).toHaveBeenCalled());
+      cleanup();
+      vi.useRealTimers();
+    }
+
+    it("caches the annotated PRs, annotating with the repo's own token", async () => {
+      const annotated = [{ number: 41, relayReview: { state: "requested" } }];
+      mockAnnotateRelay.mockResolvedValue(annotated);
+      await pollOnce();
+      expect(mockAnnotateRelay).toHaveBeenCalledWith(
+        expect.anything(),
+        [{ number: 41 }],
+        { owner: "test-owner", repo: "test-repo" },
+        "ghp_token",
+      );
+      expect(setRepoPRsStatus).toHaveBeenCalledWith(
+        "test-owner",
+        "test-repo",
+        expect.objectContaining({ prs: annotated }),
+      );
+    });
+
+    it.each([
+      ["GitHub fails", () => new GitHubApiError("rate limited", 403)],
+      ["the annotation has a bug", () => new TypeError("boom")],
+    ])("caches the PRs un-annotated, loudly, when %s", async (_name, makeError) => {
+      mockAnnotateRelay.mockRejectedValue(makeError());
+      await pollOnce();
+      expect(setRepoPRsStatus).toHaveBeenCalledWith(
+        "test-owner",
+        "test-repo",
+        expect.objectContaining({ prs: [{ number: 41 }] }),
+      );
+      // The rest of the refresh still ran: the badge is not skipped.
+      expect(mockRefreshDefaultBranchCi).toHaveBeenCalledTimes(1);
+    });
   });
 
   // A poll that finds a PR's review/CI state changed pushes the browser,

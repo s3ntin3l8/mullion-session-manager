@@ -21,6 +21,7 @@ import {
   type PlacementMode,
 } from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
@@ -86,7 +87,6 @@ import {
   getDefaultBranch,
   type GitHubCiStatus,
   type GitHubPRsStatus,
-  type PROrWithChecks,
   detectReleasePleaseConfig,
 } from "../services/github.js";
 import {
@@ -110,10 +110,10 @@ import { buildHandoffPrompt } from "../services/pr-handoff.js";
 import {
   assertReviewerConfigured,
   getHermesReviewStatus,
-  getReviewRunForPr,
   requestHermesReview,
 } from "../services/hermes-review.js";
-import { getRelayReviewState, replyReviewError, reviewReader } from "./review-relay.js";
+import { getRelayReviewState, overlayRelayRuns } from "../services/relay-review-state.js";
+import { replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
@@ -738,55 +738,6 @@ interface LoadProjectRepoContextOptions {
 }
 
 /**
- * Annotates a project's pull requests with the review relay's state for
- * each (issue #1630).
- *
- * Only a PR the relay knows about costs anything: the run index is
- * in-memory, so a PR with no run in it is left exactly as it was, and the
- * GitHub call that looks for a landed review happens only for the few PRs
- * that actually have a run.
- */
-async function attachRelayReviewState(
-  app: FastifyInstance,
-  prs: PROrWithChecks[],
-  repoRef: { owner: string; repo: string },
-): Promise<PROrWithChecks[]> {
-  // One pass to find the PRs the relay knows about — the same lookup every
-  // annotation would otherwise repeat.
-  const withRuns = new Set(
-    prs
-      .filter((pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null)
-      .map((pr) => pr.number),
-  );
-  if (withRuns.size === 0) return prs;
-  // A read token for the landed check. Without one the PR still shows that a
-  // review was requested — it just cannot say whether it landed (the state
-  // says "could not confirm", not "not landed").
-  //
-  // `resolveGitHubToken` already narrows its own failures the way this repo
-  // does everywhere else: the expected ones fall back to the PAT and a null
-  // answer means "no credentials", while an unexpected one (a bug) is
-  // rethrown. So there is nothing to catch here — a swallowed TypeError
-  // would read as "could not confirm" instead of surfacing.
-  const token = await resolveGitHubToken(app, repoRef, "read");
-  return Promise.all(
-    prs.map(async (pr) => {
-      if (!withRuns.has(pr.number)) return pr;
-      const relayReview = await getRelayReviewState(app, {
-        owner: repoRef.owner,
-        repo: repoRef.repo,
-        prNumber: pr.number,
-        token,
-      });
-      // The list renders the state, the verdict and the author — not the
-      // review's whole text, which the drill-in fetches when it is opened.
-      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
-      return { ...pr, relayReview: summary };
-    }),
-  );
-}
-
-/**
  * The ~28-line preamble every `/api/projects/:id/github*` route below
  * shared verbatim (project lookup, host-aware repo-ref resolution, token
  * resolution), each with its own 400/404/503/204 short-circuits. Sends the
@@ -1144,6 +1095,96 @@ export async function projectsRoute(app: FastifyInstance) {
         isRegistered: registeredCwds.has(c.cwd),
       }));
       return discovered;
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // The placement PREVIEW — issue #1726 / roadmap 8.12.
+  // ---------------------------------------------------------------------------
+  //
+  // "Where would a new session land right now, and why?" — the question a
+  // user has to be able to answer before they turn automatic placement on.
+  //
+  // It runs the SAME decision function the spawn path uses
+  // (services/placement.ts's previewPlacement, which is the one
+  // resolvePlacement also calls), so the preview cannot drift from what
+  // would actually happen. It differs only in that it announces nothing
+  // (no "placement: chose a host" line — no placement happened) and in
+  // that it writes nothing at all: it is a read.
+  //
+  // Two routes, one decision:
+  //   - GET  /api/projects/:id/placement-preview — an existing project. The
+  //     mode may be overridden with ?placement=…, because the question a UI
+  //     asks is "what would happen if this project were AUTO?", which is
+  //     usually NOT the mode the project is stored as (turning the mode ON
+  //     is the whole point of the control). Without the override the answer
+  //     would be about the stored mode — the opposite of what the user is
+  //     asking.
+  //   - POST /api/projects/placement-preview    — a project that does not
+  //     exist yet (the create-project modal asks BEFORE the row is saved),
+  //     with the would-be host and mode in the body.
+  //
+  // The answer is a NOW reading: load moves between the preview and the
+  // spawn, so the UI labels it as such.
+  app.get<{ Params: { id: string }; Querystring: { placement?: string } }>(
+    "/api/projects/:id/placement-preview",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            // The shared mode vocabulary — the same enum the project's own
+            // create/PATCH schemas use, so a preview can never be asked
+            // about a mode the project could not actually be set to.
+            placement: { type: "string", enum: [...PLACEMENT_MODES] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      // The mode ASKED about — the picked one when the caller says so, the
+      // project's own when it does not.
+      const placement = (request.query.placement ?? project.placement) as PlacementMode;
+      const decision = previewPlacement(app, {
+        project: { hostId: project.hostId, placement },
+      });
+      return { placement, ...decision };
+    },
+  );
+
+  app.post<{ Body: { hostId: string; placement?: PlacementMode } }>(
+    "/api/projects/placement-preview",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        body: {
+          type: "object",
+          required: ["hostId"],
+          properties: {
+            hostId: { type: "string" },
+            // The shared mode vocabulary — the same enum the project's own
+            // create/PATCH schemas use, so a preview can never be asked
+            // about a mode the project could not actually be set to.
+            placement: { type: "string", enum: [...PLACEMENT_MODES] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { hostId } = request.body;
+      // A preview for a host that is not registered would answer a question
+      // about a machine Mullion does not know — say so rather than guess.
+      if (!getHostRow(app, hostId)) return reply.notFound(`Unknown host ${hostId}`);
+      const placement = request.body.placement ?? "pinned";
+      const decision = previewPlacement(app, { project: { hostId, placement } });
+      return { placement, ...decision };
     },
   );
 
@@ -1982,11 +2023,11 @@ export async function projectsRoute(app: FastifyInstance) {
         reply.code(204);
         return;
       }
-      // The review relay's state per PR (issue #1630) — the panel shows a
-      // "review requested" marker on a PR a review was asked for. Only a PR
-      // with a known relay run costs anything (one GitHub call, memoized);
-      // the rest of the list is untouched.
-      const annotated = await attachRelayReviewState(app, prs, repoRef);
+      // The review relay's state per PR (issues #1630, #1744) — the panel shows
+      // a "review requested" marker on a PR a review was asked for. The poller
+      // annotates the cache with the landed check; this only overlays the
+      // in-memory run index, so the request never waits on GitHub.
+      const annotated = overlayRelayRuns(prs, repoRef);
       return { prs: annotated, prSummary: computePRSummary(annotated) };
     },
   );
@@ -3027,28 +3068,16 @@ export async function projectsRoute(app: FastifyInstance) {
               prsResult[project.id] = null;
               return;
             }
-            // The relay's state for each PR the relay knows about (issue
-            // #1630). This half is where the panel's PR list comes from in a
-            // running app (the batch route feeds the Zustand store, which
-            // shadows the per-project fetch), so annotating only the
-            // per-project route would leave the list's review marker dead.
-            //
-            // A GitHub failure here is expected (a rate limit, a token that
-            // cannot be minted) — the list itself is still good, so it goes
-            // out un-annotated. An unexpected one is a bug and is left loud.
-            try {
-              prsResult[project.id] = {
-                ...status,
-                prs: await attachRelayReviewState(app, status.prs, result.value),
-              };
-            } catch (err) {
-              if (!(err instanceof GitHubApiError)) throw err;
-              app.log.warn(
-                { detail: (err as Error).message, projectId: project.id },
-                "batch git-refs: the review relay's state is unavailable, omitting",
-              );
-              prsResult[project.id] = status;
-            }
+            // The relay's state for each PR the relay knows about (issues
+            // #1630, #1744). This half is where the panel's PR list comes from
+            // in a running app (the batch route feeds the Zustand store, which
+            // shadows the per-project fetch). The poller already annotated the
+            // cache with the landed check, so this stays a pure cache read plus
+            // an in-memory overlay — it never waits on GitHub.
+            prsResult[project.id] = {
+              ...status,
+              prs: overlayRelayRuns(status.prs, result.value),
+            };
           })();
 
           await Promise.all([branchesPromise, prsPromise]);

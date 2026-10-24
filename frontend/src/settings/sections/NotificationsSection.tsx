@@ -62,7 +62,10 @@ export function NotificationsSection() {
     { label: "Turn complete", statuses: ["finished"] },
     { label: "Needs attention", statuses: ["needs_input"] },
     { label: "Busy", statuses: ["compacting", "subagent", "background", "working"] },
-    { label: "Dormant", statuses: ["idle", "exited"] },
+    // Issue #1727 — "suspended" (the host did not answer) joins the
+    // dormant group: it is not an error, and it is not something a user
+    // needs to be woken up for.
+    { label: "Dormant", statuses: ["idle", "exited", "suspended"] },
   ];
 
   return (

@@ -337,6 +337,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
 
       const liveByHost = new Map<string, Record<string, SessionInfo | null>>();
+      // Issue #1727 — the hosts that did NOT answer. A session on one of
+      // these is reported as SUSPENDED (the host is unreachable — it may
+      // still be running) rather than as the idle no-signal fallback, which
+      // would be indistinguishable from a session that is genuinely idle and
+      // alive. Per HOST, not per session: one unreachable machine must not
+      // mark another machine's sessions suspended.
+      const unreachableHosts = new Set<string>();
       await Promise.all(
         [...idsByHost.entries()].map(async ([hostId, ids]) => {
           try {
@@ -349,6 +356,7 @@ export async function sessionsRoute(app: FastifyInstance) {
               { hostId, err },
               "host unreachable, reporting default live status for its sessions",
             );
+            unreachableHosts.add(hostId);
             liveByHost.set(hostId, Object.create(null));
           }
         }),
@@ -357,7 +365,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
-        return withLiveInfo(app, row, info, hostId);
+        return withLiveInfo(app, row, info, hostId, {
+          hostReachable: !unreachableHosts.has(hostId),
+        });
       });
     },
   );

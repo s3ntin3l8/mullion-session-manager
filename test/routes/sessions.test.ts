@@ -962,6 +962,97 @@ describe("sessions route", () => {
     await app.close();
   });
 
+  // Issue #1727 / roadmap 8.13 — a session on a host that does not answer.
+  describe("a session whose host is unreachable (issue #1727)", () => {
+    it("reports it as SUSPENDED — not exited, and not the idle fallback", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      // A registered host that cannot be reached: the bulk live-status call
+      // to it throws, which IS the "the host did not answer" case.
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "sleepy-laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      expect(host.statusCode).toBe(201);
+      const hostId = host.json().id as string;
+      // The session row is inserted directly: spawning a session ON a remote
+      // host needs that host to be alive, which is exactly what it is not.
+      const row = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active", hostId })
+        .returning()
+        .get();
+
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      const session = list.json().find((s: { id: number }) => s.id === row.id);
+      expect(session).toBeDefined();
+      expect(session.sessionStatus).toBe("suspended");
+      // "dormant", not "gone" — the work may still be running there.
+      expect(session.sessionStatusSeverity).toBe("dormant");
+      // The raw column stays null-ish/raw: the EFFECTIVE host is what the
+      // badge shows.
+      expect(session.resolvedHostId).toBe(hostId);
+
+      await app.close();
+    });
+
+    it("does NOT suspend a LOCAL session because ANOTHER host is unreachable", async () => {
+      // The guard is per-HOST: one dead machine must not make another
+      // machine's rows look suspended. With a single host in the app, code
+      // that suspended every row on any host failure would still pass —
+      // so this case puts a dead remote host AND a live local session in the
+      // SAME app.
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "sleepy-laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      const remote = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active", hostId })
+        .returning()
+        .get();
+      const local = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .get();
+
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      const byId = new Map<number, { sessionStatus: string; resolvedHostId: string }>(
+        list.json().map((s: { id: number }) => [s.id, s]),
+      );
+      expect(byId.get(remote.id)?.sessionStatus).toBe("suspended");
+      expect(byId.get(local.id)?.sessionStatus).not.toBe("suspended");
+      expect(byId.get(local.id)?.resolvedHostId).toBe("local");
+
+      await app.close();
+    });
+
+    it("leaves a session on a HEALTHY host alone", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+
+      const list = await app.inject({ method: "GET", url: `/api/sessions?projectId=${projectId}` });
+      const session = list.json().find((s: { id: number }) => s.id === sessionId);
+      expect(session.sessionStatus).not.toBe("suspended");
+      // A local session's effective host is this machine.
+      expect(session.resolvedHostId).toBe("local");
+
+      await app.close();
+    });
+  });
+
   describe("GET /api/sessions/:id (Phase 4, #187)", () => {
     it("returns the row merged with live status", async () => {
       const app = await buildApp();

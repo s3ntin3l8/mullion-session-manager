@@ -868,7 +868,13 @@
   background: var(--g);
   animation: cmuxPulse 1.1s ease-in-out infinite;
 }
-.session-dot-idle {
+/* The idle ring — and, since issue #1727, the SUSPENDED ring too: both say
+   "not running as far as we can tell", and one rule means the two can never
+   drift apart. A suspended session deliberately does NOT get the exited
+   dot: its host did not answer, and the work may well still be running
+   there. */
+.session-dot-idle,
+.session-dot-suspended {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -934,11 +940,49 @@
 .session-status-label.working {
   color: var(--g);
 }
-.session-status-label.idle {
+/* The quiet labels share one colour — idle, exited and (issue #1727)
+   suspended all read in the same dim voice, and the LABEL is what tells
+   them apart. */
+.session-status-label.idle,
+.session-status-label.exited,
+.session-status-label.suspended {
   color: var(--dim);
 }
-.session-status-label.exited {
+/* Issue #1727 / roadmap 8.13 — the status label and the host badge sit
+   together in one inline-flex group, so the badge can sit TIGHT against the
+   label instead of picking up the row's own 8px gap. min-width: 0 lets the
+   group shrink with the sidebar, and the label inside it still ellipsis. */
+.session-status-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+/* The host a session runs on. Quiet by design — small, dim, and never for a
+   local session (the sidebar already carries a per-PROJECT host badge for
+   that); it exists for the case one project's sessions sit on DIFFERENT
+   hosts. */
+.session-host-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
   color: var(--dim);
+  opacity: 0.75;
+  min-width: 0;
+  /* A long host name must not push the row wider than the sidebar — the
+     same cap the row's other chips use (100-110px). The NAME ellipsis
+     inside it; the icon never shrinks. */
+  max-width: 110px;
+}
+.session-host-badge-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-host-badge svg {
+  flex-shrink: 0;
 }
 .session-status-label.killed {
   color: var(--r);

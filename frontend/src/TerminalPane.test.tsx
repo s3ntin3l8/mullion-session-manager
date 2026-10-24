@@ -542,6 +542,9 @@ function renderPane(
         autoFocusOnAttention: false,
         notificationMatrix: {
           exited: { notify: false, sound: false, autoFocus: false },
+          // Issue #1727 — a suspended session (its host did not answer) is
+          // not a notification-worthy event.
+          suspended: { notify: false, sound: false, autoFocus: false },
           api_error: { notify: true, sound: false, autoFocus: false },
           tool_failure: { notify: true, sound: false, autoFocus: false },
           awaiting_permission: { notify: true, sound: false, autoFocus: false },
@@ -664,6 +667,10 @@ function makeMinimalSession(overrides: Partial<Session>): Session {
     previewBranch: null,
     kind: "terminal",
     status: "active",
+    // Issue #1727 — the session's host: the raw column (null = inherits
+    // its project's) and the resolved one the host badge shows.
+    hostId: null,
+    resolvedHostId: "local",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastAttachedAt: null,
     alive: true,

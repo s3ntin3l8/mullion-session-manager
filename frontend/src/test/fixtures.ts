@@ -30,6 +30,10 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
     cwd: null,
     env: null,
     kind: "terminal",
+    // Issue #1727 / roadmap 8.13 — the session's host: the raw column (null
+    // = inherits its project's) and the resolved one the host badge shows.
+    hostId: null,
+    resolvedHostId: "local",
     status: "active",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastAttachedAt: null,

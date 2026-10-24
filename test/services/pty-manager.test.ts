@@ -2542,6 +2542,82 @@ describe("PtyManager", () => {
     });
   });
 
+  // Issue #1720 (roadmap 8.6) — a macOS PRIMARY's local sessions.
+  //
+  // The dogfooding #1720 asks to verify: on a Mac acting as the PRIMARY, a
+  // LOCAL session runs under the darwin (detached/dtach) backend — the same
+  // backend an agent's sessions use. The local path is PtyManager's own
+  // scope, resolved from the HOST's platform by getScopeBackend(); there is
+  // no separate "primary" backend.
+  describe("a macOS primary's local session scope", () => {
+    /** Runs the body with process.platform stubbed — the same technique
+     *  test/services/scope.test.ts uses for its own darwin case. */
+    async function withPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>): Promise<T> {
+      const original = process.platform;
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      try {
+        return await body();
+      } finally {
+        Object.defineProperty(process, "platform", { value: original, configurable: true });
+      }
+    }
+
+    it("resolves the local scope through the PLATFORM, not a fixed backend", async () => {
+      await withPlatform("win32", async () => {
+        // A platform with no backend has no way to run a local session at
+        // all, and says so plainly — which is only observable if the local
+        // path really does go through getScopeBackend().
+        const winManager = new PtyManager({ sessionsDir });
+        try {
+          await expect(winManager.isMasterAliveStateBatch(["1"])).rejects.toThrow(
+            /no scope backend for platform "win32"/,
+          );
+        } finally {
+          winManager.killAll();
+        }
+      });
+    });
+
+    it("resolves a usable scope on darwin — the primary boots and its local sessions run", async () => {
+      await withPlatform("darwin", async () => {
+        const macManager = new PtyManager({ sessionsDir });
+        try {
+          // The detached backend's answer is a TOTAL map — every requested id
+          // is present — so this resolves rather than rejecting. (The
+          // socket itself is not there, so the answer is "dead"/"unknown";
+          // what matters here is that the darwin backend was SELECTED and
+          // answered, instead of the app refusing to run a local session.)
+          const state = await macManager.isMasterAliveStateBatch(["1"]);
+          expect(Object.keys(state)).toEqual(["1"]);
+          expect(["alive", "dead", "unknown"]).toContain(state["1"]);
+        } finally {
+          macManager.killAll();
+        }
+      });
+    });
+
+    it("keeps the local scope resolution LAZY — a Mac with only remote agents still boots", async () => {
+      await withPlatform("darwin", async () => {
+        // Constructing the manager must not touch the scope at all: a macOS
+        // primary whose sessions all run on remote Linux agents never needs
+        // a local scope backend, and refusing to start would make that
+        // topology impossible (pty-manager.ts's own `scope` getter comment).
+        const macManager = new PtyManager({ sessionsDir });
+        expect(() =>
+          macManager.getOrCreate({
+            id: "1",
+            cwd: "/tmp",
+            command: "bash",
+            cols: 80,
+            rows: 24,
+            env: {},
+          }),
+        ).not.toThrow();
+        macManager.killAll();
+      });
+    });
+  });
+
   // Issue #1715 — the process inventory goes through the scope backend like
   // every other scope operation. The inventory itself is a best-effort,
   // Linux-only probe (cgroup v2 + /proc), so on a host that can't answer it

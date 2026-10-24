@@ -15,6 +15,7 @@ import {
 import { gitEnv } from "./git-env.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
+import { annotateRelayReviewState } from "./relay-review-state.js";
 import { diffPrSnapshots, snapshotPr, type PrChange, type PrSnapshot } from "./github-pr-phase.js";
 import {
   createProbeMemo,
@@ -143,6 +144,20 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     const status = await getRepoPRsStatus(token, owner, repo);
     // Review state (GraphQL) is best-effort and never throws.
     await enrichPrsWithReviewState(token, owner, repo, status.prs, app.log);
+    // The review relay's state (issue #1744): the landed check is a GitHub call,
+    // so it happens here, off the request path; the routes read the cache.
+    try {
+      status.prs = await annotateRelayReviewState(app, status.prs, { owner, repo }, token);
+    } catch (err) {
+      // The annotation is decorative: whatever goes wrong (a rate limit, an
+      // unmintable token, a bug), the PR list and the default-branch badge must
+      // still refresh, so the list is cached un-annotated. Logged at error
+      // level so a bug stays loud rather than reading as "no review".
+      app.log.error(
+        { err, owner, repo },
+        "[github-pr-poller] the review relay's state failed, caching PRs un-annotated",
+      );
+    }
     setRepoPRsStatus(owner, repo, status);
     const changes = pushPrChanges(repoKey, status.prs, projectIds);
     if (changes.length > 0 && projectIds) {

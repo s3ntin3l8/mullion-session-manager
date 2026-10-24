@@ -54,10 +54,21 @@ export function deriveHostStatus(host: Host, click: PingState): HostStatusDispla
     click.status !== "unknown" && host.lastCheckedAt === click.lastCheckedAtSnapshot;
 
   if (host.health !== "pending" && !clickIsFresh) {
-    const dot = host.health === "online" ? "on" : host.health === "degraded" ? "warn" : "off";
-    const color =
-      host.health === "online" ? "var(--g)" : host.health === "degraded" ? "var(--y)" : "var(--r)";
-    return { dot, label: host.health, color };
+    // Issue #1727 / roadmap 8.13 — the wording, and the unreachable dot.
+    //
+    // The backend CANNOT tell a sleeping host from an unreachable one (it
+    // only knows that the host did not answer), so the UI must not say
+    // "offline" — which reads as "something broke". "Unreachable" says what
+    // is actually knowable, and the hollow dim dot says "not there right
+    // now" rather than "failed". A fleet of laptops should not look like a
+    // fleet of broken machines.
+    if (host.health === "online") return { dot: "on", label: "online", color: "var(--g)" };
+    if (host.health === "degraded") {
+      return { dot: "warn", label: "missed a ping", color: "var(--y)" };
+    }
+    // The "off" dot IS the hollow dim ring (.settings-status-dot.off) —
+    // the same shape an idle dot uses, so no new dot value is needed.
+    return { dot: "off", label: "unreachable", color: "var(--dim)" };
   }
   if (click.status === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
   return {

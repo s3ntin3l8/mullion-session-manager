@@ -6,6 +6,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { vi } from "vitest";
+import { warmSqliteBinding } from "../helpers/app.js";
 import { MullionClient } from "../../src/mcp/client.mjs";
 import { applySettingsPatch } from "../../src/services/settings.js";
 import { setHermesKey } from "../../src/services/hermes-integration.js";
@@ -274,6 +275,24 @@ function collectFrames(socket: net.Socket): Record<string, unknown>[] {
 }
 
 describe("buildQueryUrl", () => {
+  // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY (its
+  // emulator runs in a `systemd --user` scope), so on a non-Linux host the
+  // panel is off and every device route answers 400. This file asserts the
+  // panel's ENABLED behaviour, so the host platform is stubbed for the whole
+  // test — the same technique test/services/scope.test.ts uses for its own
+  // darwin case.
+  //
+  // The stub covers the whole test (not just the build) because the app's
+  // plugins read the platform when Fastify makes them ready, and the panel's
+  // gate is read at REQUEST time.
+  let originalPlatform: NodeJS.Platform;
+  beforeEach(() => {
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
   it("returns the bare path with no body", () => {
     expect(buildQueryUrl("/api/sessions", undefined)).toBe("/api/sessions");
   });
@@ -4126,10 +4145,23 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     describe("device ops", () => {
-      beforeEach(() => {
+      // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY
+      // (its emulator runs in a `systemd --user` scope), so on a non-Linux
+      // host the panel is off and the device routes answer 400. These ops
+      // assert the panel's ENABLED behaviour, so the host platform is
+      // stubbed for this describe — the same technique
+      // test/services/scope.test.ts uses for its own darwin case.
+      let originalPlatform: NodeJS.Platform;
+      beforeEach(async () => {
+        // The native SQLite binding must be loaded BEFORE the platform is
+        // stubbed — see warmSqliteBinding()'s own doc comment.
+        await warmSqliteBinding();
+        originalPlatform = process.platform;
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
         process.env.DEVICE_ENABLED = "true";
       });
       afterEach(() => {
+        Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
         delete process.env.DEVICE_ENABLED;
       });
 

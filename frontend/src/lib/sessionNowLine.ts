@@ -110,6 +110,12 @@ export function deriveNowLine(
   const evts = events ?? [];
 
   if (presentation.tone === "exited") return null;
+  // Issue #1727 — "suspended" (the host did not answer) gets no "now"
+  // line either: there is nothing to report, and the row would otherwise
+  // fall through to the "the agent's turn is over" branch and show the
+  // PREVIOUS turn's last message as if it were the current state — which
+  // is exactly the wrong thing to say about a session we cannot see.
+  if (presentation.tone === "suspended") return null;
 
   if (ATTENTION_TONES.has(presentation.tone)) {
     const described = newestAttentionEvent(evts);

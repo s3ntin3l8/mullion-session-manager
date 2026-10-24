@@ -127,6 +127,12 @@ export function withLiveInfo(
   row: typeof sessions.$inferSelect,
   info: SessionInfo | null | undefined,
   hostId: string,
+  // Issue #1727 — whether the host ANSWERED. `hostReachable: false` means
+  // the host was unreachable, so nothing about the session itself could be
+  // established (the live info is the idle/no-signal fallback). Optional and
+  // defaulting to "reachable", so every existing caller keeps today's
+  // behaviour.
+  opts: { hostReachable?: boolean } = {},
 ) {
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
@@ -150,11 +156,22 @@ export function withLiveInfo(
   // ("active"/"killed"/"exited") is a separate, narrower concept other code
   // may still read, and collapsing it into the much richer SessionStatus
   // union here would be a silent breaking change for any such reader.
-  const derived = deriveSessionStatus({ dbStatus: row.status, info: live });
+  const derived = deriveSessionStatus({
+    dbStatus: row.status,
+    hostReachable: opts.hostReachable,
+    info: live,
+  });
   return {
     ...row,
     ...live,
     browserUrl,
+    // Issue #1727 — the session's EFFECTIVE host: its own when it has one,
+    // the project's when it inherits. The raw `hostId` column above stays
+    // as it is (null = "inherits the project's host"), so both facts are
+    // visible and neither is ambiguous. Resolved HERE, on the server, where
+    // the rule already lives (resolveSessionHostId) — the frontend does not
+    // re-derive it.
+    resolvedHostId: hostId,
     // Issue #822 — same "parse the JSON-as-text column back into an object
     // before it reaches the wire" convention as workspaces.ts's own
     // `layout` field; without this override, the `...row` spread above
@@ -293,16 +310,22 @@ export async function withLiveStatus(
   hostId: string,
 ) {
   let info: SessionInfo | null = null;
+  let hostReachable = true;
   try {
     const map = await resolveBackend(app, hostId).liveStatus([String(row.id)], idleThresholdMs);
     info = map[String(row.id)] ?? null;
   } catch (err) {
+    // Issue #1727 — the host did not answer. That is not "the session is
+    // gone": it is "we cannot tell what is going on there". The session is
+    // reported as SUSPENDED (host unreachable — may still be running) rather
+    // than as the idle no-signal fallback a quiet session gets.
+    hostReachable = false;
     app.log.warn(
       { hostId, sessionId: row.id, err },
       "host unreachable, reporting default live status",
     );
   }
-  return withLiveInfo(app, row, info, hostId);
+  return withLiveInfo(app, row, info, hostId, { hostReachable });
 }
 
 // One corrupt `env` column must not 500 GET /api/sessions for every session.
