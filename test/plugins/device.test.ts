@@ -11,7 +11,7 @@ import type * as ChildProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { buildTestApp } from "../helpers/app.js";
+import { buildTestApp, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { isDevicePanelSupported } from "../../src/services/device-manager.js";
 
@@ -37,6 +37,13 @@ const tmpDb = path.join(os.tmpdir(), `device-panel-gate-test-${process.pid}.db`)
  * request is made, not only when the app was built.
  */
 async function withPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>): Promise<T> {
+  // The native SQLite binding must be loaded BEFORE the platform is stubbed:
+  // better-sqlite3 resolves its prebuild lazily, in the Database constructor,
+  // and that loader reads process.platform — so a stubbed platform would make
+  // it try the WRONG platform's .node file (a Linux binary on macOS, a
+  // Darwin binary on CI). The binding is memoized, so loading it once here
+  // makes the stub safe. See warmSqliteBinding()'s own doc comment.
+  await warmSqliteBinding();
   const original = process.platform;
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
   try {
