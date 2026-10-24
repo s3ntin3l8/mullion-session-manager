@@ -3,7 +3,7 @@ import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Integration-style test for the actual forwarder.mjs subprocess entry
@@ -78,6 +78,33 @@ function collectLines(server: net.Server, count: number): Promise<string[]> {
   });
 }
 
+/**
+ * Writes `stdin` to the child and closes it.
+ *
+ * The child may exit BEFORE the write lands — the forwarder has nothing to
+ * do in the "no socket configured" cases and exits immediately — and then the
+ * write hits a closed pipe, so the stream raises `EPIPE`. Nothing listens
+ * for `child.stdin`'s `error` event by default, and an unhandled `error`
+ * event on a stream is an UNCAUGHT exception: vitest reports it as an
+ * *unhandled error*, so every assertion in the file passes and yet the suite
+ * exits non-zero (issue #1831).
+ *
+ * A closed stdin is the normal end of the interaction here, not a failure of
+ * the thing under test, so it is swallowed and the promise still settles on
+ * the child's exit.
+ */
+function writeStdinAndClose(child: ChildProcess, stdin: string): void {
+  child.stdin.on("error", () => {
+    // The child exited before reading stdin. Expected in the "nothing to
+    // do" cases; the exit code is what the assertions are about.
+  });
+  child.stdin.write(stdin, () => {
+    // The write callback carries the same failure the stream's `error` event
+    // does. Handling it here as well keeps the failure from surfacing twice.
+  });
+  child.stdin.end();
+}
+
 /** Runs the real forwarder.mjs as a child process with the given argv/env,
  * writing `stdin` and waiting for it to exit. */
 function runForwarder(
@@ -92,8 +119,7 @@ function runForwarder(
     });
     child.on("error", reject);
     child.on("exit", (code) => resolve(code));
-    child.stdin.write(stdin);
-    child.stdin.end();
+    writeStdinAndClose(child, stdin);
   });
 }
 
@@ -116,8 +142,7 @@ function runForwarderCapturingStdout(
     });
     child.on("error", reject);
     child.on("exit", (code) => resolve({ code, stdout }));
-    child.stdin.write(stdin);
-    child.stdin.end();
+    writeStdinAndClose(child, stdin);
   });
 }
 
@@ -203,6 +228,39 @@ describe("forwarder.mjs (issue #174)", () => {
       "{}",
     );
     expect(exitCode).toBe(0);
+  });
+
+  // Issue #1831 — the child can exit BEFORE the write lands. In the "no
+  // socket configured" case above the forwarder has nothing to do and exits
+  // immediately, so the write hits a closed pipe and the stream raises
+  // `EPIPE`. Without a listener on `child.stdin`'s `error` event that is an
+  // UNCAUGHT exception: vitest reports it as an *unhandled error*, so every
+  // assertion in the file still passes and yet the suite exits non-zero.
+  //
+  // This test makes the race deterministic — a child that is already gone by
+  // the time the write happens — so the EPIPE is guaranteed rather than
+  // load-dependent. If the fix ever regresses, the unhandled error makes
+  // THIS RUN fail, which is exactly the symptom the issue is about.
+  it("survives a child that exits before the write lands (issue #1831)", async () => {
+    // The race, made deterministic. The child stays alive long enough to
+    // ACCEPT the write, then exits — and the pending flush then fails with
+    // `EPIPE`. The write has to be bigger than the pipe buffer, or it
+    // completes before the child dies and there is no race at all, which is
+    // why this only ever showed up under load.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120)"], {
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const exit = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+
+    writeStdinAndClose(child, "x".repeat(4 * 1024 * 1024));
+
+    expect(await exit).toBe(0);
+
+    // Give the pending flush time to fail. If that error were unhandled it
+    // would be an UNCAUGHT exception, and vitest fails the RUN for it —
+    // every assertion above still passes, which is exactly the symptom the
+    // issue reports.
+    await new Promise((resolve) => setTimeout(resolve, 200));
   });
 
   it("exits cleanly (never throws) when the socket path doesn't exist", async () => {
