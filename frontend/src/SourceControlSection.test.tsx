@@ -33,6 +33,7 @@ function makeProject(overrides: Partial<Project>): Project {
     cwd: "/home/x/demo",
     hostId: LOCAL_HOST_ID,
     placement: "pinned",
+    hostCwds: {},
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,

@@ -6,6 +6,8 @@ import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
+import { resolveTaskWorkerHost } from "./session-live-info.js";
+import { projectCwdForHost } from "./placement.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
 // attemptAutoRebase's stale-attempt-termination branch below for why this
@@ -159,10 +161,17 @@ async function spawnReviewAgentNow(
     // the review agent is told to write somewhere it can actually reach on
     // its own filesystem, not wherever the primary's own hookSocketPath
     // happens to live.
-    const backend = resolveBackend(app, project.hostId);
+    // Issue #1724 / roadmap 8.10 — the review agent reads the task's
+    // worktree, so it runs on the host that HOLDS it: the worker session's
+    // own host, which is where the worktree was cut. The sessions dir it is
+    // told to write to has to be that host's too (#778's own reasoning: the
+    // agent is told to write somewhere it can actually reach on its own
+    // filesystem).
+    const workerHostId = resolveTaskWorkerHost(app, task);
+    const backend = resolveBackend(app, workerHostId);
     const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
       taskId: task.id,
-      hostId: project.hostId,
+      hostId: workerHostId,
     });
     // task.autoReturnRounds is the round THIS review belongs to: 0 for the
     // first review, 1 for the one spawned after an auto-returned round —
@@ -216,6 +225,11 @@ async function spawnReviewAgentNow(
       // tasks #66 / #67. Mark as a Task Master session so the opencode
       // and codex adapters deny the same three skills.
       taskId: task.id,
+      // Issue #1724 — an unattended session (the placement policy scores it
+      // with no local bonus) AND pinned to the worker's host: the review
+      // reads that worktree, so it cannot be placed anywhere else.
+      unattended: true,
+      hostId: workerHostId,
     });
     if (!result.ok) {
       app.log.warn(
@@ -230,12 +244,12 @@ async function spawnReviewAgentNow(
     // resolveSeedDelivered's doc comment.
     const seedDelivered = resolveSeedDelivered(
       seedCapable,
-      project.hostId,
+      workerHostId,
       result.initialPromptApplied,
     );
     if (!seedDelivered) {
       app.log.warn(
-        { taskId: task.id, reviewCommand, hostId: project.hostId, seedCapable },
+        { taskId: task.id, reviewCommand, hostId: workerHostId, seedCapable },
         seedCapable
           ? "task reconcile: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
           : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
@@ -919,12 +933,15 @@ async function failReviewingGate(
   now: Date,
 ): Promise<void> {
   if (task.worktreePath) {
-    const commitResult = await commitHostWipChanges(app, project.hostId, task.worktreePath);
+    // Issue #1724 — the worktree is on the WORKER's host, so the commit
+    // happens there too.
+    const workerHostId = resolveTaskWorkerHost(app, task);
+    const commitResult = await commitHostWipChanges(app, workerHostId, task.worktreePath);
     if (!commitResult.ok) {
       app.log.warn(
         {
           taskId: task.id,
-          hostId: project.hostId,
+          hostId: workerHostId,
           worktreePath: task.worktreePath,
           reason: commitResult.reason,
           ...(commitResult.reason === "unreachable" ? { detail: commitResult.detail } : {}),
@@ -1354,7 +1371,13 @@ async function attemptAutoRebase(
   }
 
   const now = Date.now();
-  const backend = resolveBackend(app, project.hostId);
+  // Issue #1724 — the auto-rebase worker works in the task's EXISTING
+  // worktree, and that worktree lives on the host the worker was placed
+  // on — not necessarily the project's own host any more. So the backend
+  // AND the project root it resolves against both follow the worker.
+  const workerHostId = resolveTaskWorkerHost(app, task);
+  const workerCwd = projectCwdForHost(project, workerHostId);
+  const backend = resolveBackend(app, workerHostId);
 
   if (task.rebaseStartedAt !== null) {
     const withinWindow = now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS;
@@ -1481,14 +1504,14 @@ async function attemptAutoRebase(
   // behind on an already-superseded attempt is a contract violation, not
   // work worth the careful preservation removeWorktreeIfClean exists for.
   const stalePath = deriveWorktreePath(project.cwd, branchName);
-  await backend.removeWorktree(stalePath, project.cwd).catch((err) => {
+  await backend.removeWorktree(stalePath, workerCwd).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, stalePath },
       "task auto-rebase: failed to clear a stale worktree before retrying",
     );
   });
 
-  const worktree = await backend.resumeTaskWorktree(project.cwd, branchName);
+  const worktree = await backend.resumeTaskWorktree(workerCwd, branchName);
   if (!worktree) {
     if (task.reviewSessionId !== null) {
       app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
@@ -1511,7 +1534,7 @@ async function attemptAutoRebase(
     ? taskCommitTitlePath(
         await resolveSessionsDirWithFallback(app, backend, {
           taskId: task.id,
-          hostId: project.hostId,
+          hostId: workerHostId,
         }),
         task.id,
       )
@@ -1551,6 +1574,10 @@ async function attemptAutoRebase(
     // The auto-rebase worker is just as exposed to the brainstorming-skill
     // failure mode as any other Task Master worker.
     taskId: task.id,
+    // Issue #1724 — the rebase worker runs in the task's existing worktree
+    // (`cwd: worktree.path`), so it joins the host that holds it.
+    unattended: true,
+    hostId: workerHostId,
   });
   if (!result.ok) {
     if (task.reviewSessionId !== null) {
@@ -1565,7 +1592,7 @@ async function attemptAutoRebase(
   }
   const seedDelivered = resolveSeedDelivered(
     seedCapable,
-    project.hostId,
+    workerHostId,
     result.initialPromptApplied,
   );
 
@@ -2657,11 +2684,14 @@ async function attemptReturnRedCiToWorker(
 
   // #778 — resolved against the OWNING host's own sessionsDir; see
   // spawnReviewAgentNow's own comment for the full rationale.
+  // Issue #1724 — the worker these notes go back to runs on the host that
+  // holds its worktree, so its sessions dir is resolved there.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const commitTitlePath = project.conventionalCommitTitles
     ? taskCommitTitlePath(
-        await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
+        await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
           taskId: task.id,
-          hostId: project.hostId,
+          hostId: workerHostId,
         }),
         task.id,
       )
@@ -2836,11 +2866,14 @@ async function attemptReturnPrCommentsToWorker(
 
   // #778 — resolved against the OWNING host's own sessionsDir; see
   // spawnReviewAgentNow's own comment for the full rationale.
+  // Issue #1724 — the worker these notes go back to runs on the host that
+  // holds its worktree, so its sessions dir is resolved there.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const commitTitlePath = project.conventionalCommitTitles
     ? taskCommitTitlePath(
-        await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
+        await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
           taskId: task.id,
-          hostId: project.hostId,
+          hostId: workerHostId,
         }),
         task.id,
       )
@@ -4045,7 +4078,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             ? taskCommitTitlePath(
                 await resolveSessionsDirWithFallback(app, backend, {
                   taskId: task.id,
-                  hostId: project.hostId,
+                  hostId: resolveTaskWorkerHost(app, task),
                 }),
                 task.id,
               )
