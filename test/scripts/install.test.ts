@@ -833,19 +833,25 @@ sed -n "/<key>$LEAF<\\/key>/{n;s/.*<string>\\(.*\\)<\\/string>.*/\\1/p;}" "$FILE
 
     it("reads a quoted PORT the way the installer reads a quoted MULLION_ROLE", async () => {
       // PORT="4001" must read as 4001 — the same trim the installer does for
-      // MULLION_ROLE. A stray trailing quote would make a real collision
-      // read as none (and print the quote in the warning).
+      // MULLION_ROLE.
+      //
+      // BOTH roots carry the SAME quoted port, so the warning fires only if
+      // the quote is stripped from BOTH sides: before the fix, one side read
+      // "4001" with the quote still on it, the two differed, and no warning
+      // printed at all — which is what made this case unable to fail.
       writeDarwinShim();
       writeLoadedLaunchctlShim();
       const mullionHome = freshMullionHome();
       const otherHome = freshMullionHome();
       skipDownload(mullionHome);
+      // This root's own .env is left as-is by the installer.
+      fs.writeFileSync(path.join(mullionHome, ".env"), 'PORT="4001"\n');
       fs.writeFileSync(path.join(otherHome, ".env"), 'PORT="4001"\n');
       seedOtherLaunchdJob("com.mullion.agent", otherHome);
 
       const { stderr } = await runScript(["--role", "primary", mullionHome]);
 
-      expect(stderr).not.toMatch(/BOTH bind port/);
+      expect(stderr).toMatch(/BOTH bind port 4001/);
       expect(stderr).not.toMatch(/4001"/);
     });
 
