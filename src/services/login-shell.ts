@@ -13,6 +13,10 @@
  * ask the same way a session would — through a login shell — or it will
  * report "not installed" for a CLI that every session runs perfectly well.
  *
+ * That PATH also includes the entries only an interactive rc file (~/.zshrc,
+ * ~/.bashrc) adds: `buildSessionEnv()` merges them in (see user-shell-env.ts),
+ * because a `-lc` shell never reads those files itself.
+ *
  * `agent-detect.ts` uses this to find the agent binaries; the mcode adapter
  * uses it to read mcode's own version (its CODEX plugin format has a minimum
  * version, and the check has to see the SAME mcode a session would run).

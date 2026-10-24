@@ -41,6 +41,18 @@ let lastSpawnOpts: { stdio?: unknown } | undefined;
 // What `opencode --version` prints (issue #1593); null = the probe prints nothing.
 let opencodeVersionOutput: string | null = null;
 
+// resolveUserShellEnv() would spawn a real interactive shell through the same
+// faked child_process — covered by user-shell-env.test.ts, kept out of here.
+// `resolveUserShellEnvImpl` lets a test hold the resolve open to pin the
+// resolve-before-probe ordering in refreshAgents().
+let resolveUserShellEnvImpl: () => Promise<void> = () => Promise.resolve();
+vi.mock("../../src/services/user-shell-env.js", () => ({
+  resolveUserShellEnv: () => resolveUserShellEnvImpl(),
+  invalidateUserShellEnv: () => {},
+  getUserShellPath: () => null,
+  mergePaths: (base: string | undefined) => base ?? "",
+}));
+
 // getCodexHookTrust() reads the REAL ~/.codex (unless CODEX_HOME is set) —
 // mocked here for the same reason child_process is faked above: detectAgents
 // must not depend on whatever Codex hook-trust state happens to exist on the
@@ -256,6 +268,25 @@ describe("probe() timeout (B7)", () => {
 });
 
 describe("getCachedAgents", () => {
+  it("settles the interactive-PATH resolve before spawning any probe", async () => {
+    available = {};
+    clearAgentsCacheForTests();
+    const spawnMock = vi.mocked((await import("node:child_process")).spawn);
+    spawnMock.mockClear();
+    let release!: () => void;
+    resolveUserShellEnvImpl = () => new Promise<void>((r) => (release = r));
+    try {
+      const pending = getCachedAgents();
+      await new Promise((r) => setImmediate(r));
+      expect(spawnMock).not.toHaveBeenCalled();
+      release();
+      await pending;
+      expect(spawnMock).toHaveBeenCalled();
+    } finally {
+      resolveUserShellEnvImpl = () => Promise.resolve();
+    }
+  });
+
   it("only re-probes once the TTL is bypassed via forceRefresh, otherwise reuses the cache", async () => {
     available = {};
     clearAgentsCacheForTests();

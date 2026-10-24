@@ -22,6 +22,15 @@ vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
   getCodexHookTrust: () => "pending" as const,
 }));
 
+// resolveUserShellEnv() would spawn one extra (interactive) shell through the
+// faked child_process and skew probeCount — it has its own test file.
+vi.mock("../../src/services/user-shell-env.js", () => ({
+  resolveUserShellEnv: () => Promise.resolve(),
+  invalidateUserShellEnv: () => {},
+  getUserShellPath: () => null,
+  mergePaths: (base: string | undefined) => base ?? "",
+}));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
