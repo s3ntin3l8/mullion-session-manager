@@ -109,6 +109,37 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("does not 500 the fleet list on a capacity entry with an unusable timestamp", async () => {
+    // The sweep stamps a finite time when it records a reading, so the
+    // route's own guard is defence in depth — and defence in depth that no
+    // test reaches is defence in depth that can be deleted. This pins it:
+    // a NaN straight into the tracker must still render the list.
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "bad-stamp", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    });
+    const { id } = created.json();
+    app.hostCapacityTracker?.record(
+      id,
+      {
+        platform: "linux",
+        logicalCores: 4,
+        loadAverage1m: 0,
+        memory: { totalBytes: 1, freeBytes: 1 },
+        sessions: { tracked: 0, alive: 0 },
+      },
+      Number.NaN,
+    );
+
+    const res = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(res.statusCode).toBe(200);
+    const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+    expect(row?.capacity).toEqual(expect.objectContaining({ platform: "linux" }));
+    await app.close();
+  });
+
   it("invalidates the CAPACITY cache when a host's baseUrl/token is rotated via PATCH", async () => {
     // Numbers measured against the OLD baseUrl describe a different agent.
     const app = await buildApp();

@@ -364,6 +364,22 @@ describe("RemoteHostClient", () => {
       }
     });
 
+    it("honours the test override for its budget too", async () => {
+      // The knob exists because this host's parallel suite blows real
+      // budgets; a test that needs a slow capacity route to answer needs
+      // the same escape hatch every other call site has.
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      const restore = overrideDefaultRequestTimeoutForTests(15_000);
+      try {
+        fetchMock.mockResolvedValue(jsonResponse(200, report));
+        await client().resolveCapacity();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(15_000);
+      } finally {
+        restore();
+        timeoutSpy.mockRestore();
+      }
+    });
+
     it("returns null for a 404 — an agent build that predates the route", async () => {
       fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
       await expect(client().resolveCapacity()).resolves.toBeNull();

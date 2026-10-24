@@ -131,6 +131,12 @@ const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
 // the user-facing "how long before an unreachable host is reported as such"
 // value stays REQUEST_TIMEOUT_MS.
 let defaultRequestTimeoutMs = REQUEST_TIMEOUT_MS;
+// The capacity call's own budget (see CAPACITY_REQUEST_TIMEOUT_MS). Kept as
+// its own variable so the test override below can widen it too: the knob
+// exists because this host's parallel suite blows real budgets, and a test
+// that exercises a slow capacity route needs the SAME escape hatch every
+// other call site has.
+let capacityRequestTimeoutMs = CAPACITY_REQUEST_TIMEOUT_MS;
 export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
   // AbortSignal.timeout throws on NaN/negative and a value above 2^31-1 only
   // warns and clamps to 1ms (every request would abort instantly) — refuse
@@ -139,9 +145,15 @@ export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
     throw new RangeError(`request timeout override must be in (0, 2^31-1] ms, got ${ms}`);
   }
   const previous = defaultRequestTimeoutMs;
+  const previousCapacity = capacityRequestTimeoutMs;
   defaultRequestTimeoutMs = ms;
+  // The capacity call has its own (shorter) budget, so it needs the same
+  // escape hatch — otherwise a test that needs a slow capacity route to
+  // answer would have no way to say so.
+  capacityRequestTimeoutMs = ms;
   return () => {
     defaultRequestTimeoutMs = previous;
+    capacityRequestTimeoutMs = previousCapacity;
   };
 }
 
@@ -616,7 +628,7 @@ export class RemoteHostClient {
       return await this.request<HostCapacityReport>(
         "/internal/capacity",
         undefined,
-        CAPACITY_REQUEST_TIMEOUT_MS,
+        capacityRequestTimeoutMs,
       );
     } catch (err) {
       if (err instanceof HostRequestError && err.statusCode === 404) return null;
