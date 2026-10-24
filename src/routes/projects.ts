@@ -15,7 +15,11 @@ import { getStoredSettings } from "../services/settings.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
-import { DOCKER_STACK_SESSION_NAME_PREFIX, PLACEMENT_MODES } from "../shared/constants.js";
+import {
+  DOCKER_STACK_SESSION_NAME_PREFIX,
+  PLACEMENT_MODES,
+  type PlacementMode,
+} from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -114,7 +118,6 @@ import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
 import type {
-  PlacementMode,
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleasePullRequestStatus,

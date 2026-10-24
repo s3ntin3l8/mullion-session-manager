@@ -33,8 +33,7 @@ import type {
   TabletPaneCap,
   RelayReviewState,
 } from "../../../src/shared/types.js";
-import type { TaskStatus } from "../../../src/shared/constants.js";
-import type { PlacementMode } from "../../../src/shared/types.js";
+import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult };
 export type {
@@ -2240,11 +2239,10 @@ export interface CreateProjectDirOptions {
 // "auto" lets each of the project's sessions land on an eligible host of
 // its own; absent means the column's "pinned" default.
 //
-// The mode is the SHARED one (PlacementMode, src/shared/types.ts — the
-// boundary is importable, this file already imports from there), so the
-// frontend cannot drift from the backend's own PLACEMENT_MODES
-// (src/shared/constants.ts, which the column's enum and the routes' JSON
-// schemas use).
+// The mode is the SHARED one: PlacementMode, derived from PLACEMENT_MODES in
+// src/shared/constants.ts — the very declaration the column's enum and the
+// routes' JSON schemas use. One vocabulary, one source, and the frontend
+// cannot drift from the backend because there is nothing to drift from.
 export interface CreateProjectPlacementOptions {
   placement?: PlacementMode;
 }

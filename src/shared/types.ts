@@ -488,14 +488,14 @@ export interface RelayReviewState {
   htmlUrl?: string;
 }
 
-/**
- * The placement mode of a project — issue #1723 / roadmap 8.9.
- *
- * "pinned" (the default) keeps today's behaviour exactly: every session
- * under the project runs on the project's own host. "auto" opts the project
- * into automatic placement.
- *
- * Mirrors PLACEMENT_MODES in src/shared/constants.ts, which is the runtime
- * source of truth (the column's enum and the routes' JSON schemas use it).
- */
-export type PlacementMode = "pinned" | "auto";
+// The placement mode of a project — issue #1723 / roadmap 8.9 — is NOT
+// declared here. It is derived from PLACEMENT_MODES in
+// src/shared/constants.ts (the TaskStatus/TASK_STATUSES precedent in that
+// file), so the runtime list and the type are one declaration and cannot
+// drift. It used to be spelled out here as its own union, which made the
+// pair two hand-maintained vocabularies — and this file is a leaf that
+// imports nothing, so the two could only be held together by hand.
+//
+// "pinned" (the default) keeps today's behaviour exactly: every session
+// under the project runs on the project's own host. "auto" opts the project
+// into automatic placement.

@@ -146,4 +146,21 @@ export const DOCKER_STACK_SESSION_NAME_PREFIX = "docker-stack:";
 // JSON schemas on the project routes, and the frontend's own type. A typo
 // in one of them would silently mean "pinned" — the safe default, which
 // makes a typo invisible rather than loud. One declaration, one meaning.
+//
+// The frontend's own type is not a separate spelling either: it is the
+// PlacementMode derived from this list below, so all four places hang off
+// the same declaration.
 export const PLACEMENT_MODES = ["pinned", "auto"] as const;
+
+// The MODE type is DERIVED from the list, never spelled out beside it (the
+// TaskStatus/TASK_STATUSES precedent above). Two hand-written spellings of
+// one vocabulary can drift, and a drifted pair fails silently: the backend
+// would accept a mode the frontend's type does not know, or the other way
+// round — with the column's enum and the routes' JSON schemas on the
+// backend's side of the split. Deriving makes that impossible by
+// construction rather than by discipline, and tsc is what checks it (the
+// tsconfig covers src/**, so this line is compiled by the type gate).
+//
+// Consumers import the type from HERE, not from src/shared/types.ts — one
+// import path for the list and the type it yields.
+export type PlacementMode = (typeof PLACEMENT_MODES)[number];

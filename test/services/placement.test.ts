@@ -6,7 +6,6 @@ import {
 } from "../../src/services/placement.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
 import { PLACEMENT_MODES } from "../../src/shared/constants.js";
-import type { PlacementMode } from "../../src/shared/types.js";
 
 // Issue #1723 / roadmap 8.9 — the placement policy's decision table.
 //
@@ -56,22 +55,21 @@ const localCandidate = (overrides: Partial<PlacementCandidate> = {}) =>
 
 describe("the shared placement modes stay in step (issue #1723)", () => {
   it("lists exactly the modes the shared type allows", () => {
-    // PLACEMENT_MODES (src/shared/constants.ts, a runtime VALUE) and
-    // PlacementMode (src/shared/types.ts, a type-only shape) are two
-    // declarations in two deliberately import-free modules — they cannot be
-    // derived from each other, so a mode added to one side only would
-    // drift silently. These two assignments are the compile-time half of
-    // that guard: if a mode is in the list and not in the type (or the
-    // other way round), one of them does not typecheck.
-    const listCoversType: Exclude<PlacementMode, (typeof PLACEMENT_MODES)[number]> extends never
-      ? true
-      : false = true;
-    const typeCoversList: Exclude<(typeof PLACEMENT_MODES)[number], PlacementMode> extends never
-      ? true
-      : false = true;
-
-    expect(listCoversType).toBe(true);
-    expect(typeCoversList).toBe(true);
+    // PlacementMode is DERIVED from PLACEMENT_MODES — `(typeof
+    // PLACEMENT_MODES)[number]`, the TaskStatus/TASK_STATUSES precedent in
+    // src/shared/constants.ts. The list and the type are therefore ONE
+    // declaration, not two that have to be kept in step: there is no second
+    // spelling to drift. The derivation lives in src/**, which tsc covers,
+    // so it is the type gate that holds the pair together.
+    //
+    // (An earlier draft kept the type in src/shared/types.ts and guarded the
+    // pair with Exclude<> assertions HERE — in test/, which nothing
+    // typechecks: the tsconfig covers src/** only and vitest transpiles
+    // without typechecking. Those assertions could not have bitten.)
+    //
+    // What this test still earns: the list's CONTENTS are pinned, so adding
+    // a mode is a deliberate act with the policy updated to match, not a
+    // stray edit that silently widens what the routes accept.
     expect([...PLACEMENT_MODES]).toEqual(["pinned", "auto"]);
   });
 });
