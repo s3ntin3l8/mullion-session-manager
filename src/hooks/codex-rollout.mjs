@@ -115,8 +115,8 @@ export function resolveCodexHome() {
 }
 
 /** The directory codex writes its session rollouts into. */
-export function codexSessionsDir() {
-  return path.join(resolveCodexHome(), "sessions");
+export function codexSessionsDir(codexHome) {
+  return path.join(codexHome ?? resolveCodexHome(), "sessions");
 }
 
 /**
@@ -143,7 +143,6 @@ export class CodexRateLimitSignal {
      * one", and re-reporting the same failure on every tick would restart
      * the rate-limit grace window forever.
      */
-    this.identity = turnId;
     /** True only for a quota-shaped provider refusal. */
     this.rateLimited = rateLimited;
     /** The provider's HTTP status, when codex recorded one. */
@@ -171,7 +170,7 @@ export class CodexRateLimitSignal {
  * 3. The directory check is done against a real path too, so a symlinked
  *    sessions directory does not make every path outside it look inside it.
  */
-export function isCodexRolloutPath(candidate) {
+export function isCodexRolloutPath(candidate, codexHome) {
   if (typeof candidate !== "string" || candidate.length === 0) return false;
   let stat;
   try {
@@ -184,15 +183,22 @@ export function isCodexRolloutPath(candidate) {
   let sessionsDir;
   let fileRealPath;
   try {
-    sessionsDir = realpathSync(codexSessionsDir());
+    sessionsDir = realpathSync(codexSessionsDir(codexHome));
     fileRealPath = realpathSync(candidate);
   } catch {
     return false;
   }
   const relative = path.relative(sessionsDir, fileRealPath);
   // A path outside the directory (or the directory itself) is not a
-  // rollout. `relative` starting with ".." is the outside case.
-  if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) {
+  // rollout. `relative` starting with ".." plus a separator is the outside
+  // case — a bare ".." prefix would also reject an in-directory name that
+  // merely BEGINS with two dots ("..foo/rollout-x.jsonl").
+  if (
+    relative.length === 0 ||
+    relative === ".." ||
+    relative.startsWith(".." + path.sep) ||
+    path.isAbsolute(relative)
+  ) {
     return false;
   }
   return true;
@@ -208,7 +214,7 @@ export function isCodexRolloutPath(candidate) {
  * way a caller could mistake for a positive finding.
  */
 export function readCodexRateLimitSignal(rolloutPath, options = {}) {
-  if (!isCodexRolloutPath(rolloutPath)) return null;
+  if (!isCodexRolloutPath(rolloutPath, options.codexHome)) return null;
   const tailBytes = options.tailBytes ?? DEFAULT_TAIL_BYTES;
 
   let handle;

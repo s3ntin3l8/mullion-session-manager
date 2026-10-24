@@ -8,6 +8,12 @@ export const DEFAULT_TAIL_BYTES: number;
 export interface CodexRateLimitSignalOptions {
   /** How many bytes of the rollout's tail to read. */
   tailBytes?: number;
+  /**
+   * The codex home whose `sessions/` directory the rollout must live in —
+   * the SESSION's own home, which is not necessarily the backend's (a
+   * session may be spawned with its own `CODEX_HOME`).
+   */
+  codexHome?: string;
 }
 
 export interface CodexRateLimitSignalInit {
@@ -37,8 +43,8 @@ export class CodexRateLimitSignal {
 }
 
 export function resolveCodexHome(): string;
-export function codexSessionsDir(): string;
-export function isCodexRolloutPath(candidate: string): boolean;
+export function codexSessionsDir(codexHome?: string): string;
+export function isCodexRolloutPath(candidate: string, codexHome?: string): boolean;
 export function readCodexRateLimitSignal(
   rolloutPath: string,
   options?: CodexRateLimitSignalOptions,

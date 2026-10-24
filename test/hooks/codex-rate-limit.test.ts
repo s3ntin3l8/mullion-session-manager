@@ -270,9 +270,26 @@ describe("the rollout path is untrusted", () => {
 
   it("reads a real file inside codex's sessions directory", () => {
     const path = writeRollout([RATE_LIMITED_TASK_COMPLETE, ""].join("\n"));
-    const signal = readCodexRateLimitSignal(path);
+    const signal = readCodexRateLimitSignal(path, { codexHome: tempHome });
     expect(signal!.rateLimited).toBe(true);
     expect(signal!.status).toBe(429);
+  });
+
+  it("accepts a session whose OWN CODEX_HOME differs from the backend's", () => {
+    // A session may be spawned with its own CODEX_HOME, and its rollout
+    // lives under THAT home's sessions/ — so the trust root is the
+    // SESSION's home, passed in explicitly, not the backend's.
+    const sessionHome = mkdtempSync(join(tmpdir(), "codex-session-home-"));
+    const dir = join(sessionHome, "sessions", "2026", "10", "24");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "rollout-2026-10-24T08-45-21-abc.jsonl");
+    writeFileSync(path, `${RATE_LIMITED_TASK_COMPLETE}\n`);
+
+    // The backend's own home would reject it…
+    expect(isCodexRolloutPath(path)).toBe(false);
+    // …and the session's home accepts it.
+    expect(isCodexRolloutPath(path, sessionHome)).toBe(true);
+    expect(readCodexRateLimitSignal(path, { codexHome: sessionHome })!.rateLimited).toBe(true);
   });
 
   it("refuses a path OUTSIDE codex's sessions directory", () => {
@@ -281,25 +298,34 @@ describe("the rollout path is untrusted", () => {
     // `session_start`. Reading an arbitrary file is not acceptable.
     const outside = join(mkdtempSync(join(tmpdir(), "codex-outside-")), "secret.jsonl");
     writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
-    expect(isCodexRolloutPath(outside)).toBe(false);
-    expect(readCodexRateLimitSignal(outside)).toBeNull();
+    expect(isCodexRolloutPath(outside, tempHome)).toBe(false);
+    expect(readCodexRateLimitSignal(outside, { codexHome: tempHome })).toBeNull();
   });
 
   it("refuses a path that TRAVERSES out of the sessions directory", () => {
     const outside = join(mkdtempSync(join(tmpdir(), "codex-outside-")), "secret.jsonl");
     writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
     const traversal = join(codexSessionsDir(), "..", "..", "..", "..", path.basename(outside));
-    expect(isCodexRolloutPath(traversal)).toBe(false);
+    expect(isCodexRolloutPath(traversal, tempHome)).toBe(false);
+  });
+
+  it("accepts an in-directory name that merely BEGINS with two dots", () => {
+    // `relative.startsWith("..")` would reject a directory literally named
+    // "..foo" inside the sessions tree — a real path, just an odd name.
+    const dir = join(codexSessionsDir(tempHome), "..foo");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "rollout-2026-10-24T08-45-21-abc.jsonl");
+    writeFileSync(path, `${RATE_LIMITED_TASK_COMPLETE}\n`);
+    expect(isCodexRolloutPath(path, tempHome)).toBe(true);
   });
 
   it("refuses a FIFO rather than opening it", () => {
-    // Opening a FIFO for reading blocks the event loop forever.
     const dir = join(codexSessionsDir(), "2026", "10", "24");
     mkdirSync(dir, { recursive: true });
     const fifo = join(dir, "rollout-fifo.jsonl");
     execFileSync("mkfifo", [fifo]);
-    expect(isCodexRolloutPath(fifo)).toBe(false);
-    expect(readCodexRateLimitSignal(fifo)).toBeNull();
+    expect(isCodexRolloutPath(fifo, tempHome)).toBe(false);
+    expect(readCodexRateLimitSignal(fifo, { codexHome: tempHome })).toBeNull();
   });
 
   it("refuses a symlink", () => {
@@ -309,17 +335,21 @@ describe("the rollout path is untrusted", () => {
     writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
     const link = join(dir, "rollout-link.jsonl");
     symlinkSync(outside, link);
-    expect(isCodexRolloutPath(link)).toBe(false);
-    expect(readCodexRateLimitSignal(link)).toBeNull();
+    expect(isCodexRolloutPath(link, tempHome)).toBe(false);
+    expect(readCodexRateLimitSignal(link, { codexHome: tempHome })).toBeNull();
   });
 
   it("returns null for a missing file rather than throwing", () => {
-    expect(readCodexRateLimitSignal(join(codexSessionsDir(), "gone-1734.jsonl"))).toBeNull();
+    expect(
+      readCodexRateLimitSignal(join(codexSessionsDir(tempHome), "gone-1734.jsonl"), {
+        codexHome: tempHome,
+      }),
+    ).toBeNull();
   });
 
   it("returns null for an empty file", () => {
     const path = writeRollout("");
-    expect(readCodexRateLimitSignal(path)).toBeNull();
+    expect(readCodexRateLimitSignal(path, { codexHome: tempHome })).toBeNull();
   });
 
   it("returns null for an empty path", () => {
@@ -334,6 +364,7 @@ describe("the codex home resolution agrees with the adapter's", () => {
     // two in agreement so they cannot drift apart silently.
     expect(resolveCodexHome()).toBe(resolveCodexHomeFromAdapter());
     expect(codexSessionsDir()).toBe(join(resolveCodexHomeFromAdapter(), "sessions"));
+    expect(codexSessionsDir("/some/other/home")).toBe(join("/some/other/home", "sessions"));
   });
 });
 

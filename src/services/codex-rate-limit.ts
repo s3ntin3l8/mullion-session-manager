@@ -81,17 +81,20 @@ const RATE_LIMIT_ERROR_DETAIL = "rate_limit";
  * reconcile timer down with it.
  */
 export async function detectCodexRateLimits(app: FastifyInstance): Promise<void> {
-  let sessions: Array<{ id: string; transcriptPath: string }>;
+  let sessions: Array<{ id: string; transcriptPath: string; codexHome: string }>;
   try {
     sessions = app.pty.codexTranscriptPathSessions();
   } catch {
     return;
   }
 
-  for (const { id, transcriptPath } of sessions) {
+  for (const { id, transcriptPath, codexHome } of sessions) {
     let signal;
     try {
-      signal = readCodexRateLimitSignal(transcriptPath);
+      // The SESSION's own codex home is the trust root — a session may be
+      // spawned with its own `CODEX_HOME`, and its rollout lives under THAT
+      // home's `sessions/`, not the backend's.
+      signal = readCodexRateLimitSignal(transcriptPath, { codexHome });
     } catch {
       continue;
     }

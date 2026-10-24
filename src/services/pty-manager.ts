@@ -162,7 +162,7 @@ export const MIN_TERMINAL_ROWS = 10;
 // every existing backend importer of this module (this file's own
 // clampTerminalSize() included) keeps working unchanged.
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "../shared/constants.js";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, homedir } from "node:os";
 
 /** node-pty reports a killing signal as a number; map it back to its name. */
 const SIGNAL_NAMES = new Map<number, string>();
@@ -2382,6 +2382,26 @@ export class Session {
   }
 
   /**
+   * Issue #1734 — the codex home this SESSION's own agent runs under.
+   *
+   * The session's own environment wins over the backend's, because a session
+   * may be spawned with a custom env: a codex session whose shell exports a
+   * different `CODEX_HOME` writes its rollout under THAT home, so the
+   * backend's own `CODEX_HOME` would be the wrong root to look for it in.
+   * The backend's environment is the fallback, and `~/.codex` the fallback
+   * to that — the same rule as `resolveCodexHome()` in
+   * hook-adapters/codex.ts, except that the session's own env is consulted
+   * first.
+   */
+  codexHome(): string {
+    const fromSession = this.env.CODEX_HOME;
+    if (typeof fromSession === "string" && fromSession.length > 0) return fromSession;
+    const fromBackend = process.env.CODEX_HOME;
+    if (typeof fromBackend === "string" && fromBackend.length > 0) return fromBackend;
+    return path.join(homedir(), ".codex");
+  }
+
+  /**
    * Issue #1734 — the codex turn whose rate-limit failure has already been
    * reported, so the sweep reports each failed turn exactly once.
    */
@@ -4122,11 +4142,13 @@ export class PtyManager {
    * the sweep's per-tick file reads are limited to codex sessions that have
    * reported one. A session's own state is otherwise untouched.
    */
-  codexTranscriptPathSessions(): Array<{ id: string; transcriptPath: string }> {
-    const out: Array<{ id: string; transcriptPath: string }> = [];
+  codexTranscriptPathSessions(): Array<{ id: string; transcriptPath: string; codexHome: string }> {
+    const out: Array<{ id: string; transcriptPath: string; codexHome: string }> = [];
     for (const [id, session] of this.sessions) {
       const path = session.getCodexTranscriptPath();
-      if (path !== null) out.push({ id, transcriptPath: path });
+      if (path !== null) {
+        out.push({ id, transcriptPath: path, codexHome: session.codexHome() });
+      }
     }
     return out;
   }
