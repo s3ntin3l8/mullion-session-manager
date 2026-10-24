@@ -134,6 +134,71 @@ describe("runShellCapture", () => {
     expect(onError.mock.calls[0]?.[1]).toBe(true);
   });
 
+  // The regression this pins (issue #1845): the helper settles its promise
+  // from the child's 'error' event, and settling cancels the deadline that
+  // would have ended the child. So a child that had actually STARTED and then
+  // failed was left running for the rest of the process's life — nothing else
+  // would ever end it.
+  //
+  // The helper's contract is now "when this settles, the child is dead or is
+  // about to be killed", so the error path ends a live child the same way the
+  // deadline does.
+  it("ends a child that fails after it started (issue #1845)", async () => {
+    vi.useFakeTimers();
+    const kill = vi.fn();
+    const { child, handlers } = fakeChild({
+      kill,
+      pid: 4321,
+      exitCode: null,
+      signalCode: null,
+    });
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    const assertion = expect(promise).resolves.toBeNull();
+
+    // The child fails BEFORE the deadline.
+    handlers.error?.(new Error("kill EPERM"));
+
+    // It is ended rather than left running: SIGTERM first (kill() with no
+    // argument — SIGTERM is the default signal).
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill.mock.calls[0]?.[0]).toBeUndefined();
+
+    // And if it ignores that, the escalation still fires.
+    await vi.advanceTimersByTimeAsync(baseOptions.killEscalationMs);
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+
+    await assertion;
+  });
+
+  it("does not kill a child that never started", async () => {
+    const kill = vi.fn();
+    // No `pid`: the spawn itself failed, so there is no child to end.
+    const { child, handlers } = fakeChild({ kill, exitCode: null, signalCode: null });
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    handlers.error?.(new Error("spawn ENOENT"));
+
+    expect(await promise).toBeNull();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("does not kill a child that already exited", async () => {
+    const kill = vi.fn();
+    // A pid, but the process is already gone (exitCode is set) — there is
+    // nothing left to signal.
+    const { child, handlers } = fakeChild({ kill, pid: 4321, exitCode: 0, signalCode: null });
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    handlers.error?.(new Error("kill EPERM"));
+
+    expect(await promise).toBeNull();
+    expect(kill).not.toHaveBeenCalled();
+  });
+
   it("calls onTimeout when the deadline fires", async () => {
     vi.useFakeTimers();
     const { child } = fakeChild({ kill: undefined });
