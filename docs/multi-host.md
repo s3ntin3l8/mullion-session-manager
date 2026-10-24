@@ -204,10 +204,15 @@ never a gate. Every decision records why it was made (_"least loaded:
 mac-mini at 1.2 load on 12 cores (0.10 per core)"_), in the server log, so
 it can be explained rather than guessed at.
 
-The drain flag the policy consults (a host that is parked and takes no new
-work) arrives with
-[#1725](https://github.com/s3ntin3l8/mullion-session-manager/issues/1725);
-until then no host is ever drained.
+**Parking a host.** A host can be _parked_: it takes no new work, so the
+placement policy stops choosing it. Parking is a **flag, not an action** —
+no session is killed, no worktree removed, no agent contacted, and a parked
+host stays perfectly usable for **manual** placement (a project still pinned
+to it, or a session you start there yourself). It is a column, so the
+decision survives a primary restart.
+
+Park one from **Settings → Hosts** (the row's kebab menu), or over the
+API: `PATCH /api/hosts/:id` with `{"drained": true}`.
 
 ### Seeing it in the UI
 
@@ -453,6 +458,19 @@ Docker detection are all cross-platform. The macOS **launchd** deployment —
 `deploy/launchd/com.mullion.primary.plist` — is the counterpart of the
 systemd unit, and `deploy/install.sh` picks it from `uname -s` and skips the
 systemd prerequisite checks on darwin.
+
+**Installing a Mac needs no clone.** The release tarball ships `deploy/`, so
+a Mac (like any host) can be installed straight from a published release:
+
+```sh
+curl -fsSL -o mullion-install.sh \
+  https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
+sh mullion-install.sh --role primary ~/opt/mullion
+```
+
+The bootstrap fetches the release, verifies its checksum, and runs the
+`deploy/install.sh` inside it — the same installer the clone path runs. See
+[`deploy/README.md`](../deploy/README.md)'s "Installing without a clone".
 
 **What is different.** A macOS primary's **local** sessions run under the
 darwin scope backend — the same detached `dtach` backend an agent's sessions

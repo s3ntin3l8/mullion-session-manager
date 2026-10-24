@@ -32,6 +32,9 @@ interface UpdateHostBody {
   name?: string;
   baseUrl?: string;
   token?: string;
+  // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
+  // A flag, not an action — nothing is terminated.
+  drained?: boolean;
 }
 
 const createHostSchema = {
@@ -56,6 +59,10 @@ const updateHostSchema = {
       name: { type: "string", minLength: 1 },
       baseUrl: { type: "string", minLength: 1 },
       token: { type: "string", minLength: 1 },
+      // Issue #1725 — the drain flag (park the host / un-park it). A new
+      // host is never parked: parking is a decision about a host that is
+      // already in the fleet.
+      drained: { type: "boolean" },
     },
   },
 };
@@ -176,7 +183,21 @@ export async function hostsRoute(app: FastifyInstance) {
     { schema: updateHostSchema },
     async (request, reply) => {
       const { id } = request.params;
-      if (id === LOCAL_HOST_ID) return reply.badRequest("the local host cannot be edited");
+      // Issue #1725 — the DRAIN flag is a placement decision, not an edit of
+      // the local host's identity, and it is the one thing about the primary
+      // an operator needs to be able to change: parking the primary is how
+      // you drain it. Everything else about it stays uneditable.
+      //
+      // "Only the drain flag" means ONLY the drain flag: a body that also
+      // carries a name or a token would otherwise apply those to the
+      // primary as well — renaming the primary and re-pointing its token
+      // are exactly the edits this host refuses.
+      if (id === LOCAL_HOST_ID) {
+        const keys = Object.keys(request.body);
+        if (keys.length !== 1 || keys[0] !== "drained") {
+          return reply.badRequest("the local host cannot be edited");
+        }
+      }
       if (request.body.baseUrl !== undefined && !isValidHttpUrl(request.body.baseUrl)) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }

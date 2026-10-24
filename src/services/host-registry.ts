@@ -37,6 +37,12 @@ export interface HostSummary {
   // for a host that never reported one (a manually-added host, or an agent
   // build that predates the field) — a legitimate state, not a defect.
   platform: string | null;
+  // Issue #1725 / roadmap 8.11 — whether this host is PARKED: it takes no
+  // new work (the placement policy stops choosing it), but nothing about it
+  // is torn down and it stays usable for manual placement. False for every
+  // host as of this migration, so nothing changes until an operator parks
+  // one.
+  drained: boolean;
   // baseUrl is only ever null for "local" — enrollHost/claimHost always
   // set it atomically from the agent's own self-reported registration
   // call, so an "enrolled" row is never actually created in a
@@ -58,6 +64,12 @@ export interface UpdateHostInput {
   baseUrl?: string;
   /** Omit to leave the stored token untouched; pass a new value to rotate it. */
   token?: string;
+  /**
+   * Issue #1725 / roadmap 8.11 — park this host (it takes no new work) or
+   * un-park it. It is a flag, not an action: nothing is terminated, and the
+   * host stays usable for manual placement.
+   */
+  drained?: boolean;
 }
 
 export class UnknownHostError extends Error {
@@ -89,6 +101,7 @@ function toSummary(row: HostRow): HostSummary {
     createdAt: row.createdAt,
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
     platform: row.platform,
+    drained: row.drained,
   };
 }
 
@@ -133,6 +146,9 @@ export function updateHost(
     .set({
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+      // Issue #1725 — parking a host changes nothing but the flag: no
+      // session is killed, no worktree removed, no agent contacted.
+      ...(input.drained !== undefined ? { drained: input.drained } : {}),
       ...(input.token !== undefined
         ? {
             authTokenEnc: app.encryption.encryptString(input.token),

@@ -71,33 +71,22 @@ jobs:
           # bare MAJOR.MINOR.PATCH package.json's own "version" field uses
           # (see src/services/update-checker.ts's parseVersion).
           version="${VERSION#v}"
-          # Staged so self-update.sh's `tar -xzf ... -C "$RELEASE_DIR"` lands
-          # dist/, frontend/dist/, drizzle/, scripts/, package.json directly
-          # under the release dir — the same layout src/plugins/env.ts's
-          # cwd-relative defaults (FRONTEND_DIST=./frontend/dist,
-          # drizzle/ via path.resolve("drizzle")) expect when
-          # WorkingDirectory is that release dir. Built outside the repo
-          # checkout (../staging) so it's never itself picked up by a later
-          # `cp -r`, and tarred with `-C staging .` (no wrapping directory)
-          # rather than `tar -czf x.tgz staging/` (which would nest
-          # everything one level too deep on extraction).
-          staging="../staging"
-          rm -rf "$staging" && mkdir -p "$staging/frontend"
-          cp -r dist "$staging/dist"
-          cp -r frontend/dist "$staging/frontend/dist"
-          cp -r drizzle "$staging/drizzle"
-          cp -r scripts "$staging/scripts"
-          cp package.json package-lock.json "$staging/"
-          tar -czf "mullion-${version}.tgz" -C "$staging" .
-          # Checksum the tarball as its own asset — self-update.sh and
-          # deploy/install.sh both verify against this before extracting
-          # (Hermes review, PR #54: "no integrity verification of the
-          # downloaded tarball"). Standard sha256sum output format
-          # ("<hex>  <filename>") so `sha256sum -c` can verify it directly.
-          sha256sum "mullion-${version}.tgz" > "mullion-${version}.tgz.sha256"
+          # The staging + archiving + checksum work lives in
+          # scripts/assemble-release-tarball.sh, so it can be reproduced
+          # locally and covered by test/scripts/assemble-release-tarball.test.ts
+          # instead of only ever running inside this workflow.
+          bash scripts/assemble-release-tarball.sh "$version" .
 
       - name: Upload tarball and checksum to the GitHub Release
         run: |
           version="${VERSION#v}"
+          # mullion-install.sh is the clone-free bootstrap: a stable-named
+          # asset so `releases/latest/download/mullion-install.sh` always
+          # resolves to the newest release's copy. It fetches the tarball
+          # above and hands it to the deploy/install.sh INSIDE it. Copied to
+          # the working directory first so the asset's NAME is exactly
+          # "mullion-install.sh" rather than whatever gh infers from a path.
+          cp deploy/mullion-install.sh mullion-install.sh
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            "mullion-${version}.tgz" "mullion-${version}.tgz.sha256"
+            "mullion-${version}.tgz" "mullion-${version}.tgz.sha256" \
+            "mullion-install.sh"
