@@ -172,6 +172,18 @@ export const projects = sqliteTable("projects", {
   // block comment above. The modes come from PLACEMENT_MODES (the shared
   // declaration every other spelling of them uses).
   placement: text("placement", { enum: PLACEMENT_MODES }).notNull().default("pinned"),
+  // Issue #1724 / roadmap 8.10 — WHERE this project lives on OTHER hosts.
+  //
+  // A JSON object: `{ "<hostId>": "<absolute path>" }`. The project's own
+  // host is NOT in it — `projects.cwd` IS its path there, and `projects.hostId`
+  // is its host. This map is only for the hosts an "auto" project may be
+  // PLACED on: a host with no entry here does not have the project, so it is
+  // not a placement candidate (a session cannot run where its code is not).
+  //
+  // Nullable, and an absent/empty map means "this project lives on its own
+  // host and nowhere else" — which is every project as of this migration, so
+  // nothing changes until an operator fills it in.
+  hostCwds: text("host_cwds"),
   // Where this project's dev server listens — issue #28. A bare port
   // ("5173") or a full "scheme://host:port" URL; the preview proxy
   // (src/plugins/preview-proxy.ts) parses this to find the upstream.
@@ -433,6 +445,18 @@ export const sessions = sqliteTable(
     // trade-off `projects.hostId` makes (see the migration for why).
     // host_id is always server-set, never user input.
     hostId: text("host_id").references(() => hosts.id),
+    // Issue #1724 / roadmap 8.10 — WHY this session is on the host it is on.
+    //
+    // The placement decision's own reason, in words: "least loaded: mgmt at
+    // 1.2 load on 12 cores (0.10 per core)", or "no eligible host — fell back
+    // to the project's host dev-01". A placement a user cannot explain is a
+    // placement they will not trust, so the reason is kept with the row
+    // rather than only in the server log (the log is where it comes from;
+    // this is where it can be read back).
+    //
+    // NULLABLE: NULL means "nothing was decided here" — a pinned project, or
+    // a session created before placement existed. Those rows are unaffected.
+    placementReason: text("placement_reason"),
     // Cosmetic label the user can rename; falls back to `command` when unset.
     name: text("name"),
     // True only once the user has explicitly renamed this session (PATCH

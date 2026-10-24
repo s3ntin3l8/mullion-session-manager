@@ -85,6 +85,9 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     cwd: "/home/x/demo",
     hostId: "local",
     placement: "pinned",
+    // Issue #1724 — no per-host paths by default: the project lives on its
+    // own host and nowhere else.
+    hostCwds: {},
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,

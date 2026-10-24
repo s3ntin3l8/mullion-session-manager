@@ -19,6 +19,10 @@ import type { HostCapacity } from "../../src/services/host-capacity.js";
 
 const tmpDb = path.join(os.tmpdir(), `placement-assembler-test-${process.pid}.db`);
 
+/** The project's own path, and the path it has on a remote host. */
+const LOCAL_CWD = "/home/x/repo";
+const REMOTE_CWD = "/srv/repo";
+
 function capacity(loadAverage1m: number, logicalCores: number): HostCapacity {
   return {
     platform: "linux",
@@ -66,11 +70,34 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
 
     const decision = resolvePlacement(app, {
-      project: { hostId: "local", placement: "auto" },
+      project: {
+        hostId: "local",
+        placement: "auto",
+        cwd: LOCAL_CWD,
+        // Issue #1724 — the project has to BE on the remote host for the
+        // remote host to be a candidate at all.
+        hostCwds: JSON.stringify({ [hostId]: REMOTE_CWD }),
+      },
       unattended: true,
     });
     expect(decision.hostId).toBe(hostId);
     expect(decision.fellBack).toBe(false);
+  });
+
+  it("does not offer a host the project is not on", async () => {
+    // Issue #1724 — a session runs in a directory, so a host without the
+    // project cannot host a session for it. The host is healthy and idle,
+    // and it is STILL not a candidate: no map entry, no checkout.
+    const hostId = await registerHost("idle-agent");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+
+    const decision = resolvePlacement(app, {
+      project: { hostId: "local", placement: "auto", cwd: LOCAL_CWD },
+      unattended: true,
+    });
+    expect(decision.hostId).toBe("local");
+    expect(decision.considered.map((c) => c.hostId)).not.toContain(hostId);
   });
 
   it("does not offer a host that is offline per the heartbeat", async () => {
@@ -79,7 +106,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
 
     const decision = resolvePlacement(app, {
-      project: { hostId: "local", placement: "auto" },
+      project: { hostId: "local", placement: "auto", cwd: LOCAL_CWD },
       unattended: true,
     });
     // The local host is this process — it is online and measured live, so it
@@ -95,7 +122,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     // No capacity recorded → not a candidate (not a failure).
 
     const decision = resolvePlacement(app, {
-      project: { hostId: "local", placement: "auto" },
+      project: { hostId: "local", placement: "auto", cwd: LOCAL_CWD },
       unattended: true,
     });
     expect(decision.hostId).toBe("local");
@@ -106,7 +133,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     // The local host is measured on demand (issue #1721) — it is this
     // process — so the assembler must not read its (absent) cached entry.
     const decision = resolvePlacement(app, {
-      project: { hostId: "local", placement: "auto" },
+      project: { hostId: "local", placement: "auto", cwd: LOCAL_CWD },
       unattended: true,
     });
     // The local host is the only candidate, and it is eligible (measured
@@ -127,7 +154,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     });
     try {
       const decision = resolvePlacement(app, {
-        project: { hostId: "local", placement: "auto" },
+        project: { hostId: "local", placement: "auto", cwd: LOCAL_CWD },
         unattended: true,
       });
       expect(decision.hostId).toBe("local");
@@ -144,7 +171,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
 
     const decision = resolvePlacement(app, {
-      project: { hostId: "local", placement: "pinned" },
+      project: { hostId: "local", placement: "pinned", cwd: LOCAL_CWD },
       unattended: true,
     });
     expect(decision.hostId).toBe("local");
