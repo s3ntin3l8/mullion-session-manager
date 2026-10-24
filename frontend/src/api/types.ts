@@ -373,6 +373,36 @@ export interface HostCapacity {
   sampledAt: string;
 }
 
+// Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new
+// session land right now, and why?".
+//
+// Mirrors src/services/placement.ts's PlacementDecision 1:1 (plus the mode
+// the preview was asked about), which is what the server's
+// /api/projects/:id/placement-preview and /api/projects/placement-preview
+// routes return.
+export interface PlacementPreview {
+  /** The mode the preview was asked about ("pinned" | "auto"). */
+  placement: PlacementMode;
+  /** The host a new session would be placed on. */
+  hostId: string;
+  /** Why — human-readable, for the UI to show verbatim. */
+  reason: string;
+  /**
+   * The eligible hosts and the numbers the policy compared, so a UI can
+   * show the comparison rather than just the winner. Empty for a pinned
+   * project (nothing is scored).
+   */
+  considered: {
+    hostId: string;
+    loadAverage1m: number;
+    logicalCores: number;
+    loadPerCore: number;
+    chosen: boolean;
+  }[];
+  /** True when the fallback was used (no eligible host at all). */
+  fellBack: boolean;
+}
+
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
 // #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
 // HostConfig.sshAuthSock.path has the value it does — "none" is never sent

@@ -23,6 +23,25 @@
  * no `kill` at all.
  *
  * So it lives here, once, and both callers delegate to it.
+ *
+ * ## The contract
+ *
+ * **When this settles, the child is dead or is about to be killed.** Every exit
+ * path upholds it, including the ones that give up early:
+ *
+ * - the deadline fires → SIGTERM, then SIGKILL if the child ignores it;
+ * - the child errors → a child that had actually started is ended the same way,
+ *   because the deadline that would have ended it is about to be cancelled
+ *   (issue #1845).
+ *
+ * The child is asked to stop **once**: the SIGTERM goes out when the first of
+ * those paths fires, and the escalation is what follows it up. A late `error`
+ * does not ask a second time, and the escalation timer is armed once — so
+ * each signal goes out at most once.
+ *
+ * A child that never started has nothing to end — `child.pid` is undefined
+ * precisely because the spawn failed — so only a child that really ran is
+ * signalled.
  */
 
 import { spawn as spawnChild } from "node:child_process";
@@ -125,21 +144,44 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       }
     };
 
-    const timer = setTimeout(() => {
-      options.onTimeout?.();
+    // Whether we have already asked the child to stop. The deadline sends the
+    // SIGTERM, and a late 'error' must not send a second one — the child has
+    // already been asked, and the escalation is what follows it up.
+    let signalled = false;
+
+    // Asks the child to stop (SIGTERM), once.
+    const requestStop = () => {
+      if (signalled) return;
+      signalled = true;
       kill(); // SIGTERM
-      // Escalate to SIGKILL if the process is still alive after a short
-      // grace period — a timeout firing means it already ignored our
-      // attempt to end it cooperatively. (`killed`/`exitCode` don't tell us
-      // this: Node sets `killed` once a signal is successfully SENT, not
-      // once the process has actually died — `exitCode`/`signalCode` both
-      // staying `null` is the real "still alive" signal.)
+    };
+
+    // A child that is still alive is one whose `exitCode` and `signalCode` are
+    // both `null`. (`killed`/`exitCode` don't tell us this: Node sets `killed`
+    // once a signal is successfully SENT, not once the process has actually
+    // died — `exitCode`/`signalCode` both staying `null` is the real "still
+    // alive" signal.)
+    const isAlive = () => child.exitCode === null && child.signalCode === null;
+
+    // Escalate to SIGKILL if the process is still alive after a short grace
+    // period — a timeout firing means it already ignored our attempt to end it
+    // cooperatively. Armed at most once: the deadline and the 'error' path can
+    // both reach it, and two timers would mean two chances to signal a child
+    // that is already gone.
+    const armEscalation = () => {
+      if (killTimer) return;
       killTimer = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) {
+        if (isAlive()) {
           kill("SIGKILL");
         }
       }, options.killEscalationMs);
       if (options.unrefEscalationTimer) killTimer.unref();
+    };
+
+    const timer = setTimeout(() => {
+      options.onTimeout?.();
+      requestStop();
+      armEscalation();
       finish(null);
     }, options.timeoutMs);
 
@@ -153,7 +195,19 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       // `pid` is undefined when the spawn itself failed and a number once the
       // child is really running, so this tells the caller which of the two
       // happened.
-      options.onError?.(err, child.pid !== undefined);
+      const spawned = child.pid !== undefined;
+      options.onError?.(err, spawned);
+
+      // A child that started and then failed is still RUNNING, and `finish()`
+      // is about to cancel the deadline that would have ended it — so end it
+      // here, exactly the way the deadline does (issue #1845). A spawn failure
+      // has no child to end: `pid` is undefined precisely because it never
+      // started.
+      if (spawned && isAlive()) {
+        requestStop();
+        armEscalation();
+      }
+
       finish(null);
     });
     // 'close' (stdio streams closed), NOT 'exit' (process ended) — 'exit'

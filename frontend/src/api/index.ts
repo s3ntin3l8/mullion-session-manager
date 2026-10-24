@@ -78,8 +78,9 @@ export type {
 // workspace). Re-exported below so every existing import of them from
 // "./api/index.js" elsewhere in the frontend keeps working unchanged.
 import { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID } from "../../../src/shared/constants.js";
+import type { PlacementMode } from "../../../src/shared/constants.js";
 
-export { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID };
+export { TASK_STATUSES, type TaskStatus, LOCAL_HOST_ID, type PlacementMode };
 
 // The rest of the former api.ts's local (frontend-only) types — see
 // ./types.ts's own header for why these didn't move to src/shared/.
@@ -105,6 +106,8 @@ export type {
   DiscoveredProject,
   HostHealthStatus,
   Host,
+  HostCapacity,
+  PlacementPreview,
   HostConfig,
   HostUpdateStatus,
   SshAuthSockSource,

@@ -18,6 +18,23 @@ default — see [`configuration.md`](configuration.md)). See the
 server listens on — only worth changing if something else on the host
 already holds `5037`.
 
+**Linux-only** (issue [#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720),
+roadmap 8.6). The panel's emulator runs in a `systemd --user` scope —
+`systemd-run` starts it, `systemctl` reads its liveness and tears it down —
+and macOS has no equivalent: the darwin scope backend is keyed to a
+_session's_ dtach socket, which an emulator has no analogue of. So on macOS
+the panel is off even with `DEVICE_ENABLED=true`, and every route that
+**adds, starts or changes** a device answers **400 "The device panel is
+not supported on darwin — it is Linux-only."** rather than a raw `spawn
+systemctl ENOENT`. The `/api/devices` reads (`GET /api/devices`,
+`/api/devices/discovered`, `/api/devices/:id`) and the teardown routes
+(`POST /api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on
+purpose — they were never gated on `DEVICE_ENABLED` either, and an
+operator must be able to stop a device even where the panel cannot create
+one. A macOS device
+scope is tracked separately — see
+[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+
 ### Stream tuning
 
 The emulator has no hardware H.264 encoder, so every streamed frame is

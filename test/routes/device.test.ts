@@ -7,7 +7,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
-import { buildTestApp } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
@@ -45,6 +45,27 @@ class MockWebSocket extends EventEmitter {
 const tmpDb = path.join(os.tmpdir(), `device-route-test-${process.pid}.db`);
 
 describe("device route (/ws/device/:deviceId)", () => {
+  // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY (its
+  // emulator runs in a `systemd --user` scope), so on a non-Linux host the
+  // panel is off and every device route answers 400. This file asserts the
+  // panel's ENABLED behaviour, so the host platform is stubbed for the whole
+  // test — the same technique test/services/scope.test.ts uses for its own
+  // darwin case.
+  //
+  // The stub covers the whole test (not just the build) because the app's
+  // plugins read the platform when Fastify makes them ready, and the panel's
+  // gate is read at REQUEST time.
+  let originalPlatform: NodeJS.Platform;
+  beforeEach(async () => {
+    // The binding must be loaded BEFORE the platform is stubbed — see
+    // warmSqliteBinding()'s own doc comment.
+    await warmSqliteBinding();
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
   beforeEach(() => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
   });
@@ -58,7 +79,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
   describe("preValidation guards", () => {
     it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/ws/device/1" });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("Device panel is disabled");
@@ -66,7 +87,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
     it("rejects with 400 when deviceId is not an integer", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/ws/device/abc" });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("deviceId path param is required");
@@ -74,7 +95,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
     it("rejects with 404 when device row does not exist", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/ws/device/999" });
       expect(res.statusCode).toBe(404);
       expect(res.json().message).toContain("No device 999");
@@ -82,7 +103,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
     it("rejects with 400 when device is killed", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -105,7 +126,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("sends error and closes socket when getOrCreate rejects", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       vi.spyOn(app.device, "getOrCreate").mockRejectedValueOnce(new Error("Scope dead"));
       const socket = new MockWebSocket();
 
@@ -125,7 +146,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("does nothing if socket was closed before getOrCreate finishes", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const socket = new MockWebSocket();
       vi.spyOn(app.device, "getOrCreate").mockImplementationOnce(async () => {
         socket.readyState = socket.CLOSED;
@@ -147,7 +168,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("streams video packets, applies WeakMap caching, and respects backpressure", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
       const unsubscribeVideo = vi.fn();
       const mockResetVideo = vi.fn().mockResolvedValue(undefined);
@@ -245,7 +266,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("gates a late joiner on a keyframe and requests one on attach", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
       const mockResetVideo = vi.fn().mockResolvedValue(undefined);
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
@@ -286,7 +307,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     it("warns and re-requests a keyframe when a socket stays gated past the stall timeout", async () => {
       vi.useFakeTimers();
       try {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const warn = vi.spyOn(app.log, "warn");
         const mockResetVideo = vi.fn().mockResolvedValue(undefined);
         vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
@@ -317,7 +338,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     it("does not warn about a stall once a keyframe has gone out, or after close", async () => {
       vi.useFakeTimers();
       try {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const warn = vi.spyOn(app.log, "warn");
         let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
         const mockResetVideo = vi.fn().mockResolvedValue(undefined);
@@ -350,7 +371,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("logs, rather than throws, when the on-attach resetVideo rejects", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const warn = vi.spyOn(app.log, "warn");
       vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
         controller: { resetVideo: vi.fn().mockRejectedValue(new Error("nope")) },
@@ -373,7 +394,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("sends exited message and closes socket on device exit", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       let exitListener: (() => void) | undefined;
       const fakeDevice = {
         onVideoPacket: vi.fn(() => vi.fn()),
@@ -402,7 +423,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("handles incoming socket input messages and dispatches to controller", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const mockController = {
         resetVideo: vi.fn().mockResolvedValue(undefined),
         injectTouch: vi.fn().mockResolvedValue(undefined),
@@ -603,7 +624,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("handles resetVideo rejection on backpressure recovery gracefully", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
       const fakeDevice = {
         controller: { resetVideo: vi.fn().mockRejectedValue(new Error("reset failed")) },
@@ -637,7 +658,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
     describe("clipboard", () => {
       const attach = async (fakeDevice: Record<string, unknown>) => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce(fakeDevice as any);
         const socket = new MockWebSocket();
         await attachSocketToDevice(app, socket as any, {
@@ -728,7 +749,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("unsubscribes listeners on socket close", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const unsubscribeVideo = vi.fn();
       const unsubscribeExit = vi.fn();
       const fakeDevice = {
@@ -753,7 +774,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("releases touches still held when a viewer socket disconnects", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const injectTouch = vi.fn().mockResolvedValue(undefined);
       const fakeDevice = {
         controller: {
@@ -806,7 +827,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("stops forwarding video packets once the socket has already closed", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       let videoListener: ((pkt: ScrcpyMediaStreamPacket) => void) | undefined;
       const fakeDevice = {
         onVideoPacket: vi.fn((fn) => {
@@ -833,7 +854,7 @@ describe("device route (/ws/device/:deviceId)", () => {
     });
 
     it("logs a warning (and keeps the connection open) when input dispatch throws", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const mockController = {
         resetVideo: vi.fn().mockResolvedValue(undefined),
         injectText: vi.fn().mockRejectedValue(new Error("input failed")),
@@ -865,7 +886,7 @@ describe("device route (/ws/device/:deviceId)", () => {
   describe("real WebSocket upgrade handling", () => {
     it("connects to /ws/device/:id over WebSocket and executes upgrade handler", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -886,7 +907,7 @@ describe("device route (/ws/device/:deviceId)", () => {
 
     it("closes socket if row is killed before upgrade handler runs", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",

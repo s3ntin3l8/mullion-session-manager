@@ -238,12 +238,55 @@ function markChosen(considered: ConsideredHost[], hostId: string): void {
 }
 
 /**
- * Assembles the candidate set from the live trackers and decides — the seam
- * #1724 calls when a session is created or a task is claimed.
+ * The candidate set as the trackers see it RIGHT NOW.
  *
  * The candidate set is built HERE, not inside the policy, so that "what is
  * eligible" is a property of the moment of the call (the trackers' current
  * readings) while the policy itself stays pure.
+ */
+interface CollectedCandidates {
+  /** The local host's live reading (it is measured on demand, issue #1721). */
+  localCapacity: HostCapacity | null;
+  candidates: PlacementCandidate[];
+}
+
+/**
+ * Reads the live trackers into a candidate set.
+ *
+ * THROWS when the DB read or the measurement fails — the caller decides what
+ * a failure means (fall back to the project's host), because only the caller
+ * knows whether this was a real placement or a preview.
+ */
+function collectCandidates(app: FastifyInstance): CollectedCandidates {
+  const localCapacity = measureHostCapacity(app);
+  const candidates = listHosts(app).map((host) => {
+    const isLocal = host.id === LOCAL_HOST_ID;
+    const health = app.hostHeartbeatTracker?.getHealth(host.id);
+    return {
+      hostId: host.id,
+      isLocal,
+      // Only "online" is eligible. The local host reads as online by
+      // construction (host-heartbeat.ts says so explicitly); a remote host
+      // that has never been reached reads as "pending".
+      online: health?.status === "online",
+      // Issue #1725 owns the drain flag; until it lands, nothing is drained.
+      drained: false,
+      // The local host's reading is in the context, not here (it is
+      // measured live rather than polled).
+      capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
+    };
+  });
+  return { localCapacity, candidates };
+}
+
+/**
+ * THE decision — one implementation, two entry points.
+ *
+ * `announce` is the ONLY difference between a real placement and a preview:
+ * a preview must not write "placement: chose a host", because no placement
+ * happened. The decision itself is identical either way, which is the whole
+ * point — a preview that could disagree with the spawn path would be worse
+ * than no preview at all.
  *
  * A "pinned" project short-circuits: the project's own host, with the
  * reason saying so, and no scoring at all. That is what makes "pinned
@@ -261,6 +304,84 @@ function markChosen(considered: ConsideredHost[], hostId: string): void {
  * The fallback itself is the pure function's, and its table is pinned by
  * test/services/placement.test.ts.
  */
+function decide(
+  app: FastifyInstance,
+  project: { hostId: string; placement: PlacementMode },
+  unattended: boolean,
+  announce: boolean,
+): PlacementDecision {
+  if (project.placement !== "auto") {
+    const decision: PlacementDecision = {
+      hostId: project.hostId,
+      reason: `pinned to the project's host ${project.hostId}`,
+      considered: [],
+      fellBack: false,
+    };
+    if (announce) {
+      app.log.info(
+        { hostId: decision.hostId, placement: project.placement, unattended },
+        "placement: pinned to the project's host",
+      );
+    }
+    return decision;
+  }
+
+  let collected: CollectedCandidates;
+  try {
+    collected = collectCandidates(app);
+  } catch (err) {
+    // The seam must never fail a spawn, not just the policy: the DB read
+    // or the measurement threw BEFORE chooseHost() was reached, and a
+    // placement decision that cannot be made is not a reason to refuse the
+    // work. Fall back to the project's own host — which is where the
+    // session would have gone anyway.
+    const decision: PlacementDecision = {
+      hostId: project.hostId,
+      reason: `placement could not be evaluated — fell back to the project's host ${project.hostId}`,
+      considered: [],
+      fellBack: true,
+    };
+    // A FAILURE, not an announcement — so it is logged either way. The
+    // `preview` flag only says which caller was asking.
+    app.log.warn(
+      { err, hostId: decision.hostId, placement: project.placement, preview: !announce },
+      "placement: could not evaluate the candidates, using the project's host",
+    );
+    return decision;
+  }
+
+  const decision = chooseHost(collected.candidates, {
+    pinnedHostId: project.hostId,
+    unattended,
+    localCapacity: collected.localCapacity,
+  });
+
+  if (announce) {
+    app.log.info(
+      {
+        hostId: decision.hostId,
+        pinnedHostId: project.hostId,
+        unattended,
+        fellBack: decision.fellBack,
+        considered: decision.considered,
+        reason: decision.reason,
+      },
+      "placement: chose a host",
+    );
+  }
+  return decision;
+}
+
+/**
+ * Assembles the candidate set from the live trackers and decides — the seam
+ * #1724 calls when a session is created or a task is claimed.
+ *
+ * The caller owns the EFFECT: the chosen host is where the session will
+ * RUN, so the caller (#1724) has to give the session a cwd that exists
+ * THERE (its own worktree on that host) — the project's cwd lives on the
+ * pinned host, and a remote-placed session's cwd cannot be that path.
+ * This module decides the host; it does not move files.
+ */
 export function resolvePlacement(
   app: FastifyInstance,
   opts: {
@@ -275,80 +396,34 @@ export function resolvePlacement(
     unattended: boolean;
   },
 ): PlacementDecision {
-  const { project, unattended } = opts;
+  return decide(app, opts.project, opts.unattended, true);
+}
 
-  if (project.placement !== "auto") {
-    const decision: PlacementDecision = {
-      hostId: project.hostId,
-      reason: `pinned to the project's host ${project.hostId}`,
-      considered: [],
-      fellBack: false,
-    };
-    app.log.info(
-      { hostId: decision.hostId, placement: project.placement, unattended },
-      "placement: pinned to the project's host",
-    );
-    return decision;
-  }
-
-  // The local host is measured on demand (issue #1721) — it is this
-  // process, so its reading is always fresh.
-  let localCapacity: HostCapacity | null;
-  let candidates: PlacementCandidate[];
-  try {
-    localCapacity = measureHostCapacity(app);
-    candidates = listHosts(app).map((host) => {
-      const isLocal = host.id === LOCAL_HOST_ID;
-      const health = app.hostHeartbeatTracker?.getHealth(host.id);
-      return {
-        hostId: host.id,
-        isLocal,
-        // Only "online" is eligible. The local host reads as online by
-        // construction (host-heartbeat.ts says so explicitly); a remote host
-        // that has never been reached reads as "pending".
-        online: health?.status === "online",
-        // Issue #1725 owns the drain flag; until it lands, nothing is drained.
-        drained: false,
-        // The local host's reading is in the context, not here (it is
-        // measured live rather than polled).
-        capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
-      };
-    });
-  } catch (err) {
-    // The seam must never fail a spawn, not just the policy: the DB read
-    // or the measurement threw BEFORE chooseHost() was reached, and a
-    // placement decision that cannot be made is not a reason to refuse the
-    // work. Fall back to the project's own host — which is where the
-    // session would have gone anyway.
-    const decision: PlacementDecision = {
-      hostId: project.hostId,
-      reason: `placement could not be evaluated — fell back to the project's host ${project.hostId}`,
-      considered: [],
-      fellBack: true,
-    };
-    app.log.warn(
-      { err, hostId: decision.hostId, placement: project.placement },
-      "placement: could not evaluate the candidates, using the project's host",
-    );
-    return decision;
-  }
-
-  const decision = chooseHost(candidates, {
-    pinnedHostId: project.hostId,
-    unattended,
-    localCapacity,
-  });
-
-  app.log.info(
-    {
-      hostId: decision.hostId,
-      pinnedHostId: project.hostId,
-      unattended,
-      fellBack: decision.fellBack,
-      considered: decision.considered,
-      reason: decision.reason,
-    },
-    "placement: chose a host",
-  );
-  return decision;
+/**
+ * The SAME decision, without announcing it — the live preview #1726's UI
+ * asks for ("where would a new session land right now, and why?").
+ *
+ * It reads the same trackers and runs the same policy as the spawn path, so
+ * it cannot drift from what would actually happen; it only differs in that
+ * it writes no "placement: chose a host" line, because no placement
+ * happened. The project's own host and mode are passed in rather than read
+ * from the DB, so this also works for a project that does not exist yet
+ * (the create-project modal's preview).
+ *
+ * The answer is a NOW reading: load moves between the preview and the
+ * spawn. The UI says so.
+ */
+export function previewPlacement(
+  app: FastifyInstance,
+  opts: {
+    project: { hostId: string; placement: PlacementMode };
+    /**
+     * True for an unattended session (a Task Master worker or reviewer).
+     * Defaults to false — a preview answers the question a human is asking,
+     * and a human creates an interactive session.
+     */
+    unattended?: boolean;
+  },
+): PlacementDecision {
+  return decide(app, opts.project, opts.unattended ?? false, false);
 }

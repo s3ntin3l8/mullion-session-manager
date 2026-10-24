@@ -529,8 +529,8 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
     {
       websocket: true,
       preValidation: async (request, reply) => {
-        if (!app.config.DEVICE_ENABLED) {
-          return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+        if (!app.devicePanelEnabled) {
+          return reply.badRequest(app.devicePanelUnavailableMessage);
         }
         const deviceId = Number(request.params.deviceId);
         if (!Number.isInteger(deviceId)) {

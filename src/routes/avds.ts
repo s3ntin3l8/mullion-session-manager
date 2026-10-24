@@ -49,8 +49,8 @@ interface CreateAvdBody {
 
 export async function avdsRoute(app: FastifyInstance): Promise<void> {
   app.get("/api/avds", async (_request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     if (!app.config.DEVICE_AVDMANAGER_PATH) {
       return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
@@ -69,8 +69,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/api/system-images", async (_request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
       return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
@@ -88,8 +88,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   // — duplicating a second hardcoded list would drift from whatever
   // `avdmanager list device` actually reports on this host.
   app.get("/api/device-profiles", async (_request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     if (!app.config.DEVICE_AVDMANAGER_PATH) {
       return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
@@ -103,8 +103,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Body: CreateAvdBody }>("/api/avds", async (request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     if (!app.config.DEVICE_AVDMANAGER_PATH) {
       return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
@@ -187,8 +187,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   const AVAILABLE_IMAGES_CACHE_TTL_MS = 5 * 60 * 1000;
 
   app.get("/api/system-images/available", async (_request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     if (!app.config.DEVICE_SDKMANAGER_PATH) {
       return reply.badRequest("DEVICE_SDKMANAGER_PATH is not configured.");
@@ -251,6 +251,15 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
 
       if (!msg.packagePath || !msg.packagePath.startsWith("system-images;")) {
         socket.send(JSON.stringify({ type: "error", message: "Invalid packagePath" }));
+        return;
+      }
+
+      // The platform reason FIRST: on a platform the panel does not exist on,
+      // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
+      // that, this socket's original combined message — its own contract,
+      // asserted as such by this file's own tests.
+      if (!app.devicePanelSupported) {
+        socket.send(JSON.stringify({ type: "error", message: app.devicePanelUnavailableMessage }));
         return;
       }
 
@@ -390,6 +399,15 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
         return;
       }
 
+      // The platform reason FIRST: on a platform the panel does not exist on,
+      // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
+      // that, this socket's original combined message — its own contract,
+      // asserted as such by this file's own tests.
+      if (!app.devicePanelSupported) {
+        socket.send(JSON.stringify({ type: "error", message: app.devicePanelUnavailableMessage }));
+        return;
+      }
+
       if (!app.config.DEVICE_ENABLED || !app.config.DEVICE_SDKMANAGER_PATH) {
         socket.send(
           JSON.stringify({
@@ -460,8 +478,8 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   // ---------------------------------------------------------------------------
 
   app.get("/api/sdk-licenses/status", async (_request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     return { pending: licensesMayBePending() };
   });

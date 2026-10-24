@@ -146,6 +146,16 @@ pruning all use the portable spellings in `scripts/portable.sh` (`shasum -a
 256`, a background watchdog, a numeric version sort), so a stock Mac works
 without `brew install coreutils`.
 
+**macOS is a supported PRIMARY** (issue #1720, roadmap 8.6) — the same
+`install.sh --role primary` installs a launchd agent from
+`launchd/com.mullion.primary.plist`, and a Mac's **local** sessions run
+under the same detached-`dtach` scope backend an agent's sessions use. The
+enrollment protocol is agent-dials-primary and carries no OS assumption, so
+**a macOS primary with Linux agents** is a valid topology. One caveat: the
+[Android device panel](../docs/device-panel.md) is **Linux-only** (its
+emulator needs a `systemd --user` scope), so on macOS the panel is off even
+with `DEVICE_ENABLED=true`.
+
 **`bwrap` (bubblewrap) — OPTIONAL (issue #1081):** not checked as a hard
 requirement, unlike the binaries above. When `bwrap` is present AND
 actually usable (`src/services/scaffold-generate.ts`'s own runtime smoke
