@@ -858,16 +858,15 @@ async function createSessionRecordInner(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
-  rb.hostId = project.hostId;
-
   // Issue #1722 / roadmap 8.8 — THE host this session is created on, named
   // once and used for everything that has to agree about it: the row the
   // insert writes, the spawn the backend is resolved for, the seed stashed
-  // into it, and the worktree closures that clean up after it. Today it is
-  // the project's host — the placement decision; #1724 replaces THIS ONE
-  // value with the placement policy's choice, and the row, the spawn and
-  // the cleanups all follow it.
+  // into it, the worktree closures that clean up after it, AND the rollback
+  // (rb.hostId — which is what a failed create unwinds through). Today it
+  // is the project's host — the placement decision; #1724 replaces THIS
+  // ONE value with the placement policy's choice, and everything follows it.
   const placementHost = project.hostId;
+  rb.hostId = placementHost;
 
   const parent = validateParent(app, params);
   if (!parent.ok) return parent.result;
@@ -913,7 +912,11 @@ async function createSessionRecordInner(
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
-  rb.hostId = project.hostId;
+  // The placement host, not the project's: rb.hostId is what a failed
+  // create unwinds through (rollbackCreate terminates the scope and removes
+  // the worktree), so it has to be the host the session was actually
+  // created on — the same value the spawn uses (issue #1722).
+  rb.hostId = placementHost;
   rb.sessionId = created.id;
 
   await stashSeedBestEffort(app, placementHost, created.id, params.seedPrompt);
@@ -1001,6 +1004,9 @@ async function prepareWorktree(
     if (!result) return fail("worktree-failed");
     // Checks out an EXISTING branch detached — nothing to delete but the
     // directory.
+    // The worktree is created on the PROJECT's host — the placement
+    // decision has not been made yet (8.10 moves this to the placement
+    // host) — so the rollback unwinds it there.
     rb.hostId = project.hostId;
     rb.worktreePath = result.path;
     rb.parentCwd = params.cwd ?? project.cwd;
@@ -1020,6 +1026,9 @@ async function prepareWorktree(
         result: { ok: false, reason: "worktree-failed", detail: resolved.detail },
       };
     }
+    // The worktree is created on the PROJECT's host — the placement
+    // decision has not been made yet (8.10 moves this to the placement
+    // host) — so the rollback unwinds it there.
     rb.hostId = project.hostId;
     rb.worktreePath = resolved.path;
     rb.parentCwd = params.cwd ?? project.cwd;

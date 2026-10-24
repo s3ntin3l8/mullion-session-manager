@@ -137,7 +137,6 @@ import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
-import { resolveSessionHostId } from "../services/session-live-info.js";
 
 interface CreateProjectBody {
   name: string;
@@ -499,7 +498,11 @@ async function resolveSessionCwdTargets(
     }
     // Issue #1722 / roadmap 8.8 — the SESSION's host: each target is one
     // session, and a session placed on a host of its own is acted on there.
-    targets.push({ sessionId: row.id, hostId: resolveSessionHostId(app, row), cwd });
+    // The project's host is already in scope here, so this is
+    // resolveSessionHostId's own rule (`row.hostId ?? project.hostId`)
+    // without its query — this function batches its selects and caches
+    // `listWorktrees` per project, and a per-row SELECT would undo both.
+    targets.push({ sessionId: row.id, hostId: row.hostId ?? project.hostId, cwd });
   }
   return targets;
 }

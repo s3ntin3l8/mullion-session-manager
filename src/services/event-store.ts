@@ -71,8 +71,9 @@ const OWNERSHIP_LOOKUP_CHUNK_SIZE = 500;
 
 /** Resolves each remote-sourced event's session to its owning host (via
  * the session's own host, same join session-reconciler.ts's
- * reconcileExitedSessions already uses — `sessions` itself has no `hostId`
- * column) and drops any whose reporting host doesn't match. A buggy or
+ * reconcileExitedSessions already uses — `sessions.hostId` when the session
+ * has one, its project's otherwise) and drops any whose reporting host
+ * doesn't match. A buggy or
  * compromised agent could otherwise emit an arbitrary numeric `sessionId`
  * over its events stream and have it persisted against a session it
  * doesn't actually own.
