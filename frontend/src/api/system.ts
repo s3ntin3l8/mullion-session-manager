@@ -115,4 +115,8 @@ export const systemApi = {
   listOpenCodeModels: () => request<string[]>("/api/opencode/models"),
   listAgyModels: () => request<string[]>("/api/agy/models"),
   listCodexModels: () => request<string[]>("/api/codex/models"),
+  // Issue #1784 — mcode's catalog is `provider/model` ids, read from mcode's
+  // own config.yaml (not from `mcode provider list --json`, which reports an
+  // empty model list for mcode's own MiniMax providers).
+  listMcodeModels: () => request<string[]>("/api/mcode/models"),
 };

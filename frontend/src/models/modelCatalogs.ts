@@ -8,7 +8,7 @@ import { api } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
 import type { ModelOption } from "../settings/ModelPicker.js";
 
-export type ModelCli = "claude-code" | "codex" | "agy" | "opencode";
+export type ModelCli = "claude-code" | "codex" | "agy" | "opencode" | "mcode";
 
 export type CatalogStatus = "loading" | "ready" | "error";
 
@@ -86,20 +86,31 @@ export function commandModelCli(command: string): ModelCli | null {
       return "agy";
     case "opencode":
       return "opencode";
+    case "mcode":
+      // Issue #1784 — mcode's CLI binary is `mcode` and it takes
+      // `-m, --model <provider/model>`, so it has its own model catalog
+      // (GET /api/mcode/models).
+      return "mcode";
     default:
       return null;
   }
 }
 
-// True if `command` already has an explicit --model (or, for codex, -m)
-// flag, mirroring buildModelFlag's own skip-if-present check
+// True if `command` already has an explicit --model (or, for codex and mcode,
+// -m) flag, mirroring buildModelFlag's own skip-if-present check
 // (hook-adapters/shared.ts) so the picker doesn't offer to set a flag the
 // backend would silently ignore. Meaningless for opencode, which never reads
 // --model out of the command line — its model always comes from
 // OPENCODE_CONFIG_CONTENT — so this always returns false there.
 export function commandHasModelFlag(command: string, cli: ModelCli): boolean {
   if (cli === "opencode") return false;
-  const re = cli === "codex" ? /(?:^|\s)(?:--model|-m)(?:[\s=]|$)/ : /(?:^|\s)--model(?:[\s=]|$)/;
+  // Issue #1784 — mcode's adapter calls buildModelFlag with the "-m" short
+  // flag, exactly like codex's, so a hand-typed `-m` also suppresses the
+  // backend's own flag.
+  const re =
+    cli === "codex" || cli === "mcode"
+      ? /(?:^|\s)(?:--model|-m)(?:[\s=]|$)/
+      : /(?:^|\s)--model(?:[\s=]|$)/;
   return re.test(command);
 }
 
@@ -135,7 +146,9 @@ export function useModelOptions(cli: ModelCli): {
         ? api.listCodexModels
         : cli === "agy"
           ? api.listAgyModels
-          : api.listOpenCodeModels;
+          : cli === "mcode"
+            ? api.listMcodeModels
+            : api.listOpenCodeModels;
     fetcher()
       .then((list) => {
         if (cancelled) return;
