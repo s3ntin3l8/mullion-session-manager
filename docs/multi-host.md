@@ -390,6 +390,36 @@ policy ([#1723](https://github.com/s3ntin3l8/mullion-session-manager/issues/1723
 is: treat `platform: "win32"` as _this host reports no load_, never as _this
 host is idle_.
 
+## Where a session lives
+
+A session records the host it was spawned on — `sessions.hostId`, written
+**once** at creation and never changed (issue
+[#1722](https://github.com/s3ntin3l8/mullion-session-manager/issues/1722)
+/ roadmap 8.8). Every **session-scoped** operation follows that row: its live
+status, its scrollback, its process list, its scope's liveness, the review
+gate or attention acknowledgement waiting on it, the events it reports.
+
+The column is **nullable, and `NULL` means "inherit the project's host"** —
+which is every session created before this change, and every session created
+before the placement policy lands. Those rows behave exactly as they always
+did: a project's host is where its sessions live.
+
+**Project-scoped work still follows the project.** A project's git
+operations, its files, its worktree and its webhooks run on the project's own
+host, whatever host any one of its sessions happens to sit on. A session
+placed on a remote machine does not drag the project's git operations there.
+
+The reason the distinction matters is destructive, not cosmetic: the
+reconciler asks a host for the liveness of the sessions it owns, and "dead"
+is the one verdict it is allowed to act on (it terminates the scope and
+flips the session's row to `"exited"`). Deriving that host from the project
+would ask the wrong machine about a session that lives elsewhere — and the
+wrong machine's honest answer ("I have no such session") would read as
+"dead".
+
+A session's host is fixed at creation; moving a running session between
+hosts is not attempted.
+
 ## Agent updates
 
 Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)
