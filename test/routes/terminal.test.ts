@@ -248,7 +248,10 @@ describe("terminal route (/ws/terminal)", () => {
       `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
     );
     await waitForOpenOrClose(ws);
-    await waitUntil(() => clientSpy.mock.calls.length > 0, 5000);
+    // waitUntil() takes only the check (it polls with setImmediate and
+    // throws after 50 tries) — a second argument here would be a
+    // superfluous one, which is exactly what CodeQL flagged.
+    await waitUntil(() => clientSpy.mock.calls.length > 0);
 
     expect(clientSpy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
     expect(clientSpy.mock.calls.map((call) => call[1])).not.toContain("local");
