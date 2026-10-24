@@ -77,7 +77,6 @@ describe("check-case-collision.mjs", () => {
     expect(output).toContain("UnifiedBoard.tsx");
     expect(output).toContain("unifiedBoard.ts");
   });
-
   it("fails on a case-only pair of ASSETS (they cannot coexist on a Mac)", async (ctx) => {
     // The point of the rule: "favicon.svg" and "Favicon.svg" are two files
     // in the index, and on a case-insensitive filesystem (macOS) a checkout
@@ -95,12 +94,17 @@ describe("check-case-collision.mjs", () => {
     }
 
     let failed = false;
+    let output = "";
     try {
       await execFileAsync(process.execPath, [SCRIPT, root]);
-    } catch {
+    } catch (err) {
       failed = true;
+      output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
     }
     expect(failed).toBe(true);
+    // The failure must NAME the files, not just fail.
+    expect(output).toContain("favicon.svg");
+    expect(output).toContain("Favicon.svg");
   });
 
   it("fails on a case-only pair of DIRECTORIES", async (ctx) => {
@@ -112,12 +116,44 @@ describe("check-case-collision.mjs", () => {
     }
 
     let failed = false;
+    let output = "";
     try {
       await execFileAsync(process.execPath, [SCRIPT, root]);
-    } catch {
+    } catch (err) {
       failed = true;
+      output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
     }
     expect(failed).toBe(true);
+    expect(output).toContain("UnifiedBoard/");
+    expect(output).toContain("unifiedBoard/");
+  });
+
+  it("reports a case-only pair with the SAME extension once, and names it", async (ctx) => {
+    // "Board.ts" and "BOARD.ts" match BOTH rules (same stem, same full
+    // name) — the report must not list the pair twice, and must not claim
+    // "different extensions" when the extensions are identical.
+    write("src/Board.ts");
+    write("src/BOARD.ts");
+    if (sameFile("src/Board.ts", "src/BOARD.ts")) {
+      ctx.skip();
+      return;
+    }
+
+    let failed = false;
+    let output = "";
+    try {
+      await execFileAsync(process.execPath, [SCRIPT, root]);
+    } catch (err) {
+      failed = true;
+      output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
+    }
+    expect(failed).toBe(true);
+    expect(output).toContain("Board.ts");
+    expect(output).toContain("BOARD.ts");
+    expect(output).not.toContain("different extensions");
+    // The pair is reported once, not once per rule.
+    const occurrences = output.split("Board.ts  and  BOARD.ts").length - 1;
+    expect(occurrences).toBe(1);
   });
 
   it("ignores assets that share a stem but not their name (favicon.ico, favicon.svg)", async () => {

@@ -106,21 +106,32 @@ function walk(dir) {
     }
   }
   const where = path.relative(ROOT, dir) || ".";
+  const reported = new Set();
   for (const list of stems.values()) {
     if (list.length > 1) {
+      const files = list.slice().sort();
+      reported.add(files.join("|"));
+      const extensions = new Set(files.map((f) => moduleExtension(f)));
       collisions.push({
         dir: where,
-        reason: "same name ignoring case, different extensions — an import specifier cannot tell them apart",
-        files: list.sort(),
+        reason:
+          extensions.size > 1
+            ? "the same name ignoring case, with different extensions — an import specifier cannot tell them apart"
+            : "the same name ignoring case",
+        files,
       });
     }
   }
   for (const list of fullNames.values()) {
     if (list.length > 1) {
+      const files = list.slice().sort();
+      // A pair the stem rule already reported is not reported twice.
+      if (reported.has(files.join("|"))) continue;
       collisions.push({
         dir: where,
-        reason: "the same name ignoring case — they cannot coexist on a case-insensitive filesystem",
-        files: list.sort(),
+        reason:
+          "the same name ignoring case — they cannot coexist on a case-insensitive filesystem",
+        files,
       });
     }
   }
@@ -141,7 +152,7 @@ if (collisions.length > 0) {
   }
   console.error(
     "\nOn a case-insensitive filesystem (macOS's default) two such names\n" +
-      'cannot coexist: a git checkout collapses one into the other, and the\n' +
+      "cannot coexist: a git checkout collapses one into the other, and the\n" +
       "tree silently diverges from the index. An import specifier cannot\n" +
       'tell them apart either ("./Name.js" resolves to whichever the\n' +
       "filesystem finds first), and TypeScript fails the build with TS1149.\n" +
