@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { DeviceManager } from "../services/device-manager.js";
+import { DeviceManager, isDevicePanelSupported } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
 import { resolveSessionsDirs } from "./pty.js";
@@ -37,6 +37,46 @@ function readActiveDevicePorts(app: FastifyInstance): number[] {
 }
 
 export const devicePlugin = fp(async (app: FastifyInstance) => {
+  // Issue #1720 (roadmap 8.6) — the device panel is LINUX-ONLY, and this is
+  // the one place that decides it. The panel's emulator scope needs
+  // `systemd-run --user --scope` to start, to read liveness from, and to tear
+  // down (device-process.ts); macOS has no equivalent, and the darwin
+  // ScopeBackend cannot stand in because it is keyed to a SESSION's dtach
+  // socket. A macOS device scope is tracked separately.
+  //
+  // So the panel is gated OFF on a platform that cannot support it, and the
+  // gate says WHY: every device route answers 400 with "the device panel is
+  // not supported on darwin (it is Linux-only)" instead of the raw
+  // `spawn systemctl ENOENT` a macOS operator would otherwise hit. The
+  // platform is a parameter so a test can exercise both sides of the gate on
+  // any host.
+  // The platform is read HERE, at registration time, not at module load —
+  // the same posture getScopeBackend() takes (src/services/scope/index.ts),
+  // and the reason a test can exercise the gate on any host by stubbing
+  // process.platform (see test/services/scope.test.ts's own darwin case).
+  const platform = process.platform;
+  const panelSupported = isDevicePanelSupported(platform);
+  // The EFFECTIVE gate — the operator's DEVICE_ENABLED flag AND the
+  // platform's ability to run the panel at all. Every device route checks
+  // THIS, so the panel is off in one place and the reason for it is said in
+  // one place.
+  const panelEnabled = app.config.DEVICE_ENABLED && panelSupported;
+  // Why the panel is unavailable, when it is. The platform reason DOMINATES:
+  // telling a macOS operator to set DEVICE_ENABLED=true would send them off
+  // to change a .env and restart for nothing.
+  const panelUnavailableMessage = panelSupported
+    ? "Device panel is disabled — set DEVICE_ENABLED=true."
+    : `The device panel is not supported on ${platform} — it is Linux-only.`;
+  if (!panelSupported) {
+    app.log.info(
+      { platform },
+      "[device] the device panel is not supported on this platform — it is Linux-only, and the panel stays off",
+    );
+  }
+  app.decorate("devicePanelEnabled", panelEnabled);
+  app.decorate("devicePanelSupported", panelSupported);
+  app.decorate("devicePanelUnavailableMessage", panelUnavailableMessage);
+
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
   // set of dirs this instance may own scopes in (the current one plus every
   // fallback root an earlier release shipped for the same configured path).
@@ -53,7 +93,10 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     mullionHome: app.config.MULLION_HOME,
   });
   const manager = new DeviceManager({
-    enabled: app.config.DEVICE_ENABLED,
+    // A NARROWING, never a widening: `enabled` can only ever turn the panel
+    // OFF on a platform it was already off by default on. Linux is unchanged.
+    enabled: app.config.DEVICE_ENABLED && panelSupported,
+    supported: panelSupported,
     adbPath: app.config.DEVICE_ADB_PATH,
     adbServerPort: app.config.DEVICE_ADB_SERVER_PORT,
     emulatorPath: app.config.DEVICE_EMULATOR_PATH,
@@ -107,7 +150,10 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   );
   app.decorate("bootDeviceDiscoveryEnabled", discoveryEnabled);
   const discovery = new DeviceDiscoveryService({
-    enabled: app.config.DEVICE_ENABLED && discoveryEnabled,
+    // Gated on the platform too: the mDNS scanner is the device panel's
+    // companion, so a platform whose panel is off must not bind a
+    // multicast socket or emit 5353 queries either.
+    enabled: app.config.DEVICE_ENABLED && discoveryEnabled && panelSupported,
   });
   discovery.start();
   app.decorate("deviceDiscovery", discovery);
@@ -124,5 +170,22 @@ declare module "fastify" {
     deviceDiscovery: DeviceDiscoveryService;
     /** Discovery flag this process booted with (env default or Settings override). */
     bootDeviceDiscoveryEnabled: boolean;
+    /**
+     * Whether the device panel is USABLE here — the operator's DEVICE_ENABLED
+     * flag AND the platform's ability to run the panel at all (issue #1720:
+     * the panel is Linux-only, because its emulator scope needs systemd).
+     *
+     * Every device route gates on this rather than on app.config directly, so
+     * the panel is off in exactly one place.
+     */
+    devicePanelEnabled: boolean;
+    /** Why the panel is unavailable, when it is — the platform reason first. */
+    devicePanelUnavailableMessage: string;
+    /**
+     * Whether this PLATFORM supports the device panel at all. Distinct from
+     * `devicePanelEnabled` (the effective gate) so a surface with its own
+     * message shape can keep it and still report the platform reason.
+     */
+    devicePanelSupported: boolean;
   }
 }

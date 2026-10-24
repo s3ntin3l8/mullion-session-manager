@@ -289,6 +289,21 @@ describe("multi-host proxy (issue #26)", () => {
       return list.json()[0]?.alive === true;
     });
 
+    // Issue #1720 / roadmap 8.6 — the session is listed with the HOST it
+    // actually lives on, not the primary's own. This is the cross-topology
+    // claim a macOS primary depends on: the enrollment protocol is
+    // agent-dials-primary and carries no OS assumption, so a session an
+    // agent runs shows up in the primary's list under the AGENT's host id.
+    {
+      const list = await primary.app.inject({
+        method: "GET",
+        url: `/api/sessions?projectId=${projectId}`,
+      });
+      const item = list.json()[0];
+      expect(item?.alive).toBe(true);
+      expect(item?.hostId).toBe(hostId);
+    }
+
     const ws = new WebSocket(`ws://127.0.0.1:${primary.port}/ws/terminal?sessionId=${sessionId}`);
 
     // attachSocketToSession forwards pty output as binary Buffer frames

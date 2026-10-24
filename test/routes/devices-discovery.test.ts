@@ -8,7 +8,7 @@ import type * as ChildProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { buildTestApp } from "../helpers/app.js";
+import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import type { DeviceDiscoveryService } from "../../src/services/device-discovery.js";
 
@@ -50,6 +50,27 @@ vi.mock("node:child_process", async (importOriginal) => {
 const tmpDb = path.join(os.tmpdir(), `devices-discovery-test-${process.pid}.db`);
 
 describe("devices discovery + pair-and-connect routes", () => {
+  // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY (its
+  // emulator runs in a `systemd --user` scope), so on a non-Linux host the
+  // panel is off and every device route answers 400. This file asserts the
+  // panel's ENABLED behaviour, so the host platform is stubbed for the whole
+  // test — the same technique test/services/scope.test.ts uses for its own
+  // darwin case.
+  //
+  // The stub covers the whole test (not just the build) because the app's
+  // plugins read the platform when Fastify makes them ready, and the panel's
+  // gate is read at REQUEST time.
+  let originalPlatform: NodeJS.Platform;
+  beforeEach(async () => {
+    // The binding must be loaded BEFORE the platform is stubbed — see
+    // warmSqliteBinding()'s own doc comment.
+    await warmSqliteBinding();
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
   beforeEach(() => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.DEVICE_ENABLED = "true";
@@ -99,7 +120,7 @@ describe("devices discovery + pair-and-connect routes", () => {
 
   describe("GET /api/devices/discovered", () => {
     it("returns an empty array when nothing has been advertised", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([]);
@@ -109,7 +130,7 @@ describe("devices discovery + pair-and-connect routes", () => {
       delete process.env.DEVICE_ENABLED;
       const findCallsBefore = routeFindCalls.length;
       const ctorCallsBefore = routeBonjourCtorCalls.mock.calls.length;
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([]);
@@ -126,7 +147,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("returns the cached discovery snapshot grouped by SRV hostname", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
       expect(res.statusCode).toBe(200);
@@ -143,7 +164,7 @@ describe("devices discovery + pair-and-connect routes", () => {
 
     it("returns an empty array when DEVICE_DISCOVERY_ENABLED is false", async () => {
       process.env.DEVICE_DISCOVERY_ENABLED = "false";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices/discovered" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([]);
@@ -156,7 +177,7 @@ describe("devices discovery + pair-and-connect routes", () => {
   // PATCH /api/devices/:id. This pins that the two backend halves line up.
   describe("rediscovered known device (issue #1380)", () => {
     it("a discovered host matching a physical row's host is reconnectable via PATCH with the rediscovered address", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -190,7 +211,7 @@ describe("devices discovery + pair-and-connect routes", () => {
   describe("POST /api/devices/pair-and-connect", () => {
     it("rejects when DEVICE_ENABLED is off", async () => {
       delete process.env.DEVICE_ENABLED;
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair-and-connect",
@@ -200,7 +221,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects a malformed pairing code", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair-and-connect",
@@ -214,7 +235,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects when neither discoveryId nor pairingAddress is supplied", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair-and-connect",
@@ -224,7 +245,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects an unknown discoveryId", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair-and-connect",
@@ -234,7 +255,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("skips pair() and goes straight to connect when the cache has only a connect service (paired-before reconnect case)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", connectPort: 37251 });
       const pair = vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
       const getOrCreate = vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({} as never);
@@ -254,7 +275,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects manual mode without a connectAddress", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair-and-connect",
@@ -264,7 +285,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("creates a physical row, calls pair(), and starts a Device from the cached discovery entry", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       const pair = vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
       const getOrCreate = vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({
@@ -298,7 +319,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("always attempts pair() in manual mode, even with no discovery cache entries", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const pair = vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
       const getOrCreate = vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({} as never);
 
@@ -317,7 +338,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("surfaces a pair() failure as 400 and rolls back the row so a retry can succeed", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       vi.spyOn(app.device, "pair").mockRejectedValueOnce(new Error("wrong code"));
       const res = await app.inject({
@@ -340,7 +361,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("returns 409 when an active physical row already owns the same connect address", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       // Pre-seed an active row at the same address the route would use.
       app.db
         .insert((await import("../../src/db/schema.js")).devices)
@@ -364,7 +385,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("honors a user-supplied connectAddress override on top of the cached entry", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
       vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
       const getOrCreate = vi.spyOn(app.device, "getOrCreate").mockResolvedValueOnce({} as never);
@@ -385,7 +406,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects a cached pairingAddress that fails isValidDeviceAddress, evicts the entry, and 400s (W1 on #1381)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       // Seed with a literal IPv6 host: resolveHost falls back to
       // service.host when addresses[] is empty, so the grouped
       // pairingAddress becomes "fe80::1:41234" — which
@@ -418,7 +439,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("rejects a cached connectAddress that fails isValidDeviceAddress (W1 on #1381)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       // Connect-only entry (no pairing service) with an IPv6 host — the
       // connectAddress fails validation even though pairingAddress is
       // undefined (nothing to validate there).
@@ -441,7 +462,7 @@ describe("devices discovery + pair-and-connect routes", () => {
     });
 
     it("concurrent double-click yields exactly one 201 and one 409, never two rows (W3 on #1381)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       seedDiscovery(app, { name: "Pixel 7", pairingPort: 41234, connectPort: 37251 });
 
       // Block pair() on a deferred promise so both requests are in flight

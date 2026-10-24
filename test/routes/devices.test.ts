@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
-import { buildTestApp } from "../helpers/app.js";
+import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 
@@ -32,6 +32,27 @@ vi.mock("node:child_process", async (importOriginal) => {
 const tmpDb = path.join(os.tmpdir(), `devices-test-${process.pid}.db`);
 
 describe("devices routes", () => {
+  // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY (its
+  // emulator runs in a `systemd --user` scope), so on a non-Linux host the
+  // panel is off and every device route answers 400. This file asserts the
+  // panel's ENABLED behaviour, so the host platform is stubbed for the whole
+  // test — the same technique test/services/scope.test.ts uses for its own
+  // darwin case.
+  //
+  // The stub covers the whole test (not just the build) because the app's
+  // plugins read the platform when Fastify makes them ready, and the panel's
+  // gate is read at REQUEST time.
+  let originalPlatform: NodeJS.Platform;
+  beforeEach(async () => {
+    // The binding must be loaded BEFORE the platform is stubbed — see
+    // warmSqliteBinding()'s own doc comment.
+    await warmSqliteBinding();
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
   beforeEach(() => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
   });
@@ -45,7 +66,7 @@ describe("devices routes", () => {
 
   describe("with DEVICE_ENABLED unset (default off)", () => {
     it("POST /api/devices rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -55,20 +76,20 @@ describe("devices routes", () => {
     });
 
     it("GET /api/devices still returns 200 (an empty live map is a valid answer)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([]);
     });
 
     it("GET /api/devices/:id 404s for a nonexistent row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices/999" });
       expect(res.statusCode).toBe(404);
     });
 
     it("POST /api/devices/:id/action rejects with 400 regardless of row existence", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/1/action",
@@ -78,7 +99,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/pair rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices/pair",
@@ -88,14 +109,14 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/start rejects with 400 (guard runs before the row lookup)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "POST", url: "/api/devices/999/start" });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toMatch(/Device panel is disabled/);
     });
 
     it("PATCH /api/devices/:id rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "PATCH",
         url: "/api/devices/1",
@@ -109,7 +130,7 @@ describe("devices routes", () => {
     // comment on the /start guard claims exactly that, so these two pin the
     // claim). Creation is gated, so the row has to be inserted directly.
     it("POST /api/devices/:id/stop still works with the feature off (teardown is never gated)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const [row] = app.db
         .insert(devices)
         .values({ kind: "emulator", avdName: "dev35", status: "active" })
@@ -125,7 +146,7 @@ describe("devices routes", () => {
     });
 
     it("DELETE /api/devices/:id still works with the feature off (teardown is never gated)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const [row] = app.db
         .insert(devices)
         .values({ kind: "emulator", avdName: "dev35", status: "active" })
@@ -147,7 +168,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices creates a row and returns 201 with the expected shape", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -166,7 +187,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices persists the allocated port on the row via onPortAssigned (issue #1325's reattach durability)", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -184,7 +205,7 @@ describe("devices routes", () => {
     });
 
     it("a fresh spawn() on a NEW app instance (simulating a Mullion restart) skips a port persisted by a still-active, not-yet-reattached row (issue #1328)", async () => {
-      // Plain buildApp(), not buildTestApp() — this test closes app1 itself,
+      // Plain buildApp(), not buildTestAppOnPlatform("linux") — this test closes app1 itself,
       // mid-test, to force devicePlugin's own DeviceManager construction on
       // app2 to start from a genuinely empty `allocatedPorts` (see
       // buildTestApp's own header on why manual closes use buildApp
@@ -230,7 +251,7 @@ describe("devices routes", () => {
     });
 
     it("GET /api/devices lists a created row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       await app.inject({ method: "POST", url: "/api/devices", payload: { avdName: "dev35" } });
       const res = await app.inject({ method: "GET", url: "/api/devices" });
       expect(res.statusCode).toBe(200);
@@ -240,7 +261,7 @@ describe("devices routes", () => {
     });
 
     it("DELETE /api/devices/:id tears the device down and REMOVES the row, returning 204", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -262,7 +283,7 @@ describe("devices routes", () => {
     });
 
     it("DELETE /api/devices/:id keeps the row as killed and returns 500 when teardown throws", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -282,7 +303,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/stop flips status to killed and keeps the row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -299,7 +320,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/stop keeps the row killed and returns 500 when teardown throws", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -316,13 +337,13 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/stop 404s for a nonexistent row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "POST", url: "/api/devices/999/stop" });
       expect(res.statusCode).toBe(404);
     });
 
     it("POST /api/devices/:id/start flips a stopped row back to active and returns the row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -340,7 +361,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/start reverts a stopped row to killed and 400s when getOrCreate throws", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -363,13 +384,13 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/start 404s for a nonexistent row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "POST", url: "/api/devices/999/start" });
       expect(res.statusCode).toBe(404);
     });
 
     it("POST /api/devices/:id/start tears the scope it just made down and 404s when the row is deleted mid-start", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -399,7 +420,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/start rolls the device back down and 409s when it is stopped mid-start", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -429,13 +450,13 @@ describe("devices routes", () => {
     });
 
     it("DELETE /api/devices/:id 404s for a nonexistent row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "DELETE", url: "/api/devices/999" });
       expect(res.statusCode).toBe(404);
     });
 
     it("POST /api/devices/:id/action 400s when the device has no live adb connection yet", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -453,7 +474,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices/:id/action rejects an invalid action body", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -470,7 +491,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices rejects when avdName is missing", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -481,7 +502,7 @@ describe("devices routes", () => {
     });
 
     it("POST /api/devices rejects when getOrCreate throws", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       vi.spyOn(app.device, "getOrCreate").mockRejectedValueOnce(new Error("boot failure"));
       const res = await app.inject({
         method: "POST",
@@ -493,13 +514,13 @@ describe("devices routes", () => {
     });
 
     it("GET /api/devices/:id rejects non-integer id with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/devices/abc" });
       expect(res.statusCode).toBe(400);
     });
 
     it("GET /api/devices/:id returns device info for valid row", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const created = await app.inject({
         method: "POST",
         url: "/api/devices",
@@ -512,13 +533,13 @@ describe("devices routes", () => {
     });
 
     it("DELETE /api/devices/:id rejects non-integer id with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "DELETE", url: "/api/devices/abc" });
       expect(res.statusCode).toBe(400);
     });
 
     it("POST /api/devices/:id/action rejects non-integer id with 400 and nonexistent with 404", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res1 = await app.inject({
         method: "POST",
         url: "/api/devices/abc/action",
@@ -536,7 +557,7 @@ describe("devices routes", () => {
 
     describe("action execution against live adbConnection", () => {
       it("executes screenshot, tap, swipe, text, key, and logcat actions", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -672,7 +693,7 @@ describe("devices routes", () => {
       // receives, not just against shellQuoteArg in isolation, so a
       // regression in how routes/devices.ts calls it is caught too.
       it("neutralizes shell metacharacters in the logcat filter via POSIX single-quote escaping", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -706,7 +727,7 @@ describe("devices routes", () => {
       });
 
       it("400s on a logcat action whose optional fields have the wrong type", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -758,7 +779,7 @@ describe("devices routes", () => {
       };
 
       it("get returns { text: null } when nothing has been cached yet", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const { id } = await createDeviceWithController(app);
 
         const res = await app.inject({
@@ -771,7 +792,7 @@ describe("devices routes", () => {
       });
 
       it("get returns the value the device's own clipboard stream delivered", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const { id, device } = await createDeviceWithController(app);
 
         let push!: (text: string) => void;
@@ -801,7 +822,7 @@ describe("devices routes", () => {
       });
 
       it("get returns the value a prior set wrote, and set validates oversize text", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const { id, setClipboard } = await createDeviceWithController(app);
 
         const rSet = await app.inject({
@@ -838,7 +859,7 @@ describe("devices routes", () => {
       });
 
       it("set with --paste forwards paste: true", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const { id, setClipboard } = await createDeviceWithController(app);
 
         await app.inject({
@@ -854,7 +875,7 @@ describe("devices routes", () => {
       });
 
       it("400s get and set when device.controller is not live yet", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -886,7 +907,7 @@ describe("devices routes", () => {
       });
 
       it("400s a clipboard body with an invalid or missing op", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const { id } = await createDeviceWithController(app);
 
         const res1 = await app.inject({
@@ -924,7 +945,7 @@ describe("devices routes", () => {
 
     describe("physical devices", () => {
       it("POST /api/devices with kind: physical creates a row with kind/serial persisted, avdName/port null", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -945,7 +966,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices with kind: physical rejects a second row for an address an active row already owns (issue #1350)", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const first = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -969,7 +990,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices with kind: physical allows re-adding an address once the prior row is killed", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const first = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -989,7 +1010,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices/:id/start rejects a stop→re-add→start cycle that would put two active rows on one address (issue #1350)", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const first = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1020,7 +1041,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices with kind: physical rejects a malformed address", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1030,7 +1051,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices with kind: physical rejects an out-of-range port", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1040,7 +1061,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices with kind: physical rejects a body that also sets avdName", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1050,7 +1071,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices without kind: physical rejects a body that sets address", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1060,7 +1081,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices/pair delegates to app.device.pair with the validated address/code", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const pair = vi.spyOn(app.device, "pair").mockResolvedValueOnce(undefined);
         const res = await app.inject({
           method: "POST",
@@ -1073,7 +1094,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices/pair rejects a malformed pairing code", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/devices/pair",
@@ -1083,7 +1104,7 @@ describe("devices routes", () => {
       });
 
       it("POST /api/devices/pair surfaces a pair() failure as 400", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         vi.spyOn(app.device, "pair").mockRejectedValueOnce(new Error("bad pairing code"));
         const res = await app.inject({
           method: "POST",
@@ -1095,7 +1116,7 @@ describe("devices routes", () => {
       });
 
       it("DELETE /api/devices/:id passes the row's own kind through to terminate() — not a hardcoded emulator assumption", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({
           method: "POST",
           url: "/api/devices",
@@ -1111,7 +1132,7 @@ describe("devices routes", () => {
 
       describe("PATCH /api/devices/:id (issue #1347)", () => {
         it("rewrites serial in place — reconnecting via getOrCreate with the NEW address, without touching id/name/projectId/createdAt", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const created = await app.inject({
             method: "POST",
             url: "/api/devices",
@@ -1158,7 +1179,7 @@ describe("devices routes", () => {
         });
 
         it("rejects editing an emulator row with 400", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const created = await app.inject({
             method: "POST",
             url: "/api/devices",
@@ -1175,7 +1196,7 @@ describe("devices routes", () => {
         });
 
         it("rejects a malformed address with 400", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const created = await app.inject({
             method: "POST",
             url: "/api/devices",
@@ -1192,7 +1213,7 @@ describe("devices routes", () => {
         });
 
         it("persists an edit on a stopped row WITHOUT starting it — no implicit start, no 400", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const created = await app.inject({
             method: "POST",
             url: "/api/devices",
@@ -1223,7 +1244,7 @@ describe("devices routes", () => {
         });
 
         it("rejects an address another ACTIVE row already owns with 409", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const owner = await app.inject({
             method: "POST",
             url: "/api/devices",
@@ -1247,7 +1268,7 @@ describe("devices routes", () => {
         });
 
         it("404s for a nonexistent row", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const res = await app.inject({
             method: "PATCH",
             url: "/api/devices/999",
@@ -1257,7 +1278,7 @@ describe("devices routes", () => {
         });
 
         it("rejects a non-integer id with 400", async () => {
-          const app = await buildTestApp();
+          const app = await buildTestAppOnPlatform("linux");
           const res = await app.inject({
             method: "PATCH",
             url: "/api/devices/abc",
