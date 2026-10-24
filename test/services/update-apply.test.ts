@@ -276,10 +276,10 @@ describe("spawnSelfUpdate", async () => {
   // spawned at all.
   it("reports the PARTIAL budget a slow bootout left, not the whole one", async () => {
     setPlatform("darwin");
-    // 8s of the 10s budget: the bootstrap is left with ~2s, comfortably
-    // above the floor, so it IS attempted and then times out on what is
-    // actually left.
-    launchctlDelaysMs = { bootout: 8_000 };
+    // 4s of the 10s budget: the bootstrap is left with ~6s — comfortably
+    // above the floor (1s) even when a loaded runner overshoots the delay by
+    // a second or two, and comfortably below the whole budget.
+    launchctlDelaysMs = { bootout: 4_000 };
     // ...and the bootstrap then hangs, so its own (partial) budget is what
     // runs out.
     launchctlHangsOn = ["bootstrap"];
@@ -293,9 +293,17 @@ describe("spawnSelfUpdate", async () => {
       });
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
-      // ~2s left, not 10s: the message reports the budget the call had.
-      // (Reverting it to the constant prints "10000ms" and reds this.)
-      expect(result.message).toMatch(/timed out after 1\d{3}ms/);
+      // The budget the call was LEFT with, parsed out of the message and
+      // bounded on BOTH sides rather than matched against a digit count: a
+      // regex like /1\d{3}ms/ is a 1ms-wide window at its upper edge, and
+      // the bootout's own overshoot moves the number. The bounds are the
+      // ones that matter: above the floor (the call WAS attempted) and
+      // below the whole budget (it was a PARTIAL one).
+      const timedOut = /timed out after (\d+)ms/.exec(result.message);
+      expect(timedOut).not.toBeNull();
+      const budget = Number(timedOut?.[1]);
+      expect(budget).toBeGreaterThan(1_000);
+      expect(budget).toBeLessThan(10_000);
       // ...and the bootstrap was attempted (it had budget to try).
       expect(
         spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
@@ -322,6 +330,11 @@ describe("spawnSelfUpdate", async () => {
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
       expect(result.message).toMatch(/already exhausted/);
+      // The short-circuit's own wording is pinned too — it is the PR's only
+      // production change, and "already exhausted" alone is satisfied by the
+      // old constant form as well: what makes it true is that it says what
+      // was LEFT.
+      expect(result.message).toMatch(/only \d+ms of the 10000ms budget was left/);
       // The bootstrap was never attempted.
       expect(
         spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
