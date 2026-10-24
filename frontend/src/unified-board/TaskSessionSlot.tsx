@@ -15,7 +15,7 @@ import { BotIcon, TerminalPromptIcon } from "../ui/icons.js";
 // surface is far too heavy for a ~250px task column). `session` is
 // `undefined` only once the linked id is fully reaped off the backend's own
 // session list (GET /api/sessions returns killed rows too — see
-// unifiedBoard.ts's adhocSessionsByColumn's own `status === "killed"` filter,
+// boardLanes.ts's adhocSessionsByColumn's own `status === "killed"` filter,
 // which would be dead code otherwise — so a killed-but-not-yet-reaped session
 // still resolves here and renders the live path below with an "exited"
 // presentation, tinted via .status-exited, not this "ended" chip). Since

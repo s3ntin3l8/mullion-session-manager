@@ -22,7 +22,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:all": "concurrently -n backend,frontend -c blue,green \"npm:test\" \"npm --prefix frontend run test\"",
-    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:review-protocol-sync && npm run check:ssh-agent-filter-vectors && npm run check:security-antipatterns && npm run check:pre-push-hook-order",
+    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:review-protocol-sync && npm run check:ssh-agent-filter-vectors && npm run check:security-antipatterns && npm run check:pre-push-hook-order && npm run check:case-collision",
     "lint:all": "concurrently -n backend,frontend -c blue,green \"npm:lint\" \"npm --prefix frontend run lint\"",
     "typecheck": "tsc --noEmit",
     "typecheck:all": "concurrently -n backend,frontend -c blue,green \"npm:typecheck\" \"npm --prefix frontend run typecheck\"",
@@ -40,7 +40,8 @@
     "check:patch-coverage": "node scripts/check-patch-coverage-hook.mjs",
     "check:pre-push-hook-order": "node scripts/check-pre-push-hook-order.mjs",
     "test:patch-coverage": "node scripts/check-patch-coverage.mjs",
-    "check:scope-leaks": "tsx scripts/check-scope-leaks.ts"
+    "check:scope-leaks": "tsx scripts/check-scope-leaks.ts",
+    "check:case-collision": "node scripts/check-case-collision.mjs"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.2",
