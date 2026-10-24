@@ -87,8 +87,6 @@ describe("scripts/macos-launchd-check.sh", () => {
     // one) must be sandboxed.
     expect(sandboxed.length).toBe(2);
     expect(SOURCE).not.toMatch(/PATH="\$SBX_BIN:\$PATH"/);
-    // …and the HOME must be the sandbox's, never the real one.
-    expect(SOURCE).not.toMatch(/HOME="\$SBX_BIN"/);
   });
 
   it("fails loudly when a binary the installer needs is missing", () => {

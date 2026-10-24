@@ -186,20 +186,10 @@ else
       fail "the installer refused, but without naming launchctl: $(tail -2 "$TMPD/install-nolaunchctl.log" | head -1)"
     fi
   fi
-  # The refusal must not have touched the real machine: no new plist, no
-  # new job.
-  PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
-  JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-  if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
-    pass "the refusal left the real ~/Library/LaunchAgents untouched"
-  else
-    fail "the refusal wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
-  fi
-  if [ "$JOBS_BEFORE" = "$JOBS_AFTER" ]; then
-    pass "the refusal left the real launchd jobs untouched"
-  else
-    fail "the refusal installed a launchd job on the REAL host — the sandbox is not holding"
-  fi
+  # The refusal happens at the prerequisite check, long before the installer
+  # would write anything, so there is nothing here to compare yet — the
+  # before/after comparison lives in section 5, whose run gets PAST that
+  # gate and would really write.
 fi
 
 echo
@@ -216,6 +206,12 @@ chmod +x "$SBX_BIN/launchctl"
 
 ROLE_HOME="$SBX_HOME/role-home"
 mkdir -p "$ROLE_HOME"
+# The com.mullion.* plists and jobs on THIS host, captured right before the
+# run below: that run gets PAST the prerequisite check (it reaches the .env
+# write and the plist write), so a sandbox that is not holding WOULD leave a
+# trace on the real machine — which is what the comparison can catch.
+PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
+JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
 # The seeded role is the OPPOSITE of the requested one on purpose: if the
 # installer could not read the .env, it would fall back to its default
 # ("primary"), and a request for "primary" would then be ACCEPTED — so a
@@ -242,6 +238,27 @@ else
     pass "the installer worked inside the sandbox HOME"
   else
     fail "the installer's log never mentions the sandbox HOME — the sandbox is not holding"
+  fi
+  # The install root the script PASSED is echoed back by the installer, so
+  # that line proves nothing about HOME. What proves the sandbox held is
+  # that the REAL home never appears in the installer's output.
+  if grep -q "$HOME" "$TMPD/install-roleswitch.log"; then
+    fail "the installer's log mentions the REAL \$HOME — the sandbox is not holding"
+  else
+    pass "the installer never touched the real \$HOME"
+  fi
+  # …and the real machine is unchanged: no new plist, no new job.
+  PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
+  JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+  if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
+    pass "the run left the real ~/Library/LaunchAgents untouched"
+  else
+    fail "the run wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
+  fi
+  if [ "$JOBS_BEFORE" = "$JOBS_AFTER" ]; then
+    pass "the run left the real launchd jobs untouched"
+  else
+    fail "the run installed a launchd job on the REAL host — the sandbox is not holding"
   fi
 fi
 
