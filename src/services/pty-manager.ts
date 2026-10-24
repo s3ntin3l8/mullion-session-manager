@@ -2384,6 +2384,14 @@ export class Session {
    * once per session, and re-reporting the same path is a no-op.
    */
   setCodexTranscriptPath(path: string): void {
+    // A DIFFERENT path means a different codex process: the agent was
+    // restarted inside the same PTY, possibly under a different
+    // CODEX_HOME. Keeping the old home would reject the new path — the
+    // session would silently stop being watched — so the home is
+    // re-resolved whenever the path changes.
+    if (this.codexTranscriptPath !== null && this.codexTranscriptPath !== path) {
+      this.codexTranscriptHome = null;
+    }
     this.codexTranscriptPath = path;
     // The home is resolved ONCE, here, and kept beside the path. The
     // session's own environment is the only thing that can make it differ
