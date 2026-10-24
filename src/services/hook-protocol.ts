@@ -340,8 +340,9 @@ export interface TurnStartHookMessage {
  * The distinguishing property is not "interactive vs not" — it is "**is
  * this session going to wake again**":
  *
- *  - a human's turn (`user`) ended, and nothing is pending → the work is
- *    done.
+ *  - a human's turn (`user`) ended → the work is done. A pending wakeup does
+ *    NOT hold it back: a human's turn is the end of that turn's work
+ *    whatever else the session has scheduled.
  *  - `sdk` — a non-interactive entrypoint (`-p` / Agent SDK), which is
  *    EXACTLY how Task Master's own workers run. It must count as done: if
  *    it did not, Task Master would never reach `reviewing` at all.
@@ -352,6 +353,15 @@ export interface TurnStartHookMessage {
  *    the `/loop`'s FINAL iteration: the agent armed one more wakeup every
  *    iteration but the last, so the final turn ends with an empty
  *    `session_crons` — and the task must be able to advance.
+ *
+ *    Why an empty `session_crons` is enough for `poll_event` too, whose
+ *    source describes an ENQUEUE-time pass ("the hook fires when the host
+ *    submits an event, before its delivery ack exists"): the source
+ *    describes how the turn STARTED, but the `session_crons` this rule
+ *    reads comes from the turn's `Stop`, which fires at the turn's END. By
+ *    then the outcome exists, and the pending list is the state after the
+ *    turn finished — so an empty list really does mean nothing is going to
+ *    wake the session again.
  *
  * An ABSENT source is NOT automatically "done". The `source` field is still
  * rolling out upstream, and Claude Code 2.1.286's `UserPromptSubmit` emitter
@@ -372,6 +382,9 @@ export function turnEndMeansWorkFinished(
   switch (source) {
     case "user":
     case "sdk":
+      // A human's turn (or the non-interactive entrypoint) is the end of that
+      // turn's work, whatever else the session has scheduled: a pending
+      // wakeup does not hold it back.
       return true;
     case "loop_wakeup":
     case "schedule_wakeup":
