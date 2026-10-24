@@ -770,7 +770,18 @@ export async function createSessionRecord(
 
 // What createSessionRecordInner has created so far and so must unwind.
 interface CreateRollback {
+  /** The host the session's SCOPE was created on — the placement host. */
   hostId?: string;
+  /**
+   * The host the session's WORKTREE was created on — issue #1722: the
+   * worktree is cut from the project's repo, so it is created on the
+   * PROJECT's host, while the scope runs on the placement host. The two
+   * are the same host today; #1724 makes them differ, and a rollback that
+   * sent the worktree cleanup to the scope's host would leave a leaked
+   * worktree and an undeleted branch with no log line. So they are
+   * tracked separately.
+   */
+  worktreeHostId?: string;
   /** Worktree created by this call (never a pre-existing one). */
   worktreePath?: string;
   /** Repo the worktree was cut from (parentCwd for removeWorktree/deleteBranch). */
@@ -802,15 +813,19 @@ async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise
     }
   }
   if (rb.worktreePath !== undefined) {
+    // The worktree lives on ITS host — the project's, where it was cut
+    // from — which is not necessarily the host the scope was created on
+    // (issue #1722).
+    const worktreeBackend = () => resolveBackend(app, rb.worktreeHostId ?? rb.hostId!);
     try {
-      await backend().removeWorktree(rb.worktreePath, rb.parentCwd);
+      await worktreeBackend().removeWorktree(rb.worktreePath, rb.parentCwd);
     } catch {
       // Best-effort: a leaked worktree directory is the cheaper failure —
       // same posture as cleanupPreviewWorktree's pendingRemoval retry.
     }
     if (rb.branch !== undefined && rb.parentCwd !== undefined) {
       try {
-        await backend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
+        await worktreeBackend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
       } catch {
         // Best-effort, as above.
       }
@@ -1006,8 +1021,10 @@ async function prepareWorktree(
     // directory.
     // The worktree is created on the PROJECT's host — the placement
     // decision has not been made yet (8.10 moves this to the placement
-    // host) — so the rollback unwinds it there.
-    rb.hostId = project.hostId;
+    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
+    // rb.hostId (the scope's host): the two are the same host today, and
+    // #1724 makes them differ.
+    rb.worktreeHostId = project.hostId;
     rb.worktreePath = result.path;
     rb.parentCwd = params.cwd ?? project.cwd;
     return { ok: true, cwd: result.path };
@@ -1028,8 +1045,10 @@ async function prepareWorktree(
     }
     // The worktree is created on the PROJECT's host — the placement
     // decision has not been made yet (8.10 moves this to the placement
-    // host) — so the rollback unwinds it there.
-    rb.hostId = project.hostId;
+    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
+    // rb.hostId (the scope's host): the two are the same host today, and
+    // #1724 makes them differ.
+    rb.worktreeHostId = project.hostId;
     rb.worktreePath = resolved.path;
     rb.parentCwd = params.cwd ?? project.cwd;
     rb.branch = resolved.branch;
