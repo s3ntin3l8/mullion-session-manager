@@ -152,8 +152,13 @@ cleanup() {
 # script CONTINUE, with $TMP_DIR already deleted, and only die at the next
 # command under `set -e`. Exiting explicitly says what is meant: interrupt
 # the run, clean up, stop.
+#
+# The two signals get their own statuses — 128+2 for SIGINT (130) and 128+15
+# for SIGTERM (143) — so a wrapper driving this script can tell a Ctrl-C from
+# a kill. A single 130 for both would hide that.
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 TARBALL_NAME="mullion-$VERSION.tgz"
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
