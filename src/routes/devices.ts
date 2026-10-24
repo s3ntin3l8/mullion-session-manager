@@ -178,8 +178,8 @@ interface CreateDeviceBody {
 
 export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Body: CreateDeviceBody }>("/api/devices", async (request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     const { kind = "emulator", avdName, address, projectId, name } = request.body ?? {};
 
@@ -301,8 +301,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Body: { pairingAddress?: string; pairingCode?: string } }>(
     "/api/devices/pair",
     async (request, reply) => {
-      if (!app.config.DEVICE_ENABLED) {
-        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+      if (!app.devicePanelEnabled) {
+        return reply.badRequest(app.devicePanelUnavailableMessage);
       }
       const { pairingAddress, pairingCode } = request.body ?? {};
       if (!isValidDeviceAddress(pairingAddress)) {
@@ -346,8 +346,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       name?: string;
     };
   }>("/api/devices/pair-and-connect", async (request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     const { discoveryId, pairingAddress, connectAddress, pairingCode, name } = request.body ?? {};
 
@@ -575,8 +575,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string }; Body: { address?: string } }>(
     "/api/devices/:id",
     async (request, reply) => {
-      if (!app.config.DEVICE_ENABLED) {
-        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+      if (!app.devicePanelEnabled) {
+        return reply.badRequest(app.devicePanelUnavailableMessage);
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
@@ -682,8 +682,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   // state UI" posture — as POST /api/devices creating one. Tearing a device
   // down must keep working while the feature is off.
   app.post<{ Params: { id: string } }>("/api/devices/:id/start", async (request, reply) => {
-    if (!app.config.DEVICE_ENABLED) {
-      return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+    if (!app.devicePanelEnabled) {
+      return reply.badRequest(app.devicePanelUnavailableMessage);
     }
     const id = Number(request.params.id);
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
@@ -843,8 +843,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { id: string }; Body: unknown }>(
     "/api/devices/:id/action",
     async (request, reply) => {
-      if (!app.config.DEVICE_ENABLED) {
-        return reply.badRequest("Device panel is disabled — set DEVICE_ENABLED=true.");
+      if (!app.devicePanelEnabled) {
+        return reply.badRequest(app.devicePanelUnavailableMessage);
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");

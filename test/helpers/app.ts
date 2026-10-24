@@ -78,3 +78,57 @@ export async function buildTestApp(): Promise<FastifyInstance> {
 
   return build;
 }
+
+/**
+ * Builds a test app with `process.platform` stubbed for the BUILD, then
+ * restores the real platform before returning.
+ *
+ * **Why this exists.** The Android device panel is LINUX-ONLY (issue #1720,
+ * roadmap 8.6): its emulator runs in a `systemd --user` scope, so on a
+ * platform without one the panel is off and every device route answers 400
+ * "not supported on <platform>". The device route tests assert the panel's
+ * ENABLED behaviour, so on a macOS host they would fail — not because the
+ * code is wrong, but because the host is not the platform the panel exists
+ * on.
+ *
+ * **Why the stub is restored.** The platform is read at two different times
+ * for two different things: the device plugin reads it when the app becomes
+ * READY (to decide the panel's gate), while the SCOPE backend
+ * (getScopeBackend) resolves it LAZILY, on first use. Stubbing only across
+ * the build means the panel's gate is decided as if on the target platform
+ * while the scope backend still resolves against the real host — so a test
+ * that also creates a local session behaves exactly as it did before.
+ *
+ * This is the same technique test/services/scope.test.ts uses for its own
+ * darwin case.
+ */
+export async function buildTestAppOnPlatform(platform: NodeJS.Platform): Promise<FastifyInstance> {
+  await warmSqliteBinding();
+  const original = process.platform;
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  try {
+    const app = await buildTestApp();
+    // Force the plugin bodies to run NOW, while the platform is still
+    // stubbed — Fastify defers them to app.ready().
+    await app.ready();
+    return app;
+  } finally {
+    Object.defineProperty(process, "platform", { value: original, configurable: true });
+  }
+}
+
+/**
+ * Loads better-sqlite3's NATIVE BINDING, so a later stub of
+ * `process.platform` cannot break it.
+ *
+ * better-sqlite3 resolves its prebuild LAZILY, in the Database constructor,
+ * and that loader reads process.platform to pick the .node file — so a
+ * stubbed "linux" makes it try a Linux binary on macOS. The binding is
+ * memoized (lib/binding.js keeps DEFAULT_ADDON), so loading it once makes
+ * the rest of the suite immune to the stub. An IN-MEMORY database, so no
+ * file is touched.
+ */
+export async function warmSqliteBinding(): Promise<void> {
+  const Database = (await import("better-sqlite3")).default;
+  new Database(":memory:").close();
+}

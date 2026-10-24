@@ -47,7 +47,7 @@ vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
 // chain during THIS file's own module-linking phase, before `const ptyMock
 // = createNodePtyMock()` above has run — confirmed empirically, the same
 // failure test/routes/devices.test.ts's own use of buildTestApp avoids.
-import { buildTestApp } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import {
   AvdCreatedError,
   createAvd,
@@ -62,6 +62,27 @@ import {
 } from "../../src/services/avd-manager.js";
 
 describe("avds routes", () => {
+  // Issue #1720 (roadmap 8.6) — the Android device panel is LINUX-ONLY (its
+  // emulator runs in a `systemd --user` scope), so on a non-Linux host the
+  // panel is off and every device route answers 400. This file asserts the
+  // panel's ENABLED behaviour, so the host platform is stubbed for the whole
+  // test — the same technique test/services/scope.test.ts uses for its own
+  // darwin case.
+  //
+  // The stub covers the whole test (not just the build) because the app's
+  // plugins read the platform when Fastify makes them ready, and the panel's
+  // gate is read at REQUEST time.
+  let originalPlatform: NodeJS.Platform;
+  beforeEach(async () => {
+    // The binding must be loaded BEFORE the platform is stubbed — see
+    // warmSqliteBinding()'s own doc comment.
+    await warmSqliteBinding();
+    originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+  });
   beforeEach(() => {
     vi.mocked(listAvds).mockReset().mockResolvedValue(["pixel_7"]);
     vi.mocked(listDeviceProfiles).mockReset().mockResolvedValue(["pixel_6"]);
@@ -103,25 +124,25 @@ describe("avds routes", () => {
 
   describe("with DEVICE_ENABLED unset (default off)", () => {
     it("GET /api/avds rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/avds" });
       expect(res.statusCode).toBe(400);
     });
 
     it("GET /api/system-images rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images" });
       expect(res.statusCode).toBe(400);
     });
 
     it("GET /api/device-profiles rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/device-profiles" });
       expect(res.statusCode).toBe(400);
     });
 
     it("POST /api/avds rejects with 400", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({
         method: "POST",
         url: "/api/avds",
@@ -141,13 +162,13 @@ describe("avds routes", () => {
     });
 
     it("GET /api/avds rejects with 400 when DEVICE_AVDMANAGER_PATH is unset", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/avds" });
       expect(res.statusCode).toBe(400);
     });
 
     it("GET /api/system-images rejects with 400 when DEVICE_ANDROID_SDK_ROOT is unset", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images" });
       expect(res.statusCode).toBe(400);
     });
@@ -159,7 +180,7 @@ describe("avds routes", () => {
       });
 
       it("GET /api/avds lists AVDs from the service", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({ method: "GET", url: "/api/avds" });
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ avds: ["pixel_7"] });
@@ -172,14 +193,14 @@ describe("avds routes", () => {
       // handles as a 400.
       it("GET /api/avds surfaces a listAvds failure as 400, not an uncaught 500", async () => {
         vi.mocked(listAvds).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({ method: "GET", url: "/api/avds" });
         expect(res.statusCode).toBe(400);
         expect(res.json().message).toContain("ENOENT");
       });
 
       it("GET /api/system-images lists installed images from the service", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({ method: "GET", url: "/api/system-images" });
         expect(res.statusCode).toBe(200);
         expect(res.json().systemImages).toHaveLength(1);
@@ -187,7 +208,7 @@ describe("avds routes", () => {
       });
 
       it("GET /api/device-profiles lists device profiles from the service", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({ method: "GET", url: "/api/device-profiles" });
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ deviceProfiles: ["pixel_6"] });
@@ -195,7 +216,7 @@ describe("avds routes", () => {
 
       it("GET /api/device-profiles surfaces a listDeviceProfiles failure as 400, not an uncaught 500", async () => {
         vi.mocked(listDeviceProfiles).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({ method: "GET", url: "/api/device-profiles" });
         expect(res.statusCode).toBe(400);
         expect(res.json().message).toContain("ENOENT");
@@ -203,7 +224,7 @@ describe("avds routes", () => {
 
       it("POST /api/avds surfaces a listDeviceProfiles/listInstalledSystemImages failure as 400", async () => {
         vi.mocked(listDeviceProfiles).mockRejectedValueOnce(new Error("spawn avdmanager ENOENT"));
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -219,7 +240,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds creates an AVD and returns 201", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -242,7 +263,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds rejects a name with invalid characters", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -260,7 +281,7 @@ describe("avds routes", () => {
       // (harmless either way, since argv is never shelled, but the
       // allowlist's own purpose is matching avdmanager's accepted charset).
       it("POST /api/avds rejects a bare-dot name", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -281,7 +302,7 @@ describe("avds routes", () => {
       // repeats of a character the pattern accepts, followed by one it
       // doesn't). This pins the fix: validation must stay linear-time.
       it("rejects a pathological name in linear time, not catastrophic-backtracking time", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const pathologicalName = "0".repeat(50_000) + "!";
         const start = Date.now();
         const res = await app.inject({
@@ -300,7 +321,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds rejects a systemImage not in the installed allowlist", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -316,7 +337,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds rejects a deviceProfile not in the known allowlist", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -332,7 +353,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds rejects when name is missing", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -348,7 +369,7 @@ describe("avds routes", () => {
         vi.mocked(createAvd).mockRejectedValueOnce(
           new Error("Android Virtual Device 'pixel_7' already exists."),
         );
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -363,7 +384,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds forwards optional hardware sizes and normalizes RAM to megabytes", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -388,7 +409,7 @@ describe("avds routes", () => {
       });
 
       it("POST /api/avds treats blank hardware fields as unset", async () => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -414,7 +435,7 @@ describe("avds routes", () => {
         ["ramSize", "64", "ramSize must be megabytes"],
         ["dataPartitionSize", "nope", "dataPartitionSize must be a size"],
       ])("POST /api/avds rejects an invalid %s before creating", async (field, value, message) => {
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -436,7 +457,7 @@ describe("avds routes", () => {
             "AVD pixel_7 was created, but its config directory is outside the AVD home",
           ),
         );
-        const app = await buildTestApp();
+        const app = await buildTestAppOnPlatform("linux");
         const res = await app.inject({
           method: "POST",
           url: "/api/avds",
@@ -456,7 +477,7 @@ describe("avds routes", () => {
 
   describe("GET /api/system-images/available", () => {
     it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
       expect(res.statusCode).toBe(400);
     });
@@ -464,7 +485,7 @@ describe("avds routes", () => {
     it("rejects with 400 when DEVICE_SDKMANAGER_PATH is unset", async () => {
       process.env.DEVICE_ENABLED = "true";
       process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
       expect(res.statusCode).toBe(400);
     });
@@ -472,7 +493,7 @@ describe("avds routes", () => {
     it("rejects with 400 when DEVICE_ANDROID_SDK_ROOT is unset", async () => {
       process.env.DEVICE_ENABLED = "true";
       process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
       expect(res.statusCode).toBe(400);
     });
@@ -481,7 +502,7 @@ describe("avds routes", () => {
       process.env.DEVICE_ENABLED = "true";
       process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
       process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
       expect(res.statusCode).toBe(200);
       expect(res.json().systemImages).toHaveLength(1);
@@ -498,7 +519,7 @@ describe("avds routes", () => {
       vi.mocked(listAvailableSystemImages).mockRejectedValueOnce(
         new Error("spawn sdkmanager ENOENT"),
       );
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/system-images/available" });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toContain("ENOENT");
@@ -508,7 +529,7 @@ describe("avds routes", () => {
       process.env.DEVICE_ENABLED = "true";
       process.env.DEVICE_SDKMANAGER_PATH = "/opt/sdk/sdkmanager";
       process.env.DEVICE_ANDROID_SDK_ROOT = "/opt/sdk";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       await app.listen({ port: 0, host: "127.0.0.1" });
       const address = app.server.address();
       if (address === null || typeof address === "string") {
@@ -548,14 +569,14 @@ describe("avds routes", () => {
 
   describe("GET /api/sdk-licenses/status", () => {
     it("rejects with 400 when DEVICE_ENABLED is unset", async () => {
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
       expect(res.statusCode).toBe(400);
     });
 
     it("returns pending status when config is set", async () => {
       process.env.DEVICE_ENABLED = "true";
-      const app = await buildTestApp();
+      const app = await buildTestAppOnPlatform("linux");
       const res = await app.inject({ method: "GET", url: "/api/sdk-licenses/status" });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ pending: true });
@@ -594,7 +615,7 @@ async function waitUntil(check: () => boolean, timeoutMs = 5000) {
 
 describe("WS /ws/system-image-install", () => {
   async function buildAndListen() {
-    const app = await buildTestApp();
+    const app = await buildTestAppOnPlatform("linux");
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
     if (address === null || typeof address === "string") {
@@ -925,7 +946,7 @@ describe("WS /ws/system-image-install", () => {
 
 describe("WS /ws/sdk-licenses", () => {
   async function buildAndListen() {
-    const app = await buildTestApp();
+    const app = await buildTestAppOnPlatform("linux");
     await app.listen({ port: 0, host: "127.0.0.1" });
     const address = app.server.address();
     if (address === null || typeof address === "string") {

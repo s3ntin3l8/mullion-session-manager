@@ -41,8 +41,56 @@ import {
 // every method throws when this manager is disabled, rather than silently
 // no-op-ing, so a misconfigured caller fails loudly.
 
+/**
+ * The platforms the device panel works on.
+ *
+ * **Why the panel is Linux-only.** The panel's scope is load-bearing at all
+ * three points of an emulator's life, and all three go through systemd:
+ * `buildDeviceLaunchPlan` (device-process.ts) launches the emulator with
+ * `systemd-run --user --scope`, `isDeviceAliveState` reads the scope's
+ * liveness, and `stopDeviceScope` tears it down. macOS has no equivalent —
+ * and the darwin `ScopeBackend` cannot stand in, because it is socket-keyed
+ * to a SESSION's dtach socket (`DetachedScopeBackend.socketPathFor`), which
+ * an emulator has no analogue of. A macOS device scope is a real piece of
+ * work (a detached, launchd-reparented process tracked by pid + marker
+ * file), so it is tracked separately rather than half-built here.
+ *
+ * **What is NOT gated by this.** The panel's PHYSICAL half — an Android
+ * phone over adb wireless debugging — needs no scope at all:
+ * `DeviceManager.getOrCreate` branches `kind === "physical"` off before the
+ * scope pre-check, and `stopDeviceScope` returns early for it. `adb` and
+ * `scrcpy` both exist on macOS. That half could be enabled on macOS
+ * separately, without waiting for a macOS device scope; the follow-up issue
+ * records it.
+ */
+export const DEVICE_PANEL_SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["linux"];
+
+/**
+ * Whether the device panel works on `platform`.
+ *
+ * The platform parameter is injectable so the gate can be exercised from a
+ * test on any host — the predicate is the single source of truth for "is the
+ * device panel usable here", and every caller (the plugin) goes through it.
+ */
+export function isDevicePanelSupported(platform: NodeJS.Platform = process.platform): boolean {
+  return DEVICE_PANEL_SUPPORTED_PLATFORMS.includes(platform);
+}
+
 export interface DeviceManagerOptions {
   enabled: boolean;
+  /**
+   * Whether this PLATFORM supports the device panel at all. Defaults to
+   * `true` — a caller that does not care (tests, and any caller that has
+   * already decided) keeps today's behavior. The plugin (src/plugins/device.ts)
+   * passes the real answer from `isDevicePanelSupported()`.
+   *
+   * Distinct from `enabled` on purpose: `enabled` is the operator's
+   * DEVICE_ENABLED flag, and `supported` is a property of the platform. The
+   * two produce DIFFERENT messages, and conflating them would tell a macOS
+   * operator to set DEVICE_ENABLED=true — which would not help, because the
+   * panel is unsupported there for a structural reason.
+   */
+  supported?: boolean;
   /** Absolute path to the `adb` binary — used only for one idempotent
    * `adb start-server` call at construction; every other operation talks to
    * the running server directly over TCP. */
@@ -881,6 +929,14 @@ export class DeviceManager {
   }
 
   private assertEnabled(): void {
+    // SUPPORT FIRST, then the flag. On a platform the panel does not exist
+    // on, telling the operator to set DEVICE_ENABLED=true would be a lie that
+    // sends them off to change a .env and restart for nothing.
+    if (this.opts.supported === false) {
+      throw new Error(
+        `the device panel is not supported on ${process.platform} (it is Linux-only)`,
+      );
+    }
     if (!this.opts.enabled) {
       throw new Error("device panel is disabled (set DEVICE_ENABLED=true)");
     }

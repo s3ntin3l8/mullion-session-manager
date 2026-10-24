@@ -440,6 +440,61 @@ suspend/resume proxy), and measures whether the monotonic clock advances
 across a real suspend — the one question the code deliberately refuses to
 assume. The rest is the checklist in the validation issue.
 
+### macOS as a primary
+
+A Mac can be the **primary** of a mixed fleet, not just an agent — issue
+[#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720),
+roadmap 8.6.
+
+**What is the same as on Linux.** The primary's extra surface is small:
+SQLite, `@fastify/static`, the product routes (which shell out to `git` or go
+through the `SessionBackend` seam), the GitHub integration, Playwright, and
+Docker detection are all cross-platform. The macOS **launchd** deployment —
+`deploy/launchd/com.mullion.primary.plist` — is the counterpart of the
+systemd unit, and `deploy/install.sh` picks it from `uname -s` and skips the
+systemd prerequisite checks on darwin.
+
+**What is different.** A macOS primary's **local** sessions run under the
+darwin scope backend — the same detached `dtach` backend an agent's sessions
+use — so every local session on a Mac dogfoods the macOS scope path. The
+backend is chosen from the **host's own** platform, never negotiated between
+hosts, so a primary and its agents never have to agree on anything.
+
+**The topology is OS-agnostic.** The enrollment protocol is
+agent-dials-primary (`MULLION_PRIMARY_URL` / `MULLION_ENROLLMENT_TOKEN`) and
+carries no OS assumption. So **macOS-primary + Linux-agents** is a valid
+topology: the `hosts` table's `local` row simply becomes the Mac, and
+`resolveSessionHostId` keeps working unchanged. A session an agent runs shows
+up in the primary's list under the **agent's** host id, and the terminal
+attach proxies to whichever host the session actually lives on.
+
+#### The Android device panel is Linux-only
+
+The device panel ([`device-panel.md`](device-panel.md)) is **off on macOS**,
+even with `DEVICE_ENABLED=true`: the emulator runs in a `systemd --user`
+scope (`systemd-run` starts it, `systemctl` reads its liveness and tears it
+down), and macOS has no equivalent — the darwin scope backend is keyed to a
+_session's_ dtach socket, which an emulator has no analogue of.
+
+So on macOS every route that **adds, starts or changes** a device answers
+**400 "The device panel is not supported on darwin — it is Linux-only."** — a
+legible reason rather than a raw `spawn systemctl ENOENT` — and the panel's
+mDNS scanner never binds a multicast socket. The `/api/devices` reads and
+the teardown routes stay open on purpose: they were never gated on
+`DEVICE_ENABLED` either, and an operator must be able to stop a device even
+where the panel cannot create one. The app boots either way: the gate is a narrowing of an
+existing flag, so it can only ever turn the panel _off_ on a platform it was
+already off by default on.
+
+A macOS device scope is real work and is tracked separately — see
+[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+One lead worth knowing before that issue is picked up: the panel's
+**physical** half — an Android phone over adb wireless debugging — needs no
+scope at all (the manager branches it off before the scope pre-check), and
+`adb` and `scrcpy` both exist on macOS. So that half could be enabled on
+macOS separately, without waiting for a macOS device scope for the emulator
+half.
+
 ## Request signing
 
 Every request the primary sends to a **self-registered** host also carries
