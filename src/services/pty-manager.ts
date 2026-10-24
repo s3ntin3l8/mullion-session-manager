@@ -162,6 +162,15 @@ export const MIN_TERMINAL_ROWS = 10;
 // every existing backend importer of this module (this file's own
 // clampTerminalSize() included) keeps working unchanged.
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "../shared/constants.js";
+import { constants as osConstants } from "node:os";
+
+/** node-pty reports a killing signal as a number; map it back to its name. */
+const SIGNAL_NAMES = new Map<number, string>();
+// First name wins: os.constants.signals lists Linux aliases after the
+// canonical name (SIGIOT after SIGABRT, SIGPOLL after SIGIO).
+for (const [name, num] of Object.entries(osConstants.signals)) {
+  if (!SIGNAL_NAMES.has(num)) SIGNAL_NAMES.set(num, name);
+}
 export { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS };
 
 /** Clamp a client-supplied terminal size to
@@ -1742,14 +1751,29 @@ export class Session {
     // first exit `this.ptyProcess` is null, which the identity check below
     // lets through, so a duplicate exit callback would otherwise re-emit.
     let exitHandled = false;
-    ptyProcess.onExit(() => {
+    ptyProcess.onExit((e) => {
       if (exitHandled) return;
       exitHandled = true;
       // M2 — this handler captures `this`, not the pty instance. If a later
       // respawn has already installed a NEWER attach-client, this is the old
       // one's late exit: nulling ptyProcess / cancelling the nudge / emitting
       // "exited" now would clobber the live client's state.
-      if (this.ptyProcess !== null && this.ptyProcess !== ptyProcess) return;
+      if (this.ptyProcess !== null && this.ptyProcess !== ptyProcess) {
+        // Not the current client dying, but its own small mystery (crash vs
+        // teardown): keep it visible without claiming the session's client died.
+        console.debug(
+          `[pty-manager] session ${this.id} superseded attach client exited (code=${e.exitCode})`,
+        );
+        return;
+      }
+      // Attribution for "my session just vanished": `retired` is set only by
+      // kill(), so retired=false means the attach client died on its own.
+      // After the stale-client guard so a superseded client's late exit is
+      // not logged as the current one dying.
+      const signalName = e.signal ? (SIGNAL_NAMES.get(e.signal) ?? String(e.signal)) : "none";
+      console.log(
+        `[pty-manager] session ${this.id} attach client exited (code=${e.exitCode}, signal=${signalName}, retired=${this.retired})`,
+      );
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
       // not just for suppressingOutput tidiness, but because a stale

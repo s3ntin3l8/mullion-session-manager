@@ -30,6 +30,10 @@ import {
   waitForSession,
   type WaitSnapshot,
 } from "../services/session-wait.js";
+import {
+  CONTROL_SOCKET_VIA_HEADER,
+  CONTROL_SOCKET_VIA_TOKEN,
+} from "../services/internal-request.js";
 import { getAdapterPromptFraming } from "../services/hook-adapters/index.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
@@ -665,7 +669,12 @@ export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredR
       const opts = {
         method: resolved.method,
         url: resolved.url,
-        headers: resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app),
+        headers: {
+          ...(resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app)),
+          // Marks a CLI/agent-originated request so routes that audit their
+          // caller (DELETE /api/sessions/:id) can tell it from a browser one.
+          [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN,
+        },
         ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
       };
       ctx.reply(

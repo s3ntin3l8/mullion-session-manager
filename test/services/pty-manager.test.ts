@@ -9459,6 +9459,56 @@ describe("PtyManager retire / restore hardening (PR D)", () => {
     expect(events).not.toContain("status_change:exited");
   });
 
+  describe("exit attribution log", () => {
+    let log: ReturnType<typeof vi.spyOn>;
+    let debug: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      log = vi.spyOn(console, "log").mockImplementation(() => {});
+      debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      log.mockRestore();
+      debug.mockRestore();
+    });
+
+    it("logs code and retired=false when the attach client dies on its own", async () => {
+      const session = manager.getOrCreate(opts());
+      await waitForSpawnAlive(session);
+      for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 7 });
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/attach client exited \(code=7, signal=none, retired=false\)/),
+      );
+    });
+
+    it.each([
+      [15, "SIGTERM"],
+      [6, "SIGABRT"], // not the SIGIOT alias
+    ])("names the killing signal %i as %s", async (signal, name) => {
+      const session = manager.getOrCreate(opts());
+      await waitForSpawnAlive(session);
+      for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 0, signal });
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(new RegExp(`code=0, signal=${name}, retired=false\\)`)),
+      );
+    });
+
+    it("logs retired=true when kill() ends the client", async () => {
+      const session = manager.getOrCreate(opts());
+      await waitForSpawnAlive(session);
+      session.kill(); // the fake pty's kill() fires its exit listeners
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/retired=true\)/));
+    });
+
+    it("does not log a superseded client's late exit as the current one dying", async () => {
+      const session = manager.getOrCreate(opts());
+      await waitForSpawnAlive(session);
+      (session as unknown as { ptyProcess: unknown }).ptyProcess = new FakePty(80, 24);
+      for (const cb of fakePtyChildren[0].exitListeners) cb({ exitCode: 1 });
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/attach client exited/));
+      expect(debug).toHaveBeenCalledWith(expect.stringMatching(/superseded attach client exited/));
+    });
+  });
+
   it("#1529: a duplicate exit callback from the same pty emits status_change:exited once", async () => {
     const session = manager.getOrCreate(opts());
     await waitForSpawnAlive(session);

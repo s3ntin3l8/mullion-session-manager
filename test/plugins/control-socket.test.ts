@@ -33,7 +33,7 @@ vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
 
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
-  exitListeners: Array<() => void> = [];
+  exitListeners: Array<(e: { exitCode: number }) => void> = [];
   writeSpy = vi.fn();
   resizeSpy = vi.fn();
   constructor() {
@@ -43,7 +43,7 @@ class FakePty {
     this.dataListeners.push(cb);
     return { dispose: () => {} };
   }
-  onExit(cb: () => void) {
+  onExit(cb: (e: { exitCode: number }) => void) {
     this.exitListeners.push(cb);
     return { dispose: () => {} };
   }
@@ -2799,7 +2799,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           app = await buildApp();
           await app.ready();
           const { childId, pty, socket } = await agentChild();
-          for (const cb of pty.exitListeners) cb();
+          for (const cb of pty.exitListeners) cb({ exitCode: 0 });
           pty.writeSpy.mockClear();
           const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
           expect(reply).toMatchObject({ ok: false, status: 409 });
