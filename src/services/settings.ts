@@ -496,6 +496,39 @@ export interface AppSettings {
      */
     reviewerBotLogin: string;
   };
+  /**
+   * The Runway quota integration (issue #29).
+   *
+   * Runway is a SEPARATE service — an "AI usage tracker" — that already
+   * knows each provider's remaining quota. Mullion polls it and uses the
+   * answer to decide whether an agent may be claimed at all.
+   *
+   * As with reviewRelay above, the NON-SECRET half lives here (this blob is
+   * returned verbatim by GET /api/settings) and the admin key lives
+   * encrypted in the `integrations` table (services/runway-integration.ts).
+   * An empty `apiUrl` means the feature is off.
+   */
+  runway: {
+    /** Base URL of the Runway server, e.g. https://runway.example.com (no trailing path). */
+    apiUrl: string;
+    /**
+     * Which Mullion agent each Runway provider_id describes.
+     *
+     * A mapping, not a derivation: Runway's provider ids describe
+     * *providers* (anthropic, opencode, chatgpt, minimax, …) and Mullion's
+     * agents are *CLIs* (claude, codex, opencode, agy). Neither set
+     * contains the other, several Runway providers have no Mullion agent at
+     * all (gemini, github, ollama, …), and several Mullion agents have no
+     * Runway provider (agy). So the correspondence is a per-install
+     * decision, with a conservative default.
+     *
+     * An agent that is NOT in this map is never quarantined: absence of
+     * data must not block work.
+     */
+    providerMap: Record<string, string>;
+    /** How often to poll Runway for the quota. 0 = never poll (the feature is configured but idle). */
+    pollSeconds: number;
+  };
   browser: {
     // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
     framerate: number;
@@ -663,6 +696,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
     triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
+  },
+  runway: {
+    apiUrl: "",
+    // The conservative default: the two providers whose quota genuinely
+    // tracks the CLI that spends it. Runway's real provider ids (confirmed
+    // against the installed Runway: anthropic, opencode, chatgpt, minimax,
+    // gemini, antigravity, github, ollama, xai, zai, deepseek, kimi_*, …)
+    // are PROVIDER names, and Mullion's agents are CLI names — so the
+    // correspondence is configured, not derived.
+    //
+    // `chatgpt` is deliberately NOT mapped to `codex` by default: Codex
+    // authenticates with a ChatGPT plan, but so does a browser, and
+    // quarantining every codex task because an unrelated ChatGPT window
+    // ran out would be the wrong call. An operator whose Codex quota really
+    // is that window can add the mapping.
+    providerMap: { anthropic: "claude", opencode: "opencode" },
+    pollSeconds: 60,
   },
   browser: {
     framerate: -1,
@@ -1251,7 +1301,69 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         ),
       ),
     },
+    runway: {
+      apiUrl: safeString(settings.runway.apiUrl, DEFAULT_SETTINGS.runway.apiUrl),
+      // The provider map is a plain string->string table, so a value that is
+      // not a string cannot be persisted. An entry whose AGENT is not one
+      // Mullion knows is kept (the operator may name an agent Mullion has
+      // not shipped yet) but it can never match a resolved agent, so it is
+      // inert rather than dangerous.
+      providerMap: sanitizeProviderMap(
+        settings.runway.providerMap,
+        DEFAULT_SETTINGS.runway.providerMap,
+      ),
+      pollSeconds: safeNumber(settings.runway.pollSeconds, {
+        min: 0,
+        max: 3600,
+        fallback: DEFAULT_SETTINGS.runway.pollSeconds,
+      }),
+    },
   };
+}
+
+/**
+ * Issue #29 — the Runway provider-id → Mullion-agent map.
+ *
+ * Both halves are plain strings. An empty provider id or agent name is
+ * dropped: an empty key could match every provider, and an empty agent
+ * could match nothing.
+ *
+ * The object is built with a NULL PROTOTYPE and `Object.defineProperty`,
+ * not `out[key] = value`. The provider id is operator-supplied, so a plain
+ * assignment would hand a key of `__proto__` to the prototype setter. With
+ * the value gated to a string that form was INERT — the `__proto__` setter
+ * ignores a non-object value — but it would become a real
+ * prototype-pollution hole the moment a non-string value were allowed
+ * here, and it is the reason CodeQL flags the naive form. With no
+ * prototype to pollute and no `[[Set]]` on the way in, a `__proto__` key
+ * is just an ordinary own property that nothing looks up.
+ *
+ * CodeQL's `js/remote-property-injection` still fires on the
+ * user-provided property NAME (it does not model the null-prototype
+ * containment), so the alert is dismissed in GHAS with this containment
+ * argument — the same pattern dock-config.ts's `isSymlinkPath` uses for
+ * `js/path-injection`, and for the same reason: no step of this repo's
+ * CodeQL workflow reads a SARIF suppression annotation (the analyze step
+ * itself lives in the shared workflow this repo calls), so a
+ * `// codeql[...]` comment here would not silence anything.
+ */
+function sanitizeProviderMap(
+  value: unknown,
+  fallback: Record<string, string>,
+): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ...fallback };
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
+  for (const [provider, agent] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof provider !== "string" || provider.trim() === "") continue;
+    if (typeof agent !== "string" || agent.trim() === "") continue;
+    Object.defineProperty(out, provider.trim(), {
+      value: agent.trim(),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
 
 // deepMerge only proves a field is *a* string; trim it so a stray space from

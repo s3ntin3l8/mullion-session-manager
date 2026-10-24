@@ -56,6 +56,8 @@ import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
 import { Header } from "./session-row/Header.js";
 import { Details } from "./session-row/Details.js";
+import { QuotaBadge } from "./session-row/QuotaBadge.js";
+import { useRunwayQuota } from "./hooks/useRunwayQuota.js";
 
 // U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
 // severity-derived columns (not "Finished"/"Idle") — matches the finding's
@@ -1602,6 +1604,13 @@ export function SessionRow({
   const sessionEvents = useDashboardStore((s) => s.events[session.id]);
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
+  // Issue #29 — the Runway quota chip. The snapshot is fetched ONCE for the
+  // whole app (hooks/useRunwayQuota.ts's shared cache) and every row reads
+  // it, so a sidebar full of sessions still makes a single request. The
+  // agent is derived from the session's own command (the same value the
+  // row's logo and name come from), so the badge names the same agent the
+  // rest of the row names.
+  const runwayQuota = useRunwayQuota();
   const renameSession = useDashboardStore((s) => s.renameSession);
 
   // Row 4 (issue #177) — recent file changes, derived from the same
@@ -1879,6 +1888,7 @@ export function SessionRow({
           agentBinary={agentBinary}
           dot={dot}
           statusLabel={statusLabel}
+          quotaBadge={<QuotaBadge quota={runwayQuota} command={session.command} />}
           hasDetails={detailsAvailable}
           alwaysExpandGit={alwaysExpandGit}
           gitLineExpanded={gitLineExpanded}

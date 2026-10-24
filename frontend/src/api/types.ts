@@ -583,6 +583,41 @@ export interface HermesIntegration {
   updatedAt: string | null;
 }
 
+/** Never carries the key — see src/services/runway-integration.ts. */
+export interface RunwayIntegration {
+  hasKey: boolean;
+  updatedAt: string | null;
+}
+
+/** One agent's quota state (GET /api/runway/quota). */
+export interface RunwayAgentQuota {
+  /** The Mullion agent (a CLI name: claude, codex, opencode, agy). */
+  agent: string;
+  /** The Runway provider id this came from ("anthropic", "opencode", …). */
+  providerId: string;
+  /** Percentage of the quota used, when Runway knows it. */
+  pctUsed: number | null;
+  /** When the provider's window resets. */
+  resetAt: string | null;
+  /** The provider is out of quota. */
+  exhausted: boolean;
+  /** The agent is quarantined — Mullion will not claim a task onto it. */
+  quarantined: boolean;
+}
+
+/**
+ * The quota snapshot (GET /api/runway/quota).
+ *
+ * `configured` false means the feature is off (no URL or no key) and the
+ * badge renders nothing. `fetchedAt` null means the fetch failed — "no
+ * quota information", NOT "everything is fine".
+ */
+export interface RunwayQuota {
+  configured: boolean;
+  fetchedAt: string | null;
+  agents: RunwayAgentQuota[];
+}
+
 /** One review run this Mullion dispatched (GET /api/reviews). */
 export interface ReviewRun {
   runId: string;
@@ -1268,6 +1303,8 @@ export interface RemoveWorktreeResult {
 // "shadowed" means a higher-precedence file for the SAME agent already
 // wins (currently only Codex's AGENTS.override.md over AGENTS.md) — it says
 // nothing about another agent sharing the same absolutePath.
+// "claude-code" is the id the API uses (the backend's own AgentRuleAgent
+// enum, src/services/agent-rules.ts) — not the CLI binary.
 export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
 // Issue: mcode support — the CLIs the bundle sync can install skills into.
 // A SUPERSET of AgentRuleAgent: mcode gets the bundle's skills (into its own
@@ -2064,6 +2101,25 @@ export interface AppSettings {
      * keys diverge. Empty = any bot's review counts.
      */
     reviewerBotLogin: string;
+  };
+  /**
+   * The Runway quota integration (issue #29) — the non-secret half. The
+   * admin key is write-only via api.setRunwayKey and never part of
+   * settings.
+   */
+  runway: {
+    /** Base URL of the Runway server. Empty = the feature is off. */
+    apiUrl: string;
+    /**
+     * Which Mullion agent each Runway provider id describes. Runway's
+     * provider ids name PROVIDERS (anthropic, opencode, chatgpt, …) and
+     * Mullion's agents are CLIs (claude, codex, opencode, agy) — the
+     * correspondence is per-install, and an agent that is not in the map is
+     * never quarantined.
+     */
+    providerMap: Record<string, string>;
+    /** How often to poll Runway for the quota. */
+    pollSeconds: number;
   };
   browser: {
     framerate: number;
