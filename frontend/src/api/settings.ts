@@ -162,6 +162,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     autoFocusOnAttention: false,
     notificationMatrix: {
       exited: { notify: false, sound: false, autoFocus: false },
+      // Issue #1727 — a suspended session (its host did not answer) is NOT a
+      // notification-worthy event: a laptop that fell asleep is the normal
+      // case, and the session may still be running.
+      suspended: { notify: false, sound: false, autoFocus: false },
       api_error: { notify: true, sound: false, autoFocus: false },
       tool_failure: { notify: true, sound: false, autoFocus: false },
       awaiting_permission: { notify: true, sound: false, autoFocus: false },

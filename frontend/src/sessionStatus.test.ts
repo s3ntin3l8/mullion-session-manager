@@ -86,6 +86,22 @@ describe("STATUS_PRESENTATION", () => {
     }
   });
 
+  // Issue #1727 / roadmap 8.13 — the SUSPENDED presentation. The wording and
+  // the tone are what keep "the host is asleep" from reading as "the work
+  // died" — the label says which, and it is NOT the exited dot.
+  it("presents 'suspended' as a quiet, non-alerting state", () => {
+    const presentation = STATUS_PRESENTATION.suspended;
+    expect(presentation.label).toBe("Suspended");
+    expect(presentation.tone).toBe("suspended");
+    // Dim, not the exited red and not an attention colour: the work may
+    // still be running on that machine.
+    expect(presentation.colorToken).toBe("--dim");
+    // The detail explains WHY ("host unreachable — may still be running").
+    expect(presentation.showDetail).toBe(true);
+    // A sleeping laptop is not an event worth a desktop notification.
+    expect(presentation.defaultNotify).toBe(false);
+  });
+
   it("defaults `finished` to notify OFF (highest-frequency notifiable status)", () => {
     expect(STATUS_PRESENTATION.finished.defaultNotify).toBe(false);
   });
@@ -221,6 +237,9 @@ describe("isStatusReachable", () => {
     // not agent-hook-driven, so it's always reachable.
     const reachable: SessionStatus[] = [
       "exited",
+      // Issue #1727 — "suspended" is derived from the host not answering,
+      // not from a hook, so it is always reachable.
+      "suspended",
       "needs_input",
       "working",
       "idle",
@@ -248,6 +267,9 @@ describe("isStatusReachable", () => {
     // session_diff
     const reachable: SessionStatus[] = [
       "exited",
+      // Issue #1727 — "suspended" is derived from the host not answering,
+      // not from a hook, so it is always reachable.
+      "suspended",
       "needs_input",
       "working",
       "idle",
@@ -280,6 +302,9 @@ describe("isStatusReachable", () => {
     // turn_start, file_change, git_branch, cwd_changed
     const reachable: SessionStatus[] = [
       "exited",
+      // Issue #1727 — "suspended" is derived from the host not answering,
+      // not from a hook, so it is always reachable.
+      "suspended",
       "needs_input",
       "working",
       "idle",

@@ -44,6 +44,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     previewBranch: null,
     kind: "terminal",
     status: "active",
+    // Issue #1727 — the session's host: the raw column (null = inherits
+    // its project's) and the resolved one the host badge shows.
+    hostId: null,
+    resolvedHostId: "local",
     createdAt: "2026-01-01T00:00:00.000Z",
     lastAttachedAt: "2026-01-01T00:00:00.000Z",
     alive: true,

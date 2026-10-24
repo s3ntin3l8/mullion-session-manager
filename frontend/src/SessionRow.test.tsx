@@ -21,11 +21,12 @@ import {
   type GitDiffStats,
   type GitHubPRsStatus,
   type GitStatus,
+  type Host,
   type NotificationEvent,
   type Project,
   type Session,
 } from "./api/index.js";
-import { makeSession, makeProject } from "./test/fixtures.js";
+import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -43,6 +44,10 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // Defaults to [] in beforeEach; tests exercising the cascade UI set it
 // before rendering.
 let sessions: Session[];
+// Issue #1727 — the hosts the fleet knows about, for the per-session host
+// badge. Defaults to one remote host so the badge's name lookup has
+// something to find.
+let hosts: Host[];
 let confirmBeforeKill = false;
 // Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
 // promoteState==="pending" auto-open) reads these two store actions.
@@ -81,6 +86,9 @@ vi.mock("./store/index.js", () => {
     sessions,
     mutedSessionIds: [],
     toggleSessionMute: vi.fn(),
+    // Issue #1727 — the per-session host badge reads the fleet's host list
+    // (non-reactively) to name the host a session runs on.
+    hosts,
   });
   return { useDashboardStore };
 });
@@ -131,6 +139,10 @@ const SESSION: Session = {
   previewBranch: null,
   kind: "terminal",
   status: "active",
+  // Issue #1727 — the session's host: the raw column (null = inherits
+  // its project's) and the resolved one the host badge shows.
+  hostId: null,
+  resolvedHostId: "local",
   createdAt: "2026-01-01T00:00:00.000Z",
   lastAttachedAt: "2026-01-01T00:00:00.000Z",
   alive: true,
@@ -183,10 +195,60 @@ beforeEach(() => {
   gitBranchesByProject = {};
   prsByProject = {};
   sessions = [];
+  // Issue #1727 — one remote host for the per-session host badge to name.
+  hosts = [makeHost({ id: "mac-mini", name: "mac-mini" })];
   localStorage.clear();
 });
 
 describe("SessionRow", () => {
+  // Issue #1727 / roadmap 8.13 — the per-session host badge. It exists for
+  // the case that matters: one project's sessions on DIFFERENT hosts (what
+  // automatic placement produces). A local session shows nothing at all —
+  // the sidebar already carries a per-PROJECT host badge for that.
+  describe("the host badge (issue #1727)", () => {
+    it("names the host a REMOTE session runs on", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText("mac-mini")).toBeInTheDocument();
+    });
+
+    it("shows NOTHING for a local session", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "local" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
+      expect(document.querySelector(".session-host-badge")).toBeNull();
+    });
+
+    it("falls back to the host id when the fleet does not know that host", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "unknown-host" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      // Better a raw id than nothing: the session IS on some host, and the
+      // id identifies it even when the fleet's list has no name for it.
+      expect(screen.getByText("unknown-host")).toBeInTheDocument();
+    });
+  });
+
   it("sets application/x-mullion-session on drag start", () => {
     const onOpen = vi.fn();
     const onEnd = vi.fn();

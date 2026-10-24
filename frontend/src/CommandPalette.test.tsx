@@ -1331,6 +1331,10 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       env: null,
       kind: "terminal",
       status: "active",
+      // Issue #1727 — the session's host: the raw column (null = inherits
+      // its project's) and the resolved one the host badge shows.
+      hostId: null,
+      resolvedHostId: "local",
       createdAt: "",
       lastAttachedAt: null,
       alive: true,
@@ -1393,6 +1397,10 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
             cwd: null,
             env: null,
             status: "active",
+            // Issue #1727 — the session's host: the raw column (null = inherits
+            // its project's) and the resolved one the host badge shows.
+            hostId: null,
+            resolvedHostId: "local",
           }),
         );
       }

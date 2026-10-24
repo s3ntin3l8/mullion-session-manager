@@ -115,6 +115,10 @@ const BASE_SESSION_FIELDS = {
   staleHooks: false,
   restoredVersion: null,
   sessionStatus: "idle" as const,
+  // Issue #1727 — the session's host: the raw column (null = inherits its
+  // project's) and the resolved one the host badge shows.
+  hostId: null,
+  resolvedHostId: "local",
   sessionStatusSeverity: "dormant" as const,
   sessionStatusDetail: null,
   hookEmits: [],

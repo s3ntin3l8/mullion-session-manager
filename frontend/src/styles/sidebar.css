@@ -940,6 +940,44 @@
 .session-status-label.exited {
   color: var(--dim);
 }
+/* Issue #1727 / roadmap 8.13 — the status label and the host badge sit
+   together in one inline-flex group, so the badge can sit TIGHT against the
+   label instead of picking up the row's own 8px gap. min-width: 0 lets the
+   group shrink with the sidebar, and the label inside it still ellipsis. */
+.session-status-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+/* The host a session runs on. Quiet by design — small, dim, and never for a
+   local session (the sidebar already carries a per-PROJECT host badge for
+   that); it exists for the case one project's sessions sit on DIFFERENT
+   hosts. */
+.session-host-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  color: var(--dim);
+  opacity: 0.75;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* Issue #1727 — "suspended": the host did not answer. A hollow dim ring —
+   the same shape as the idle dot ("not running as far as we can tell"),
+   and deliberately NOT the exited dot: the work may still be running on
+   that machine. */
+.session-dot-suspended {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--dim);
+  box-sizing: border-box;
+}
+.session-status-label.suspended {
+  color: var(--dim);
+}
 .session-status-label.killed {
   color: var(--r);
   opacity: 0.85;

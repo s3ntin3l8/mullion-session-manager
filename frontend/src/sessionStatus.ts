@@ -26,7 +26,16 @@ export interface StatusPresentation {
    * label color); the label text above is what tells them apart within that
    * tier. Not named after the SessionStatus itself, since more than one
    * status maps to the same tone. */
-  tone: "exited" | "error" | "permission" | "plan" | "finished" | "attention" | "working" | "idle";
+  tone:
+    | "exited"
+    | "suspended"
+    | "error"
+    | "permission"
+    | "plan"
+    | "finished"
+    | "attention"
+    | "working"
+    | "idle";
   /** CSS custom property carrying this status's colour — for surfaces that
    * can't just apply a `.session-dot-<tone>` class wholesale (the tab-title/
    * favicon badge canvas, e.g.). Same value the matching CSS rule uses;
@@ -52,6 +61,18 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
   exited: {
     label: "exited",
     tone: "exited",
+    colorToken: "--dim",
+    showDetail: true,
+    defaultNotify: false,
+  },
+  // Issue #1727 — the host did not answer. A sleeping laptop, most likely:
+  // the session may well still be running, so this is deliberately NOT the
+  // "exited" look (a dim filled dot) and NOT an alert (a sleeping machine
+  // is not an event worth a desktop notification). The hollow dim ring says
+  // "not running *as far as we can tell*" — and the detail says why.
+  suspended: {
+    label: "Suspended",
+    tone: "suspended",
     colorToken: "--dim",
     showDetail: true,
     defaultNotify: false,
@@ -221,6 +242,9 @@ export function formatStatusLabel(
 // table: the keys here are HookMessageKind values each adapter actually emits.
 const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
   exited: [],
+  // Issue #1727 — not hook-driven: it is derived from the host not
+  // answering, so it is always reachable (like `exited` above).
+  suspended: [],
   needs_input: [],
   working: [],
   idle: [],

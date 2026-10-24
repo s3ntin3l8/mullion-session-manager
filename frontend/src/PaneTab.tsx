@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
+// LOCAL_HOST_ID from its shared home rather than from ./api/index.js — this
+// file's own test mocks that module wholesale (only `api` is provided), and
+// TerminalPane.tsx already imports shared constants the same way.
+import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
-import { BellIcon, CheckIcon, CloseIcon } from "./ui/icons.js";
+import { BellIcon, CheckIcon, CloseIcon, HostsIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
@@ -323,6 +327,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     }
   }
 
+  // Issue #1727 / roadmap 8.13 — the host this session runs on. Quiet by
+  // design, and not shown for a local session (the common case): it exists
+  // for the case that matters, one project's sessions on DIFFERENT hosts.
+  // The host's name comes from the store's hosts list, read non-reactively
+  // so the tab does not re-render on every fleet refresh.
+  const remoteHostName = (() => {
+    const hostId = session?.resolvedHostId;
+    if (!hostId || hostId === LOCAL_HOST_ID) return null;
+    const hosts = useDashboardStore.getState().hosts ?? [];
+    return hosts.find((h) => h.id === hostId)?.name ?? hostId;
+  })();
+
   return (
     <div
       ref={setTabRef}
@@ -363,6 +379,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         )}
         {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
         {!narrow && badge}
+        {!narrow && remoteHostName && (
+          <span className="pane-tab-host-badge" title={`Runs on host: ${remoteHostName}`}>
+            <HostsIcon size={9} />
+            {remoteHostName}
+          </span>
+        )}
         {unreadCount > 0 && unreadIconKind && (
           <span
             className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}

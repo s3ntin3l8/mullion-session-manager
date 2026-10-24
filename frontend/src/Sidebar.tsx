@@ -1820,20 +1820,46 @@ export function SessionRow({
   const showUnknownIndicator = !session.stateRestored && session.alive;
   const showStaleIndicator = session.staleHooks;
   const statusLabelText = formatStatusLabel(presentation, session.sessionStatusDetail);
+  // Issue #1727 / roadmap 8.13 — the host THIS session runs on.
+  //
+  // Quiet by design: a small icon and the host's name, in --dim, and not
+  // shown at all for a local session (the overwhelmingly common case — the
+  // sidebar already carries a per-PROJECT host badge for that). It exists
+  // for the case that matters: one project's sessions on DIFFERENT hosts,
+  // which is what automatic placement produces.
+  //
+  // The host's name comes from the store's hosts list, read NON-reactively
+  // (getState) so a session row does not re-render every time the fleet's
+  // health dot refreshes — the row re-renders on every session refresh
+  // anyway, which is often enough for a label.
+  const remoteHostName = (() => {
+    const hostId = session.resolvedHostId;
+    if (!hostId || hostId === LOCAL_HOST_ID) return null;
+    const hosts = useDashboardStore.getState().hosts ?? [];
+    return hosts.find((h) => h.id === hostId)?.name ?? hostId;
+  })();
   const statusLabel = (
-    <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
-      {showUnknownIndicator && (
-        <span title="Awaiting data… — session state not yet restored after restart">?</span>
-      )}
-      {statusLabelText}
-      {showStaleIndicator && (
-        <span
-          className="session-stale-icon"
-          title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
-        >
-          &#9201;
-        </span>
-      )}
+    <span className="session-status-group">
+      <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
+        {showUnknownIndicator && (
+          <span title="Awaiting data… — session state not yet restored after restart">?</span>
+        )}
+        {statusLabelText}
+        {showStaleIndicator && (
+          <span
+            className="session-stale-icon"
+            title={`Session launched with Mullion ${session.restoredVersion ?? "unknown"}, restart to pick up new capabilities`}
+          >
+            &#9201;
+          </span>
+        )}
+        {remoteHostName && (
+          <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
+            <HostsIcon size={10} />
+            {remoteHostName}
+          </span>
+        )}
+      </span>
     </span>
   );
 
