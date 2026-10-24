@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import {
   existsSync,
   mkdtempSync,
@@ -100,6 +100,31 @@ describe("mcodeAdapter.emits", () => {
 });
 
 describe("mcodeAdapter.prepareLaunch", () => {
+  // `prepareLaunch` installs the plugin SYNCHRONOUSLY, into the HOST-GLOBAL
+  // plugin directory, and the install also sweeps stale manifest directories
+  // out of the dirs it owns. So EVERY call in this describe would otherwise
+  // rewrite the developer's real ~/.minimax/plugins — and, before the
+  // ownership marker existed, could have removed a manifest directory out
+  // from under a user-authored plugin of the same name. The whole describe is
+  // therefore pointed at a temp data dir and a temp HOME.
+  const originalDataDir = process.env.MINIMAX_DATA_DIR;
+  const originalHome = process.env.HOME;
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-prepare-launch-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    process.env.HOME = tmp;
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+    if (originalDataDir === undefined) delete process.env.MINIMAX_DATA_DIR;
+    else process.env.MINIMAX_DATA_DIR = originalDataDir;
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
   it("writes the per-session hook handoff file under the session's temp dir", () => {
     const plan = mcodeAdapter.prepareLaunch(ctx);
     expect(plan.settingsFiles).toHaveLength(1);
@@ -156,33 +181,15 @@ describe("mcodeAdapter.prepareLaunch", () => {
     // managedInstall would race that scan and the session would come up
     // with no hooks at all.
     //
-    // The plugin directory and the shim are HOST-GLOBAL, so this test must
-    // point them at a temp dir: prepareLaunch installs synchronously, and the
-    // install now also sweeps stale manifest directories out of the plugin
-    // dirs it owns. Without the isolation it would rewrite the developer's
-    // real ~/.minimax/plugins/mullion — and, before the ownership marker
-    // existed, could have removed a manifest directory out from under a
-    // user-authored plugin of the same name.
-    const originalDataDir = process.env.MINIMAX_DATA_DIR;
-    const originalHome = process.env.HOME;
-    const tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-prepare-launch-"));
-    process.env.MINIMAX_DATA_DIR = tmp;
-    process.env.HOME = tmp;
-    try {
-      const plan = mcodeAdapter.prepareLaunch(ctx);
-      expect(plan.managedInstall).toBeUndefined();
-      // It landed in the temp dir, not in the real one.
-      expect(existsSync(path.join(tmp, "plugins", "mullion", ".mullion-managed"))).toBe(true);
-      expect(existsSync(path.join(tmp, "plugins", "mullion-permission", ".mullion-managed"))).toBe(
-        true,
-      );
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-      if (originalDataDir === undefined) delete process.env.MINIMAX_DATA_DIR;
-      else process.env.MINIMAX_DATA_DIR = originalDataDir;
-      if (originalHome === undefined) delete process.env.HOME;
-      else process.env.HOME = originalHome;
-    }
+    const plan = mcodeAdapter.prepareLaunch(ctx);
+    expect(plan.managedInstall).toBeUndefined();
+    // It landed in the temp dir this describe is pointed at, not in the real
+    // one — and BOTH plugin directories are there (the Claude-format one and
+    // the CODEX-format PermissionRequest one).
+    expect(existsSync(path.join(tmp, "plugins", "mullion", ".mullion-managed"))).toBe(true);
+    expect(existsSync(path.join(tmp, "plugins", "mullion-permission", ".mullion-managed"))).toBe(
+      true,
+    );
   });
 });
 
