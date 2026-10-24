@@ -36,8 +36,8 @@
  *
  * The child is asked to stop **once**: the SIGTERM goes out when the first of
  * those paths fires, and the escalation is what follows it up. A late `error`
- * does not ask a second time, and the escalation timer is armed once — so a
- * child is never signalled twice for the same episode.
+ * does not ask a second time, and the escalation timer is armed once — so
+ * each signal goes out at most once.
  *
  * A child that never started has nothing to end — `child.pid` is undefined
  * precisely because the spawn failed — so only a child that really ran is
