@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 // Issue #1255 — only used for the rename route's `instanceof
 // BetterSqlite3.SqliteError` check below; see session-lifecycle.ts's
 // createSessionRecord for the empirical confirmation of this detection.
@@ -45,7 +45,8 @@ import { isControlSocketRequest } from "../services/internal-request.js";
 import { transferOpencodeSession } from "../services/opencode-session-transfer.js";
 import {
   withLiveInfo,
-  resolveProjectHostId,
+  resolveSessionHostId,
+  resolveSessionHostIds,
   withLiveStatus,
 } from "../services/session-live-info.js";
 
@@ -316,18 +317,20 @@ export async function sessionsRoute(app: FastifyInstance) {
       // remote-host-client.ts's short-TTL cache for the same concern when
       // several requests like this land close together). Only the projects
       // these rows actually reference, not a full table scan.
-      const projectIds = [...new Set(rows.map((row) => row.projectId))];
-      const projectHostIds = new Map(
-        app.db
-          .select({ id: projects.id, hostId: projects.hostId })
-          .from(projects)
-          .where(inArray(projects.id, projectIds))
-          .all()
-          .map((p) => [p.id, p.hostId] as const),
+      //
+      // Issue #1722 / roadmap 8.8 — the host is the SESSION's own, not its
+      // project's: a placement policy may put some of a project's sessions
+      // on one machine and some on another, so the map is sessionId→hostId
+      // (resolveSessionHostIds, one batched query) rather than
+      // projectId→hostId. A session with no host of its own inherits its
+      // project's — the same fallback, in the same query.
+      const sessionHostIds = resolveSessionHostIds(
+        app,
+        rows.map((row) => row.id),
       );
       const idsByHost = new Map<string, string[]>();
       for (const row of rows) {
-        const hostId = projectHostIds.get(row.projectId) ?? LOCAL_HOST_ID;
+        const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const ids = idsByHost.get(hostId) ?? [];
         ids.push(String(row.id));
         idsByHost.set(hostId, ids);
@@ -352,7 +355,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       );
 
       return rows.map((row) => {
-        const hostId = projectHostIds.get(row.projectId) ?? LOCAL_HOST_ID;
+        const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
         return withLiveInfo(app, row, info, hostId);
       });
@@ -373,7 +376,10 @@ export async function sessionsRoute(app: FastifyInstance) {
     if (!row) return reply.notFound();
 
     const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-    const hostId = resolveProjectHostId(app, row.projectId);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+    // project's: a session may live on a host of its own (placement),
+    // and this operation is about the session.
+    const hostId = resolveSessionHostId(app, row);
     return withLiveStatus(app, row, idleThresholdMs, hostId);
   });
 
@@ -406,7 +412,10 @@ export async function sessionsRoute(app: FastifyInstance) {
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
     if (!row) return reply.notFound();
 
-    const hostId = resolveProjectHostId(app, row.projectId);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+    // project's: a session may live on a host of its own (placement),
+    // and this operation is about the session.
+    const hostId = resolveSessionHostId(app, row);
     try {
       const buffer = await resolveBackend(app, hostId).getScrollback(String(sessionId));
       return { b64: buffer.toString("base64") };
@@ -431,7 +440,10 @@ export async function sessionsRoute(app: FastifyInstance) {
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
     if (!row) return reply.notFound();
 
-    const hostId = resolveProjectHostId(app, row.projectId);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+    // project's: a session may live on a host of its own (placement),
+    // and this operation is about the session.
+    const hostId = resolveSessionHostId(app, row);
     try {
       return {
         processes: await resolveBackend(app, hostId).listSessionProcesses(String(sessionId)),
@@ -773,7 +785,13 @@ export async function sessionsRoute(app: FastifyInstance) {
       let resumeAgentSessionId: string | undefined;
       let transferFailureWarning: string | null = null;
       let transferSuccessNote: string | null = null;
-      if (project.hostId === LOCAL_HOST_ID && adapterHasResumeSessionArgs(row.command)) {
+      // Issue #1722 / roadmap 8.8 — the SESSION's host: this reads the
+      // session's own live pty out of THIS process's PtyManager, so only a
+      // session that lives here has one.
+      if (
+        resolveSessionHostId(app, row) === LOCAL_HOST_ID &&
+        adapterHasResumeSessionArgs(row.command)
+      ) {
         const liveAgentSessionId = app.pty.get(String(sessionId))?.agentSessionId ?? null;
         if (liveAgentSessionId) {
           // `repoCwd`, not `sourceCwd` — #693's own fix exists because
@@ -957,20 +975,23 @@ export async function sessionsRoute(app: FastifyInstance) {
       // said no (persistent), unlike an unreachable host (possibly
       // transient).
       try {
-        await resolveBackend(app, project.hostId).resolvePendingPromote(String(sessionId), {
-          decision: "accepted",
-          worktreePath,
-          newSessionId: created.row.id,
-        });
+        await resolveBackend(app, resolveSessionHostId(app, row)).resolvePendingPromote(
+          String(sessionId),
+          {
+            decision: "accepted",
+            worktreePath,
+            newSessionId: created.row.id,
+          },
+        );
       } catch (err) {
         if (err instanceof HostRequestError) {
           app.log.warn(
-            { hostId: project.hostId, sessionId, err },
+            { hostId: resolveSessionHostId(app, row), sessionId, err },
             "resolvePendingPromote: host rejected the request",
           );
         } else {
           app.log.warn(
-            { hostId: project.hostId, sessionId, err },
+            { hostId: resolveSessionHostId(app, row), sessionId, err },
             "resolvePendingPromote: host unreachable",
           );
         }
@@ -989,7 +1010,15 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       reply.code(201);
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      const liveStatus = await withLiveStatus(app, created.row, idleThresholdMs, project.hostId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host: the row exists, so
+      // its live status has to come from the host it runs on (the same
+      // rule task-claim.ts's post-spawn read follows).
+      const liveStatus = await withLiveStatus(
+        app,
+        created.row,
+        idleThresholdMs,
+        resolveSessionHostId(app, created.row),
+      );
       return warnings.length > 0 ? { ...liveStatus, warnings } : liveStatus;
     } finally {
       promoting.delete(sessionId);
@@ -1014,7 +1043,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
 
-      const hostId = resolveProjectHostId(app, row.projectId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+      // project's: a session may live on a host of its own (placement),
+      // and this operation is about the session.
+      const hostId = resolveSessionHostId(app, row);
       const ok = await resolveBackend(app, hostId).resolvePendingPromote(String(sessionId), {
         decision: "declined",
         reason: request.body.reason,
@@ -1058,7 +1090,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
       if (updated.length === 0) return reply.notFound();
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      const hostId = resolveProjectHostId(app, updated[0].projectId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host, not its project's
+      // (see the comment on the sibling route).
+      const hostId = resolveSessionHostId(app, updated[0]);
       return withLiveStatus(app, updated[0], idleThresholdMs, hostId);
     },
   );
@@ -1079,7 +1113,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
 
-      const hostId = resolveProjectHostId(app, row.projectId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+      // project's: a session may live on a host of its own (placement),
+      // and this operation is about the session.
+      const hostId = resolveSessionHostId(app, row);
       const { decision, reason, gateId } = request.body;
       let ok: boolean;
       try {
@@ -1211,7 +1248,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
       if (!row) return reply.notFound();
 
-      const hostId = resolveProjectHostId(app, row.projectId);
+      // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+      // project's: a session may live on a host of its own (placement),
+      // and this operation is about the session.
+      const hostId = resolveSessionHostId(app, row);
       let acked: boolean;
       try {
         acked = await resolveBackend(app, hostId).acknowledgeAttention(String(sessionId));
@@ -1304,7 +1344,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
 
       try {
-        const backend = resolveBackend(app, project.hostId);
+        // Issue #1722 / roadmap 8.8 — the SESSION's host: the upload writes
+        // into the SESSION's cwd, and that path is on the host the session
+        // runs on.
+        const backend = resolveBackend(app, resolveSessionHostId(app, row));
         const cwd = row.cwd ?? project.cwd;
         return isGenericFile
           ? await backend.uploadFile(cwd, request.body, fileName)
@@ -1314,7 +1357,10 @@ export async function sessionsRoute(app: FastifyInstance) {
         // (session-lifecycle.ts, reached via POST /api/sessions): an
         // unreachable host or an agent-side rejection is a gateway
         // failure, never a 500 — there's no row here to roll back.
-        app.log.error({ err, sessionId, hostId: project.hostId }, "session file upload failed");
+        app.log.error(
+          { err, sessionId, hostId: resolveSessionHostId(app, row) },
+          "session file upload failed",
+        );
         // The local backend tags an unusable `.mullion-uploads` (symlink/file)
         // with statusCode 409 — surface that as the client-visible conflict.
         if ((err as { statusCode?: number }).statusCode === 409) {

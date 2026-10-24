@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -186,7 +186,11 @@ export function withLiveInfo(
 
 /** hostId of the project a session row belongs to — "local" for any row
  * whose project is missing (shouldn't happen; projectId is a required FK)
- * or genuinely local, keeping every call site's fallback identical. */
+ * or genuinely local, keeping every call site's fallback identical.
+ *
+ * Still the right answer for PROJECT-scoped operations (git ops, project
+ * files, a project's worktree, webhooks) — a session's host says where
+ * that session runs, not where the project's work lives. */
 export function resolveProjectHostId(app: FastifyInstance, projectId: number): string {
   const [project] = app.db
     .select({ hostId: projects.hostId })
@@ -194,6 +198,33 @@ export function resolveProjectHostId(app: FastifyInstance, projectId: number): s
     .where(eq(projects.id, projectId))
     .all();
   return project?.hostId ?? LOCAL_HOST_ID;
+}
+
+/**
+ * The host a session lives on: its own recorded host, else its project's.
+ *
+ * Issue #1722 / roadmap 8.8 — a session records the host it was actually
+ * spawned on (`sessions.hostId`, written once at creation), so a placement
+ * policy can put some of a project's sessions on one machine and some on
+ * another. Every SESSION-scoped operation resolves through here.
+ *
+ * The row's own value wins when it is set; NULL means "inherit the
+ * project's host", which is every pre-existing row (and every row created
+ * before the placement wiring lands). The fallback is therefore the only
+ * thing that has to be right for old rows — a placed session costs NO
+ * query here at all, and an inheriting one costs the same single query
+ * its project-scoped sibling always did.
+ *
+ * `projectId` is deliberately not consulted when the row carries its own
+ * host: the project's host is a different fact (where the project's work
+ * lives), and reading it would be a query nobody needs.
+ */
+export function resolveSessionHostId(
+  app: FastifyInstance,
+  row: { projectId: number; hostId: string | null },
+): string {
+  if (row.hostId !== null) return row.hostId;
+  return resolveProjectHostId(app, row.projectId);
 }
 
 // Batch size for the inArray lookup below — same value and same reasoning as
@@ -207,11 +238,16 @@ export function resolveProjectHostId(app: FastifyInstance, projectId: number): s
 const SESSION_HOST_LOOKUP_CHUNK_SIZE = 500;
 
 /**
- * Resolves a batch of numeric `sessions.id` values to their owning host, via
- * the same `sessions -> projects.hostId` join resolveProjectHostId uses one
- * project at a time (`sessions` itself has no `hostId` column). Issue
- * #1459's collision guard: `relayRemoteEventsHost` (routes/events.ts) uses
- * this to drop a `cursors`/`seen` entry a remote agent reports for a
+ * Resolves a batch of numeric `sessions.id` values to their owning host.
+ *
+ * Issue #1722 / roadmap 8.8 — the owning host is the SESSION's own
+ * `sessions.hostId` when it has one (a session placed on a host of its
+ * own), and the project's host otherwise (`coalesce` over a LEFT JOIN, so
+ * a session whose project row is missing still resolves — to "local",
+ * exactly as resolveProjectHostId's own fallback does).
+ *
+ * Issue #1459's collision guard: `relayRemoteEventsHost` (routes/events.ts)
+ * uses this to drop a `cursors`/`seen` entry a remote agent reports for a
  * sessionId that doesn't actually resolve to the host reporting it — the
  * same numeric-id-collision hazard event-store.ts's filterHostOwnership
  * guards against for persisted events, just for the live relay instead.
@@ -232,12 +268,17 @@ export function resolveSessionHostIds(
   for (let i = 0; i < uniqueIds.length; i += SESSION_HOST_LOOKUP_CHUNK_SIZE) {
     const chunk = uniqueIds.slice(i, i + SESSION_HOST_LOOKUP_CHUNK_SIZE);
     const rows = app.db
-      .select({ sessionId: sessions.id, hostId: projects.hostId })
+      .select({
+        sessionId: sessions.id,
+        // The session's own host when it has one, else its project's — the
+        // same rule resolveSessionHostId() applies one row at a time.
+        hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+      })
       .from(sessions)
-      .innerJoin(projects, eq(sessions.projectId, projects.id))
+      .leftJoin(projects, eq(sessions.projectId, projects.id))
       .where(inArray(sessions.id, chunk))
       .all();
-    for (const row of rows) owners.set(row.sessionId, row.hostId);
+    for (const row of rows) owners.set(row.sessionId, row.hostId ?? LOCAL_HOST_ID);
   }
   return owners;
 }

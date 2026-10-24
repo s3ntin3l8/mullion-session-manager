@@ -221,6 +221,47 @@ describe("terminal route (/ws/terminal)", () => {
   // that resolveAndAttach then closes the socket cleanly (a real error
   // response, not a possible uncaught TypeError inside a WS handler after
   // the upgrade has already completed).
+  // Issue #1722 / roadmap 8.8 — the attach reaches for the pty the session
+  // actually runs under. With the host taken from the PROJECT, a session
+  // placed on a host of its own would be proxied to the machine that does
+  // not hold it.
+  it("attaches a PLACED session to the session's host, not the project's (issue #1722)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId } = await createProjectAndSession(app);
+
+    // A remote host, and the session moved onto it (its project stays
+    // local).
+    const remote = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "placed-terminal", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const remoteHostId = remote.json().id as string;
+    app.db.update(sessions).set({ hostId: remoteHostId }).where(eq(sessions.id, sessionId)).run();
+
+    // The proxy's client is built for the host it was handed — that is the
+    // decision under test.
+    const remoteHostClient = await import("../../src/services/remote-host-client.js");
+    const clientSpy = vi.spyOn(remoteHostClient, "getRemoteHostClient");
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    await waitForOpenOrClose(ws);
+    // waitUntilReal(), not waitUntil(): the latter polls with setImmediate
+    // and gives up after 50 fast tries, so it would flake the moment an
+    // await lands in the attach path. This one keeps the wall-clock bound
+    // the original 5s timeout meant (and its timeout argument is used, so
+    // CodeQL's superfluous-trailing-arguments stays quiet).
+    await waitUntilReal(() => clientSpy.mock.calls.length > 0, 5000);
+
+    expect(clientSpy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
+    expect(clientSpy.mock.calls.map((call) => call[1])).not.toContain("local");
+
+    clientSpy.mockRestore();
+    await app.close();
+  });
+
   it("closes the socket cleanly instead of crashing when the session's project row is missing", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import path from "node:path";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
@@ -31,11 +31,22 @@ const isWithin = (candidate: string, directory: string) => {
  * session may have `cd`'d), else the recorded one, else its project's.
  */
 export function worktreeInUse(app: FastifyInstance, worktreePath: string): boolean {
+  // Issue #1722 / roadmap 8.8 — "local" means the SESSION's own host is
+  // local, not its project's: a session placed on a remote host has a cwd
+  // on that other machine, so it cannot be holding a local worktree open —
+  // counting it would make the local host's worktrees look busy forever.
+  // A session with no host of its own inherits its project's (the
+  // coalesce), so every pre-existing row keeps behaving exactly as before.
   const activeSessions = app.db
     .select({ id: sessions.id, cwd: sessions.cwd, projectCwd: projects.cwd })
     .from(sessions)
     .innerJoin(projects, eq(sessions.projectId, projects.id))
-    .where(and(eq(sessions.status, "active"), eq(projects.hostId, LOCAL_HOST_ID)))
+    .where(
+      and(
+        eq(sessions.status, "active"),
+        sql`coalesce(${sessions.hostId}, ${projects.hostId}) = ${LOCAL_HOST_ID}`,
+      ),
+    )
     .all();
   for (const row of activeSessions) {
     let directory = row.cwd ?? row.projectCwd;

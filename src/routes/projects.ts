@@ -423,7 +423,15 @@ async function resolveSessionCwdTargets(
 ): Promise<SessionCwdTarget[]> {
   if (sessionIds.length === 0) return [];
   const sessionRows = app.db
-    .select({ id: sessions.id, cwd: sessions.cwd, projectId: sessions.projectId })
+    .select({
+      id: sessions.id,
+      cwd: sessions.cwd,
+      projectId: sessions.projectId,
+      // Issue #1722 / roadmap 8.8 — the session's own host, so the target
+      // can be resolved from the row (resolveSessionHostId) rather than
+      // from the project.
+      hostId: sessions.hostId,
+    })
     .from(sessions)
     .where(inArray(sessions.id, sessionIds))
     .all();
@@ -488,7 +496,13 @@ async function resolveSessionCwdTargets(
         if (matched) cwd = matched.path;
       }
     }
-    targets.push({ sessionId: row.id, hostId: project.hostId, cwd });
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: each target is one
+    // session, and a session placed on a host of its own is acted on there.
+    // The project's host is already in scope here, so this is
+    // resolveSessionHostId's own rule (`row.hostId ?? project.hostId`)
+    // without its query — this function batches its selects and caches
+    // `listWorktrees` per project, and a per-row SELECT would undo both.
+    targets.push({ sessionId: row.id, hostId: row.hostId ?? project.hostId, cwd });
   }
   return targets;
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import {
   CONTROL_SOCKET_VIA_HEADER,
   CONTROL_SOCKET_VIA_TOKEN,
@@ -5131,6 +5131,176 @@ describe("sessions route", () => {
       });
       expect(res.statusCode).toBe(400);
 
+      await app.close();
+    });
+  });
+
+  // Issue #1722 / roadmap 8.8 — a session operation goes to the SESSION's
+  // host, not its project's. The route resolves the host BEFORE it talks
+  // to any backend, so the assertion is on resolveBackend's own argument:
+  // that is the host the operation was routed to.
+  describe("the session's own host decides where a session operation goes (issue #1722)", () => {
+    // The resolveBackend spies below must NOT leak into the next test: a
+    // faked backend has no spawn(), so a leaked spy breaks the next
+    // test's session creation with a 502.
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    /** A remote host row (unreachable — the backend is faked below). */
+    async function createRemoteHost(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      name: string,
+    ): Promise<string> {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      return res.json().id as string;
+    }
+
+    it("routes a PLACED session's scrollback to the session's host", async () => {
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const remoteHostId = await createRemoteHost(app, "placed-scrollback");
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [placed] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", hostId: remoteHostId })
+        .returning()
+        .all();
+
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      spy.mockReturnValue({
+        getScrollback: vi.fn().mockResolvedValue(Buffer.from("remote")),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${placed.id}/scrollback`,
+      });
+      expect(res.statusCode).toBe(200);
+      // The HOSTS the operation was routed to. (Not `toHaveBeenCalledWith`:
+      // comparing the Fastify instance itself would deep-walk it, and its
+      // `origin` getter reads an address this inject-only app never had.)
+      expect(spy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
+      await app.close();
+    });
+
+    it("routes an INHERITING session's scrollback to its project's host", async () => {
+      // Every pre-existing row is NULL here, and must keep resolving
+      // exactly as it did before the column existed.
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [inheriting] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      spy.mockReturnValue({
+        getScrollback: vi.fn().mockResolvedValue(Buffer.from("local")),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${inheriting.id}/scrollback`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(spy.mock.calls.map((call) => call[1])).toContain("local");
+      await app.close();
+    });
+
+    it("routes a PLACED session's file upload to the session's host", async () => {
+      // The upload writes into the SESSION's cwd, and that path is on the
+      // host the session runs on.
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const remoteHostId = await createRemoteHost(app, "placed-upload");
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [placed] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", hostId: remoteHostId })
+        .returning()
+        .all();
+
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      spy.mockReturnValue({
+        uploadFile: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/sessions/${placed.id}/uploads`,
+        headers: { "content-type": "application/octet-stream", "x-upload-filename": "a.pdf" },
+        payload: Buffer.from("data"),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(spy.mock.calls.map((call) => call[1])).toContain(remoteHostId);
+      await app.close();
+    });
+
+    it("records the host a NEW session was created on (issue #1722)", async () => {
+      // The insert is what makes the column meaningful: the row records the
+      // host the session was spawned on, written ONCE, so every
+      // session-scoped operation can find it again.
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const { sessions } = await import("../../src/db/schema.js");
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, created.json().id)).all();
+      expect(row?.hostId).toBe("local");
+      await app.close();
+    });
+
+    it("routes the LIST's live-status call to the session's host too", async () => {
+      // The list batches by host — one bulk liveStatus call per distinct
+      // host — so the grouping itself has to follow the session's host.
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const remoteHostId = await createRemoteHost(app, "placed-list");
+      const projectId = await createProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [placed] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active", hostId: remoteHostId })
+        .returning()
+        .all();
+
+      // Which host was asked for WHICH session ids — the list's batching is
+      // per host, so the placement of ONE session has to show up in the
+      // right group.
+      const idsByHost = new Map<string, string[]>();
+      const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
+      spy.mockImplementation((_app, hostId: string) => {
+        const liveStatus = vi.fn(async (ids: string[]) => {
+          idsByHost.set(hostId, ids);
+          return {};
+        });
+        return { liveStatus } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>;
+      });
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      expect(res.statusCode).toBe(200);
+      // The placed session was asked for on ITS host...
+      expect(idsByHost.get(remoteHostId)).toContain(String(placed.id));
+      // ...and NOT on its project's host, which is where the old
+      // project-derived grouping would have put it.
+      expect(idsByHost.get("local") ?? []).not.toContain(String(placed.id));
+      // ...and the placed session is still listed (its live status came
+      // from its own host).
+      const listed = (res.json() as Array<{ id: number }>).map((row) => row.id);
+      expect(listed).toContain(placed.id);
       await app.close();
     });
   });

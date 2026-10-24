@@ -23,6 +23,7 @@ import { createSessionRecord } from "./session-lifecycle.js";
 // cleanupPreviewWorktree is a no-op here regardless — a task worker session
 // is never registered in the preview-worktree map — so only this one matters.
 import { closeSessionBrowserBindings } from "./session-browsers.js";
+import { resolveSessionHostId } from "./session-live-info.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -106,7 +107,12 @@ export async function reseedTaskIfSessionExited(
       return false;
     }
     try {
-      await resolveBackend(app, project.hostId).terminate(String(task.sessionId));
+      // Issue #1722 / roadmap 8.8 — the SESSION's host: this terminates
+      // the task's session, and a session placed on a host of its own runs
+      // there. The row was read above.
+      await resolveBackend(app, resolveSessionHostId(app, session)).terminate(
+        String(task.sessionId),
+      );
       closeSessionBrowserBindings(app, task.sessionId);
     } catch (err) {
       // Do NOT fall through to spawning anyway — a terminate failure means

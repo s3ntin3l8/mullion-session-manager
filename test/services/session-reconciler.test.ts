@@ -62,6 +62,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { reconcileExitedSessions } = await import("../../src/services/session-reconciler.js");
+const { hosts, sessions } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `session-reconciler-test-${process.pid}.db`);
 
@@ -293,6 +295,37 @@ describe("reconcileExitedSessions", () => {
   // failed" exactly like "a reachable host's response omitted this key,"
   // not like "confirmed dead." Getting this wrong would mass-exit every
   // active local session on a single transient systemctl error.
+  // Issue #1722 / roadmap 8.8 — the reconciler asks the SESSION's host for
+  // liveness, not its project's.
+  //
+  // This is the destructive one: a session that lives on a remote host
+  // while its PROJECT lives here would, with the host derived from the
+  // project, be checked against THIS host — which does not have it. Told
+  // the session is not alive here (true, and the only answer this host can
+  // give), the reconciler would flip a perfectly healthy session's row to
+  // "exited" and tear it down. The host must come from the row.
+  it("asks the SESSION's host for liveness, not its project's (issue #1722)", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app);
+    // A remote host that is not reachable from here (a closed port): the
+    // reconciler must SKIP it entirely rather than treat it as dead.
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://127.0.0.1:1" })
+      .run();
+    // The session lives on remote-b; its project lives here.
+    app.db.update(sessions).set({ hostId: "remote-b" }).where(eq(sessions.id, sessionId)).run();
+
+    // This host reports "not alive" — correctly: it does not have the
+    // session. That is the answer that must NOT be allowed to flip the row.
+    mockMasterAlive(app, false);
+
+    await reconcileExitedSessions(app);
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    expect(row?.status).toBe("active");
+  });
+
   it("leaves an active session alone when the batch liveness check itself fails (total map, every id explicitly unknown)", async () => {
     const app = await openTestApp();
     const sessionId = await createSession(app);

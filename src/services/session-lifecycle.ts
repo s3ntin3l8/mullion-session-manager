@@ -31,7 +31,7 @@ import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveProjectHostId } from "./session-live-info.js";
+import { resolveSessionHostId } from "./session-live-info.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import {
   readProjectBriefing,
@@ -770,7 +770,18 @@ export async function createSessionRecord(
 
 // What createSessionRecordInner has created so far and so must unwind.
 interface CreateRollback {
+  /** The host the session's SCOPE was created on — the placement host. */
   hostId?: string;
+  /**
+   * The host the session's WORKTREE was created on — issue #1722: the
+   * worktree is cut from the project's repo, so it is created on the
+   * PROJECT's host, while the scope runs on the placement host. The two
+   * are the same host today; #1724 makes them differ, and a rollback that
+   * sent the worktree cleanup to the scope's host would leave a leaked
+   * worktree and an undeleted branch with no log line. So they are
+   * tracked separately.
+   */
+  worktreeHostId?: string;
   /** Worktree created by this call (never a pre-existing one). */
   worktreePath?: string;
   /** Repo the worktree was cut from (parentCwd for removeWorktree/deleteBranch). */
@@ -792,25 +803,33 @@ interface CreateRollback {
 async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise<void> {
   if (rb.done) return;
   rb.done = true;
-  if (rb.hostId === undefined) return;
-  const backend = () => resolveBackend(app, rb.hostId!);
-  if (rb.sessionId !== undefined) {
+  // Either host is enough to have something to undo: the scope's host (the
+  // terminate) or the worktree's host (the worktree/branch cleanup). They
+  // are two INDEPENDENT fields (issue #1722) — so the gate has to name
+  // both, or a rollback that only ever made a worktree would be skipped
+  // and leave the worktree and its branch behind.
+  if (rb.hostId === undefined && rb.worktreeHostId === undefined) return;
+  if (rb.sessionId !== undefined && rb.hostId !== undefined) {
     try {
-      await backend().terminate(String(rb.sessionId));
+      await resolveBackend(app, rb.hostId).terminate(String(rb.sessionId));
     } catch (err) {
       app.log.warn({ err, sessionId: rb.sessionId }, "create rollback: terminate failed");
     }
   }
   if (rb.worktreePath !== undefined) {
+    // The worktree lives on ITS host — the project's, where it was cut
+    // from — which is not necessarily the host the scope was created on
+    // (issue #1722).
+    const worktreeBackend = () => resolveBackend(app, rb.worktreeHostId ?? rb.hostId!);
     try {
-      await backend().removeWorktree(rb.worktreePath, rb.parentCwd);
+      await worktreeBackend().removeWorktree(rb.worktreePath, rb.parentCwd);
     } catch {
       // Best-effort: a leaked worktree directory is the cheaper failure —
       // same posture as cleanupPreviewWorktree's pendingRemoval retry.
     }
     if (rb.branch !== undefined && rb.parentCwd !== undefined) {
       try {
-        await backend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
+        await worktreeBackend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
       } catch {
         // Best-effort, as above.
       }
@@ -858,7 +877,15 @@ async function createSessionRecordInner(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
-  rb.hostId = project.hostId;
+  // Issue #1722 / roadmap 8.8 — THE host this session is created on, named
+  // once and used for everything that has to agree about it: the row the
+  // insert writes, the spawn the backend is resolved for, the seed stashed
+  // into it, the worktree closures that clean up after it, AND the rollback
+  // (rb.hostId — which is what a failed create unwinds through). Today it
+  // is the project's host — the placement decision; #1724 replaces THIS
+  // ONE value with the placement policy's choice, and everything follows it.
+  const placementHost = project.hostId;
+  rb.hostId = placementHost;
 
   const parent = validateParent(app, params);
   if (!parent.ok) return parent.result;
@@ -896,13 +923,22 @@ async function createSessionRecordInner(
     cwd,
     parent.parentId,
     sessionSettings.maxChildSessionsPerParent,
+    // The host this session is spawned on — the same value the spawn below
+    // is routed to (resolveBackend(app, placementHost).spawn(...)).
+    // Issue #1722 / roadmap 8.8; 8.10 replaces it with the placement
+    // policy's choice.
+    placementHost,
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
-  rb.hostId = project.hostId;
+  // The placement host, not the project's: rb.hostId is what a failed
+  // create unwinds through (rollbackCreate terminates the scope and removes
+  // the worktree), so it has to be the host the session was actually
+  // created on — the same value the spawn uses (issue #1722).
+  rb.hostId = placementHost;
   rb.sessionId = created.id;
 
-  await stashSeedBestEffort(app, project, created.id, params.seedPrompt);
+  await stashSeedBestEffort(app, placementHost, created.id, params.seedPrompt);
 
   const spawnOpts = await resolveSpawnInputs(
     app,
@@ -912,12 +948,12 @@ async function createSessionRecordInner(
     created.id,
     sessionSettings,
   );
-  const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb);
+  const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 
   rb.spawned = true;
 
-  trackPreview(app, project, params, cwd, created.id);
+  trackPreview(app, project, params, cwd, created.id, placementHost);
 
   return {
     ok: true,
@@ -987,7 +1023,12 @@ async function prepareWorktree(
     if (!result) return fail("worktree-failed");
     // Checks out an EXISTING branch detached — nothing to delete but the
     // directory.
-    rb.hostId = project.hostId;
+    // The worktree is created on the PROJECT's host — the placement
+    // decision has not been made yet (8.10 moves this to the placement
+    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
+    // rb.hostId (the scope's host): the two are the same host today, and
+    // #1724 makes them differ.
+    rb.worktreeHostId = project.hostId;
     rb.worktreePath = result.path;
     rb.parentCwd = params.cwd ?? project.cwd;
     return { ok: true, cwd: result.path };
@@ -1006,7 +1047,12 @@ async function prepareWorktree(
         result: { ok: false, reason: "worktree-failed", detail: resolved.detail },
       };
     }
-    rb.hostId = project.hostId;
+    // The worktree is created on the PROJECT's host — the placement
+    // decision has not been made yet (8.10 moves this to the placement
+    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
+    // rb.hostId (the scope's host): the two are the same host today, and
+    // #1724 makes them differ.
+    rb.worktreeHostId = project.hostId;
     rb.worktreePath = resolved.path;
     rb.parentCwd = params.cwd ?? project.cwd;
     rb.branch = resolved.branch;
@@ -1031,6 +1077,17 @@ function insertRow(
   cwd: string | undefined,
   parentId: number | null,
   maxChildren: number,
+  // Issue #1722 / roadmap 8.8 — the host this session is being created
+  // ON, recorded on the row so every session-scoped operation can find it
+  // without deriving it from the project (a placement policy may put some
+  // of a project's sessions on one machine and some on another).
+  //
+  // The caller (createSessionRecordInner — the ONLY production writer of a
+  // session row: `grep -rn "insert(sessions)" src/` finds this one) passes
+  // the SAME host the spawn is routed to, so the row and the live scope
+  // cannot disagree. 8.10 replaces the one argument with the placement
+  // policy's choice, and the row follows for free.
+  hostId: string,
 ): Step<{ row: SessionRow }> {
   const {
     projectId,
@@ -1059,6 +1116,10 @@ function insertRow(
         .insert(sessions)
         .values({
           projectId,
+          // Issue #1722 — the host this session lives on (see the parameter
+          // docs above). Written ONCE, here, inside the same transaction
+          // that enforces the live-child cap.
+          hostId,
           command,
           name: name ?? null,
           cwd: cwd ?? null,
@@ -1100,16 +1161,22 @@ function insertRow(
 // is a degraded promote, not a failed one.
 async function stashSeedBestEffort(
   app: FastifyInstance,
-  project: ProjectRow,
+  // Issue #1722 / roadmap 8.8 — the SESSION's host (the placement host),
+  // not the project's: the seed is stashed into the session that was just
+  // created.
+  hostId: string,
   sessionId: number,
   seedPrompt: string | undefined,
 ): Promise<void> {
   if (!seedPrompt || seedPrompt.length === 0) return;
   try {
-    await resolveBackend(app, project.hostId).stashSeed(String(sessionId), seedPrompt);
+    // Issue #1722 / roadmap 8.8 — the SESSION's host: the seed is stashed
+    // into the session that was just created, so it goes to the host that
+    // session runs on.
+    await resolveBackend(app, hostId).stashSeed(String(sessionId), seedPrompt);
   } catch (err) {
     app.log.warn(
-      { hostId: project.hostId, sessionId, err },
+      { hostId, sessionId, err },
       "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
     );
   }
@@ -1242,11 +1309,14 @@ async function spawnOrRollback(
   sessionId: number,
   spawnOpts: SpawnOpts,
   rb: CreateRollback,
+  // Issue #1722 / roadmap 8.8 — the host the session is spawned on (the
+  // placement host), not the project's: 8.10 replaces this one value.
+  placementHost: string,
 ): Promise<Step<{ initialPromptApplied: boolean | undefined }>> {
   const { injectAgentGuide, injectProjectBriefing, injectMullionBundle, taskId } = spawnOpts;
   let spawnResult;
   try {
-    spawnResult = await resolveBackend(app, project.hostId).spawn(spawnOpts);
+    spawnResult = await resolveBackend(app, placementHost).spawn(spawnOpts);
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
     // CreateSessionResult: nothing downstream currently needs to REACT to
@@ -1341,6 +1411,9 @@ function trackPreview(
   params: CreateSessionParams,
   cwd: string | undefined,
   sessionId: number,
+  // Issue #1722 / roadmap 8.8 — the host the session (and therefore its
+  // preview worktree) lives on: the placement host, not the project's.
+  placementHost: string,
 ): void {
   const { worktree, worktreeRefresh, projectId } = params;
   const effectiveCwd = cwd ?? project.cwd;
@@ -1353,7 +1426,10 @@ function trackPreview(
     worktreeRefresh: worktreeRefresh ?? false,
     parentCwd: previewParentCwd,
     projectId,
-    hostId: project.hostId,
+    // Issue #1722 — the SESSION's host (the placement host), so the
+    // preview worktree's sync/cleanup closures talk to the machine that
+    // actually holds it.
+    hostId: placementHost,
     // Issue #345 — host-routed closures, attached only for a remote host
     // (undefined for local, which keeps git-worktree.ts's own local fallback
     // and every existing local-path test unmodified). Never reject —
@@ -1371,14 +1447,14 @@ function trackPreview(
     // removeWarned/syncWarned (Hermes review) — per-closure state tracking
     // whether the LAST attempt already logged a failure, so a host that stays
     // down warns once per outage rather than once per 5s tick forever.
-    ...(project.hostId !== LOCAL_HOST_ID
+    ...(placementHost !== LOCAL_HOST_ID
       ? (() => {
           let removeWarned = false;
           let syncWarned = false;
           return {
             remove: async () => {
               try {
-                const result = await resolveBackend(app, project.hostId).removeWorktree(
+                const result = await resolveBackend(app, placementHost).removeWorktree(
                   effectiveCwd,
                   previewParentCwd,
                 );
@@ -1399,7 +1475,7 @@ function trackPreview(
             },
             sync: async () => {
               try {
-                const result = await resolveBackend(app, project.hostId).syncWorktree(
+                const result = await resolveBackend(app, placementHost).syncWorktree(
                   effectiveCwd,
                   previewBranch,
                 );
@@ -1493,7 +1569,10 @@ export async function killSession(
       .run();
   }
 
-  const hostId = resolveProjectHostId(app, row.projectId);
+  // Issue #1722 / roadmap 8.8 — the SESSION's host: this terminate call
+  // ends the session's scope, and a scope lives on the host the session
+  // was spawned on — which is not necessarily its project's host.
+  const hostId = resolveSessionHostId(app, row);
 
   // A9 — kill/attach TOCTOU: flip the row to "killed" BEFORE awaiting the
   // host-side terminate call below, not after. Previously this update ran

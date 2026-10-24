@@ -1,22 +1,31 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { ne } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
-import { resolveSessionHostIds } from "../../src/services/session-live-info.js";
+import {
+  resolveSessionHostId,
+  resolveSessionHostIds,
+} from "../../src/services/session-live-info.js";
 
 // Issue #1459's collision guard — the same "real DB, real joins" posture
 // test/services/event-store-remote-ownership.test.ts uses for its sibling
-// filterHostOwnership: `sessions` has no hostId column (ownership only
-// resolves via sessions.projectId -> projects.hostId), so a mocked drizzle
-// chain could pass while the real join semantics were wrong.
+// filterHostOwnership: ownership resolves through REAL columns, so a mocked
+// drizzle chain could pass while the real join semantics were wrong.
 // relayRemoteEventsHost (routes/events.ts) uses this to filter a remote
 // agent's own `cursors`/`seen` frame down to sessions that agent's hostId
 // actually owns, mirroring filterHostOwnership's own role for persisted
 // events.
+//
+// Issue #1722 / roadmap 8.8 changed what "owns" means: a session records
+// the host it was actually spawned on (`sessions.hostId`), so ownership is
+// `sessions.hostId` when it is set and the PROJECT's host otherwise — the
+// same rule resolveSessionHostId() applies one row at a time. A session
+// with no host of its own (every pre-existing row) still resolves through
+// its project, exactly as before.
 
 const tmpDb = path.join(
   os.tmpdir(),
@@ -62,10 +71,10 @@ describe("resolveSessionHostIds", () => {
     return row.id;
   }
 
-  function seedSession(projectId: number): number {
+  function seedSession(projectId: number, hostId?: string): number {
     const [row] = app.db
       .insert(sessions)
-      .values({ projectId, command: "bash" })
+      .values({ projectId, command: "bash", ...(hostId === undefined ? {} : { hostId }) })
       .returning({ id: sessions.id })
       .all();
     return row.id;
@@ -82,6 +91,61 @@ describe("resolveSessionHostIds", () => {
 
     const owners = resolveSessionHostIds(app, [sessionId]);
     expect(owners.get(sessionId)).toBe("remote-a");
+  });
+
+  it("resolves a PLACED session to its own host, not its project's (issue #1722)", () => {
+    // The whole point of the column: a session may live on a host of its
+    // own while its project lives elsewhere.
+    seedHost("remote-a");
+    seedHost("remote-b");
+    const projectId = seedProject("remote-a");
+    const sessionId = seedSession(projectId, "remote-b");
+
+    const owners = resolveSessionHostIds(app, [sessionId]);
+    expect(owners.get(sessionId)).toBe("remote-b");
+  });
+
+  it("resolves a session with no host of its own to its project's (issue #1722)", () => {
+    // Every pre-existing row (and every row created before the placement
+    // wiring lands) is NULL here, and must keep resolving exactly as it
+    // did before the column existed.
+    seedHost("remote-a");
+    const projectId = seedProject("remote-a");
+    const sessionId = seedSession(projectId);
+
+    const owners = resolveSessionHostIds(app, [sessionId]);
+    expect(owners.get(sessionId)).toBe("remote-a");
+  });
+
+  it("resolves a mixed batch of placed and inheriting sessions correctly (issue #1722)", () => {
+    seedHost("remote-a");
+    seedHost("remote-b");
+    const projectId = seedProject("remote-a");
+    const placed = seedSession(projectId, "remote-b");
+    const inheriting = seedSession(projectId);
+
+    const owners = resolveSessionHostIds(app, [placed, inheriting]);
+    expect(owners.get(placed)).toBe("remote-b");
+    expect(owners.get(inheriting)).toBe("remote-a");
+  });
+
+  it("resolveSessionHostId returns the row's own host when it has one (issue #1722)", () => {
+    // The row-based resolver: no query at all for a placed session.
+    seedHost("remote-b");
+    const projectId = seedProject("local");
+    const sessionId = seedSession(projectId, "remote-b");
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+
+    expect(resolveSessionHostId(app, row)).toBe("remote-b");
+  });
+
+  it("resolveSessionHostId falls back to the project's host when the row has none (issue #1722)", () => {
+    seedHost("remote-a");
+    const projectId = seedProject("remote-a");
+    const sessionId = seedSession(projectId);
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+
+    expect(resolveSessionHostId(app, row)).toBe("remote-a");
   });
 
   it("leaves a nonexistent session id absent from the returned map", () => {
