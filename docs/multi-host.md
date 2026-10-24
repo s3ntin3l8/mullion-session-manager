@@ -476,11 +476,11 @@ scope (`systemd-run` starts it, `systemctl` reads its liveness and tears it
 down), and macOS has no equivalent — the darwin scope backend is keyed to a
 _session's_ dtach socket, which an emulator has no analogue of.
 
-So on macOS every route that **creates or starts** a device answers
+So on macOS every route that **adds, starts or changes** a device answers
 **400 "The device panel is not supported on darwin — it is Linux-only."** — a
 legible reason rather than a raw `spawn systemctl ENOENT` — and the panel's
-mDNS scanner never binds a multicast socket. The read routes and the
-teardown routes stay open on purpose: they were never gated on
+mDNS scanner never binds a multicast socket. The `/api/devices` reads and
+the teardown routes stay open on purpose: they were never gated on
 `DEVICE_ENABLED` either, and an operator must be able to stop a device even
 where the panel cannot create one. The app boots either way: the gate is a narrowing of an
 existing flag, so it can only ever turn the panel _off_ on a platform it was

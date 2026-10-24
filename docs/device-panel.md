@@ -24,9 +24,9 @@ roadmap 8.6). The panel's emulator runs in a `systemd --user` scope —
 and macOS has no equivalent: the darwin scope backend is keyed to a
 _session's_ dtach socket, which an emulator has no analogue of. So on macOS
 the panel is off even with `DEVICE_ENABLED=true`, and every route that
-**creates or starts** a device answers **400 "The device panel is not
-supported on darwin — it is Linux-only."** rather than a raw `spawn
-systemctl ENOENT`. The read routes (`GET /api/devices`,
+**adds, starts or changes** a device answers **400 "The device panel is
+not supported on darwin — it is Linux-only."** rather than a raw `spawn
+systemctl ENOENT`. The `/api/devices` reads (`GET /api/devices`,
 `/api/devices/discovered`, `/api/devices/:id`) and the teardown routes
 (`POST /api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on
 purpose — they were never gated on `DEVICE_ENABLED` either, and an
