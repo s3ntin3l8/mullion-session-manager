@@ -42,13 +42,29 @@ function git(args, opts = {}) {
   }).trim();
 }
 
-/** Runs git, returning trimmed stdout, or null when git exits non-zero. */
-function gitTry(args, opts = {}) {
+/** Runs git, returning its raw stdout (no trimming — for NUL-separated output). */
+function gitRaw(args, opts = {}) {
   try {
-    return git(args, opts);
+    return execFileSync("git", args, {
+      encoding: "utf8",
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+      ...opts,
+    });
   } catch {
     return null;
   }
+}
+
+/** Runs git, returning trimmed stdout, or null when git exits non-zero. */
+function gitTry(args, opts = {}) {
+  const raw = gitRaw(args, opts);
+  return raw === null ? null : raw.trim();
+}
+
+/** Splits NUL-separated git output into paths. */
+function nulSplit(raw) {
+  return raw.split("\0").filter(Boolean);
 }
 
 /** The shared git dir — the one every worktree of this clone reads. */
@@ -94,19 +110,25 @@ function findZeroByteFiles(root, maxDepth = 3) {
   return found;
 }
 
-/** A loose-object path is `<2 hex>/<38 hex>` — that is the sha, split. */
+/**
+ * A loose-object path is `<2 hex>/<38 hex>` — that is the sha, split in two.
+ *
+ * The two segments are compared separately rather than the joined string, so
+ * the check works whichever separator `path.join` produced.
+ */
 function isLooseObjectPath(rel) {
-  return /^[0-9a-f]{2}\/[0-9a-f]{38}$/.test(rel);
+  const parts = rel.split(/[/\\]/);
+  return parts.length === 2 && /^[0-9a-f]{2}$/.test(parts[0]) && /^[0-9a-f]{38}$/.test(parts[1]);
 }
 
 /** The sha a loose object path names. */
 function shaOfLoosePath(rel) {
-  return rel.replace("/", "");
+  return rel.split(/[/\\]/).join("");
 }
 
 /** git fsck's error lines, without the `dangling …` noise that is normal. */
 function fsckErrors() {
-  let output: string;
+  let output;
   try {
     output = execFileSync("git", ["fsck", "--connectivity-only", "--no-progress"], {
       encoding: "utf8",
@@ -146,42 +168,53 @@ function worktrees() {
 /**
  * Rebuild one worktree's index.
  *
- * `git read-tree HEAD` rewrites the index from HEAD, which drops a stale
- * cache-tree that names the broken object; `git add -A` then re-stages the
- * working tree's content, which is where the staged content came from in the
- * first place.
+ * The index is rebuilt from HEAD — which drops the stale cache-tree that names
+ * the broken object — and then exactly the paths that were staged are
+ * re-staged from the working tree:
  *
- * The guard: the index is rebuilt FROM THE WORKING TREE, so any content that
- * is in the index but NOT in the working tree would be lost. That is what
- * `git diff --name-only` reports (index against working tree). Staged changes
- * in general (`git diff --cached`) are also refused, because re-staging them
- * is an approximation rather than a restoration.
+ * - `git add -A` with an EXPLICIT pathspec limits the operation to those
+ *   paths, so an unrelated untracked file is never adopted;
+ * - a path that is staged AND has been changed again in the working tree
+ *   holds content the working tree does not have. Re-staging it from the
+ *   working tree would discard that content, so the rebuild refuses.
  */
 function rebuildIndex(worktreePath, force) {
-  const staged = gitTry(["-C", worktreePath, "diff", "--cached", "--name-only"]);
-  if (staged === null) {
-    // The index could not be read at all — that is the broken case, and the
-    // whole point of rebuilding it.
-    console.log(`  ${worktreePath}: index unreadable — rebuilding without a check`);
+  const stagedRaw = gitRaw(["-C", worktreePath, "diff", "--cached", "--name-only", "-z"]);
+  const dirtyRaw = gitRaw(["-C", worktreePath, "diff", "--name-only", "-z"]);
+
+  if (stagedRaw === null || dirtyRaw === null) {
+    console.log(`  ${worktreePath}: could not read the index — rebuilding without a check`);
   } else {
-    const differs = gitTry(["-C", worktreePath, "diff", "--name-only"]);
-    if (differs === null) {
-      console.log(`  ${worktreePath}: could not compare the index against the working tree`);
-    } else if (differs !== "" || staged !== "") {
-      if (!force) {
-        const reason =
-          differs !== ""
-            ? "the index holds content that is not in the working tree"
-            : "the index has staged changes";
-        console.log(`  ${worktreePath}: SKIPPED — ${reason}; --force overrides`);
-        return false;
-      }
+    const staged = nulSplit(stagedRaw);
+    const dirty = new Set(nulSplit(dirtyRaw));
+    // Staged AND changed again in the working tree: the staged content is
+    // not in the working tree, so re-staging would discard it.
+    const lost = staged.filter((p) => dirty.has(p));
+    if (lost.length > 0 && !force) {
+      console.log(
+        `  ${worktreePath}: SKIPPED — these paths are staged and have changed again in the` +
+          ` working tree, so re-staging them would discard what you staged:`,
+      );
+      for (const p of lost) console.log(`    ${p}`);
+      console.log("    --force overrides");
+      return false;
     }
   }
 
+  const stagedPaths = stagedRaw === null ? [] : nulSplit(stagedRaw);
   try {
     git(["-C", worktreePath, "read-tree", "HEAD"]);
-    git(["-C", worktreePath, "add", "-A"]);
+    if (stagedPaths.length > 0) {
+      // An explicit pathspec: only the paths that were staged are touched,
+      // and `git add -A` with a pathspec stages a deletion too. The pathspec
+      // has to come in on stdin, so this call's stdin is a pipe — the
+      // default `stdio` here ignores it, and an EMPTY pathspec would mean
+      // "everything".
+      git(["-C", worktreePath, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
+        input: stagedPaths.map((p) => `${p}\0`).join(""),
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    }
     console.log(`  ${worktreePath}: index rebuilt`);
     return true;
   } catch (err) {
@@ -245,6 +278,11 @@ function main() {
   console.log("");
   console.log("git-doctor: repairing.");
 
+  // The repair is only complete if the objects are readable again AND the
+  // refs came back. Anything short of that leaves the clone broken, and the
+  // exit code has to say so — `make git-doctor APPLY=1` is a health check.
+  let repaired = true;
+
   // Step 1 — quarantine. MOVE, never delete: the quarantine is the recovery
   // point, and it lives inside the git dir so the rename is atomic and
   // same-filesystem. It is deliberately outside `objects/`, so git does not
@@ -261,6 +299,7 @@ function main() {
       moved.push({ rel, sha: shaOfLoosePath(rel) });
     } catch (err) {
       console.log(`  could not quarantine ${rel} — ${err.message}`);
+      repaired = false;
     }
   }
   console.log(`  quarantined ${moved.length} zero-byte object(s) into ${quarantine}`);
@@ -279,6 +318,7 @@ function main() {
     }
   }
   if (stillMissing.length > 0) {
+    repaired = false;
     console.log(
       `  ${stillMissing.length} object(s) are genuinely gone and must be restored from the remote.`,
     );
@@ -287,6 +327,7 @@ function main() {
   // Step 3 — restore the refs.
   const fetched = gitTry(["fetch", "origin", "--prune"]);
   if (fetched === null) {
+    repaired = false;
     console.log("  'git fetch origin --prune' failed — the refs could not be restored.");
   } else {
     console.log("  refs restored from origin");
@@ -296,13 +337,17 @@ function main() {
   console.log("  rebuilding worktree indexes:");
   const paths = worktrees();
   for (const worktreePath of paths) {
-    rebuildIndex(worktreePath, FORCE);
+    if (!rebuildIndex(worktreePath, FORCE)) repaired = false;
   }
 
   console.log("");
   console.log(
     `git-doctor: done. The quarantined files are in ${quarantine} — nothing was deleted.`,
   );
+  if (!repaired) {
+    console.log("git-doctor: the clone is NOT fully repaired — see the messages above.");
+    return 1;
+  }
   return 0;
 }
 

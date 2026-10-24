@@ -36,10 +36,14 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
   naming a _missing_ object — `make git-doctor` reports it, and
   `make git-doctor APPLY=1` repairs it: the zero-byte objects are **moved**
   (never deleted) into a quarantine inside `.git/`, the refs are restored from
-  the remote, and the affected worktree indexes are rebuilt. The index rebuild
-  re-stages from the working tree, so it refuses to run when the index holds
-  staged work unless you add `FORCE=1` — nothing is lost either way, but the
-  refusal is there so you can decide.
+  the remote, and the affected worktree indexes are rebuilt. The rebuild
+  restores exactly the paths that were staged, so an unrelated untracked file
+  is never adopted — but it re-stages them from the working tree, so it
+  refuses to run when the index holds content that is _not_ in the working
+  tree (a partially staged file), because re-staging that would discard what
+  you staged. `FORCE=1` overrides that refusal. The repair exits non-zero if
+  it could not finish, so `make git-doctor APPLY=1` is usable as a health
+  check.
 
 ## Demo instance and screenshots
 

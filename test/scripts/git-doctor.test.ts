@@ -31,20 +31,12 @@ const zeroByteObjects = () =>
 function damage(sha: string) {
   const target = objectPath(sha);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  // The loose file may already be gone (a repack moved it into the pack) —
-  // then the empty file standing in its place IS the damage.
-  if (fs.existsSync(target)) fs.chmodSync(target, 0o644);
+  // Remove first rather than truncate: a loose object is written read-only,
+  // and removing it does not need write permission on the FILE (only on the
+  // directory). Writing over it in place would need the mode changed first,
+  // and a chmod-then-write is a check-then-act race.
+  fs.rmSync(target, { force: true });
   fs.writeFileSync(target, "");
-}
-
-/** git fsck's output — it exits non-zero when it finds problems. */
-function fsckOutput(): string {
-  const result = spawnSync("git", ["fsck", "--connectivity-only", "--no-progress"], {
-    cwd: repo,
-    encoding: "utf8",
-    env: gitEnv(),
-  });
-  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
 }
 
 /**
@@ -60,6 +52,21 @@ function damageTheStagedTree() {
   return tree;
 }
 
+/**
+ * Stages a change, damages the tree that change produced, and then edits the
+ * file again — so the index holds content the working tree does not have.
+ * That is the one case the rebuild has to refuse.
+ */
+function stageThenDamageThenEditAgain() {
+  fs.writeFileSync(path.join(repo, "a.txt"), "staged\n");
+  git(["add", "a.txt"]);
+  const tree = git(["write-tree"]);
+  damage(tree);
+  // …and then changed again, so the index holds content the working tree
+  // does not have.
+  fs.writeFileSync(path.join(repo, "a.txt"), "changed again\n");
+}
+
 /** A commit's objects, packed, so the loose file only SHADOWS them. */
 function damageAShadowedObject() {
   const commit = git(["rev-parse", "HEAD"]);
@@ -68,11 +75,23 @@ function damageAShadowedObject() {
   return commit;
 }
 
+/** git fsck's output — it exits non-zero when it finds problems. */
+function fsckOutput(): string {
+  const result = spawnSync("git", ["fsck", "--connectivity-only", "--no-progress"], {
+    cwd: repo,
+    encoding: "utf8",
+    env: gitEnv(),
+  });
+  return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+}
+
 beforeEach(() => {
   repo = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-"));
   execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
-  git(["config", "user.email", "test@example.com"]);
-  git(["config", "user.name", "Test"]);
+  // No `git config user.*` here: the repo forbids writing a commit identity
+  // into any config (test/git-env-guard.test.ts), and test/setup.ts already
+  // puts GIT_AUTHOR_*/GIT_COMMITTER_* in the environment — which never
+  // touches a config file.
   fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
   git(["add", "a.txt"]);
   git(["commit", "-q", "-m", "one"]);
@@ -113,7 +132,6 @@ describe("git-doctor.mjs", () => {
     const tree = damageTheStagedTree();
 
     const result = run(["--apply"]);
-    expect(result.status).toBe(0);
     expect(result.stdout).toContain("STILL MISSING");
     expect(result.stdout).toContain(tree);
 
@@ -134,21 +152,48 @@ describe("git-doctor.mjs", () => {
     const commit = damageAShadowedObject();
 
     const result = run(["--apply"]);
-    expect(result.status).toBe(0);
     expect(result.stdout).toContain("readable again");
     expect(result.stdout).toContain(commit);
     expect(result.stdout).not.toContain("STILL MISSING");
     expect(zeroByteObjects()).toEqual([]);
   });
 
-  it("refuses to rebuild an index that holds staged work, unless forced", () => {
+  // The repair is only complete if the objects are readable again AND the
+  // refs came back — so a repair that could not finish must not report
+  // success.
+  it("exits non-zero when an object is genuinely gone", () => {
     damageTheStagedTree();
+    const result = run(["--apply"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("NOT fully repaired");
+  });
+
+  // The index is re-staged from the working tree, so content that is in the
+  // index but NOT in the working tree would be lost. That is the only case
+  // that has to be refused — an ordinary unstaged edit is not at risk.
+  it("refuses to rebuild when the staged content is not in the working tree", () => {
+    stageThenDamageThenEditAgain();
 
     const refused = run(["--apply"]);
     expect(refused.stdout).toContain("SKIPPED");
+    expect(refused.stdout).toContain("would discard what you staged");
     expect(refused.stdout).toContain("--force overrides");
     // The index was left alone, so the damage it names is still there.
     expect(fsckOutput()).toContain("invalid sha1 pointer in cache-tree");
+  });
+
+  it("rebuilds when the staged content IS in the working tree", () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "staged\n");
+    git(["add", "a.txt"]);
+    damageTheStagedTree();
+
+    const result = run(["--apply"]);
+    expect(result.stdout).toContain("index rebuilt");
+    expect(fsckOutput()).not.toContain("invalid sha1 pointer in cache-tree");
+  });
+
+  it("--force overrides the refusal", () => {
+    stageThenDamageThenEditAgain();
 
     const forced = run(["--apply", "--force"]);
     expect(forced.stdout).toContain("index rebuilt");
@@ -156,11 +201,25 @@ describe("git-doctor.mjs", () => {
   });
 
   it("keeps the staged work when it does rebuild the index", () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "staged\n");
+    git(["add", "a.txt"]);
     damageTheStagedTree();
 
-    run(["--apply", "--force"]);
+    run(["--apply"]);
     // The staged content came back from the working tree.
     expect(git(["diff", "--cached", "--name-only"])).toBe("a.txt");
+  });
+
+  // The repair restores what was staged. It must not adopt anything else.
+  it("does not adopt untracked files", () => {
+    fs.writeFileSync(path.join(repo, "notes.md"), "scratch\n");
+    fs.writeFileSync(path.join(repo, "a.txt"), "staged\n");
+    git(["add", "a.txt"]);
+    damageTheStagedTree();
+
+    run(["--apply"]);
+    expect(git(["status", "--porcelain"])).toContain("?? notes.md");
+    expect(git(["diff", "--cached", "--name-only"])).not.toContain("notes.md");
   });
 
   it("refuses, with a clear message, outside a git checkout", () => {

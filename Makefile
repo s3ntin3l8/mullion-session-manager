@@ -81,4 +81,4 @@ git-safe: ## Make this clone safe for concurrent agents (turns git's auto-gc off
 	node scripts/git-safe-clone.mjs
 
 git-doctor: ## Report git object damage in this clone; add APPLY=1 to repair it
-	node scripts/git-doctor.mjs $(if $(APPLY),--apply) $(if $(FORCE),--force)
+	node scripts/git-doctor.mjs $(if $(filter 1 yes true,$(APPLY)),--apply) $(if $(filter 1 yes true,$(FORCE)),--force)
