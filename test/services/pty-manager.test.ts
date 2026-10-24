@@ -1665,6 +1665,90 @@ describe("PtyManager", () => {
       expect(reasons()).toContain("agent_prompt");
     });
 
+    // Issue #1735 — a machine-woken turn is not a turn END.
+    //
+    // Before this, EVERY `progress: done` latched the turn end, so a
+    // session that loops internally tripped the reconciler's
+    // `in_progress -> reviewing` gate MID-LOOP: the task advanced to
+    // "reviewing" while the worker was still writing, and the review agent
+    // judged an incomplete diff in the same worktree.
+    describe("the turn source decides whether a turn ended (issue #1735)", () => {
+      async function sessionWith(): Promise<ReturnType<typeof manager.getOrCreate>> {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        return session;
+      }
+
+      it("does NOT latch the turn end for a loop wakeup", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().lastTurnEndedAt).toBeNull();
+      });
+
+      it("does NOT latch the turn end for a scheduled wakeup, a poll event, or a system turn", async () => {
+        for (const source of ["schedule_wakeup", "poll_event", "system"]) {
+          const session = await sessionWith();
+          session.emitHookEvent({ kind: "turn_start", promptSource: source });
+          session.emitHookEvent({ kind: "progress", phase: "done" });
+          expect(session.toInfo().lastTurnEndedAt).toBeNull();
+        }
+      });
+
+      it("DOES latch the turn end for a human's turn", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "user" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      });
+
+      it("DOES latch the turn end for the non-interactive entrypoint", async () => {
+        // Task Master's own workers run through it: if it did not latch,
+        // Task Master would never reach "reviewing" at all.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "sdk" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      });
+
+      it("DOES latch the turn end when the source is absent — today's behaviour", async () => {
+        // The field is still rolling out upstream, and no other CLI sends
+        // one: on those, nothing changes.
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start" });
+        session.emitHookEvent({ kind: "progress", phase: "done" });
+        expect(session.toInfo().lastTurnEndedAt).not.toBeNull();
+      });
+
+      it("still releases the permission/plan latches for a machine-woken turn", async () => {
+        // Only the turn-END latch is conditional. The agent DID move on, so
+        // the observational latches are released exactly as before.
+        const session = await sessionWith();
+        session.emitHookEvent({
+          kind: "permission_request",
+          tool: "Bash",
+          summary: "run the tests",
+        });
+        expect(session.toInfo().permissionState).not.toBe("idle");
+
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        expect(session.toInfo().permissionState).toBe("idle");
+      });
+
+      it("carries the source on the turn_start event, for the timeline", async () => {
+        const session = await sessionWith();
+        session.emitHookEvent({ kind: "turn_start", promptSource: "loop_wakeup" });
+        const event = session.getEvents().find((e) => e.kind === "status_change");
+        expect(event?.payload).toMatchObject({ phase: "generating", promptSource: "loop_wakeup" });
+      });
+    });
+
     it("beginAgentTurn does not run the attention 'userInput' clear", async () => {
       const session = manager.getOrCreate({
         id: "1",
@@ -8676,6 +8760,7 @@ describe("Session state file persistence (issue #323)", () => {
         elicitationServer: null,
         lastTurnEndedAt: null,
         lastAssistantMessage: null,
+        turnPromptSource: "loop_wakeup",
       },
     };
     fs.writeFileSync(stateFilePath("1"), JSON.stringify(state));
@@ -8691,6 +8776,15 @@ describe("Session state file persistence (issue #323)", () => {
     // scenario, not a corrupt one) — subagentCount survives with an empty
     // registry rather than the restore failing or the count being zeroed.
     expect(info.subagents).toEqual([]);
+    // Issue #1735 — who authored the turn in flight survives the restart, so
+    // the restored session judges its next `progress: done` against the right
+    // source instead of treating it as unknown (which latches). Asserted
+    // BEHAVIOURALLY: the restored source is a machine wakeup, so the turn end
+    // must not latch — which is the whole point of carrying it across a
+    // restart.
+    expect(session.toInfo().lastTurnEndedAt).toBeNull();
+    session.emitHookEvent({ kind: "progress", phase: "done" });
+    expect(session.toInfo().lastTurnEndedAt).toBeNull();
   });
 
   it("restores a persisted subagent registry from state file, keyed correctly on reconstruction", () => {

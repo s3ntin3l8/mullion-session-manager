@@ -1178,6 +1178,10 @@ export class Session {
       // Issue #1734 — restore Codex's rollout path from the state file.
       setCodexTranscriptPath: (path) => this.setCodexTranscriptPath(path),
       setCodexTranscriptHome: (home) => this.setCodexTranscriptHome(home),
+      // Issue #1735 — restore who authored the turn in flight.
+      setTurnPromptSource: (source) => {
+        this.attention.turnPromptSource = source;
+      },
     };
   }
 
@@ -1250,6 +1254,10 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      // Issue #1735 — who authored the turn in flight; persisted so a
+      // resumed session keeps judging its next turn end against the right
+      // source.
+      turnPromptSource: this.attention.turnPromptSource,
       lastAssistantMessage: this.lastAssistantMessage,
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
@@ -2217,6 +2225,14 @@ export class Session {
       },
       set lastTurnEndedAt(v) {
         self.attention.lastTurnEndedAt = v;
+      },
+      // Issue #1735 — who authored the current turn. See
+      // AttentionTracker.turnPromptSource's own doc comment.
+      get turnPromptSource() {
+        return self.attention.turnPromptSource;
+      },
+      set turnPromptSource(v) {
+        self.attention.turnPromptSource = v;
       },
       get turnEndPingSent() {
         return self.attention.turnEndPingSent;

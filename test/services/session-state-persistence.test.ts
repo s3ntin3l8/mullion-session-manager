@@ -350,6 +350,43 @@ describe("applyStoredState", () => {
     });
   });
 
+  // Issue #1735 — who authored the turn in flight.
+  describe("turnPromptSource", () => {
+    function makeSourceRig(): Rig & { source: string | null } {
+      const r = makeRig();
+      const extended: Rig & { source: string | null } = { ...r, source: null };
+      extended.host = {
+        ...r.host,
+        setTurnPromptSource: (source: string | null) => {
+          extended.source = source;
+        },
+      };
+      return extended;
+    }
+
+    it("restores who authored the turn", () => {
+      // A resumed session must keep judging its next `progress: done`
+      // against the right source: an UNKNOWN source latches, and latching
+      // a machine-woken turn is exactly the mid-loop advance this exists
+      // to prevent.
+      const r = makeSourceRig();
+      applyStoredState(r.host, fullState({ turnPromptSource: "loop_wakeup" }), FILE);
+      expect(r.source).toBe("loop_wakeup");
+    });
+
+    it("restores it on the spawn()-reattach path too", () => {
+      const r = makeSourceRig();
+      applyStoredState(r.host, fullState({ turnPromptSource: "sdk" }), RESPAWN);
+      expect(r.source).toBe("sdk");
+    });
+
+    it("leaves the source alone when the state file has none", () => {
+      const r = makeSourceRig();
+      applyStoredState(r.host, fullState(), FILE);
+      expect(r.source).toBeNull();
+    });
+  });
+
   it("stamps latches after every field/background-task restore, in both modes", () => {
     for (const opts of [FILE, RESPAWN]) {
       const r = makeRig();

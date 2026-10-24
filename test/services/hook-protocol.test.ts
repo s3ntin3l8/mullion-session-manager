@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { parseHookMessage, KNOWN_BROWSER_ACTIONS } from "../../src/services/hook-protocol.js";
+import {
+  parseHookMessage,
+  KNOWN_BROWSER_ACTIONS,
+  turnSourceEndsTurn,
+} from "../../src/services/hook-protocol.js";
 import { agentActionSchema } from "../../src/routes/browser-automation.js";
 
 describe("parseHookMessage", () => {
@@ -692,6 +696,55 @@ describe("parseHookMessage", () => {
     it("accepts a turn_start with no fields", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "turn_start" }));
       expect(result).toEqual({ ok: true, message: { kind: "turn_start" } });
+    });
+
+    // Issue #1735 — the optional turn source.
+    it("accepts a turn_start with a promptSource", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "turn_start", promptSource: "loop_wakeup" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "turn_start", promptSource: "loop_wakeup" },
+      });
+    });
+
+    it("rejects a turn_start whose promptSource is not a string", () => {
+      const result = parseHookMessage(JSON.stringify({ kind: "turn_start", promptSource: 42 }));
+      expect(result.ok).toBe(false);
+    });
+  });
+
+  // Issue #1735 — the rule that decides whether a turn ENDED the work.
+  describe("turnSourceEndsTurn", () => {
+    it("latches for a human's turn and for the non-interactive entrypoint", () => {
+      // `sdk` is how Task Master's own workers run: if it did not latch,
+      // Task Master would never reach `reviewing` at all.
+      expect(turnSourceEndsTurn("user")).toBe(true);
+      expect(turnSourceEndsTurn("sdk")).toBe(true);
+    });
+
+    it("does NOT latch for a machine-woken turn", () => {
+      // These are the turns that used to trip the worker->review gate
+      // MID-LOOP, while the worker was still writing the diff the review
+      // agent then judged.
+      expect(turnSourceEndsTurn("loop_wakeup")).toBe(false);
+      expect(turnSourceEndsTurn("schedule_wakeup")).toBe(false);
+      expect(turnSourceEndsTurn("poll_event")).toBe(false);
+      expect(turnSourceEndsTurn("system")).toBe(false);
+    });
+
+    it("latches for an ABSENT source — that is today's behaviour", () => {
+      // The field is still rolling out upstream, and no other CLI sends
+      // one: on those, nothing changes.
+      expect(turnSourceEndsTurn(undefined)).toBe(true);
+      expect(turnSourceEndsTurn(null)).toBe(true);
+    });
+
+    it("latches for an unknown source", () => {
+      // A new upstream value must not silently stop Task Master's
+      // worker->review handoff.
+      expect(turnSourceEndsTurn("something-new")).toBe(true);
     });
   });
 

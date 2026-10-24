@@ -290,6 +290,43 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
       expect(describeEvent(event)).toEqual({ text: "Agent: thinking", attention: false });
     });
 
+    // Issue #1735 — a machine-injected turn is named on the timeline. It is
+    // not a human's turn, and it is exactly the thing that used to trip the
+    // worker's turn-end latch mid-loop.
+    it("names a machine-injected turn by its source", () => {
+      const loop = makeEvent({
+        kind: "status_change",
+        payload: { phase: "generating", promptSource: "loop_wakeup" },
+      });
+      expect(describeEvent(loop)).toEqual({ text: "Turn started: loop wakeup", attention: false });
+
+      const scheduled = makeEvent({
+        kind: "status_change",
+        payload: { phase: "generating", promptSource: "schedule_wakeup" },
+      });
+      expect(describeEvent(scheduled)).toEqual({
+        text: "Turn started: scheduled",
+        attention: false,
+      });
+
+      const sdk = makeEvent({
+        kind: "status_change",
+        payload: { phase: "generating", promptSource: "sdk" },
+      });
+      expect(describeEvent(sdk)).toEqual({
+        text: "Turn started: non-interactive",
+        attention: false,
+      });
+    });
+
+    it("leaves a human's turn to the ordinary phase wording", () => {
+      const event = makeEvent({
+        kind: "status_change",
+        payload: { phase: "generating", promptSource: "user" },
+      });
+      expect(describeEvent(event)).toEqual({ text: "Agent: generating", attention: false });
+    });
+
     it("appends detail when present (issue #321 — opencode retry backoff)", () => {
       const event = makeEvent({
         kind: "status_change",

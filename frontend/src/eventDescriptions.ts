@@ -318,6 +318,20 @@ export function describeEvent(
       if (event.payload.screen === "primary") {
         return { text: "Exited full-screen mode", attention: false };
       }
+      // Issue #1735 — a turn a MACHINE injected is worth naming on the
+      // timeline: it is not a human's turn, and it is exactly the thing that
+      // used to trip the worker's turn-end latch MID-LOOP (advancing the
+      // task to "reviewing" while the worker was still writing). The source
+      // rides on the `status_change` the turn-start hook emits.
+      //
+      // `user` falls through to the `phase` branch below, which already
+      // renders "Agent: generating" — the human case needs no extra words.
+      const promptSource =
+        typeof event.payload.promptSource === "string" ? event.payload.promptSource : null;
+      if (promptSource !== null && promptSource !== "user") {
+        const label = TURN_SOURCE_LABELS[promptSource] ?? promptSource;
+        return { text: `Turn started: ${label}`, attention: false };
+      }
       // Phase 2 (issue #176) — a hook `progress` message maps to
       // status_change with a `phase` field (see pty-manager.ts's
       // Session.emitHookEvent); routine, not attention-worthy. `detail`
@@ -939,6 +953,23 @@ export const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
 };
 
 export const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
+
+/**
+ * Issue #1735 — how a machine-injected turn reads on the timeline.
+ *
+ * The values are Claude Code's own `UserPromptSubmit` `source` field (see
+ * src/services/hook-protocol.ts's turnSourceEndsTurn for the rule that
+ * decides whether such a turn counts as a turn END). `user` is absent on
+ * purpose: a human's turn is the ordinary case and renders as the usual
+ * "Agent: generating".
+ */
+const TURN_SOURCE_LABELS: Record<string, string> = {
+  sdk: "non-interactive",
+  system: "system",
+  loop_wakeup: "loop wakeup",
+  schedule_wakeup: "scheduled",
+  poll_event: "poll",
+};
 
 export interface UnreadEventSummary {
   count: number;

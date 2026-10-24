@@ -281,6 +281,68 @@ export interface AgentSessionHookMessage {
  * `elicitationState`. */
 export interface TurnStartHookMessage {
   kind: "turn_start";
+  /**
+   * Issue #1735 — who authored the turn, as Claude Code's `UserPromptSubmit`
+   * reports it: `user`, `sdk`, `system`, `loop_wakeup`, `schedule_wakeup` or
+   * `poll_event`.
+   *
+   * Claude Code calls the field `source` on the wire; it is renamed here
+   * because `source` alone is ambiguous against this protocol's other
+   * messages (`SessionStartHookMessage.source` means "startup"/"resume").
+   *
+   * OPTIONAL: the field is still rolling out upstream ("Payloads may omit it
+   * while the field rolls out"), and no other CLI sends one — so an absent
+   * value means "unknown", never "user".
+   */
+  promptSource?: string;
+}
+
+/**
+ * Issue #1735 — whether a turn ENDED the agent's work, given who authored it.
+ *
+ * The reconciler's `in_progress -> reviewing` transition fires when the
+ * worker's turn has "genuinely ended" (task-reconciler.ts's
+ * `turnFinishedSinceClaim`). Before this, EVERY `progress: done` latched
+ * that end — so a session that loops internally tripped the gate
+ * MID-LOOP, advancing the task to `reviewing` while the worker was still
+ * working, and letting the review agent judge an incomplete diff in the
+ * same worktree.
+ *
+ * The distinguishing property is not "interactive vs not" — it is "**a
+ * machine re-woke this turn mid-work**":
+ *
+ *  - `user` — a human's turn. It ended.
+ *  - `sdk` — a non-interactive entrypoint (`-p` / Agent SDK), which is
+ *    EXACTLY how Task Master's own workers run. It must latch: if it did
+ *    not, Task Master would never reach `reviewing` at all.
+ *  - `loop_wakeup` — a `/loop` wake mid-work. The work did NOT end.
+ *  - `schedule_wakeup` — a scheduled fire (CronCreate/routine). The work
+ *    did NOT end.
+ *  - `poll_event` — the poll-event channel's enqueue-time pass, before the
+ *    delivery's outcome exists. The work did NOT end.
+ *  - `system` — "peer/channel messages, task notifications,
+ *    auto-continuation" — auto-continuation is precisely the mid-loop case.
+ *
+ * An ABSENT source latches, because that is today's behaviour: on a Claude
+ * Code that does not send the field, nothing changes.
+ */
+export function turnSourceEndsTurn(source: string | undefined | null): boolean {
+  if (source === undefined || source === null) return true;
+  switch (source) {
+    case "user":
+    case "sdk":
+      return true;
+    case "loop_wakeup":
+    case "schedule_wakeup":
+    case "poll_event":
+    case "system":
+      return false;
+    default:
+      // An unknown value is treated as "not a machine injection" — latching
+      // is today's behaviour, and a new upstream value must not silently
+      // stop Task Master's worker->review handoff.
+      return true;
+  }
 }
 
 /** Issue: extend surfaced session statuses — Claude Code's PreCompact/
@@ -1050,8 +1112,22 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return validateCwdChanged(payload);
     case "agent_session":
       return validateAgentSession(payload);
-    case "turn_start":
-      return { ok: true, message: { kind: "turn_start" } };
+    case "turn_start": {
+      // Issue #1735 — the optional turn source. Absent stays absent (the
+      // field is still rolling out upstream), so a payload without it
+      // parses to exactly the message it did before.
+      if (payload.promptSource !== undefined && !isString(payload.promptSource)) {
+        return {
+          ok: false,
+          error: "turn_start requires 'promptSource' to be a string when present",
+        };
+      }
+      const result: TurnStartHookMessage = { kind: "turn_start" };
+      if (isString(payload.promptSource)) {
+        result.promptSource = payload.promptSource;
+      }
+      return { ok: true, message: result };
+    }
     case "compact":
       return validateCompact(payload);
     case "subagent":

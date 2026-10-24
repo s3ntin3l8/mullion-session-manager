@@ -82,6 +82,18 @@ export type StoredStateFields = Pick<
   // would resolve the BACKEND's home, reject its own stored path, and
   // silently stop being watched.
   codexTranscriptHome?: string | null;
+  // Issue #1735 — who authored the current turn, as the CLI's turn-start hook
+  // reported it. Deliberately NOT part of the `Pick<SessionInfo, ...>`
+  // above: it is the latch's INPUT (see hook-protocol.ts's
+  // turnSourceEndsTurn), not a user-facing status, so it must never leak
+  // into the `SessionInfo` API payload — the same posture `termModes`
+  // takes.
+  //
+  // Persisted so a session resumed from its state file keeps knowing who
+  // authored the turn in flight: without it the restored session would treat
+  // the next `progress: done` as an unknown-source turn end and latch it,
+  // which is the very mid-loop advance this exists to prevent.
+  turnPromptSource?: string | null;
 };
 
 /** The plain Session fields applyStoredState assigns through `host.set`. */
@@ -129,6 +141,11 @@ export interface StoredStateHost {
    * restored session keeps looking under the home its own codex ran under.
    */
   setCodexTranscriptHome?(home: string): void;
+  /**
+   * Issue #1735 — restore who authored the turn in flight, so a resumed
+   * session's next `progress: done` is judged against the right source.
+   */
+  setTurnPromptSource?(source: string | null): void;
 }
 
 export interface ApplyStoredStateOptions {
@@ -232,6 +249,13 @@ export function applyStoredState(
   // resolves a home of its own — does not overwrite the persisted one.
   if (typeof s.codexTranscriptHome === "string" && s.codexTranscriptHome.length > 0) {
     host.setCodexTranscriptHome?.(s.codexTranscriptHome);
+  }
+  // Issue #1735 — who authored the turn in flight. Restored so a resumed
+  // session judges its next `progress: done` against the right source: an
+  // unknown source LATCHES, and latching a machine-woken turn is exactly
+  // the mid-loop advance this exists to prevent.
+  if (typeof s.turnPromptSource === "string") {
+    host.setTurnPromptSource?.(s.turnPromptSource);
   }
   // `turnEndPingSent` isn't persisted either, so it would otherwise restore to
   // its class default `false` — wrong when the restored state is an ended,

@@ -1041,6 +1041,28 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
+  // Issue #1735 — the reconciler's half of the turn-source rule.
+  //
+  // The gate opens on "the worker's turn genuinely ended", which is
+  // `lastTurnEndedAt` being latched. A machine-woken turn (a `/loop` wake,
+  // a scheduled fire, a poll pass, an auto-continuation) no longer latches
+  // it — so a session that loops internally no longer advances the task to
+  // "reviewing" MID-LOOP, with the review agent judging an incomplete diff
+  // in the same worktree the worker was still writing.
+  it("does not advance a task whose turn was never latched as ended", async () => {
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () => fakeInfo({ lastTurnEndedAt: null }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    await app.close();
+  });
+
   it("skips a task whose session already exited — that's #282's job, not this pass's", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "claimed");

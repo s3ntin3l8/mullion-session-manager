@@ -59,8 +59,10 @@ import type {
   TodoHookMessage,
   SessionDiffHookMessage,
   ToolDoneHookMessage,
+  TurnStartHookMessage,
   BackgroundTask,
 } from "./hook-protocol.js";
+import { turnSourceEndsTurn } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
 import type { NotificationEvent } from "../shared/types.js";
 import { isPathGitIgnoredCached } from "./git-ignore.js";
@@ -122,6 +124,13 @@ export interface SessionHookContext {
   currentTodo: { content: string; status: string } | null;
   lastTurnEndedAt: number | null;
   turnEndPingSent: boolean;
+  /**
+   * Issue #1735 — who authored the current turn, as the CLI's turn-start
+   * hook reported it. `null` means "unknown", and an unknown source LATCHES
+   * the turn end (today's behaviour). See
+   * hook-protocol.ts's turnSourceEndsTurn for the rule.
+   */
+  turnPromptSource: string | null;
 
   backgroundTasks: BackgroundTask[];
   backgroundTasksAt: number | null;
@@ -393,13 +402,27 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // an honest "the Stop hook fired" signal even while background
         // work is outstanding — session-status.ts's deriveSessionStatus is
         // where the two axes combine, not here.
-        ctx.lastTurnEndedAt = Date.now();
-        // A fresh latch is a NEW turn-end occurrence that deserves its
-        // own single ping, even if a PRIOR latch's ping already fired and
-        // the user hasn't typed anything since (Hermes review, PR #453 —
-        // see turnEndPingSent's own doc comment).
-        ctx.turnEndPingSent = false;
-        ctx.resolveDeferredTurnEnd();
+        //
+        // Issue #1735 — but only for a turn that actually ENDED. A
+        // machine-woken turn (a `/loop` wake, a scheduled fire, a poll
+        // pass, an auto-continuation) produces a `progress: done` that is
+        // byte-identical to a human's turn end, and latching it advanced
+        // the task to `reviewing` MID-LOOP — the review agent then judged
+        // an incomplete diff in the same worktree the worker was still
+        // writing to.
+        //
+        // Everything above this line still happens for a machine-woken
+        // turn: the permission/plan/question latches are released, because
+        // the agent DID move on. Only the turn-END latch is conditional.
+        if (turnSourceEndsTurn(ctx.turnPromptSource)) {
+          ctx.lastTurnEndedAt = Date.now();
+          // A fresh latch is a NEW turn-end occurrence that deserves its
+          // own single ping, even if a PRIOR latch's ping already fired and
+          // the user hasn't typed anything since (Hermes review, PR #453 —
+          // see turnEndPingSent's own doc comment).
+          ctx.turnEndPingSent = false;
+          ctx.resolveDeferredTurnEnd();
+        }
       } else {
         // Settle-window cancel for `agentIdle` (attention-tracker.ts's
         // ATTENTION_SETTLE_MS) — a non-"done" phase (thinking/generating)
@@ -837,7 +860,8 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
   ],
   [
     "turn_start",
-    (ctx) => {
+    (ctx, message) => {
+      const turnStart = message as TurnStartHookMessage;
       // Issue: extend surfaced session statuses — a deterministic "a new
       // turn genuinely started" signal (Claude Code's UserPromptSubmit,
       // remapped — see forwarder-core.mjs). Releases every observational
@@ -880,7 +904,15 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // the next Stop regardless, so there's nothing to preserve here.
       ctx.backgroundTasks = [];
       ctx.backgroundTasksAt = null;
-      ctx.emitEvent("status_change", { phase: "generating" });
+      // Issue #1735 — who authored THIS turn, latched for the turn-end
+      // check below. Carried only when the CLI sent one: an absent source
+      // means "unknown", and an unknown source latches (today's behaviour).
+      ctx.turnPromptSource = turnStart.promptSource ?? null;
+      ctx.emitEvent("status_change", {
+        phase: "generating",
+        // Issue #1735 — the timeline shows which kind of turn this was.
+        promptSource: ctx.turnPromptSource,
+      });
     },
   ],
   [

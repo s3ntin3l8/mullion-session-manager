@@ -113,6 +113,20 @@ export class AttentionTracker {
   // machine's state so there's only ever one timestamp to keep in sync.
   state: AttentionMachineState = INITIAL_ATTENTION_STATE;
   lastTurnEndedAt: number | null = null;
+  // Issue #1735 — who authored the CURRENT turn, as Claude Code's
+  // `UserPromptSubmit` reports it (`user`, `sdk`, `system`, `loop_wakeup`,
+  // `schedule_wakeup`, `poll_event`).
+  //
+  // It is the input to the turn-END latch: `lastTurnEndedAt` says WHEN a
+  // turn ended, and this says WHETHER it did. A `/loop` wake mid-work
+  // produced a `progress: done` that was byte-identical to a human's turn
+  // end, so the reconciler advanced the task to `reviewing` while the
+  // worker was still working.
+  //
+  // `null` means "unknown" — either the field is not rolled out yet, or
+  // this CLI does not send one — and an unknown source LATCHES, which is
+  // today's behaviour.
+  turnPromptSource: string | null = null;
   // Issue #428 — see SessionInfo.backgroundTasks/.backgroundTasksAt's own
   // doc comments.
   backgroundTasks: BackgroundTask[] = [];
