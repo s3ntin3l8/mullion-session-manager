@@ -811,6 +811,19 @@ server keeps serving and every tool reports that it cannot reach a Mullion
 session — the same "serve and degrade cleanly" contract
 `test/mcp/server.test.ts` already pins.
 
+**Verified live against a real mcode 0.6.13** (the isolated-profile run). Two
+things were checked, both in a fully isolated profile with an independent
+login:
+
+| What was checked                                                       | Observed                                                                                                                              |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| mcode starts an MCP server the PLUGIN declares                         | **yes** — the stub server the plugin's `.mcp.json` names was started by mcode (it needs a PTY; driven with pipes it never starts at all) |
+| the MCP child inherits the session's credentials                        | **yes** — the stub recorded `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN`, `MULLION_SOCKET_PATH` and `MULLION_SESSION_ID` from its own environment |
+
+So the credentials really do travel mcode-process → MCP child, and no secret
+is written into any host-global file. The live host's `config.yaml` and
+`permission.json` were byte-identical before and after.
+
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
 `TEMP`, `TMP`, …) — `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and
