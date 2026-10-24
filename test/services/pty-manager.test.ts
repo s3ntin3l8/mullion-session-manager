@@ -309,8 +309,12 @@ describe("PtyManager", () => {
       session.setCodexTranscriptHome("/opt/home-a");
       expect(session.codexHome()).toBe("/opt/home-a");
 
+      // Asserted EXACTLY, not "not the old one": `not.toBe` would also pass
+      // for undefined, "" or any other wrong value, so it proves nothing
+      // about what the new path actually resolves to. With no session env and
+      // no CODEX_HOME in the backend's env, the fallback is `~/.codex`.
       session.setCodexTranscriptPath("/opt/home-b/sessions/rollout-y.jsonl");
-      expect(session.codexHome()).not.toBe("/opt/home-a");
+      expect(session.codexHome()).toBe(path.join(os.homedir(), ".codex"));
     });
   });
 
