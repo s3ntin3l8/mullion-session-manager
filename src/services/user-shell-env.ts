@@ -22,28 +22,37 @@ const RESOLVE_KILL_ESCALATION_MS = 2_000;
 // bytes between these markers are parsed.
 const SENTINEL = "__MULLION_USER_ENV_8f3a1c__";
 
-// `env -0` so values containing newlines can't corrupt the parse. fish has no
-// POSIX `printf`/`env` quoting differences here, but its `-ilc` is a different
-// beast (config.fish, no .zshrc/.bashrc) — only shells known to behave are
-// resolved; anything else falls back to today's behaviour.
+// Prints just $PATH between the markers: `env -0` is not portable (macOS's
+// /usr/bin/env has no -0, and this repo deploys there via launchd). fish has a
+// different startup model (config.fish, no .zshrc/.bashrc) — only shells known
+// to behave are resolved; anything else falls back to today's behaviour.
 const SUPPORTED_SHELLS = new Set(["bash", "zsh"]);
-const RESOLVE_SCRIPT = `printf '%s' '${SENTINEL}'; env -0; printf '%s' '${SENTINEL}'`;
+const RESOLVE_SCRIPT = `printf '%s%s%s' '${SENTINEL}' "$PATH" '${SENTINEL}'`;
+
+export interface UserShellEnvLogger {
+  debug: (obj: object, msg: string) => void;
+  warn: (obj: object, msg: string) => void;
+}
+let log: UserShellEnvLogger | undefined;
+/** Wired once at boot (server.ts); the failure paths below are otherwise
+ * silent, and the symptom they cause is an unexplained "not found on PATH". */
+export function setUserShellEnvLogger(logger: UserShellEnvLogger | undefined): void {
+  log = logger;
+}
 
 let resolved: { path: string } | null = null;
 let settled = false;
 let inflight: Promise<void> | null = null;
 
-/** Pure: extracts PATH from the `env -0` dump between the sentinels, or null. */
+/** Pure: the PATH printed between the sentinels (anything the rc printed
+ * before/after is ignored), or null. */
 export function parseUserShellPath(stdout: string): string | null {
   const start = stdout.indexOf(SENTINEL);
   if (start === -1) return null;
   const from = start + SENTINEL.length;
   const end = stdout.indexOf(SENTINEL, from);
   if (end === -1) return null;
-  for (const entry of stdout.slice(from, end).split("\0")) {
-    if (entry.startsWith("PATH=")) return entry.slice("PATH=".length) || null;
-  }
-  return null;
+  return stdout.slice(from, end) || null;
 }
 
 /** Pure: `base`'s PATH with any `extra` entries it lacks prepended, de-duped, order kept. */
@@ -90,7 +99,10 @@ function runInteractiveShell(shell: string): Promise<string | null> {
       }, RESOLVE_KILL_ESCALATION_MS).unref();
       finish(null);
     }, RESOLVE_TIMEOUT_MS);
-    child.on("error", () => finish(null));
+    child.on("error", (err) => {
+      log?.warn({ err, shell }, "user-shell-env: failed to spawn the interactive shell");
+      finish(null);
+    });
     child.on("close", () => finish(stdout));
   });
 }
@@ -106,16 +118,21 @@ export function resolveUserShellEnv(): Promise<void> {
   if (inflight) return inflight;
   const shell = process.env.SHELL || "";
   if (!SUPPORTED_SHELLS.has(shell.split("/").pop() ?? "")) {
+    log?.debug({ shell }, "user-shell-env: unsupported shell, not resolving the interactive PATH");
     settled = true;
     return Promise.resolve();
   }
   inflight = runInteractiveShell(shell)
     .then((stdout) => {
       const path = stdout === null ? null : parseUserShellPath(stdout);
-      resolved = path ? { path } : null;
-    })
-    .catch(() => {
-      resolved = null;
+      // Only overwrite on success: a failed rescan (rc hiccup, timeout) must
+      // not discard the PATH an earlier resolve already found.
+      if (path) resolved = { path };
+      else
+        log?.warn(
+          { shell },
+          "user-shell-env: no PATH from the interactive shell (timeout or unparseable output); keeping any previous value",
+        );
     })
     .finally(() => {
       settled = true;

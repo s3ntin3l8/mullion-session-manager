@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
 let stdoutToEmit: string | null;
+let spawnError: Error | null = null;
 let spawned: Array<{ shell: string; args: string[]; opts: { stdio?: unknown } }> = [];
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -21,7 +22,10 @@ vi.mock("node:child_process", async (importOriginal) => {
       child.exitCode = null;
       child.signalCode = null;
       child.kill = vi.fn();
-      if (stdoutToEmit !== null) {
+      if (spawnError) {
+        const err = spawnError;
+        setImmediate(() => child.emit("error", err));
+      } else if (stdoutToEmit !== null) {
         const out = stdoutToEmit;
         setImmediate(() => {
           child.stdout.emit("data", Buffer.from(out));
@@ -40,21 +44,21 @@ import {
   parseUserShellPath,
   resetUserShellEnvForTests,
   resolveUserShellEnv,
+  setUserShellEnvLogger,
 } from "../../src/services/user-shell-env.js";
 
 const S = "__MULLION_USER_ENV_8f3a1c__";
-const dump = (...vars: string[]) => `${S}${vars.join("\0")}\0${S}`;
+const dump = (path: string) => `${S}${path}${S}`;
 
 describe("parseUserShellPath", () => {
   it("ignores rc-file noise before and after the sentinels", () => {
-    const out = `Welcome!\n${dump("HOME=/h", "PATH=/a:/b")}\ntrailing banner`;
-    expect(parseUserShellPath(out)).toBe("/a:/b");
+    expect(parseUserShellPath(`Welcome!\n${dump("/a:/b")}\ntrailing banner`)).toBe("/a:/b");
   });
 
-  it("returns null without both sentinels or without PATH", () => {
-    expect(parseUserShellPath("PATH=/a")).toBeNull();
-    expect(parseUserShellPath(`${S}PATH=/a\0`)).toBeNull();
-    expect(parseUserShellPath(dump("HOME=/h"))).toBeNull();
+  it("returns null without both sentinels or with an empty PATH", () => {
+    expect(parseUserShellPath("/a")).toBeNull();
+    expect(parseUserShellPath(`${S}/a`)).toBeNull();
+    expect(parseUserShellPath(dump(""))).toBeNull();
   });
 });
 
@@ -76,7 +80,8 @@ describe("resolveUserShellEnv", () => {
 
   beforeEach(() => {
     spawned = [];
-    stdoutToEmit = dump("PATH=/home/u/.minimax-code/bin:/usr/bin");
+    spawnError = null;
+    stdoutToEmit = dump("/home/u/.minimax-code/bin:/usr/bin");
     process.env.SHELL = "/usr/bin/zsh";
     delete process.env.MULLION_RESOLVE_INTERACTIVE_ENV;
     resetUserShellEnvForTests();
@@ -87,6 +92,7 @@ describe("resolveUserShellEnv", () => {
     if (savedOptOut === undefined) delete process.env.MULLION_RESOLVE_INTERACTIVE_ENV;
     else process.env.MULLION_RESOLVE_INTERACTIVE_ENV = savedOptOut;
     resetUserShellEnvForTests();
+    setUserShellEnvLogger(undefined);
   });
 
   it("runs one interactive shell for concurrent callers and caches the PATH", async () => {
@@ -109,6 +115,43 @@ describe("resolveUserShellEnv", () => {
     await resolveUserShellEnv();
     invalidateUserShellEnv();
     expect(getUserShellPath()).toBe("/home/u/.minimax-code/bin:/usr/bin");
+  });
+
+  it("keeps the previous PATH when a rescan fails", async () => {
+    await resolveUserShellEnv();
+    invalidateUserShellEnv();
+    stdoutToEmit = "garbage";
+    await resolveUserShellEnv();
+    expect(spawned).toHaveLength(2);
+    expect(getUserShellPath()).toBe("/home/u/.minimax-code/bin:/usr/bin");
+  });
+
+  it("logs why it fell back: unparseable output, spawn error, unsupported shell", async () => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    setUserShellEnvLogger(logger);
+
+    stdoutToEmit = "garbage";
+    await resolveUserShellEnv();
+    expect(logger.warn).toHaveBeenCalledWith(
+      { shell: "/usr/bin/zsh" },
+      expect.stringContaining("no PATH from the interactive shell"),
+    );
+
+    resetUserShellEnvForTests();
+    spawnError = new Error("ENOENT");
+    await resolveUserShellEnv();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: spawnError }),
+      expect.stringContaining("failed to spawn"),
+    );
+
+    resetUserShellEnvForTests();
+    process.env.SHELL = "/usr/bin/fish";
+    await resolveUserShellEnv();
+    expect(logger.debug).toHaveBeenCalledWith(
+      { shell: "/usr/bin/fish" },
+      expect.stringContaining("unsupported shell"),
+    );
   });
 
   it("falls back to null on unparseable output", async () => {

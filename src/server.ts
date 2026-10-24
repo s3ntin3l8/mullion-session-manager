@@ -1,5 +1,6 @@
 import { buildApp } from "./app.js";
 import { getCachedAgents } from "./services/agent-detect.js";
+import { setUserShellEnvLogger } from "./services/user-shell-env.js";
 
 async function start() {
   const app = await buildApp();
@@ -24,6 +25,7 @@ async function start() {
       host: app.config.HOST,
     });
     app.log.info(`Server listening at ${address}`);
+    setUserShellEnvLogger(app.log);
     // Warm the launcher/agent probe cache (login-shell `command -v` per
     // binary) so the first palette open doesn't pay for it. Fire-and-forget:
     // it must never delay or fail boot.
