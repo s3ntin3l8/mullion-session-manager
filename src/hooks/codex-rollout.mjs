@@ -41,10 +41,31 @@
 // the rate-limit-shaped ones count here: a `server_overloaded` or an
 // `internal_server_error` is a DIFFERENT failure and must not buy a task a
 // rate-limit grace window.
-import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+//
+// THE PATH IS UNTRUSTED.
+//
+// The rollout path arrives over the hook channel, and hook-protocol.ts
+// documents that channel as untrusted: any subprocess holding the hook token
+// can forge a `session_start`. So the path is NOT taken at face value. It
+// must resolve inside codex's OWN sessions directory, it must be a regular
+// file (not a FIFO — opening one for reading blocks the event loop
+// forever — and not a device or a directory), and the file is opened with
+// O_NOFOLLOW and re-checked with fstat so a symlink swapped in between the
+// check and the open cannot be followed.
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
 
 /** How many bytes of the rollout's tail to read. A rollout grows for the
- * whole session, but the signal we want — the last `task_complete` — is
+ * whole session, but the signal we want — the last completed turn — is
  * always in the final few lines. 256 KiB is far more than a few hundred
  * lines of JSONL need, and small enough to keep the per-tick read cheap. */
 export const DEFAULT_TAIL_BYTES = 256 * 1024;
@@ -69,6 +90,36 @@ const STATUS_CARRYING_VARIANT = "response_too_many_failed_attempts";
 const TOO_MANY_REQUESTS = 429;
 
 /**
+ * The payload tags that mean "this turn completed".
+ *
+ * Upstream defines the event as
+ * `#[serde(rename = "task_complete", alias = "turn_complete")]` for v2
+ * interop (codex-rs/protocol/src/protocol.rs), so a v2 rollout writes
+ * `turn_complete` and a v1 rollout writes `task_complete`. Both are
+ * accepted: reading only one of them would silently report nothing on the
+ * other.
+ */
+const COMPLETED_TAGS = new Set(["task_complete", "turn_complete"]);
+
+/**
+ * Codex's home directory — the same rule as `resolveCodexHome()` in
+ * src/services/hook-adapters/codex.ts (`CODEX_HOME` or `~/.codex`).
+ *
+ * Duplicated here rather than imported because that module imports the
+ * adapter graph, and this file is plain ESM on the hook side of the fence.
+ * test/hooks/codex-rate-limit.test.ts pins the two in agreement, so they
+ * cannot drift apart silently.
+ */
+export function resolveCodexHome() {
+  return process.env.CODEX_HOME || path.join(homedir(), ".codex");
+}
+
+/** The directory codex writes its session rollouts into. */
+export function codexSessionsDir() {
+  return path.join(resolveCodexHome(), "sessions");
+}
+
+/**
  * The signal a rollout's last completed turn reports.
  *
  * `rateLimited` is false for every non-quota failure — including an
@@ -79,6 +130,20 @@ export class CodexRateLimitSignal {
   constructor({ turnId, rateLimited, status, variant, message }) {
     /** The turn the signal belongs to, so a caller can report it once. */
     this.turnId = turnId;
+    /**
+     * A stable identity for the completed turn this signal describes, used
+     * to report each failed turn exactly once.
+     *
+     * `turn_id` is codex's own id and is what we want. It is NOT always
+     * present, though, so this falls back to the rollout envelope's
+     * `ordinal` (the file's own monotonically increasing line counter) and
+     * then to `completed_at`. When none of them is available the signal
+     * carries `null`, and the caller must NOT report it: with no stable
+     * identity there is no way to tell "the same failed turn" from "a new
+     * one", and re-reporting the same failure on every tick would restart
+     * the rate-limit grace window forever.
+     */
+    this.identity = turnId;
     /** True only for a quota-shaped provider refusal. */
     this.rateLimited = rateLimited;
     /** The provider's HTTP status, when codex recorded one. */
@@ -91,27 +156,78 @@ export class CodexRateLimitSignal {
 }
 
 /**
+ * True when `candidate` really is a file inside codex's sessions directory.
+ *
+ * Three checks, each closing a hole the previous one leaves:
+ *
+ * 1. `lstatSync` (NOT `statSync`) and `isFile()` — a symlink is not a
+ *    regular file, so it is rejected outright, and a FIFO or a device is
+ *    rejected too. Opening a FIFO for reading blocks the event loop
+ *    forever, which is the sharpest edge of "any readable file gets read".
+ * 2. The REAL path of the file must sit inside the REAL path of codex's
+ *    sessions directory. The real path is what the kernel will actually
+ *    open, so this is the check that defeats a `..` traversal or a symlinked
+ *    parent directory.
+ * 3. The directory check is done against a real path too, so a symlinked
+ *    sessions directory does not make every path outside it look inside it.
+ */
+export function isCodexRolloutPath(candidate) {
+  if (typeof candidate !== "string" || candidate.length === 0) return false;
+  let stat;
+  try {
+    stat = lstatSync(candidate);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile()) return false;
+
+  let sessionsDir;
+  let fileRealPath;
+  try {
+    sessionsDir = realpathSync(codexSessionsDir());
+    fileRealPath = realpathSync(candidate);
+  } catch {
+    return false;
+  }
+  const relative = path.relative(sessionsDir, fileRealPath);
+  // A path outside the directory (or the directory itself) is not a
+  // rollout. `relative` starting with ".." is the outside case.
+  if (relative.length === 0 || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Reads the tail of a rollout file and reports the last completed turn's
  * error, if any.
  *
- * Returns null when the file is missing, unreadable, empty, or holds no
- * completed turn — every one of which means "no signal", never "no rate
- * limit" in a way a caller could mistake for a positive finding.
+ * Returns null when the path is not a codex rollout, when the file is
+ * missing or unreadable, when it is empty, or when it holds no completed
+ * turn — every one of which means "no signal", never "no rate limit" in a
+ * way a caller could mistake for a positive finding.
  */
 export function readCodexRateLimitSignal(rolloutPath, options = {}) {
-  if (typeof rolloutPath !== "string" || rolloutPath.length === 0) return null;
+  if (!isCodexRolloutPath(rolloutPath)) return null;
   const tailBytes = options.tailBytes ?? DEFAULT_TAIL_BYTES;
 
   let handle;
   try {
-    if (!existsSync(rolloutPath)) return null;
-    handle = openSync(rolloutPath, "r");
-    const size = fstatSync(handle).size;
-    if (size === 0) return null;
-    const length = Math.min(size, tailBytes);
+    // O_NOFOLLOW: if the path was swapped for a symlink between the lstat
+    // above and this open, the open FAILS rather than following it. The
+    // fstat below then re-checks the handle we actually hold.
+    handle = openSync(rolloutPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stat = fstatSync(handle);
+    if (!stat.isFile()) return null;
+    if (stat.size === 0) return null;
+    const length = Math.min(stat.size, tailBytes);
     const buffer = Buffer.alloc(length);
-    readSync(handle, buffer, 0, length, size - length);
-    return parseCodexRateLimitSignal(buffer.toString("utf8"));
+    // readSync may return FEWER bytes than asked for (a short read). Using
+    // the buffer as-is would leave NUL padding at the end, and the trailing
+    // line — the newest one, the one this reader exists to read — would
+    // fail to parse.
+    const read = readSync(handle, buffer, 0, length, stat.size - length);
+    return parseCodexRateLimitSignal(buffer.subarray(0, read).toString("utf8"));
   } catch {
     // A rollout that cannot be read (rotated away, a permissions problem, a
     // half-written file) is "no signal" — never a reason to fail a task.
@@ -140,6 +256,7 @@ export function parseCodexRateLimitSignal(tailText) {
   // is skipped rather than aborting the parse.
   const lines = tailText.split("\n");
   let completed = null;
+  let completedOrdinal = null;
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.length === 0 || !trimmed.startsWith("{")) continue;
@@ -151,10 +268,21 @@ export function parseCodexRateLimitSignal(tailText) {
     }
     if (parsed?.type !== "event_msg") continue;
     const payload = parsed.payload;
-    if (payload?.type !== "task_complete") continue;
+    if (!COMPLETED_TAGS.has(payload?.type)) continue;
     completed = payload;
+    completedOrdinal = typeof parsed.ordinal === "number" ? parsed.ordinal : null;
   }
   if (completed === null) return null;
+
+  // The identity of this completed turn, most specific first.
+  const identity =
+    typeof completed.turn_id === "string" && completed.turn_id.length > 0
+      ? completed.turn_id
+      : completedOrdinal !== null
+        ? `ordinal:${completedOrdinal}`
+        : typeof completed.completed_at === "number"
+          ? `completed_at:${completed.completed_at}`
+          : null;
 
   const error = completed.error ?? null;
   if (error === null) {
@@ -162,7 +290,7 @@ export function parseCodexRateLimitSignal(tailText) {
     // so a caller can see that the rollout IS being read and the last turn
     // was fine — which is what clears a previously reported rate limit.
     return new CodexRateLimitSignal({
-      turnId: typeof completed.turn_id === "string" ? completed.turn_id : null,
+      turnId: identity,
       rateLimited: false,
       status: null,
       variant: null,
@@ -186,7 +314,7 @@ export function parseCodexRateLimitSignal(tailText) {
     (variant === STATUS_CARRYING_VARIANT && status === TOO_MANY_REQUESTS);
 
   return new CodexRateLimitSignal({
-    turnId: typeof completed.turn_id === "string" ? completed.turn_id : null,
+    turnId: identity,
     rateLimited,
     status,
     variant,

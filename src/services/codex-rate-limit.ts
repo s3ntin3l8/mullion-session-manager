@@ -101,18 +101,40 @@ export async function detectCodexRateLimits(app: FastifyInstance): Promise<void>
     // own error state is cleared by the next `progress`/`turn_start` hook.
     if (!signal.rateLimited) continue;
 
-    const turnId = signal.turnId;
-    if (turnId !== null && app.pty.reportedCodexRateLimitTurnId(id) === turnId) continue;
+    const identity = signal.turnId;
+    // The identity of the failed turn. `null` means the rollout carried no
+    // usable identity (no `turn_id`, no `ordinal`, no `completed_at`), so
+    // there is no way to tell "the same failed turn" from "a new one" — and
+    // re-reporting the same failure on every tick would restart the
+    // rate-limit grace window forever, so it is NOT reported at all.
+    if (identity === null) {
+      app.log.warn(
+        { sessionId: id },
+        "[codex-rate-limit] a rate-limited codex turn had no usable identity — not reporting it",
+      );
+      continue;
+    }
+    if (app.pty.reportedCodexRateLimitTurnId(id) === identity) continue;
 
     try {
-      app.pty.emitHookEvent(id, {
-        kind: "stop_failure",
-        error: signal.message ?? "codex reported a provider rate limit",
-        errorType: RATE_LIMIT_ERROR_DETAIL,
-      });
-      if (turnId !== null) app.pty.setReportedCodexRateLimitTurnId(id, turnId);
+      // `provesHookPipeline: false` — this message is NOT evidence that the
+      // session's hook pipeline fires. It is Mullion's own synthesis from the
+      // rollout file, and latching `hooksProven` from it would let a session
+      // read as hook-proven when no hook has ever been delivered to it (the
+      // one signal codex's `/hooks` trust gate would otherwise keep honest).
+      app.pty.emitHookEvent(
+        id,
+        {
+          kind: "stop_failure",
+          error: signal.message ?? "codex reported a provider rate limit",
+          errorType: RATE_LIMIT_ERROR_DETAIL,
+        },
+        Date.now(),
+        { provesHookPipeline: false },
+      );
+      app.pty.setReportedCodexRateLimitTurnId(id, identity);
       app.log.info(
-        { sessionId: id, turnId, status: signal.status, variant: signal.variant },
+        { sessionId: id, turnId: identity, status: signal.status, variant: signal.variant },
         "[codex-rate-limit] reported a provider rate limit for a codex session",
       );
     } catch (err) {

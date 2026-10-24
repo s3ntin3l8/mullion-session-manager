@@ -2290,14 +2290,30 @@ export class Session {
   // captured slightly earlier — see emitAttentionSignalDeferred's own doc
   // comment for the failure this caused (test/services/pty-manager.test.ts's
   // D4 sweep test, intermittently on a loaded CI runner).
-  emitHookEvent(message: HookMessage, now: number = Date.now()): void {
+  emitHookEvent(
+    message: HookMessage,
+    now: number = Date.now(),
+    options?: { provesHookPipeline?: boolean },
+  ): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
     // fires, so this latches unconditionally before dispatch, ahead of every
     // handler's own early return. See `hooksProven`'s field doc for why this
     // can't be the ONLY place it latches (Claude Code's own first hook,
     // SessionStart, never reaches this method at all — see markHooksProven).
-    this.hooksProven = true;
+    //
+    // Issue #1734 — `provesHookPipeline: false` opts OUT of that latch, for
+    // the one caller whose message is NOT a delivered hook: the codex
+    // rate-limit sweep synthesizes a `stop_failure` from the session's
+    // rollout file (src/services/codex-rate-limit.ts). That message is
+    // Mullion's own reading of a file, not evidence that the hook pipeline
+    // fires — and codex's `/hooks` trust gate means "a hook has been
+    // delivered" is exactly the signal that keeps an untrusted codex
+    // session honest. Latching it from a synthesized message would let a
+    // session read as hook-proven with no hook ever delivered to it.
+    if (options?.provesHookPipeline !== false) {
+      this.hooksProven = true;
+    }
     // PR 33a (Wave 6) — was a 24-case switch; now a thin dispatch through
     // HOOK_HANDLERS (hook-handlers.ts), one entry per hook kind, each
     // operating over the narrow SessionHookContext built by
@@ -2335,6 +2351,18 @@ export class Session {
    */
   markHooksProven(): void {
     this.hooksProven = true;
+  }
+
+  /**
+   * Whether this session's hook pipeline has ever delivered a message.
+   *
+   * Issue #1734 — a READ accessor for a latch that nothing currently reads
+   * (the silence watchdog stopped gating on it), added so the invariant the
+   * codex rate-limit sweep depends on is enforceable: a message that
+   * Mullion synthesized itself must never make a session look hook-proven.
+   */
+  areHooksProven(): boolean {
+    return this.hooksProven;
   }
 
   /**
@@ -4055,8 +4083,13 @@ export class PtyManager {
    * but a session could in principle be killed in the gap between resolving
    * a message's token and this call reaching it, so the no-op fallback
    * matters, not just consistency with markEventsSeen(). */
-  emitHookEvent(id: string, message: HookMessage): void {
-    this.sessions.get(id)?.emitHookEvent(message);
+  emitHookEvent(
+    id: string,
+    message: HookMessage,
+    now?: number,
+    options?: { provesHookPipeline?: boolean },
+  ): void {
+    this.sessions.get(id)?.emitHookEvent(message, now, options);
   }
 
   /** Follow-up to #275 (gap #1) — see Session.markHooksProven's doc comment
@@ -4065,6 +4098,14 @@ export class PtyManager {
    * posture as every other per-id lookup in this class. */
   markHooksProven(id: string): void {
     this.sessions.get(id)?.markHooksProven();
+  }
+
+  /**
+   * Issue #1734 — whether this session's hook pipeline has ever delivered a
+   * message. See Session.areHooksProven's own doc comment.
+   */
+  areHooksProven(id: string): boolean {
+    return this.sessions.get(id)?.areHooksProven() ?? false;
   }
 
   /** Issue #1734 — see Session.setCodexTranscriptPath's doc comment. Same

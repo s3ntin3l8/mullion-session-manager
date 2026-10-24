@@ -12,21 +12,26 @@
 // The fixture text below is the shape a real codex-cli 0.164.0 rollout
 // writes, captured from a live session whose API answered 429 (see the PR
 // body for the spike's raw output).
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import path, { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  codexSessionsDir,
+  isCodexRolloutPath,
   parseCodexRateLimitSignal,
   readCodexRateLimitSignal,
+  resolveCodexHome,
 } from "../../src/hooks/codex-rollout.mjs";
 import { buildForwarderMessage } from "../../src/hooks/forwarder-core.mjs";
+import { resolveCodexHome as resolveCodexHomeFromAdapter } from "../../src/services/hook-adapters/codex.js";
 
 /** A rollout line: the outer envelope codex writes around every event. */
-function rolloutLine(payload: Record<string, unknown>): string {
+function rolloutLine(payload: Record<string, unknown>, ordinal = 42): string {
   return JSON.stringify({
     timestamp: "2026-10-24T08:45:21.000Z",
-    ordinal: 42,
+    ordinal,
     type: "event_msg",
     payload,
   });
@@ -165,6 +170,26 @@ describe("parseCodexRateLimitSignal", () => {
     expect(signal!.turnId).toBe("01a16ca8-2666-79f1-9f91-c026a979190e");
   });
 
+  it("accepts the v2 `turn_complete` tag as well as `task_complete`", () => {
+    // Upstream defines the event as
+    // `#[serde(rename = "task_complete", alias = "turn_complete")]` for v2
+    // interop (codex-rs/protocol/src/protocol.rs), so a v2 rollout writes
+    // `turn_complete`. Reading only one tag would silently report nothing.
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine({
+        type: "turn_complete",
+        turn_id: "turn-v2",
+        error: {
+          message: "429 Too Many Requests",
+          codex_error_info: { response_too_many_failed_attempts: { http_status_code: 429 } },
+        },
+      }),
+    );
+    expect(signal).not.toBeNull();
+    expect(signal!.rateLimited).toBe(true);
+    expect(signal!.turnId).toBe("turn-v2");
+  });
+
   it("skips a partial first line from a tail read", () => {
     // The tail of a rollout can begin mid-line; a partial line must not
     // abort the parse of the lines after it.
@@ -182,25 +207,114 @@ describe("parseCodexRateLimitSignal", () => {
       ),
     ).toBeNull();
   });
+
+  it("falls back to the envelope's ordinal for a turn with no turn_id", () => {
+    // The identity is what lets a caller report each failed turn exactly
+    // once. `turn_id` is codex's own id and is what we want, but it is not
+    // always present — the envelope's `ordinal` is a stable fallback.
+    const signal = parseCodexRateLimitSignal(
+      rolloutLine(
+        {
+          type: "task_complete",
+          error: {
+            message: "429 Too Many Requests",
+            codex_error_info: { response_too_many_failed_attempts: { http_status_code: 429 } },
+          },
+        },
+        77,
+      ),
+    );
+    expect(signal!.turnId).toBe("ordinal:77");
+  });
+
+  it("has no identity at all when the rollout carries none", () => {
+    // With no identity there is no way to tell "the same failed turn" from
+    // "a new one", so the caller must not report it.
+    const line = JSON.stringify({
+      type: "event_msg",
+      payload: {
+        type: "task_complete",
+        error: {
+          message: "429 Too Many Requests",
+          codex_error_info: { response_too_many_failed_attempts: { http_status_code: 429 } },
+        },
+      },
+    });
+    const signal = parseCodexRateLimitSignal(line);
+    expect(signal!.rateLimited).toBe(true);
+    expect(signal!.turnId).toBeNull();
+  });
 });
 
-describe("readCodexRateLimitSignal", () => {
+describe("the rollout path is untrusted", () => {
+  const originalHome = process.env.CODEX_HOME;
+  let tempHome: string;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), "codex-home-"));
+    process.env.CODEX_HOME = tempHome;
+  });
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalHome;
+  });
+
   function writeRollout(contents: string): string {
-    const dir = mkdtempSync(join(tmpdir(), "codex-rollout-test-"));
+    const dir = join(codexSessionsDir(), "2026", "10", "24");
+    mkdirSync(dir, { recursive: true });
     const path = join(dir, "rollout-2026-10-24T08-45-21-abc.jsonl");
     writeFileSync(path, contents);
     return path;
   }
 
-  it("reads a real file and finds the rate limit", () => {
+  it("reads a real file inside codex's sessions directory", () => {
     const path = writeRollout([RATE_LIMITED_TASK_COMPLETE, ""].join("\n"));
     const signal = readCodexRateLimitSignal(path);
     expect(signal!.rateLimited).toBe(true);
     expect(signal!.status).toBe(429);
   });
 
+  it("refuses a path OUTSIDE codex's sessions directory", () => {
+    // The path arrives over the hook channel, which hook-protocol.ts
+    // documents as untrusted — any subprocess holding the token can forge a
+    // `session_start`. Reading an arbitrary file is not acceptable.
+    const outside = join(mkdtempSync(join(tmpdir(), "codex-outside-")), "secret.jsonl");
+    writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
+    expect(isCodexRolloutPath(outside)).toBe(false);
+    expect(readCodexRateLimitSignal(outside)).toBeNull();
+  });
+
+  it("refuses a path that TRAVERSES out of the sessions directory", () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "codex-outside-")), "secret.jsonl");
+    writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
+    const traversal = join(codexSessionsDir(), "..", "..", "..", "..", path.basename(outside));
+    expect(isCodexRolloutPath(traversal)).toBe(false);
+  });
+
+  it("refuses a FIFO rather than opening it", () => {
+    // Opening a FIFO for reading blocks the event loop forever.
+    const dir = join(codexSessionsDir(), "2026", "10", "24");
+    mkdirSync(dir, { recursive: true });
+    const fifo = join(dir, "rollout-fifo.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    expect(isCodexRolloutPath(fifo)).toBe(false);
+    expect(readCodexRateLimitSignal(fifo)).toBeNull();
+  });
+
+  it("refuses a symlink", () => {
+    const dir = join(codexSessionsDir(), "2026", "10", "24");
+    mkdirSync(dir, { recursive: true });
+    const outside = join(mkdtempSync(join(tmpdir(), "codex-outside-")), "secret.jsonl");
+    writeFileSync(outside, RATE_LIMITED_TASK_COMPLETE);
+    const link = join(dir, "rollout-link.jsonl");
+    symlinkSync(outside, link);
+    expect(isCodexRolloutPath(link)).toBe(false);
+    expect(readCodexRateLimitSignal(link)).toBeNull();
+  });
+
   it("returns null for a missing file rather than throwing", () => {
-    expect(readCodexRateLimitSignal(join(tmpdir(), "definitely-not-here-1734.jsonl"))).toBeNull();
+    expect(readCodexRateLimitSignal(join(codexSessionsDir(), "gone-1734.jsonl"))).toBeNull();
   });
 
   it("returns null for an empty file", () => {
@@ -210,6 +324,16 @@ describe("readCodexRateLimitSignal", () => {
 
   it("returns null for an empty path", () => {
     expect(readCodexRateLimitSignal("")).toBeNull();
+  });
+});
+
+describe("the codex home resolution agrees with the adapter's", () => {
+  it("resolves the same directory the codex adapter writes its hooks to", () => {
+    // codex-rollout.mjs cannot import the adapter module (plain ESM on the
+    // hook side of the fence), so it resolves the home itself. This pins the
+    // two in agreement so they cannot drift apart silently.
+    expect(resolveCodexHome()).toBe(resolveCodexHomeFromAdapter());
+    expect(codexSessionsDir()).toBe(join(resolveCodexHomeFromAdapter(), "sessions"));
   });
 });
 

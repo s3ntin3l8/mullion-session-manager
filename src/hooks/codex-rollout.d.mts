@@ -10,15 +10,21 @@ export interface CodexRateLimitSignalOptions {
   tailBytes?: number;
 }
 
+export interface CodexRateLimitSignalInit {
+  turnId: string | null;
+  rateLimited: boolean;
+  status: number | null;
+  variant: string | null;
+  message: string | null;
+}
+
 export class CodexRateLimitSignal {
-  constructor(init: {
-    turnId: string | null;
-    rateLimited: boolean;
-    status: number | null;
-    variant: string | null;
-    message: string | null;
-  });
-  /** The turn the signal belongs to, so a caller can report it once. */
+  constructor(init: CodexRateLimitSignalInit);
+  /**
+   * A stable identity for the completed turn this signal describes — used to
+   * report each failed turn exactly once. `null` when the rollout carried no
+   * identity at all, in which case the caller must NOT report the signal.
+   */
   turnId: string | null;
   /** True only for a quota-shaped provider refusal. */
   rateLimited: boolean;
@@ -30,9 +36,11 @@ export class CodexRateLimitSignal {
   message: string | null;
 }
 
+export function resolveCodexHome(): string;
+export function codexSessionsDir(): string;
+export function isCodexRolloutPath(candidate: string): boolean;
 export function readCodexRateLimitSignal(
   rolloutPath: string,
   options?: CodexRateLimitSignalOptions,
 ): CodexRateLimitSignal | null;
-
 export function parseCodexRateLimitSignal(tailText: string): CodexRateLimitSignal | null;
