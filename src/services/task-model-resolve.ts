@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
-import { validateCliModel } from "./hook-adapters/shared.js";
+import { validateCliModel, validateOpenCodeModel } from "./hook-adapters/shared.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -33,9 +33,17 @@ const SMALL_MODEL_LINE_RE = /^\s*SmallModel:\s*(\S+)\s*$/im;
 // plain substring search — same semantics (a `/` strictly between the first
 // and last character; a `/` immediately at either boundary, e.g. "/foo" or
 // "foo/", doesn't count on its own), but linear and non-backtracking.
+//
+// Issue #1731 — the implementation now lives in hook-adapters/shared.ts as
+// `validateOpenCodeModel`, beside its sibling `validateCliModel`. It has to
+// be reachable from hook-adapters/mullion-bundle.ts (which validates a
+// project's reviewer agent's `opencode-model:` key), and this module
+// imports the adapter graph — so keeping the implementation here would make
+// mullion-bundle.ts → task-model-resolve.ts → hook-adapters/index.ts →
+// opencode.ts → mullion-bundle.ts a cycle. `validateModel` stays exported
+// from here: this is the name the resolution chain and its tests use.
 export function validateModel(value: string): boolean {
-  if (value.length < 3 || /\s/.test(value)) return false;
-  return value.slice(1, -1).includes("/");
+  return validateOpenCodeModel(value);
 }
 
 function parseModelDirective(body: string | null): string | null {

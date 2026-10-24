@@ -39,6 +39,12 @@ name: my-project-reviewer
 description: "Review a diff or PR in this project for correctness against this project's own domain invariants, not just general code quality."
 tools: Read, Grep, Glob, Bash
 model: inherit
+# Issue #1731 — optional: the model this reviewer runs on under OPENCODE, in
+# opencode's own "provider/model" shape (optionally "provider/model#variant").
+# The plain "model:" key above is Claude Code's; opencode's agent config takes
+# only "provider/model", so a bare alias there would be dropped. Leave this
+# line out to let opencode pick its own default.
+# opencode-model: anthropic/claude-sonnet-4-5
 ---
 
 You are reviewing a change in this project. Your job is to catch violations
@@ -208,7 +214,10 @@ const FIELD_CONFIGS: ToolingFieldConfig[] = [
       "mullion-reviewer.md. Composed into Claude Code's plugin bundle verbatim; translated " +
       "automatically for opencode (its own agent format can't carry the tools:/model: fields " +
       "here, so those are stripped for that one CLI only — the description and body still " +
-      "apply everywhere). codex has no subagent concept at all; agy has one, but nothing " +
+      "apply everywhere). To pin the reviewer's model under opencode, add an " +
+      'opencode-model: field in opencode\'s own "provider/model" shape; it is stripped ' +
+      "from Claude Code's copy, which uses the plain model: field instead. " +
+      "codex has no subagent concept at all; agy has one, but nothing " +
       "delivers this project-specific field to it today (see the notice below).",
     deleteConfirmTitle: "Delete this project's reviewer agent? This can't be undone.",
     template: REVIEWER_AGENT_TEMPLATE,

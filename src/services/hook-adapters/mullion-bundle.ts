@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSkillFrontmatter } from "../skills.js";
 import { isDangerousSkillName } from "./skill-name.js";
+import { validateOpenCodeModel } from "./shared.js";
 
 // Issue: Mullion's own agent-facing tooling (originally just the
 // `mullion-host` skill, a repo-agnostic pointer to the per-session agent
@@ -650,7 +651,18 @@ export function composeClaudeSessionBundle(
     if (name) {
       files.push({
         path: path.join(destDir, "agents", `${name}.md`),
-        contents: content.reviewerAgent,
+        // Issue #1731 — the `opencode-model:` key is stripped from Claude
+        // Code's copy. The frontmatter blob is shared by all four CLIs, and
+        // Claude Code's copy is that CLI's NATIVE agent format — where
+        // `model:` is a first-class key ("inherit" matches the spawning
+        // conversation) but `opencode-model:` is a key Claude Code knows
+        // nothing about. Claude Code's agent loader warns about
+        // unrecognised frontmatter keys, so leaving it in would put a
+        // warning in every session that used the reviewer. Stripping it
+        // here keeps the two CLIs' semantics apart AND keeps the console
+        // clean; the plain `model:` key stays, because Claude Code honours
+        // it natively.
+        contents: stripOpenCodeModelKey(content.reviewerAgent),
       });
       addedProjectContent = true;
     }
@@ -703,7 +715,16 @@ export function deriveOpenCodeReviewerAgentFile(
   const parsed = parseSkillFrontmatter(raw);
   if (!parsed || isDangerousSkillName(parsed.name)) return null;
   const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
-  const contents = `---\ndescription: ${JSON.stringify(parsed.description)}\nmode: subagent\n---\n\n${body}\n`;
+  const model = resolveOpenCodeReviewerModel(parsed.opencodeModel);
+  // Issue #1731 — `model:` is emitted ONLY when the project named a valid
+  // opencode model. opencode's `Config.Agent.model` is `provider/model`
+  // (optionally `#variant`), so a bare Claude alias is not a valid value
+  // here; emitting one would have opencode drop the key (or, on the older
+  // 1.18.23 loader this comment originally described, hard-fail the whole
+  // config). Dropping it ourselves keeps the failure visible as a warning
+  // here rather than as a silently-ignored key inside opencode.
+  const modelLine = model === null ? "" : `model: ${JSON.stringify(model)}\n`;
+  const contents = `---\ndescription: ${JSON.stringify(parsed.description)}\nmode: subagent\n${modelLine}---\n\n${body}\n`;
   return { name: parsed.name, contents };
 }
 
@@ -720,20 +741,72 @@ export function deriveOpenCodeReviewerAgentFile(
  * for the same hard-fail reason deriveOpenCodeReviewerAgentFile documents.
  * `mode: "subagent"` keeps it out of the primary-agent picker.
  *
+ * Issue #1731 — `model:` IS a valid `agents.<name>` key after all, as long
+ * as it is opencode's own shape: `provider/model` (optionally `#variant`).
+ * Verified live against the installed opencode 2.1.3 — a config carrying
+ * `"model": "anthropic/claude-sonnet-4-5"` comes back out of
+ * `opencode debug config` normalized to `{providerID: "anthropic", model:
+ * "claude-sonnet-4-5"}`. A bare Claude alias (`sonnet`) does NOT survive:
+ * opencode drops the key. So the value comes from the project's own
+ * `opencode-model:` frontmatter key (see skills.ts's ParsedFrontmatter),
+ * never from the shared plain `model:` key, and is validated here before it
+ * is emitted.
+ *
  * `null` for the same unparseable/unsafe-frontmatter cases as the file
  * variant — same silent-skip posture.
  */
 export function deriveOpenCodeReviewerAgentConfig(raw: string): {
   name: string;
-  config: { description: string; mode: "subagent"; system: string };
+  config: { description: string; mode: "subagent"; system: string; model?: string };
 } | null {
   const parsed = parseSkillFrontmatter(raw);
   if (!parsed || isDangerousSkillName(parsed.name)) return null;
   const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
-  return {
-    name: parsed.name,
-    config: { description: parsed.description, mode: "subagent", system: body },
+  const model = resolveOpenCodeReviewerModel(parsed.opencodeModel);
+  const config: { description: string; mode: "subagent"; system: string; model?: string } = {
+    description: parsed.description,
+    mode: "subagent",
+    system: body,
   };
+  if (model !== null) config.model = model;
+  return { name: parsed.name, config };
+}
+
+/**
+ * Issue #1731 — removes the `opencode-model:` key from a frontmatter block,
+ * leaving everything else (including the body) untouched.
+ *
+ * Scoped to the FRONTMATTER deliberately: the key is a frontmatter setting,
+ * and a body that happens to contain the same text — a code block, a
+ * sentence about the key — must survive verbatim. When there is no
+ * frontmatter block at all, the content is returned unchanged.
+ */
+export function stripOpenCodeModelKey(raw: string): string {
+  const match = /^(---\r?\n)([\s\S]*?)(\r?\n---)/.exec(raw);
+  if (!match) return raw;
+  const kept = match[2]
+    .split(/\r?\n/)
+    .filter((line) => !/^opencode-model\s*:/.test(line))
+    .join("\n");
+  return `${match[1]}${kept}${match[3]}${raw.slice(match[0].length)}`;
+}
+
+/**
+ * Issue #1731 — the model a project's reviewer agent should run on under
+ * opencode, or null when there is none to apply.
+ *
+ * The value is validated against opencode's own `provider/model` shape
+ * BEFORE it is emitted: an invalid value is dropped here, with a warning,
+ * rather than handed to opencode — where the key would silently disappear
+ * (v2.1.3) or, on the older loader, take the whole config down with it.
+ */
+function resolveOpenCodeReviewerModel(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  if (validateOpenCodeModel(raw)) return raw;
+  console.warn(
+    `[mullion-bundle] ignoring a reviewer agent's opencode-model: ${JSON.stringify(raw)} — expected opencode's "provider/model" shape`,
+  );
+  return null;
 }
 
 // Issue #941/#950 — agy's flat-file agent convention
