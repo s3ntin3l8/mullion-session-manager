@@ -71,17 +71,42 @@ export interface RunwayLimits {
 }
 
 /**
- * A cached snapshot plus the moment it expires.
+ * A cached snapshot plus the moment it expires AND the apiUrl it came from.
  *
  * Module-level rather than per-app: the quota is a property of the
  * PROVIDER, not of a Mullion app instance, and a test that creates several
  * apps must not see another's cached answer.
+ *
+ * The apiUrl is part of the key because the snapshot is the SERVER's answer:
+ * pointing Mullion at a different Runway must not keep serving the old
+ * server's answer until the TTL runs out.
  */
-let cached: { snapshot: RunwayLimits; expiresAt: number } | null = null;
+let cached: { snapshot: RunwayLimits; expiresAt: number; apiUrl: string } | null = null;
 
 /** Test hook — drops the cached snapshot. */
 export function resetRunwayCache(): void {
   cached = null;
+}
+
+/**
+ * Whether the integration is CONFIGURED — a URL and a key.
+ *
+ * Distinct from "the last fetch succeeded": a configured-but-unreachable
+ * Runway must leave the previous reading standing, while an UNCONFIGURED
+ * one must release it (the operator turned the feature off, or deleted the
+ * key; keeping a quarantine with no way to refresh or lift it would strand
+ * every task on that agent).
+ */
+export function isRunwayConfigured(app: FastifyInstance): boolean {
+  const settings = getStoredSettings(app.db);
+  if ((settings.runway?.apiUrl ?? "").trim() === "") return false;
+  try {
+    // A rotated app key makes the decrypt throw; that is "not configured"
+    // as far as the caller is concerned, not a crash.
+    return getRunwayKey(app) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function num(value: unknown): number | null {
@@ -139,15 +164,18 @@ export async function fetchRunwayLimits(
   if (apiUrl === "") return null;
 
   const now = Date.now();
-  if (!opts.force && cached !== null && cached.expiresAt > now) {
+  if (!opts.force && cached !== null && cached.expiresAt > now && cached.apiUrl === apiUrl) {
     return cached.snapshot;
   }
 
-  const key = getRunwayKey(app);
-  if (key === null) return null;
-
   let body: unknown;
   try {
+    // The key read (and its decrypt) is INSIDE the try: a rotated app key
+    // makes `getRunwayKey` throw a DecryptionError, and that must degrade to
+    // "no quota information" like every other failure — not escape and 500
+    // the caller's request.
+    const key = getRunwayKey(app);
+    if (key === null) return null;
     const response = await fetch(`${apiUrl.replace(/\/+$/, "")}/api/v1/usage/limits`, {
       method: "GET",
       headers: { "X-Admin-Key": key, accept: "application/json" },
@@ -171,7 +199,7 @@ export async function fetchRunwayLimits(
 
   const snapshot: RunwayLimits = { fetchedAt: new Date(), cards };
   const ttl = Math.max(1, settings.runway?.pollSeconds ?? DEFAULT_POLL_SECONDS) * 1000;
-  cached = { snapshot, expiresAt: now + ttl };
+  cached = { snapshot, expiresAt: now + ttl, apiUrl };
   return snapshot;
 }
 

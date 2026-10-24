@@ -81,7 +81,7 @@ function PollField({ value, onCommit }: { value: number; onCommit: (v: number) =
 }
 
 // A provider map is a JSON object of "runway provider id" -> "Mullion agent
-// name" ("anthropic" -> "claude-code"). It is edited as TEXT because the
+// name" ("anthropic" -> "claude"). It is edited as TEXT because the
 // mapping is small, hand-written and rarely touched — a key/value editor
 // would be more machinery than the setting deserves.
 function ProviderMapField({
@@ -128,7 +128,7 @@ function ProviderMapField({
           type="text"
           autoComplete="off"
           style={{ flex: 1, textAlign: "left", width: "auto" }}
-          placeholder='{"anthropic": "claude-code"}'
+          placeholder='{"anthropic": "claude"}'
           value={draft}
           aria-label="Provider map"
           onChange={(e) => setDraft(e.target.value)}
@@ -266,7 +266,7 @@ export function RunwaySection() {
       </Row>
       <Row
         label="Provider map"
-        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude-code, codex, opencode, agy), so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
+        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
         align="start"
       >
         <ProviderMapField

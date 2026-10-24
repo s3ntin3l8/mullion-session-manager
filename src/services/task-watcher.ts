@@ -8,7 +8,7 @@ import { getIssueState, getIssueTitle } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { refreshRunwayQuarantine } from "./runway-quarantine.js";
+import { pollRunwayQuota } from "./runway-quarantine.js";
 import { enqueueTask } from "./task-claim.js";
 import { dispatchQueuedTasks } from "./task-dispatch.js";
 import {
@@ -1232,10 +1232,10 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // runs, or the first sweep after a provider runs dry would still
       // claim a task onto it.
       //
-      // A Runway failure is NOT fatal here: refreshRunwayQuarantine returns
-      // "no information" and the previous reading stands, so an outage
-      // never stops the sweep.
-      await refreshRunwayQuarantine(app);
+      // A Runway failure is NOT fatal here: pollRunwayQuota returns "no
+      // information" and the previous reading stands, so an outage never
+      // stops the sweep.
+      await pollRunwayQuota(app);
 
       // #667 — one Map per tick, populated by each project's own
       // syncProjectTasks call below and consumed by autoClaimReadyTasks

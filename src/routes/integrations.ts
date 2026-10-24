@@ -37,7 +37,11 @@ import {
   getRunwayIntegration,
   setRunwayKey,
 } from "../services/runway-integration.js";
-import { fetchRunwayLimits } from "../services/runway-client.js";
+import {
+  fetchRunwayLimits,
+  isCardExhausted,
+  isCardWindowReset,
+} from "../services/runway-client.js";
 import { agentForProvider, agentQuarantineInfo } from "../services/runway-quarantine.js";
 import { getStoredSettings } from "../services/settings.js";
 
@@ -472,7 +476,11 @@ export async function integrationsRoute(app: FastifyInstance) {
         providerId: card.providerId,
         pctUsed: card.pctUsed,
         resetAt: card.resetAt?.toISOString() ?? null,
-        exhausted: card.stale ? false : card.isUnlimited ? false : (card.pctUsed ?? 0) >= 100,
+        // The SAME helpers the quarantine decides with — re-deriving the
+        // exhaustion here would ignore the `used_value >= limit_value` path
+        // and the reset lift, and the badge would then claim "Mullion will
+        // not claim a task onto <agent>" about a claim the gate allows.
+        exhausted: isCardExhausted(card) && !isCardWindowReset(card),
         quarantined: agentQuarantineInfo(app, agent).quarantined,
       });
     }

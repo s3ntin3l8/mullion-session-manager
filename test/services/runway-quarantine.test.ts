@@ -54,10 +54,13 @@ import { applySettingsPatch } from "../../src/services/settings.js";
 import { enqueueTask } from "../../src/services/task-claim.js";
 import {
   agentForProvider,
+  agentQuarantineInfo,
   applyRunwaySnapshot,
   isAgentQuarantined,
+  pollRunwayQuota,
   resetRunwayQuarantine,
 } from "../../src/services/runway-quarantine.js";
+import { setRunwayKey } from "../../src/services/runway-integration.js";
 import { resetRunwayCache } from "../../src/services/runway-client.js";
 
 /** A quota snapshot in the shape the client produces. */
@@ -161,6 +164,25 @@ describe("the Runway quota quarantine (issue #29)", () => {
     expect(isAgentQuarantined(app, "claude")).toBe(false);
   });
 
+  it("lifts the quarantine when the LAST of a provider's windows resets", () => {
+    // Keeping the EARLIEST reset would lift the quarantine while a later
+    // window is still exhausted — and auto-claim would then proceed onto a
+    // provider with nothing left.
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    const later = new Date(Date.now() + 600_000).toISOString();
+    applyRunwaySnapshot(
+      app,
+      snapshot([
+        { providerId: "anthropic", pctUsed: 100, resetAt: soon },
+        { providerId: "anthropic", pctUsed: 100, resetAt: later },
+      ]),
+    );
+    expect(isAgentQuarantined(app, "claude")).toBe(true);
+    const info = agentQuarantineInfo(app, "claude");
+    // The LATEST window's reset, not the earliest.
+    expect(info.resetAt?.getTime()).toBe(new Date(later).getTime());
+  });
+
   it("quarantines when ANY of a provider's cards is exhausted", () => {
     // Runway can report several cards per provider (per model, per window).
     // A provider is out of quota when ANY of them is — Mullion cannot use
@@ -179,6 +201,69 @@ describe("the Runway quota quarantine (issue #29)", () => {
     expect(agentForProvider(app, "anthropic")).toBe("claude");
     expect(agentForProvider(app, "opencode")).toBe("opencode");
     expect(agentForProvider(app, "gemini")).toBeNull();
+  });
+
+  describe("the poll", () => {
+    it("releases every quarantine when the integration is UNCONFIGURED", async () => {
+      // Nothing left to refresh the reading with, and nothing that could
+      // ever lift it — holding the quarantine would strand every task on
+      // that agent until a restart.
+      applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+      expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+      // The URL is cleared (or the key deleted) — the feature is off.
+      applySettingsPatch(app, { runway: { apiUrl: "" } });
+      const result = await pollRunwayQuota(app);
+      expect(result.quarantinedAgents).toEqual([]);
+      expect(isAgentQuarantined(app, "claude")).toBe(false);
+    });
+
+    it("keeps the previous reading when a CONFIGURED Runway is unreachable", async () => {
+      // A transient outage is not the operator turning the feature off: the
+      // reading stands until a later poll succeeds.
+      applySettingsPatch(app, { runway: { apiUrl: "https://runway.example" } });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+      applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+      expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+      const result = await pollRunwayQuota(app);
+      expect(result.quarantinedAgents).toEqual(["claude"]);
+      expect(isAgentQuarantined(app, "claude")).toBe(true);
+      vi.unstubAllGlobals();
+    });
+
+    it("honours the operator's poll interval instead of fetching on every tick", async () => {
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 3600 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ limits: [] }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await pollRunwayQuota(app);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      // A second tick inside the interval fetches nothing.
+      await pollRunwayQuota(app);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      vi.unstubAllGlobals();
+    });
+
+    it("never polls when the interval is 0", async () => {
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 0 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await pollRunwayQuota(app);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
   });
 
   describe("the pre-claim gate", () => {

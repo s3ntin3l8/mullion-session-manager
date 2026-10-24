@@ -27,6 +27,7 @@ import {
   fetchRunwayLimits,
   isCardExhausted,
   isCardWindowReset,
+  isRunwayConfigured,
   type RunwayLimits,
 } from "./runway-client.js";
 
@@ -49,9 +50,14 @@ interface AgentQuarantine {
  */
 const quarantined = new Map<string, AgentQuarantine>();
 
+/** When the last poll ran, so the operator's own interval is what paces the
+ * refresh rather than the sweep tick. */
+let lastPolledAt: number | null = null;
+
 /** Test hook — forgets every quarantine. */
 export function resetRunwayQuarantine(): void {
   quarantined.clear();
+  lastPolledAt = null;
 }
 
 /**
@@ -131,16 +137,20 @@ export function applyRunwaySnapshot(app: FastifyInstance, limits: RunwayLimits):
     const exhausted = isCardExhausted(card) && !isCardWindowReset(card, now);
     if (!exhausted) continue;
     const existing = exhaustedFor.get(agent);
-    // Keep the EARLIEST reset among the exhausted cards: the provider is
-    // free again only when the last of its exhausted windows resets.
+    // Keep the LATEST reset among the exhausted cards: the provider is
+    // free again only when the LAST of its exhausted windows resets.
+    // Keeping the earliest would lift the quarantine while a later window
+    // is still exhausted — and auto-claim would then proceed onto a provider
+    // with nothing left.
+    //
+    // A card with NO reset time means we cannot know when that window lifts,
+    // so the quarantine does not lift on its own at all (`resetAt: null`).
     const resetAt =
-      existing?.resetAt === null || existing?.resetAt === undefined
+      existing === undefined
         ? card.resetAt
-        : existing.resetAt === null
+        : existing.resetAt === null || card.resetAt === null
           ? null
-          : card.resetAt === null
-            ? null
-            : new Date(Math.min(existing.resetAt.getTime(), card.resetAt.getTime()));
+          : new Date(Math.max(existing.resetAt.getTime(), card.resetAt.getTime()));
     exhaustedFor.set(agent, { reason: `${card.providerId} quota exhausted`, resetAt });
   }
 
@@ -170,13 +180,50 @@ export function applyRunwaySnapshot(app: FastifyInstance, limits: RunwayLimits):
 }
 
 /**
- * Refreshes the quarantine from Runway and returns whether anything
- * changed — the caller uses that to log.
+ * The sweep's entry point: refresh the quarantine, on the operator's own
+ * interval.
+ *
+ * Two things live here that used to live in the caller:
+ *
+ * - the POLL INTERVAL. `settings.runway.pollSeconds` is the operator's
+ *   cadence, and `0` means "never poll" — so the refresh honours it instead
+ *   of fetching on every sweep tick.
+ * - the UNCONFIGURED case. An unconfigured integration (no URL, or the key
+ *   deleted) RELEASES every quarantine: there is nothing left to refresh
+ *   the reading with and nothing that could ever lift it, so holding it
+ *   would strand every task on that agent until a restart. A configured but
+ *   UNREACHABLE Runway is different — that is a transient outage, and the
+ *   previous reading stands.
  */
-export async function refreshRunwayQuarantine(
+export async function pollRunwayQuota(
   app: FastifyInstance,
 ): Promise<{ changed: boolean; quarantinedAgents: string[] }> {
+  const settings = getStoredSettings(app.db);
+  const pollSeconds = settings.runway?.pollSeconds ?? 0;
+
+  if (!isRunwayConfigured(app)) {
+    // Unconfigured: release everything.
+    if (quarantined.size > 0) {
+      quarantined.clear();
+      return { changed: true, quarantinedAgents: [] };
+    }
+    return { changed: false, quarantinedAgents: [] };
+  }
+
+  if (pollSeconds <= 0) {
+    // Configured but polling is off: keep the current reading, refresh
+    // nothing.
+    return { changed: false, quarantinedAgents: [...quarantined.keys()] };
+  }
+
+  const now = Date.now();
+  if (lastPolledAt !== null && now - lastPolledAt < pollSeconds * 1000) {
+    return { changed: false, quarantinedAgents: [...quarantined.keys()] };
+  }
+  lastPolledAt = now;
+
   const before = new Set(quarantined.keys());
+
   let limits: RunwayLimits | null;
   try {
     limits = await fetchRunwayLimits(app, { force: true });

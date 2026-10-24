@@ -1327,17 +1327,29 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
  * Both halves are plain strings. An empty provider id or agent name is
  * dropped: an empty key could match every provider, and an empty agent
  * could match nothing.
+ *
+ * The object is built with a NULL PROTOTYPE and `Object.defineProperty`,
+ * not `out[key] = value`. The provider id is operator-supplied, so a plain
+ * assignment would let a key of `__proto__` write the object's prototype —
+ * a real prototype-pollution hole, and the reason CodeQL flags the naive
+ * form. With no prototype to pollute and no `[[Set]]` on the way in, a
+ * `__proto__` key is just an ordinary own property that nothing looks up.
  */
 function sanitizeProviderMap(
   value: unknown,
   fallback: Record<string, string>,
 ): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...fallback };
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const [provider, agent] of Object.entries(value as Record<string, unknown>)) {
     if (typeof provider !== "string" || provider.trim() === "") continue;
     if (typeof agent !== "string" || agent.trim() === "") continue;
-    out[provider.trim()] = agent.trim();
+    Object.defineProperty(out, provider.trim(), {
+      value: agent.trim(),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return out;
 }
