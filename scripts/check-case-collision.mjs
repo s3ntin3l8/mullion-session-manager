@@ -106,11 +106,12 @@ function walk(dir) {
     }
   }
   const where = path.relative(ROOT, dir) || ".";
-  const reported = new Set();
+  const reported = [];
+  const alreadyReported = (files) => reported.some((list) => list.every((f) => files.includes(f)));
   for (const list of stems.values()) {
     if (list.length > 1) {
       const files = list.slice().sort();
-      reported.add(files.join("|"));
+      reported.push(files);
       const extensions = new Set(files.map((f) => moduleExtension(f)));
       collisions.push({
         dir: where,
@@ -125,8 +126,10 @@ function walk(dir) {
   for (const list of fullNames.values()) {
     if (list.length > 1) {
       const files = list.slice().sort();
-      // A pair the stem rule already reported is not reported twice.
-      if (reported.has(files.join("|"))) continue;
+      // A pair (or a subset of one) the stem rule already reported is not
+      // reported again: "Foo.ts"/"foo.ts"/"FOO.tsx" is one family, not two.
+      if (alreadyReported(files)) continue;
+      reported.push(files);
       collisions.push({
         dir: where,
         reason:

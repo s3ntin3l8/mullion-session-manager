@@ -151,9 +151,13 @@ describe("check-case-collision.mjs", () => {
     expect(output).toContain("Board.ts");
     expect(output).toContain("BOARD.ts");
     expect(output).not.toContain("different extensions");
-    // The pair is reported once, not once per rule.
-    const occurrences = output.split("Board.ts  and  BOARD.ts").length - 1;
-    expect(occurrences).toBe(1);
+    // The pair is reported once, not once per rule — and the assertion does
+    // not depend on the order the two names are printed in (ASCII sorts
+    // "BOARD.ts" before "Board.ts").
+    const reported = output
+      .split("\n")
+      .filter((line) => line.includes("Board.ts") && line.includes("BOARD.ts"));
+    expect(reported.length).toBe(1);
   });
 
   it("ignores assets that share a stem but not their name (favicon.ico, favicon.svg)", async () => {
