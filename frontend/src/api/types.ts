@@ -2240,11 +2240,11 @@ export interface CreateProjectDirOptions {
 // "auto" lets each of the project's sessions land on an eligible host of
 // its own; absent means the column's "pinned" default.
 //
-// The mode is spelled out here rather than imported from the backend: the
-// frontend is a separate build with its own tsconfig, so the shared
-// constant cannot be imported across the boundary — the backend's own
-// PLACEMENT_MODES (src/services/placement.ts) is the single source of TRUTH
-// for the backend, and this union is the frontend's mirror of it.
+// The mode is the SHARED one (PlacementMode, src/shared/types.ts — the
+// boundary is importable, this file already imports from there), so the
+// frontend cannot drift from the backend's own PLACEMENT_MODES
+// (src/shared/constants.ts, which the column's enum and the routes' JSON
+// schemas use).
 export interface CreateProjectPlacementOptions {
   placement?: PlacementMode;
 }

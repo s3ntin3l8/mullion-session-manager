@@ -5,6 +5,8 @@ import {
   type PlacementContext,
 } from "../../src/services/placement.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
+import { PLACEMENT_MODES } from "../../src/shared/constants.js";
+import type { PlacementMode } from "../../src/shared/types.js";
 
 // Issue #1723 / roadmap 8.9 — the placement policy's decision table.
 //
@@ -51,6 +53,28 @@ function context(overrides: Partial<PlacementContext> = {}): PlacementContext {
 
 const localCandidate = (overrides: Partial<PlacementCandidate> = {}) =>
   candidate({ hostId: "local", isLocal: true, capacity: null, ...overrides });
+
+describe("the shared placement modes stay in step (issue #1723)", () => {
+  it("lists exactly the modes the shared type allows", () => {
+    // PLACEMENT_MODES (src/shared/constants.ts, a runtime VALUE) and
+    // PlacementMode (src/shared/types.ts, a type-only shape) are two
+    // declarations in two deliberately import-free modules — they cannot be
+    // derived from each other, so a mode added to one side only would
+    // drift silently. These two assignments are the compile-time half of
+    // that guard: if a mode is in the list and not in the type (or the
+    // other way round), one of them does not typecheck.
+    const listCoversType: Exclude<PlacementMode, (typeof PLACEMENT_MODES)[number]> extends never
+      ? true
+      : false = true;
+    const typeCoversList: Exclude<(typeof PLACEMENT_MODES)[number], PlacementMode> extends never
+      ? true
+      : false = true;
+
+    expect(listCoversType).toBe(true);
+    expect(typeCoversList).toBe(true);
+    expect([...PLACEMENT_MODES]).toEqual(["pinned", "auto"]);
+  });
+});
 
 describe("chooseHost — the placement decision table (issue #1723)", () => {
   it("falls back to the project's host when NO host is eligible", () => {
@@ -252,6 +276,20 @@ describe("chooseHost — the placement decision table (issue #1723)", () => {
       context({ unattended: false, pinnedHostId: "remote-pinned", localCapacity: busyLocal }),
     );
     expect(remoteHostedProject.hostId).toBe("remote-idle");
+
+    // ...and the case the rationale implies CANNOT happen: for a
+    // remote-pinned project, the local host is still a candidate, so if it
+    // is genuinely the idlest one it wins on load (no bonus, but no
+    // penalty either). #1724 needs a fixed answer for this.
+    const localIsIdlest = chooseHost(
+      [localCandidate(), candidate({ hostId: "remote-busy", capacity: capacity(7, 8) })],
+      context({
+        unattended: false,
+        pinnedHostId: "remote-pinned",
+        localCapacity: capacity(1, 8),
+      }),
+    );
+    expect(localIsIdlest.hostId).toBe("local");
   });
 
   it("never throws, whatever it is handed", () => {
