@@ -1378,23 +1378,88 @@ describe("review-request routes", () => {
       });
     });
 
-    it("falls back to the newest bot comment, and says so", async () => {
+    it("falls back to the reviewer bot's newest comment, and says so", async () => {
       // A custom triage prompt may not use the marker — the attribution is
       // then a guess, and the payload says which it is.
       mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
       mocks.listIssueComments.mockResolvedValue([
         {
-          author: "dependabot[bot]",
+          author: "s3ntin3l8-hermes[bot]",
           authorIsBot: true,
-          body: "Bump lodash from 1.0 to 2.0",
+          body: "Looks like a duplicate of #3.",
           bodyTruncated: false,
           createdAt: new Date(1_000_900).toISOString(),
         },
       ]);
       const res = await triageGet(sessionId, "?issueNumber=12");
       expect(res.json().github.comment).toMatchObject({
-        author: "dependabot[bot]",
+        author: "s3ntin3l8-hermes[bot]",
         attribution: "fallback",
+      });
+    });
+
+    describe("whose comment counts as the triage reply (#1847)", () => {
+      const dependabot = {
+        author: "dependabot[bot]",
+        authorIsBot: true,
+        body: "Bump lodash from 1.0 to 2.0",
+        bodyTruncated: false,
+        createdAt: new Date(1_000_900).toISOString(),
+      };
+
+      beforeEach(() => {
+        mocks.getRunForTarget.mockReturnValue({ runId: "run_triage", dispatchedAt: 1_000_000 });
+      });
+
+      it("ignores another bot's comment, and logs whose it was", async () => {
+        const warn = vi.spyOn(app.log, "warn");
+        try {
+          mocks.listIssueComments.mockResolvedValue([dependabot]);
+          const res = await triageGet(sessionId, "?issueNumber=12");
+          expect(res.json().github).toEqual({ checked: true, comment: null });
+          expect(warn).toHaveBeenCalledWith(
+            expect.objectContaining({ authors: ["dependabot[bot]"] }),
+            expect.stringContaining("ignoring comment"),
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it("ignores a marker in another bot's text, and takes the reviewer's own comment", async () => {
+        mocks.listIssueComments.mockResolvedValue([
+          {
+            ...dependabot,
+            body: "## Triage\n\nnot ours",
+            createdAt: new Date(1_000_950).toISOString(),
+          },
+          {
+            author: "S3ntin3l8-Hermes[bot]",
+            authorIsBot: true,
+            body: "Duplicate of #3.",
+            bodyTruncated: false,
+            createdAt: new Date(1_000_800).toISOString(),
+          },
+        ]);
+        const res = await triageGet(sessionId, "?issueNumber=12");
+        expect(res.json().github.comment).toMatchObject({
+          author: "S3ntin3l8-Hermes[bot]",
+          attribution: "fallback",
+        });
+      });
+
+      it("counts any bot when reviewerBotLogin is empty", async () => {
+        applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
+        try {
+          mocks.listIssueComments.mockResolvedValue([dependabot]);
+          const res = await triageGet(sessionId, "?issueNumber=12");
+          expect(res.json().github.comment).toMatchObject({
+            author: "dependabot[bot]",
+            attribution: "fallback",
+          });
+        } finally {
+          applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]" } });
+        }
       });
     });
 

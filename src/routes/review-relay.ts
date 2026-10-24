@@ -892,17 +892,22 @@ type LandedComment =
         /**
          * How the comment was attributed (issue #1629): "marked" when it
          * carries the triage marker Mullion's own prompt asks for,
-         * "fallback" when it is the newest bot comment after the dispatch
-         * (a custom triage prompt may not use the marker).
+         * "fallback" when it is the newest comment by the reviewer bot after
+         * the dispatch (a custom triage prompt may not use the marker).
          */
         attribution: "marked" | "fallback";
       } | null;
     }
   | { checked: false };
 
-// Best effort: the newest comment by a bot account on the issue, posted after
-// the triage run was dispatched. A GitHub failure must not hide the Hermes
-// status. The issue-comment counterpart of `findLandedReview` (issue #1629).
+// Best effort: the newest comment by the reviewer's own bot account
+// (`reviewRelay.reviewerBotLogin`; empty = any bot, the same rule as
+// `findLandedReview`) on the issue, posted after the triage run was
+// dispatched. Triage comments come from the same GitHub App as reviews, so
+// another bot's comment (dependabot, claude[bot], ...) is not the relay's —
+// and a marker in its text does not make it so. A GitHub failure must not hide
+// the Hermes status. The issue-comment counterpart of `findLandedReview`
+// (issue #1629).
 async function findLandedComment(
   app: FastifyInstance,
   token: string,
@@ -911,6 +916,7 @@ async function findLandedComment(
 ): Promise<LandedComment> {
   if (!record) return { checked: false };
   const { dispatchedAt } = record;
+  const { reviewerBotLogin } = getStoredSettings(app.db).reviewRelay;
   try {
     // `since` narrows the walk to comments touched after the dispatch, so a
     // busy issue does not cost ten pages of comments on every poll.
@@ -920,14 +926,23 @@ async function findLandedComment(
     const newBotComments = comments.filter(
       (c) => c.authorIsBot && c.createdAt && Date.parse(c.createdAt) >= dispatchedAt - 60_000,
     );
+    const ours = newBotComments.filter((c) => isReviewerLogin(c.author, reviewerBotLogin));
     // A comment carrying the triage marker is ours; another bot's comment is
-    // not. A custom triage prompt may not use the marker, so the newest bot
-    // comment is the fallback — with its author in the payload, so a wrong
-    // attribution is visible rather than silent.
-    const marked = newBotComments.filter((c) => c.body.includes(TRIAGE_COMMENT_MARKER)).at(-1);
-    const fallback = newBotComments.at(-1);
+    // not. A custom triage prompt may not use the marker, so the reviewer
+    // bot's newest comment is the fallback — with its author in the payload,
+    // so a wrong attribution is visible rather than silent.
+    const marked = ours.filter((c) => c.body.includes(TRIAGE_COMMENT_MARKER)).at(-1);
+    const fallback = ours.at(-1);
     const landed = marked ?? fallback;
     const attribution = marked ? "marked" : "fallback";
+    if (!landed && newBotComments.length > 0) {
+      // Another bot's comment is visible on GitHub but is not the relay's: say
+      // so, or "nothing yet" next to a posted comment looks like a bug.
+      app.log.warn(
+        { authors: [...new Set(newBotComments.map((c) => c.author))], reviewerBotLogin },
+        "triage-status: ignoring comment(s) by other bots (not reviewRelay.reviewerBotLogin)",
+      );
+    }
     return {
       checked: true,
       comment: landed
