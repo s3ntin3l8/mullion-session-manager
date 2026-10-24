@@ -279,7 +279,10 @@ sees.
 
 ## Local hooks
 
-The local gate lives in `.pre-commit-config.yaml`. The `pre-commit` stage
+The local gate lives in `.pre-commit-config.yaml`, which sets `fail_fast: true`
+(globally: both stages stop at the first failing hook — notably, a failed
+pre-push test hook no longer lets `check:patch-coverage` re-run the whole suite
+to regenerate the missing coverage report). The `pre-commit` stage
 runs lint (path-scoped per workspace), typecheck, `shellcheck`, the two
 repo-wide consistency checks and the whitespace/conflict/secret checks. The
 `pre-push` stage runs:
@@ -287,7 +290,15 @@ repo-wide consistency checks and the whitespace/conflict/secret checks. The
 - `typecheck` (both workspaces, path-scoped)
 - `prettier --check .` (repo-wide, covers `frontend/`)
 - the two vitest suites (path-scoped) — as `test:coverage`, **not** `test`,
-  so the coverage JSON is already on disk for the next hook
+  so the coverage JSON is already on disk for the next hook. Each is wrapped
+  in `scripts/with-gate-lock.sh`, which takes a `flock` on
+  `$(git rev-parse --git-common-dir)/prepush-tests.lock` so pushes from
+  concurrent worktrees queue instead of running the suites at once. It waits
+  up to `MULLION_GATE_LOCK_TIMEOUT` seconds (default 3600), names the current
+  holder while waiting, and can be bypassed with `MULLION_NO_GATE_LOCK=1`.
+  Locally, vitest also caps its worker pool at `availableParallelism()/3`
+  (min 2) unless `VITEST_MAX_WORKERS` is set, which always wins (CI keeps
+  Vitest's default).
 - **`npm run check:patch-coverage`** — the ≥75% patch-coverage rule, the
   same floor Codecov reports as `codecov/patch` on the PR. It is a thin
   wrapper (`scripts/check-patch-coverage-hook.mjs`) over the same
