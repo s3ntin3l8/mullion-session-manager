@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
-import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 

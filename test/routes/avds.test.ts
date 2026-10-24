@@ -47,7 +47,7 @@ vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
 // chain during THIS file's own module-linking phase, before `const ptyMock
 // = createNodePtyMock()` above has run — confirmed empirically, the same
 // failure test/routes/devices.test.ts's own use of buildTestApp avoids.
-import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import {
   AvdCreatedError,
   createAvd,

@@ -8,7 +8,7 @@ import type * as ChildProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import type { DeviceDiscoveryService } from "../../src/services/device-discovery.js";
 

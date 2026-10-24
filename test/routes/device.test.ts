@@ -7,7 +7,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
-import { buildTestApp, buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
+import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
