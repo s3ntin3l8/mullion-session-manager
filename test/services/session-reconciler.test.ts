@@ -77,7 +77,11 @@ describe("reconcileExitedSessions", () => {
     delete process.env.DATABASE_URL;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Close first, while the mocks the test installed are still in place:
+    // the app's own shutdown may talk to them.
+    await openApp?.close();
+    openApp = undefined;
     vi.restoreAllMocks();
     mockSyncTaskTransition.mockClear();
     listUnitsOut = null;
@@ -99,6 +103,21 @@ describe("reconcileExitedSessions", () => {
       });
   }
 
+  // Every app in this file binds the SAME hooks.sock path (SESSIONS_DIR is
+  // per test FILE, not per test), so an app left open by a test that failed
+  // before its own close() makes every LATER test in the file fail with
+  // "another process is already listening there" — one failed assertion
+  // cascading into the whole file (issue #1773). The app therefore belongs
+  // to the FILE, not to the test: it is registered here and closed in the
+  // afterEach below, whatever the test did.
+  let openApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+
+  async function openTestApp() {
+    const app = await buildApp();
+    openApp = app;
+    return app;
+  }
+
   async function createSession(app: Awaited<ReturnType<typeof buildApp>>) {
     const project = await app.inject({
       method: "POST",
@@ -117,7 +136,7 @@ describe("reconcileExitedSessions", () => {
   // rows — later tests create sessions whose active/exited state would
   // otherwise make "no active sessions at all" untrue by the time this ran.
   it("is a no-op when there are no active sessions", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const isMasterAliveSpy = mockMasterAlive(app, true);
 
     await expect(reconcileExitedSessions(app)).resolves.toBeUndefined();
@@ -127,7 +146,7 @@ describe("reconcileExitedSessions", () => {
   });
 
   it("leaves an active session alone when its scope is still alive", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     mockMasterAlive(app, true);
 
@@ -151,7 +170,7 @@ describe("reconcileExitedSessions", () => {
   // flipped the row to "exited" and tore the session down while the scope
   // kept running.
   it("leaves a session alone whose scope lives in a compat dir of the owned set (#1770)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     try {
       const sessionId = await createSession(app);
 
@@ -188,7 +207,7 @@ describe("reconcileExitedSessions", () => {
   // the real liveness path ran at all, and that the compat dir is what makes
   // the difference).
   it("exits a session whose scope is outside every owned dir (the control for #1770)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     try {
       const sessionId = await createSession(app);
 
@@ -216,7 +235,7 @@ describe("reconcileExitedSessions", () => {
   // not like "confirmed dead." Getting this wrong would mass-exit every
   // active local session on a single transient systemctl error.
   it("leaves an active session alone when the batch liveness check itself fails (total map, every id explicitly unknown)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) => {
       const result: Record<string, SessionLiveness> = Object.create(null);
@@ -243,7 +262,7 @@ describe("reconcileExitedSessions", () => {
   // there's no exhaustive switch to fall through, so an unrecognized/absent
   // value fails safe rather than needing its own explicit branch.
   it("leaves an active session alone when the liveness map itself omits the id (non-total stub, defensive fallback)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue(Object.create(null));
 
@@ -259,7 +278,7 @@ describe("reconcileExitedSessions", () => {
   });
 
   it("flips an active session to exited once its scope is no longer alive", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     mockMasterAlive(app, false);
 
@@ -282,7 +301,7 @@ describe("reconcileExitedSessions", () => {
   // reconciler's explicit discardPendingSeed() call, independent of
   // whatever kill() itself does or doesn't clear.
   it("discards a stashed seed once a session is confirmed exited (B9)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     app.pty.stashSeed(String(sessionId), "some initial prompt");
     mockMasterAlive(app, false);
@@ -302,7 +321,7 @@ describe("reconcileExitedSessions", () => {
   // function had already confirmed (via the liveness check) was dead — orphaning
   // it the moment this function then flips the row underneath it.
   it("flips the row to exited BEFORE cleanupPreviewWorktree resolves, not after (A9)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     mockMasterAlive(app, false);
 
@@ -328,14 +347,23 @@ describe("reconcileExitedSessions", () => {
     let row: { status: string } | undefined;
     // (terminate() is awaited between the flip and the cleanup call, so the
     // cleanup spy is also awaited here, bounded by the loop.)
-    for (let i = 0; i < 200; i++) {
+    //
+    // The bound is WALL-CLOCK, not a tick count: 200 setImmediate ticks is a
+    // fixed budget that a loaded CI runner can exhaust before the reconcile
+    // reaches the cleanup call — the assertion then failed even though the
+    // behaviour under test is correct (issue #1773). The deadline says what
+    // the test means ("the flip happens before the cleanup resolves"), and a
+    // loaded runner gets seconds instead of microseconds.
+    const deadline = Date.now() + 5_000;
+    for (;;) {
       [row] = app.db
         .select({ status: sessions.status })
         .from(sessions)
         .where(eq(sessions.id, sessionId))
         .all();
       if (row?.status === "exited" && cleanupSpy.mock.calls.length > 0) break;
-      await new Promise((resolve) => setImmediate(resolve));
+      if (Date.now() > deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
     // The cleanup call is still pending (we haven't resolved it) — proving
@@ -351,7 +379,7 @@ describe("reconcileExitedSessions", () => {
   });
 
   it("closes a bound project browser once its session flips to exited (#182)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     const { sessions } = await import("../../src/db/schema.js");
     const { eq } = await import("drizzle-orm");
@@ -395,7 +423,7 @@ describe("reconcileExitedSessions", () => {
     }
 
     it("flips a claimed task to failed when its session exits before completion", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -423,7 +451,7 @@ describe("reconcileExitedSessions", () => {
     // — the reconciler must not race that window and flip the task to
     // failed / delete the worktree out from under an in-flight re-seed.
     it("does not fail a claimed task or touch its worktree while its scope is deactivating (issue #973/#988)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -494,7 +522,7 @@ describe("reconcileExitedSessions", () => {
     // fail the task / delete the worktree out from under the in-flight
     // re-seed (task 258971's incident, PR #136).
     it("backs off the task-failure/worktree-removal block when another writer wins the race to flip the session first (issue #988)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "in_progress");
@@ -559,7 +587,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("syncs the failed transition to GitHub for a linked task, with the freshly-updated row and its project", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed", 77);
@@ -578,7 +606,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("cleans up the worktree once a claimed task's session-death flips it to failed (6.8/#283), only when one was recorded", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -619,7 +647,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("still calls syncTaskTransition for a local task (no issueNumber) — the local/GitHub-linked distinction is syncTaskTransition's own job, not duplicated here", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -635,7 +663,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("flips an in_progress task to failed the same way", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "in_progress");
@@ -663,7 +691,7 @@ describe("reconcileExitedSessions", () => {
     // "claimed"/"in_progress" forever, since nothing would ever revisit it
     // again. This is the regression guard for that.
     it("still flips the task to failed even when cleanupPreviewWorktree fails (A9 — no longer gated on cleanup success)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -693,7 +721,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("does not fail a reviewing task whose session exits — the turn is already over", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "reviewing");
@@ -709,7 +737,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("does not fail the task when the session is still alive", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const sessionId = await createSession(app);
       const projectId = await getProjectId(app, sessionId);
       const taskId = await createTask(app, projectId, sessionId, "claimed");
@@ -729,7 +757,7 @@ describe("reconcileExitedSessions", () => {
   // stop + token/state/agent-guide files), not just kill()ed, or those
   // files leak forever.
   it("terminates a local session (removing its token/state files) once the row flips to exited (H7)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     const id = String(sessionId);
     const terminateSpy = vi.spyOn(app.pty, "terminate");
@@ -745,7 +773,7 @@ describe("reconcileExitedSessions", () => {
   });
 
   it("does not terminate when it lost the CAS to another writer (H7)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     const terminateSpy = vi.spyOn(app.pty, "terminate");
     const gitWorktreeModule = await import("../../src/services/git-worktree.js");
@@ -770,7 +798,7 @@ describe("reconcileExitedSessions", () => {
   // instance's own unit prefix whose socket lives under a different dir is
   // "unknown", never "dead" — so it is never terminated.
   it("never terminates a session whose this-instance unit has a socket outside sessionsDir (H7)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     const id = String(sessionId);
     const { deriveInstanceId } = await import("../../src/services/session-process.js");
@@ -792,7 +820,7 @@ describe("reconcileExitedSessions", () => {
 
   // M6 — one row throwing must not abort the rest of the tick.
   it("keeps reconciling the remaining rows when one row's teardown throws (M6)", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const first = await createSession(app);
     const second = await createSession(app);
     mockMasterAlive(app, false);
@@ -812,7 +840,7 @@ describe("reconcileExitedSessions", () => {
   });
 
   it("does not touch an already-killed session", async () => {
-    const app = await buildApp();
+    const app = await openTestApp();
     const sessionId = await createSession(app);
     await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
 
@@ -840,7 +868,7 @@ describe("reconcileExitedSessions", () => {
 
   describe("multi-host (issue #26)", () => {
     it("skips an unreachable remote host's sessions entirely, never flipping them to exited", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       // A local session, alive, alongside a remote one on an unreachable
       // host — the whole point of this test is that the *local* group must
       // still reconcile normally even while the remote group's host is
@@ -880,7 +908,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("does not exit a session a reachable host's liveness response omits (Hermes review, PR #34)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       // Earlier tests in this describe block leave "active" LOCAL sessions
       // behind in this file's shared on-disk DB (no per-test cleanup) —
       // reconcileExitedSessions groups those into a "local" host group too,
@@ -972,7 +1000,7 @@ describe("reconcileExitedSessions", () => {
     // `false` to `"dead"` (not just that it maps an omitted key to
     // "unknown" — the previous test already covered that half).
     it("exits a session once a reachable remote host's liveness response confirms it's dead", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       mockMasterAlive(app, true);
 
       const server = http.createServer((req, res) => {
@@ -1033,7 +1061,7 @@ describe("reconcileExitedSessions", () => {
     });
 
     it("logs a HostRequestError distinctly from unreachable, without exiting the session (Hermes review, PR #34)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       mockMasterAlive(app, true);
 
       // A reachable agent whose bulk liveness endpoint has a persistent
@@ -1085,5 +1113,34 @@ describe("reconcileExitedSessions", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await app.close();
     });
+  });
+
+  // Issue #1773 — the cascade. Every app in this file binds the same
+  // hooks.sock path (SESSIONS_DIR is per test FILE), so a test that failed
+  // before its own app.close() used to leave that socket bound and make
+  // every later test in the file fail with "another process is already
+  // listening there": one failed assertion became twenty-one failures.
+  //
+  // These two tests are deliberately consecutive: the first simulates a test
+  // that throws before it closes its app, the second proves the next app
+  // still boots (it could not, if the first app were still holding the
+  // socket).
+  it("closes an app whose test failed before its own close", async () => {
+    await expect(
+      (async () => {
+        await openTestApp();
+        throw new Error("simulated failure");
+      })(),
+    ).rejects.toThrow("simulated failure");
+  });
+
+  it("boots the next app even though the previous test failed", async () => {
+    const app = await openTestApp();
+    expect(app).toBeDefined();
+    // The app above binds the same hooks.sock path as every other app in
+    // this file, so reaching this line at all is the assertion: the socket
+    // was free, because the previous test's app was closed by the
+    // afterEach.
+    await app.close();
   });
 });
