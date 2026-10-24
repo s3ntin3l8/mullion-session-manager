@@ -20,6 +20,7 @@ import {
 import { probeSocket } from "../services/unix-socket.js";
 import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
+import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 import { fitsSunPath, maxSunPathBytes } from "../cli/sun-path.mjs";
 
@@ -711,6 +712,23 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // fastify instance that's about to be closed) alive — reconciliation is
     // opportunistic housekeeping, not core request-serving work.
     reconcileTimer = setInterval(() => {
+      // Issue #1734 — the codex rate-limit sweep, on this same timer and
+      // this same interval as the other periodic housekeeping below.
+      //
+      // A codex turn that hits a provider rate limit fires NO hook at all —
+      // codex does not fire `Stop` for a failed turn, and its payloads carry
+      // no error field to begin with — so nothing else in Mullion can see
+      // the failure. The sweep reads the session's rollout file (whose path
+      // the `SessionStart` hook reported) and reports a newly-failed turn as
+      // a `stop_failure` message, which is what lights up Task Master's
+      // rate-limit grace window.
+      //
+      // Deliberately ungated and cheap: it only touches sessions that have a
+      // rollout path (codex sessions whose `SessionStart` hook fired), and
+      // each read is a bounded tail read of one file.
+      detectCodexRateLimits(app).catch((err) => {
+        app.log.error({ err }, "codex rate-limit sweep failed");
+      });
       if (!sessionReconcileRunning) {
         sessionReconcileRunning = true;
         reconcileExitedSessions(app)

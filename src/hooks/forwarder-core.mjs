@@ -865,7 +865,19 @@ export function mapCodexStop(payload) {
 
 export function mapCodexSessionStart(payload) {
   const source = typeof payload?.source === "string" ? payload.source : undefined;
-  return source ? { kind: "session_start", source } : { kind: "session_start" };
+  // Issue #1734 — Codex's own `transcript_path`: the absolute path of the
+  // session's rollout file. Codex's hook payloads carry no error, status or
+  // usage field at all (their schemas are `additionalProperties: false`),
+  // so a provider rate limit is invisible to every hook — and codex does not
+  // even fire `Stop` for a turn that failed. The rollout file is where
+  // codex records the failure as a machine-readable `codex_error_info`, so
+  // the path is what lets the backend read it. See codex-rollout.mjs.
+  const transcriptPath =
+    typeof payload?.transcript_path === "string" ? payload.transcript_path : undefined;
+  const result = { kind: "session_start" };
+  if (source !== undefined) result.source = source;
+  if (transcriptPath !== undefined) result.transcriptPath = transcriptPath;
+  return result;
 }
 
 export function mapCodexSessionEnd(payload) {

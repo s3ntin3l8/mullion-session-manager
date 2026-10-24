@@ -162,7 +162,7 @@ export const MIN_TERMINAL_ROWS = 10;
 // every existing backend importer of this module (this file's own
 // clampTerminalSize() included) keeps working unchanged.
 import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "../shared/constants.js";
-import { constants as osConstants } from "node:os";
+import { constants as osConstants, homedir } from "node:os";
 
 /** node-pty reports a killing signal as a number; map it back to its name. */
 const SIGNAL_NAMES = new Map<number, string>();
@@ -904,6 +904,40 @@ export class Session {
   // itself.
   private hooksProven = false;
 
+  // Issue #1734 — Codex's session rollout file path, as reported by the
+  // `SessionStart` hook's `transcript_path` (forwarder-core.mjs's
+  // mapCodexSessionStart carries it through the hook protocol). Codex's
+  // hook payloads carry NO error, status or usage field at all, and codex
+  // does not fire `Stop` for a turn that failed — so a provider rate limit
+  // is invisible to every hook, and the rollout file is the only place
+  // codex records it (as a machine-readable `codex_error_info`). This path
+  // is what lets the backend read that file; see codex-rate-limit.ts.
+  //
+  // `null` for every non-codex session, and for a codex session whose
+  // `SessionStart` hook has not fired yet (or never will — codex skips all
+  // command hooks until the user grants `/hooks` trust; see
+  // hook-adapters/codex.ts's file header).
+  private codexTranscriptPath: string | null = null;
+
+  // Issue #1734 — the codex home resolved ALONGSIDE the rollout path, at the
+  // moment the path was recorded. It is the session's own home (which may
+  // differ from the backend's) and it does NOT survive a backend restart on
+  // its own — the session's environment is not persisted — so it is stored
+  // here and persisted with the path. Without it, a restored session would
+  // resolve the BACKEND's home, reject its own stored path, and silently
+  // stop being watched.
+  private codexTranscriptHome: string | null = null;
+
+  // Issue #1734 — the codex turn whose rate-limit failure has already been
+  // reported for this session. Codex records the failure in the rollout, and
+  // the rollout's LAST completed turn keeps saying so until the next turn
+  // completes — so without this, every sweep tick would re-report the same
+  // failure and restart the rate-limit grace window forever. Keyed by codex's
+  // own turn id, so a NEW rate-limited turn is still reported (and restarts
+  // the window, which matches the "a fresh rate_limit resets the clock"
+  // model task-rate-limit-grace.ts documents).
+  private reportedCodexRateLimitTurnId: string | null = null;
+
   // Issue #323: state file persistence — tracks whether a state file was
   // successfully read and applied on construction.
   private stateRestored: boolean = false;
@@ -1141,6 +1175,9 @@ export class Session {
       modes: this.modes,
       emitEvent: (kind, payload) => this.emitEvent(kind, payload),
       stampRestoredLatches: () => this.stampRestoredLatches(),
+      // Issue #1734 — restore Codex's rollout path from the state file.
+      setCodexTranscriptPath: (path) => this.setCodexTranscriptPath(path),
+      setCodexTranscriptHome: (home) => this.setCodexTranscriptHome(home),
     };
   }
 
@@ -1217,6 +1254,10 @@ export class Session {
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
       termModes: this.modes.snapshot(),
+      // Issue #1734 — Codex's rollout path, so a codex session that survives
+      // a Mullion restart keeps being watched for provider rate limits.
+      codexTranscriptPath: this.codexTranscriptPath,
+      codexTranscriptHome: this.codexTranscriptHome,
     };
   }
 
@@ -2260,14 +2301,30 @@ export class Session {
   // captured slightly earlier — see emitAttentionSignalDeferred's own doc
   // comment for the failure this caused (test/services/pty-manager.test.ts's
   // D4 sweep test, intermittently on a loaded CI runner).
-  emitHookEvent(message: HookMessage, now: number = Date.now()): void {
+  emitHookEvent(
+    message: HookMessage,
+    now: number = Date.now(),
+    options?: { provesHookPipeline?: boolean },
+  ): void {
     // Follow-up to #275 (gap #1): ANY delivered hook message — not just
     // "progress"/"done" — proves this session's hook pipeline genuinely
     // fires, so this latches unconditionally before dispatch, ahead of every
     // handler's own early return. See `hooksProven`'s field doc for why this
     // can't be the ONLY place it latches (Claude Code's own first hook,
     // SessionStart, never reaches this method at all — see markHooksProven).
-    this.hooksProven = true;
+    //
+    // Issue #1734 — `provesHookPipeline: false` opts OUT of that latch, for
+    // the one caller whose message is NOT a delivered hook: the codex
+    // rate-limit sweep synthesizes a `stop_failure` from the session's
+    // rollout file (src/services/codex-rate-limit.ts). That message is
+    // Mullion's own reading of a file, not evidence that the hook pipeline
+    // fires — and codex's `/hooks` trust gate means "a hook has been
+    // delivered" is exactly the signal that keeps an untrusted codex
+    // session honest. Latching it from a synthesized message would let a
+    // session read as hook-proven with no hook ever delivered to it.
+    if (options?.provesHookPipeline !== false) {
+      this.hooksProven = true;
+    }
     // PR 33a (Wave 6) — was a 24-case switch; now a thin dispatch through
     // HOOK_HANDLERS (hook-handlers.ts), one entry per hook kind, each
     // operating over the narrow SessionHookContext built by
@@ -2305,6 +2362,108 @@ export class Session {
    */
   markHooksProven(): void {
     this.hooksProven = true;
+  }
+
+  /**
+   * Whether this session's hook pipeline has ever delivered a message.
+   *
+   * Issue #1734 — a READ accessor for a latch that nothing currently reads
+   * (the silence watchdog stopped gating on it), added so the invariant the
+   * codex rate-limit sweep depends on is enforceable: a message that
+   * Mullion synthesized itself must never make a session look hook-proven.
+   */
+  areHooksProven(): boolean {
+    return this.hooksProven;
+  }
+
+  /**
+   * Issue #1734 — records Codex's session rollout file path, as reported by
+   * the `SessionStart` hook's `transcript_path`.
+   *
+   * Idempotent, like markHooksProven above: codex's `SessionStart` fires
+   * once per session, and re-reporting the same path is a no-op.
+   */
+  setCodexTranscriptPath(path: string): void {
+    // A DIFFERENT path means a different codex process: the agent was
+    // restarted inside the same PTY, possibly under a different
+    // CODEX_HOME. Keeping the old home would reject the new path — the
+    // session would silently stop being watched — so the home is
+    // re-resolved whenever the path changes.
+    if (this.codexTranscriptPath !== null && this.codexTranscriptPath !== path) {
+      this.codexTranscriptHome = null;
+    }
+    this.codexTranscriptPath = path;
+    // The home is resolved ONCE, here, and kept beside the path. The
+    // session's own environment is the only thing that can make it differ
+    // from the backend's, and that environment does not survive a backend
+    // restart — so re-deriving it later would resolve the backend's home
+    // instead, reject this session's own stored path, and silently stop
+    // watching it.
+    //
+    // A RESTORE passes the persisted home in separately (see
+    // setCodexTranscriptHome) and it wins over the one resolved here.
+    if (this.codexTranscriptHome === null) {
+      this.codexTranscriptHome = this.resolveCodexHome();
+    }
+  }
+
+  /**
+   * Issue #1734 — the codex home resolved ALONGSIDE the rollout path.
+   *
+   * Set by the state-file restore, where the home is the one the session's
+   * codex actually ran under — which the session's own (unpersisted)
+   * environment could no longer tell us after a restart.
+   */
+  setCodexTranscriptHome(home: string): void {
+    this.codexTranscriptHome = home;
+  }
+
+  /** Issue #1734 — the rollout file path, or null when there is none. */
+  getCodexTranscriptPath(): string | null {
+    return this.codexTranscriptPath;
+  }
+
+  /**
+   * Issue #1734 — the codex home this SESSION's own agent runs under.
+   *
+   * The session's own environment wins over the backend's, because a session
+   * may be spawned with a custom env: a codex session whose shell exports a
+   * different `CODEX_HOME` writes its rollout under THAT home, so the
+   * backend's own `CODEX_HOME` would be the wrong root to look for it in.
+   * The backend's environment is the fallback, and `~/.codex` the fallback
+   * to that — the same rule as `resolveCodexHome()` in
+   * hook-adapters/codex.ts, except that the session's own env is consulted
+   * first.
+   *
+   * Once a rollout path has been recorded, the home resolved ALONGSIDE it
+   * wins: that is the home the session's codex actually ran under, and it
+   * is persisted with the path (see the state file's own fields) so a
+   * backend restart cannot lose it.
+   */
+  codexHome(): string {
+    if (this.codexTranscriptHome !== null) return this.codexTranscriptHome;
+    return this.resolveCodexHome();
+  }
+
+  private resolveCodexHome(): string {
+    const fromSession = this.env.CODEX_HOME;
+    if (typeof fromSession === "string" && fromSession.length > 0) return fromSession;
+    const fromBackend = process.env.CODEX_HOME;
+    if (typeof fromBackend === "string" && fromBackend.length > 0) return fromBackend;
+    return path.join(homedir(), ".codex");
+  }
+
+  /**
+   * Issue #1734 — the codex turn whose rate-limit failure has already been
+   * reported, so the sweep reports each failed turn exactly once.
+   */
+  getReportedCodexRateLimitTurnId(): string | null {
+    return this.reportedCodexRateLimitTurnId;
+  }
+
+  /** Issue #1734 — see getReportedCodexRateLimitTurnId. */
+  setReportedCodexRateLimitTurnId(turnId: string | null): void {
+    this.reportedCodexRateLimitTurnId = turnId;
   }
 
   /**
@@ -3996,8 +4155,13 @@ export class PtyManager {
    * but a session could in principle be killed in the gap between resolving
    * a message's token and this call reaching it, so the no-op fallback
    * matters, not just consistency with markEventsSeen(). */
-  emitHookEvent(id: string, message: HookMessage): void {
-    this.sessions.get(id)?.emitHookEvent(message);
+  emitHookEvent(
+    id: string,
+    message: HookMessage,
+    now?: number,
+    options?: { provesHookPipeline?: boolean },
+  ): void {
+    this.sessions.get(id)?.emitHookEvent(message, now, options);
   }
 
   /** Follow-up to #275 (gap #1) — see Session.markHooksProven's doc comment
@@ -4006,6 +4170,52 @@ export class PtyManager {
    * posture as every other per-id lookup in this class. */
   markHooksProven(id: string): void {
     this.sessions.get(id)?.markHooksProven();
+  }
+
+  /**
+   * Issue #1734 — whether this session's hook pipeline has ever delivered a
+   * message. See Session.areHooksProven's own doc comment.
+   */
+  areHooksProven(id: string): boolean {
+    return this.sessions.get(id)?.areHooksProven() ?? false;
+  }
+
+  /** Issue #1734 — see Session.setCodexTranscriptPath's doc comment. Same
+   * "unknown id is quietly ignored" posture as emitHookEvent above. */
+  setCodexTranscriptPath(id: string, path: string): void {
+    this.sessions.get(id)?.setCodexTranscriptPath(path);
+  }
+
+  /**
+   * Issue #1734 — the live sessions that could carry a codex rollout path,
+   * for the rate-limit sweep (src/services/codex-rate-limit.ts).
+   *
+   * Returns only the ids of sessions that actually HAVE a rollout path, so
+   * the sweep's per-tick file reads are limited to codex sessions that have
+   * reported one. A session's own state is otherwise untouched.
+   */
+  codexTranscriptPathSessions(): Array<{ id: string; transcriptPath: string; codexHome: string }> {
+    const out: Array<{ id: string; transcriptPath: string; codexHome: string }> = [];
+    for (const [id, session] of this.sessions) {
+      const path = session.getCodexTranscriptPath();
+      if (path !== null) {
+        out.push({ id, transcriptPath: path, codexHome: session.codexHome() });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Issue #1734 — the codex turn whose rate-limit failure this session has
+   * already reported, so the sweep reports each failed turn exactly once.
+   */
+  reportedCodexRateLimitTurnId(id: string): string | null {
+    return this.sessions.get(id)?.getReportedCodexRateLimitTurnId() ?? null;
+  }
+
+  /** Issue #1734 — see reportedCodexRateLimitTurnId. */
+  setReportedCodexRateLimitTurnId(id: string, turnId: string | null): void {
+    this.sessions.get(id)?.setReportedCodexRateLimitTurnId(turnId);
   }
 
   /** Issue #178 — see Session.resolveGate's doc comment. A no-op (never

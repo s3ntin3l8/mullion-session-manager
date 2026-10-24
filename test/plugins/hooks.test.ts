@@ -1403,6 +1403,68 @@ describe("hooksPlugin (issue #172)", () => {
       expect(markHooksProvenSpy).toHaveBeenCalledWith("1");
       socket.destroy();
     });
+
+    // Issue #1734 — codex's `SessionStart` payload carries the session's
+    // rollout file path. Codex's hook payloads carry NO error, status or
+    // usage field, and codex does not fire `Stop` for a turn that failed —
+    // so the rollout file is the only place a provider rate limit is visible
+    // for codex, and this is the message that hands the backend its path.
+    it("records codex's transcript_path on the session from a session_start message", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(
+        `${JSON.stringify({
+          kind: "session_start",
+          source: "startup",
+          transcriptPath: "/home/u/.codex/sessions/2026/10/24/rollout-abc.jsonl",
+        })}\n`,
+      );
+      await replyPromise;
+
+      // The session's own codex home travels with the path: it is the trust
+      // root the rollout is looked for under, and a session spawned with its
+      // own CODEX_HOME has a different one from the backend's.
+      expect(app.pty.codexTranscriptPathSessions()).toEqual([
+        {
+          id: "1",
+          transcriptPath: "/home/u/.codex/sessions/2026/10/24/rollout-abc.jsonl",
+          codexHome: path.join(os.homedir(), ".codex"),
+        },
+      ]);
+      socket.destroy();
+    });
+
+    it("records no path for a session_start message that carries none", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+
+      const socket = await connect(app.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+      await replyPromise;
+
+      expect(app.pty.codexTranscriptPathSessions()).toEqual([]);
+      socket.destroy();
+    });
   });
 
   describe("browser_action (Feature 3.7)", () => {

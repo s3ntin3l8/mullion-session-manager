@@ -260,6 +260,64 @@ describe("PtyManager", () => {
     fs.rmSync(sessionsDir, { recursive: true, force: true });
   });
 
+  // Issue #1734 — the codex home the rollout path is looked for under.
+  describe("the codex home beside the rollout path (issue #1734)", () => {
+    it("resolves the home from the SESSION's own environment", () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { CODEX_HOME: "/opt/session-home" },
+      });
+      session.setCodexTranscriptPath("/opt/session-home/sessions/rollout-x.jsonl");
+      expect(session.codexHome()).toBe("/opt/session-home");
+    });
+
+    it("a restored home wins over the one the path setter resolves", () => {
+      // The restore order is: path first (which resolves a home of its own
+      // from the env), then the persisted home. The persisted one must win —
+      // it is the home the session's codex actually ran under, and the
+      // session's own (unpersisted) environment can no longer tell us.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        env: { CODEX_HOME: "/opt/backend-home" },
+      });
+      session.setCodexTranscriptPath("/opt/persisted-home/sessions/rollout-x.jsonl");
+      session.setCodexTranscriptHome("/opt/persisted-home");
+      expect(session.codexHome()).toBe("/opt/persisted-home");
+    });
+
+    it("re-resolves the home when a NEW path arrives", () => {
+      // A different path means a different codex process — the agent was
+      // restarted inside the same PTY, possibly under a different
+      // CODEX_HOME. Keeping the old home would reject the new path, and the
+      // session would silently stop being watched.
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      session.setCodexTranscriptPath("/opt/home-a/sessions/rollout-x.jsonl");
+      session.setCodexTranscriptHome("/opt/home-a");
+      expect(session.codexHome()).toBe("/opt/home-a");
+
+      // Asserted EXACTLY, not "not the old one": `not.toBe` would also pass
+      // for undefined, "" or any other wrong value, so it proves nothing
+      // about what the new path actually resolves to. With no session env and
+      // no CODEX_HOME in the backend's env, the fallback is `~/.codex`.
+      session.setCodexTranscriptPath("/opt/home-b/sessions/rollout-y.jsonl");
+      expect(session.codexHome()).toBe(path.join(os.homedir(), ".codex"));
+    });
+  });
+
   // spawnInternal() chains an async socket-liveness check with the mocked
   // child_process "exit" event (itself fired via setImmediate) before
   // attachClient() runs — that's more event-loop hops than a single
