@@ -279,6 +279,28 @@ host's live sessions before removing the rows (best-effort because an
 already-unreachable agent can't be told to terminate anything, and that
 can't block removing an otherwise-useless host row).
 
+**What that looks like** (roadmap 8.13). The distinction reaches the UI as
+its own state, so three things stay apart:
+
+| State                                     | Means                                                                 |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| **exited**                                | the process genuinely exited                                          |
+| **unreachable** (session) / **suspended** | the host could not be reached — the session may well still be running |
+| **idle**                                  | we reached the host and it is doing nothing                           |
+
+A session whose host is unreachable reads **"Unreachable"**, with its own
+dashed dot, and its host's row in Settings reads **"unreachable"** rather
+than "offline" — "offline" reads as _broken_, and with a fleet of sleeping
+laptops "asleep" is the normal state, not a fault. Nothing notifies for it
+(a sleeping host must not wake the human), and the state comes back on its
+own the moment the host answers again — it is derived from each read, never
+latched.
+
+**Which host is which.** Once placement (#1724) can put different sessions
+of one project on different machines, the host is shown **per session**: a
+small badge on the session row and on the pane tab, naming the machine —
+omitted entirely for a local session, which is the common case.
+
 ### Graceful deregistration on shutdown
 
 A self-registered agent traps `SIGTERM`/`SIGINT` (the same signals a

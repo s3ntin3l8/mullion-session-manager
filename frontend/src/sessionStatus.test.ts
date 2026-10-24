@@ -86,6 +86,20 @@ describe("STATUS_PRESENTATION", () => {
     }
   });
 
+  // Issue #1727 — the suspended state gets its own tone: "Idle" would say
+  // we KNOW it is doing nothing, and "Exited" would say it is gone.
+  it("gives 'suspended' its own tone and label", () => {
+    const presentation = STATUS_PRESENTATION.suspended;
+    expect(presentation.label).toBe("Unreachable");
+    expect(presentation.tone).toBe("suspended");
+    expect(presentation.tone).not.toBe(STATUS_PRESENTATION.idle.tone);
+    expect(presentation.tone).not.toBe(STATUS_PRESENTATION.exited.tone);
+  });
+
+  it("does not notify for 'suspended' — a sleeping host must not wake the human", () => {
+    expect(STATUS_PRESENTATION.suspended.defaultNotify).toBe(false);
+  });
+
   it("defaults `finished` to notify OFF (highest-frequency notifiable status)", () => {
     expect(STATUS_PRESENTATION.finished.defaultNotify).toBe(false);
   });
@@ -225,6 +239,9 @@ describe("isStatusReachable", () => {
       "working",
       "idle",
       "awaiting_review_gate",
+      // Issue #1727 — the host being unreachable is not an agent-emit
+      // question, so it is reachable for every agent.
+      "suspended",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, BASH_EMITS)).toBe(reachable.includes(status));
@@ -269,6 +286,10 @@ describe("isStatusReachable", () => {
       // even though only Claude Code's forwarder currently ever populates
       // backgroundTasks in practice.
       "background",
+      // Issue #1727 — "suspended" is about the HOST being unreachable, not
+      // about anything the agent emits, so it is reachable for every
+      // agent.
+      "suspended",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, OPENCODE_EMITS)).toBe(reachable.includes(status));
@@ -289,6 +310,9 @@ describe("isStatusReachable", () => {
       // Issue #428 — same reasoning as opencode's own "background" entry
       // above: codex emits "progress" too.
       "background",
+      // Issue #1727 — the host being unreachable is not an agent-emit
+      // question, so it is reachable for every agent.
+      "suspended",
     ];
     for (const status of ALL_STATUSES) {
       expect(isStatusReachable(status, CODEX_EMITS)).toBe(reachable.includes(status));

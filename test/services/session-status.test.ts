@@ -38,6 +38,9 @@ const BASE: DeriveSessionStatusInput["info"] = {
   subagentCount: 0,
   lastTurnEndedAt: null,
   outstandingBackgroundTasks: [],
+  // Issue #1727 — "the host answered". Undefined means "not asked", which
+  // is reachable; the unreachable case sets it false explicitly.
+  hostReachable: true,
 };
 
 function derive(
@@ -63,6 +66,44 @@ describe("deriveSessionStatus", () => {
       severity: "busy",
       detail: null,
       attentionRequired: false,
+    });
+  });
+
+  describe("the host could not be reached (issue #1727)", () => {
+    it("reports suspended/unknown — NOT exited — when the host is unreachable", () => {
+      // The backend already refuses to call an unreachable host's sessions
+      // dead ("a network blip must never look like every session on that
+      // host died"); this is where that distinction reaches the UI.
+      expect(derive({ hostReachable: false })).toEqual({
+        status: "suspended",
+        severity: "unknown",
+        detail: null,
+        attentionRequired: false,
+      });
+    });
+
+    it("keeps the three states apart: dead, suspended, and merely idle", () => {
+      // dead — the process genuinely exited.
+      expect(derive({}, "exited").status).toBe("exited");
+      // suspended — we could not reach the host, so we do not know.
+      expect(derive({ hostReachable: false }).status).toBe("suspended");
+      // idle — we reached it and it is doing nothing.
+      expect(derive().status).toBe("idle");
+      // And they never collapse into one another.
+      expect(derive({ hostReachable: false }).status).not.toBe(derive({}, "exited").status);
+    });
+
+    it("still reports a session the OPERATOR killed as exited, whatever the host is doing", () => {
+      // An explicitly killed session is gone — the host's state does not
+      // change that.
+      expect(derive({ hostReachable: false }, "killed").status).toBe("exited");
+    });
+
+    it("treats an absent hostReachable as reachable", () => {
+      // A caller that never had to reach out (a local session) has no
+      // reason to say anything about reachability.
+      const { hostReachable: _ignored, ...withoutIt } = BASE;
+      expect(deriveSessionStatus({ dbStatus: "active", info: withoutIt }).status).toBe("idle");
     });
   });
 

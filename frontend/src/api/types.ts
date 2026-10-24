@@ -727,6 +727,16 @@ export interface Session {
   // DB column, so it reaches REST automatically via withLiveInfo's `...row`
   // spread — no SessionInfo/LiveInfoKey change needed on the backend).
   parentSessionId: number | null;
+  // Issue #1727 / roadmap 8.13 — the host THIS session runs on. A raw DB
+  // column, so it reaches REST automatically through withLiveInfo's
+  // `...row` spread — no backend change needed for the badge.
+  //
+  // NULLABLE, and that is the column's own meaning: NULL means "inherit
+  // the project's host" — the same rule resolveSessionHostId() applies on
+  // the backend. So the host a session really runs on is
+  // `session.hostId ?? project.hostId`, and the badge resolves it that
+  // way.
+  hostId: string | null;
   // Issue #1624 — advisory placement hint from spawn_child's `open`: open this
   // child's panel beside its parent even when the auto-open setting is off.
   openHint?: "right" | "below" | null;

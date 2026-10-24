@@ -861,6 +861,23 @@
   flex-shrink: 0;
   animation: cmuxAttn 1.6s ease-out infinite;
 }
+/* Issue #1727 — the per-session host badge. Same quiet shape as the
+   project's own host badge, one step smaller. */
+.session-host-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: var(--muted);
+  border: 1px solid var(--border-soft);
+  padding: 0 4px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .session-dot-working {
   width: 7px;
   height: 7px;
@@ -873,6 +890,16 @@
   height: 7px;
   border-radius: 50%;
   border: 1.5px solid var(--dim);
+  box-sizing: border-box;
+}
+/* Issue #1727 — a session whose host could not be reached. Dashed, so it
+   reads as "we don't know" rather than "idle" (a hollow ring) or "gone"
+   (a filled dot). */
+.session-dot-suspended {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--dim);
   box-sizing: border-box;
 }
 .session-name {
@@ -936,6 +963,10 @@
 }
 .session-status-label.idle {
   color: var(--dim);
+}
+.session-status-label.suspended {
+  color: var(--dim);
+  font-style: italic;
 }
 .session-status-label.exited {
   color: var(--dim);

@@ -47,6 +47,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 42,
     parentSessionId: null,
+    // Issue #1727 — the host this session runs on.
+    hostId: "local",
     projectId: 1,
     name: null,
     nameLocked: false,

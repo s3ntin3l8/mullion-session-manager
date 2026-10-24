@@ -771,6 +771,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
       background: { notify: false, sound: false, autoFocus: false },
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
+      // Issue #1727 — the host could not be reached. Nothing FAILED, so no
+      // notification and no sound: a sleeping laptop waking up must not
+      // wake the human.
+      suspended: { notify: false, sound: false, autoFocus: false },
     },
   },
   dock: {

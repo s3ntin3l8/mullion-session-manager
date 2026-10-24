@@ -54,6 +54,10 @@ type LiveInfoKey = Exclude<
 function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, LiveInfoKey> {
   const live: Pick<SessionInfo, LiveInfoKey> = {
     alive: info?.alive ?? false,
+    // Issue #1727 — "the host answered" is true unless the primary could
+    // not reach it (the remote path passes an explicit false when the
+    // fetch throws — see the caller below).
+    hostReachable: info?.hostReachable ?? true,
     subscriberCount: info?.subscriberCount ?? 0,
     activity: info?.activity ?? "idle",
     lastActivityAt: info?.lastActivityAt ?? null,
@@ -127,8 +131,12 @@ export function withLiveInfo(
   row: typeof sessions.$inferSelect,
   info: SessionInfo | null | undefined,
   hostId: string,
+  // Issue #1727 — whether the host ANSWERED. False when the primary could
+  // not reach it: the session may well still be running, and the UI has to
+  // be able to say "unreachable" rather than "gone".
+  hostReachable: boolean = true,
 ) {
-  const live = buildLiveInfo(info);
+  const live = { ...buildLiveInfo(info), hostReachable: info?.hostReachable ?? hostReachable };
   let browserUrl = live.browserUrl;
 
   if (hostId === LOCAL_HOST_ID && app.config.BROWSER_ENABLED) {
@@ -293,16 +301,18 @@ export async function withLiveStatus(
   hostId: string,
 ) {
   let info: SessionInfo | null = null;
+  let hostReachable = true;
   try {
     const map = await resolveBackend(app, hostId).liveStatus([String(row.id)], idleThresholdMs);
     info = map[String(row.id)] ?? null;
   } catch (err) {
+    hostReachable = false;
     app.log.warn(
       { hostId, sessionId: row.id, err },
       "host unreachable, reporting default live status",
     );
   }
-  return withLiveInfo(app, row, info, hostId);
+  return withLiveInfo(app, row, info, hostId, hostReachable);
 }
 
 // One corrupt `env` column must not 500 GET /api/sessions for every session.

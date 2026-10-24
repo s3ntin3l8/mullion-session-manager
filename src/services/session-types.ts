@@ -208,6 +208,22 @@ export interface SessionInfo {
   createdAt: number;
   alive: boolean;
   subscriberCount: number;
+  /**
+   * Whether the host that runs this session ANSWERED.
+   *
+   * Issue #1727 / roadmap 8.13. The backend already refuses to treat an
+   * unreachable host's sessions as dead — "a network blip must never look
+   * like every session on that host died" — but that distinction stopped at
+   * the liveness check and never reached the UI, where an unreachable
+   * host's session read as plain idle.
+   *
+   * Undefined (or true) means reachable. False means the primary could not
+   * reach the host: the session may well still be running, and will resume
+   * when the host wakes. That is a third state, distinct from both "the
+   * process exited" and "we could not establish liveness for some other
+   * reason".
+   */
+  hostReachable?: boolean;
   /** Ms-epoch of the last PTY output, or null if none has arrived yet. */
   lastActivityAt: number | null;
   /** "working" if the terminal title says so, else if output has arrived

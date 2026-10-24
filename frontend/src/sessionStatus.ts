@@ -26,7 +26,16 @@ export interface StatusPresentation {
    * label color); the label text above is what tells them apart within that
    * tier. Not named after the SessionStatus itself, since more than one
    * status maps to the same tone. */
-  tone: "exited" | "error" | "permission" | "plan" | "finished" | "attention" | "working" | "idle";
+  tone:
+    | "exited"
+    | "error"
+    | "permission"
+    | "plan"
+    | "finished"
+    | "attention"
+    | "working"
+    | "idle"
+    | "suspended";
   /** CSS custom property carrying this status's colour — for surfaces that
    * can't just apply a `.session-dot-<tone>` class wholesale (the tab-title/
    * favicon badge canvas, e.g.). Same value the matching CSS rule uses;
@@ -182,6 +191,18 @@ export const STATUS_PRESENTATION: Record<SessionStatus, StatusPresentation> = {
     showDetail: false,
     defaultNotify: false,
   },
+  // Issue #1727 / roadmap 8.13 — the host running this session could not be
+  // reached. Its own tone, because "Idle" would say we KNOW it is doing
+  // nothing, and "Exited" would say it is gone: neither is true, and with a
+  // fleet of sleeping laptops "unreachable" is a NORMAL state, not a fault
+  // to shout about. The label carries the distinction; the tone stays quiet.
+  suspended: {
+    label: "Unreachable",
+    tone: "suspended",
+    colorToken: "--dim",
+    showDetail: false,
+    defaultNotify: false,
+  },
 };
 
 /** Appends `session.sessionStatusDetail` to a status's label as "label:
@@ -243,6 +264,9 @@ const EMITS_REQUIREMENTS: Record<SessionStatus, readonly string[]> = {
   // field), same closest-honest-mapping posture `finished` above already
   // uses — no HookMessageKind means "reports background tasks" specifically.
   background: ["progress"],
+  // Issue #1727 — the host could not be reached; that is not something an
+  // agent's hook emits say anything about, so it is always reachable.
+  suspended: [],
 };
 
 /**
@@ -277,6 +301,11 @@ export function rowClassNameForSeverity(
       return "status-finished";
     case "busy":
     case "dormant":
+      return "";
+    // Issue #1727 — "we could not reach the host" gets no row tint: it is
+    // not attention, not exited, and not finished. The row's own dot and
+    // label carry it.
+    case "unknown":
       return "";
   }
 }

@@ -557,6 +557,8 @@ function renderPane(
           background: { notify: false, sound: false, autoFocus: false },
           working: { notify: false, sound: false, autoFocus: false },
           idle: { notify: false, sound: false, autoFocus: false },
+
+          suspended: { notify: false, sound: false, autoFocus: false },
           // No `as Record<string, ...>` cast on this object — it would
           // silently defeat the compile-time exhaustiveness check the
           // surrounding `settings: AppSettings` context gives this literal,
@@ -654,6 +656,9 @@ function makeMinimalSession(overrides: Partial<Session>): Session {
     id: 1,
     projectId: 1,
     parentSessionId: null,
+    // Issue #1727 — the host this session runs on.
+    hostId: "local",
+    // Issue #1727 — the host this session runs on.
     name: null,
     nameLocked: false,
     command: "claude code",

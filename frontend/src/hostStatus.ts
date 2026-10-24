@@ -57,12 +57,20 @@ export function deriveHostStatus(host: Host, click: PingState): HostStatusDispla
     const dot = host.health === "online" ? "on" : host.health === "degraded" ? "warn" : "off";
     const color =
       host.health === "online" ? "var(--g)" : host.health === "degraded" ? "var(--y)" : "var(--r)";
-    return { dot, label: host.health, color };
+    // Issue #1727 — "offline" reads as BROKEN. We do not know that: the
+    // host may simply be asleep (a closed laptop), and with a fleet of
+    // sleeping machines that is the NORMAL state, not a fault. The label
+    // says what we actually know — we could not reach it — and the colour
+    // stays quiet.
+    // ("pending" never reaches here — the branch above already excluded it.)
+    const label = host.health === "offline" ? "unreachable" : host.health;
+    return { dot, label, color };
   }
   if (click.status === "unknown") return { dot: undefined, label: null, color: "var(--dim)" };
   return {
     dot: click.status === "online" ? "on" : "off",
-    label: click.status,
+    // Same wording as the health path above (issue #1727).
+    label: click.status === "online" ? "online" : "unreachable",
     color: click.status === "online" ? "var(--g)" : "var(--r)",
   };
 }

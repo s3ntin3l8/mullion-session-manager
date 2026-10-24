@@ -46,10 +46,16 @@ export type SessionStatus =
   | "subagent" // one or more subagents are running
   | "background" // outstanding backgroundTasks (bash/MCP/agent) the Stop hook reported (issue #428)
   | "working"
-  | "idle";
+  | "idle"
+  // Issue #1727 / roadmap 8.13 — the host running this session could not
+  // be reached, so we do NOT know whether it is alive. Distinct from
+  // "exited" (the process genuinely exited) and from "idle" (we reached
+  // it and it is doing nothing): a sleeping laptop is the NORMAL state
+  // for a host that is merely asleep, not a sign of trouble.
+  | "suspended";
 
 export type SessionSeverity =
-  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
+  "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant" | "unknown";
 
 // ---------------------------------------------------------------------------
 // pty-manager.ts — NotificationEvent

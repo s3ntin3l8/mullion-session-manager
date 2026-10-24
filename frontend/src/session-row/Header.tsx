@@ -50,6 +50,11 @@ export interface HeaderProps {
   // prop-driven and never reads the store or the quota itself. Absent →
   // nothing is rendered at all.
   quotaBadge?: ReactNode;
+  // Issue #1727 — which host this session runs on, for a session that is
+  // NOT on the local one. A ReactNode, not data, for the same reason
+  // `quotaBadge` above is: this component stays prop-driven and never
+  // reads the store. Absent → nothing is rendered at all.
+  hostBadge?: ReactNode;
   // Sidebar declutter — the chevron now toggles ALL of SessionRow's history
   // sections (session-row/Details.tsx: git/files/agents/said), not just git
   // as the surrounding prop names' history suggests (`alwaysExpandGit`/
@@ -90,6 +95,7 @@ export function Header({
   dot,
   statusLabel,
   quotaBadge,
+  hostBadge,
   hasDetails,
   alwaysExpandGit,
   gitLineExpanded,
@@ -175,6 +181,9 @@ export function Header({
         operator having to open the row's details. It renders nothing at all
         when Runway has nothing to say (see QuotaBadge). */}
       {quotaBadge}
+      {/* Issue #1727 — which host this session runs on. Renders nothing
+        for a local session, which is the overwhelmingly common case. */}
+      {hostBadge}
       {/* Sidebar declutter — was row 3's git-only toggle (issue #202); now
         gates every history section session-row/Details.tsx renders (git,
         files, agents, the agent's last message), not just git. `hasDetails`

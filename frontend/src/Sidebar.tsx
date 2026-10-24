@@ -55,6 +55,7 @@ import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
 import { Header } from "./session-row/Header.js";
+import { HostBadge } from "./session-row/HostBadge.js";
 import { Details } from "./session-row/Details.js";
 import { QuotaBadge } from "./session-row/QuotaBadge.js";
 import { useRunwayQuota } from "./hooks/useRunwayQuota.js";
@@ -1611,6 +1612,10 @@ export function SessionRow({
   // row's logo and name come from), so the badge names the same agent the
   // rest of the row names.
   const runwayQuota = useRunwayQuota();
+  // Issue #1727 — the host list, for the per-session host badge. Read
+  // through the hook (this renders) so the badge updates when the fleet
+  // changes.
+  const hosts = useDashboardStore((s) => s.hosts);
   const renameSession = useDashboardStore((s) => s.renameSession);
 
   // Row 4 (issue #177) — recent file changes, derived from the same
@@ -1889,6 +1894,13 @@ export function SessionRow({
           dot={dot}
           statusLabel={statusLabel}
           quotaBadge={<QuotaBadge quota={runwayQuota} command={session.command} />}
+          // Issue #1727 — which host this session runs on. Once placement
+          // (#1724) can put different sessions of one project on
+          // different machines, the per-PROJECT badge is no longer enough:
+          // the user needs to see it per session.
+          hostBadge={
+            <HostBadge hostId={session.hostId} projectHostId={project.hostId} hosts={hosts} />
+          }
           hasDetails={detailsAvailable}
           alwaysExpandGit={alwaysExpandGit}
           gitLineExpanded={gitLineExpanded}

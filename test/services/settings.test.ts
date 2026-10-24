@@ -615,9 +615,10 @@ describe("DEFAULT_SETTINGS.notifications.notificationMatrix", () => {
   // work found it (no default meant no channel — browser, sound, or push —
   // could ever be enabled for it), bringing this to the full 16-member
   // SessionStatus union.
-  it("has 16 entries — one per SessionStatus", () => {
+  it("has 17 entries — one per SessionStatus", () => {
+    // Issue #1727 added "suspended" (the host could not be reached).
     const matrix = DEFAULT_SETTINGS.notifications.notificationMatrix;
-    expect(Object.keys(matrix)).toHaveLength(16);
+    expect(Object.keys(matrix)).toHaveLength(17);
   });
 
   it("notificationMatrix defaults have correct notify values matching STATUS_PRESENTATION.defaultNotify", () => {

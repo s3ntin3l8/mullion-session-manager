@@ -136,6 +136,9 @@ function makeSession(overrides: Partial<Session>): Session {
     id: 1,
     projectId: 1,
     parentSessionId: null,
+    // Issue #1727 — the host this session runs on.
+    hostId: "local",
+    // Issue #1727 — the host this session runs on.
     name: null,
     nameLocked: false,
     command: "claude code",

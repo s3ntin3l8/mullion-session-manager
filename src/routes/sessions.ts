@@ -337,6 +337,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       }
 
       const liveByHost = new Map<string, Record<string, SessionInfo | null>>();
+      // Issue #1727 — the hosts we could NOT reach, so their sessions can
+      // say "unreachable" rather than reading as idle.
+      const unreachableHosts = new Set<string>();
       await Promise.all(
         [...idsByHost.entries()].map(async ([hostId, ids]) => {
           try {
@@ -345,6 +348,7 @@ export async function sessionsRoute(app: FastifyInstance) {
               await resolveBackend(app, hostId).liveStatus(ids, idleThresholdMs),
             );
           } catch (err) {
+            unreachableHosts.add(hostId);
             app.log.warn(
               { hostId, err },
               "host unreachable, reporting default live status for its sessions",
@@ -357,7 +361,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
-        return withLiveInfo(app, row, info, hostId);
+        return withLiveInfo(app, row, info, hostId, !unreachableHosts.has(hostId));
       });
     },
   );

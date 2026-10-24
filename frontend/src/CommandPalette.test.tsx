@@ -1324,6 +1324,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       id: 1,
       projectId: PROJECT.id,
       parentSessionId: null,
+      // Issue #1727 — the host this session runs on.
+      hostId: "local",
       name: null,
       nameLocked: false,
       command: "claude code",

@@ -2807,6 +2807,9 @@ describe("Dock", () => {
         id: 99,
         projectId: 1,
         parentSessionId: null,
+        // Issue #1727 — the host this session runs on.
+        hostId: "local",
+        // Issue #1727 — the host this session runs on.
         name: null,
         nameLocked: false,
         command: "npm run dev",
@@ -3188,6 +3191,8 @@ describe("Dock", () => {
           id: 99,
           projectId: 1,
           parentSessionId: null,
+          // Issue #1727 — the host this session runs on.
+          hostId: "local",
           name: null,
           nameLocked: false,
           command: "npm run dev",

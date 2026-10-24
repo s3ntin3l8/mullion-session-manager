@@ -71,6 +71,8 @@ function statusWith(overrides: Partial<GitStatus>): GitStatus {
 
 const BASE_SESSION_FIELDS = {
   parentSessionId: null,
+  // Issue #1727 — the host this session runs on.
+  hostId: "local",
   command: "claude",
   name: null,
   nameLocked: false,

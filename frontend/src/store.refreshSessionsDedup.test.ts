@@ -24,6 +24,9 @@ function session(id: number, overrides: Partial<Session> = {}): Session {
     id,
     projectId: 1,
     parentSessionId: null,
+    // Issue #1727 — the host this session runs on.
+    hostId: "local",
+    // Issue #1727 — the host this session runs on.
     name: `session-${id}`,
     nameLocked: true,
     command: "claude code",

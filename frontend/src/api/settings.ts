@@ -177,6 +177,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
       background: { notify: false, sound: false, autoFocus: false },
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
+      // Issue #1727 — the host could not be reached; nothing failed, so no
+      // notification and no sound.
+      suspended: { notify: false, sound: false, autoFocus: false },
       // No `as Record<SessionStatus, ...>` cast on this object (there used
       // to be one) — it silently defeated the exhaustiveness check the
       // outer `DEFAULT_SETTINGS: AppSettings` annotation would otherwise

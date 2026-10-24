@@ -58,6 +58,10 @@ const SEVERITY_BY_STATUS: Record<SessionStatus, SessionSeverity> = {
   background: "busy",
   working: "busy",
   idle: "dormant",
+  // Issue #1727 — "we could not reach the host" is its own severity: not
+  // "gone" (we do not know that), not "failed" (nothing failed), and not
+  // "dormant" (we did not look).
+  suspended: "unknown",
 };
 
 /** Every SessionStatus / SessionSeverity as runtime values, for validating a
@@ -167,6 +171,10 @@ export interface DeriveSessionStatusInput {
     | "subagentCount"
     | "lastTurnEndedAt"
     | "outstandingBackgroundTasks"
+    // Issue #1727 — whether the host answered. Undefined means "we did not
+    // ask" (a local session, or a caller that never had to reach out), and
+    // is treated as reachable.
+    | "hostReachable"
   >;
 }
 
@@ -206,6 +214,8 @@ export function defaultDeriveStatusInfo(
     subagentCount: info?.subagentCount ?? 0,
     lastTurnEndedAt: info?.lastTurnEndedAt ?? null,
     outstandingBackgroundTasks: info?.outstandingBackgroundTasks ?? [],
+    // Issue #1727 — undefined means "not asked", which is reachable.
+    hostReachable: info?.hostReachable ?? true,
   };
 }
 
@@ -249,6 +259,19 @@ export function deriveSessionStatus({
   // module existed.
   if (dbStatus === "killed" || dbStatus === "exited") {
     return make("exited", formatExitedDetail(info.endedReason, info.exitCode));
+  }
+
+  // --- The host could not be reached (issue #1727 / roadmap 8.13). ---
+  //
+  // The liveness axis already refuses to call an unreachable host's
+  // sessions dead — "a network blip must never look like every session on
+  // that host died" — and this is where that distinction reaches the UI.
+  // Checked right after the "killed/exited" case: a session the OPERATOR
+  // killed is exited whatever the host is doing, but a session whose host
+  // is merely asleep is not gone — it may well still be running, and it
+  // resumes when the host wakes.
+  if (info.hostReachable === false) {
+    return make("suspended");
   }
 
   // --- Agent-activity axis, in precedence order. ---

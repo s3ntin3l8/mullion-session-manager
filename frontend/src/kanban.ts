@@ -48,6 +48,12 @@ export function columnForSession(session: Session): KanbanColumnId {
       return "working";
     case "dormant":
       return "idle";
+    // Issue #1727 — a session whose host could not be reached is not
+    // "exited" (we do not know that it is gone) and not "working" (we do
+    // not know that it is working). It sits with the idle cards, where its
+    // own dot and label say "Unreachable".
+    case "unknown":
+      return "idle";
   }
 }
 

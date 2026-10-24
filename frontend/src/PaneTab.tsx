@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { HostBadge } from "./session-row/HostBadge.js";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
@@ -63,6 +64,14 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // underline below, since that's a property of *other* sessions this tab
   // doesn't otherwise subscribe to.
   const sessions = useDashboardStore((s) => s.sessions);
+  // Issue #1727 — the host list, for the per-session host badge (a session
+  // that is not on the local one says which machine it is on), and the
+  // session's project, for the host a session with no host of its own
+  // inherits.
+  const hosts = useDashboardStore((s) => s.hosts);
+  const sessionProject = useDashboardStore((s) =>
+    session ? s.projects?.find((p) => p.id === session.projectId) : undefined,
+  );
   const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
   const highlightFlash = highlightedPanelId === `session-${sessionId}`;
   // Branch sub-label (issue #96) — the session's best-known branch; see the
@@ -362,6 +371,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           </span>
         )}
         {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
+        {/* Issue #1727 — which host this session runs on. A user watching a
+            single session in a dock pane may not have the sidebar open, so
+            the badge is here too. Renders nothing for a local session. */}
+        {!tight && session && (
+          <HostBadge hostId={session.hostId} projectHostId={sessionProject?.hostId} hosts={hosts} />
+        )}
         {!narrow && badge}
         {unreadCount > 0 && unreadIconKind && (
           <span

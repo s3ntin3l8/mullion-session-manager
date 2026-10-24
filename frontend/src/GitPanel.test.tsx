@@ -538,6 +538,9 @@ describe("GitPanel", () => {
         id: 42,
         projectId: 20,
         parentSessionId: null,
+        // Issue #1727 — the host this session runs on.
+        hostId: "local",
+        // Issue #1727 — the host this session runs on.
         name: null,
         nameLocked: false,
         command: "claude",

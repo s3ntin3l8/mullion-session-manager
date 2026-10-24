@@ -1119,6 +1119,93 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    // Issue #1727 / roadmap 8.13 — the session list says "unreachable"
+    // for a host it could not reach, so the UI can tell "the host is
+    // asleep" from "the session is gone".
+    it("marks a session as unreachable (not idle, not exited) when its host cannot be reached", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const badHost = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "goes-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remoteProject = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-unreachable", cwd: "/x", hostId: badHost.json().id },
+      });
+      const [row] = app.db
+        .insert(sessions)
+        .values({ projectId: remoteProject.json().id, command: "bash", status: "active" })
+        .returning()
+        .all();
+
+      const res = await app.inject({ method: "GET", url: "/api/sessions" });
+      expect(res.statusCode).toBe(200);
+      const session = res.json().find((s: { id: number }) => s.id === row.id);
+      expect(session.hostReachable).toBe(false);
+      expect(session.sessionStatus).toBe("suspended");
+      expect(session.sessionStatusSeverity).toBe("unknown");
+      // The host id is on the payload as the raw column — NULL here,
+      // which means "inherit the project's host" (the bad one). The UI
+      // resolves it that way.
+      expect(session.hostId).toBeNull();
+
+      await app.close();
+    });
+
+    // Issue #1727 — the state must come back on its own when the host
+    // wakes: the list is re-read on every poll tick, and "unreachable" is
+    // derived from that read, not latched.
+    it("returns to live by itself when the host wakes, with no manual refresh", async () => {
+      const app = await buildApp();
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const { sessions } = await import("../../src/db/schema.js");
+      const badHost = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "sleeps-then-wakes", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const remoteProject = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-wakes", cwd: "/x", hostId: badHost.json().id },
+      });
+      const [row] = app.db
+        .insert(sessions)
+        .values({ projectId: remoteProject.json().id, command: "bash", status: "active" })
+        .returning()
+        .all();
+
+      // The host is asleep: the live-status read fails.
+      const asleep = {
+        liveStatus: vi.fn().mockRejectedValue(new Error("host unreachable")),
+      };
+      const spy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(
+          asleep as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>,
+        );
+
+      const whileAsleep = await app.inject({ method: "GET", url: "/api/sessions" });
+      const asleepSession = whileAsleep.json().find((s: { id: number }) => s.id === row.id);
+      expect(asleepSession.sessionStatus).toBe("suspended");
+      expect(asleepSession.hostReachable).toBe(false);
+
+      // The host wakes: the same route, one poll later.
+      spy.mockReturnValue({
+        liveStatus: vi.fn().mockResolvedValue({ [String(row.id)]: { id: String(row.id) } }),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const whenAwake = await app.inject({ method: "GET", url: "/api/sessions" });
+      const awakeSession = whenAwake.json().find((s: { id: number }) => s.id === row.id);
+      expect(awakeSession.hostReachable).toBe(true);
+      expect(awakeSession.sessionStatus).not.toBe("suspended");
+      spy.mockRestore();
+      await app.close();
+    });
+
     it("reports an empty buffer instead of 500ing when the session's remote host is unreachable", async () => {
       const app = await buildApp();
       const { sessions } = await import("../../src/db/schema.js");

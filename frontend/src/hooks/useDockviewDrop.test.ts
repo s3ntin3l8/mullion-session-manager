@@ -82,6 +82,9 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     sessionStatus: "idle",
     attention: false,
     parentSessionId: null,
+    // Issue #1727 — the host this session runs on.
+    hostId: "local",
+    // Issue #1727 — the host this session runs on.
     createdAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
   } as Session;

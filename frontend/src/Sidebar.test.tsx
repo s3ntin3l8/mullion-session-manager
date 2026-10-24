@@ -939,7 +939,8 @@ describe("Sidebar declutter — project header trim", () => {
 
     expect(document.querySelector(".project-rules-indicator")).toBeNull();
     const name = screen.getByText(PROJECT.name);
-    expect(name.getAttribute("title")).toBe(`${PROJECT.cwd}\nAgent rules: AGENTS.md, CLAUDE.md`);
+    expect(name.getAttribute("title")).toBe(`${PROJECT.cwd}
+Agent rules: AGENTS.md, CLAUDE.md`);
   });
 
   it("falls back to just the cwd in the tooltip when the project has no rule files", () => {

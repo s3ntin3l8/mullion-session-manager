@@ -25,10 +25,20 @@ describe("deriveHostStatus (issue #246)", () => {
     expect(display).toEqual({ dot: "warn", label: "degraded", color: "var(--y)" });
   });
 
+  // Issue #1727 / roadmap 8.13 — an unreachable host is NOT "broken": it
+  // may simply be asleep, and with a fleet of sleeping laptops that is the
+  // normal state. The label says what we know.
+  it("says 'unreachable' rather than 'offline' for a host it could not reach", () => {
+    const host = makeHost({ health: "offline", lastCheckedAt: "2026-01-01T00:00:10.000Z" });
+    const display = deriveHostStatus(host, NO_CLICK);
+    expect(display.label).toBe("unreachable");
+    expect(display.dot).toBe("off");
+  });
+
   it("shows red/off for an offline heartbeat status", () => {
     const host = makeHost({ health: "offline", lastCheckedAt: "2026-01-01T00:00:10.000Z" });
     const display = deriveHostStatus(host, NO_CLICK);
-    expect(display).toEqual({ dot: "off", label: "offline", color: "var(--r)" });
+    expect(display).toEqual({ dot: "off", label: "unreachable", color: "var(--r)" });
   });
 
   it("shows 'testing…' while a click is in flight, overriding a disagreeing heartbeat", () => {
@@ -64,7 +74,7 @@ describe("deriveHostStatus (issue #246)", () => {
     const click: PingState = { status: "online", lastCheckedAtSnapshot: t1 };
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
-      label: "offline",
+      label: "unreachable",
       color: "var(--r)",
     });
   });
@@ -74,7 +84,7 @@ describe("deriveHostStatus (issue #246)", () => {
     const click: PingState = { status: "offline", lastCheckedAtSnapshot: null };
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
-      label: "offline",
+      label: "unreachable",
       color: "var(--r)",
     });
   });
@@ -106,7 +116,7 @@ describe("deriveHostStatus (issue #246)", () => {
     // wrongly treated this as fresh since clickToken > earlierServerToken.
     expect(deriveHostStatus(host, click)).toEqual({
       dot: "off",
-      label: "offline",
+      label: "unreachable",
       color: "var(--r)",
     });
   });
