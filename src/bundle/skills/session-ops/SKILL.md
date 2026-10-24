@@ -67,13 +67,14 @@ are one; see the Mullion host skill's scope caveat).
 
 `skipPermissions` IS honoured from inside a session, but only as far as your
 own session's posture allows: **a child can never be more permissive than
-the session that spawned it.** Pass `skipPermissions: true` and the child
-gets it only if you already run with permissions skipped; pass `false` (or
-omit it) and the child inherits your posture. So a child of an unattended
-session is unattended too. If a child needs to act unattended (edit files,
-run tests, commit) rather than wait on a human, pass
-`skipPermissions: true`. Its panel doesn't auto-open unless a human turned
-that on separately — either way it shows in the sidebar.
+the session that spawned it.** Leave it out and the child inherits your
+posture exactly; pass `true` and the child gets it only if you already run
+with permissions skipped; pass `false` and the child is narrowed to
+prompts-on. So a child of an unattended session is unattended too. If a
+child needs to act unattended (edit files, run tests, commit) rather than
+wait on a human, pass `skipPermissions: true`. Its panel doesn't auto-open
+unless a human turned that on separately — either way it shows in the
+sidebar.
 
 **Don't bake prompt text into `command`.** Use `initialPrompt` (MCP) /
 `--initial-prompt` (CLI) instead — it's delivered via the target CLI's own

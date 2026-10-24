@@ -1856,6 +1856,28 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      it("session scope: a NON-boolean skipPermissions narrows to false", async () => {
+        // The socket body is not schema-validated before this point (only
+        // POST /api/sessions would 400 it), so this is the only place a
+        // nonsense value can be caught — and it must fail CLOSED: a
+        // non-boolean is neither "unset" nor "true", so it narrows.
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession({ skipPermissions: true });
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", skipPermissions: "true" },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        expect(reply.result).toMatchObject({ skipPermissions: false });
+        socket.destroy();
+      });
+
       it("session scope: a child may NARROW its parent's skipPermissions", async () => {
         // The other direction is always allowed: a child can be less
         // permissive than its parent.

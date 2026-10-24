@@ -301,15 +301,15 @@ already resolves to full scope and it takes effect.
 
 `skipPermissions` IS honoured from inside a session, but only ever as far as
 your own session's posture allows: **a child can never be more permissive
-than the session that spawned it.** Pass `skipPermissions: true` and the
-child gets it if — and only if — _you_ already run with permissions skipped;
-pass `false` (or omit it) and the child inherits your posture. So if you are
-already unattended, a delegated child is unattended too, and if you are
-not, no child you spawn can act as if you were. If a child you spawn needs
-to act unattended (edit files, run tests, commit) rather than just sit and
-wait for a human, pass `skipPermissions: true` — and check whether it
-actually took effect on this host before assuming it stalled on a permission
-prompt nobody is watching.
+than the session that spawned it.** Leave it out and the child inherits your
+posture exactly. Pass `true` and the child gets it if — and only if — _you_
+already run with permissions skipped; pass `false` and the child is narrowed
+to prompts-on whatever you do. So if you are already unattended, a
+delegated child is unattended too, and if you are not, no child you spawn
+can act as if you were. If a child you spawn needs to act unattended (edit
+files, run tests, commit) rather than just sit and wait for a human, pass
+`skipPermissions: true` — and check whether it actually took effect on this
+host before assuming it stalled on a permission prompt nobody is watching.
 
 **Model overrides.** `model` (MCP) / `--model` (CLI) sets the child's model:
 opencode's own `provider/model` string, or the bare `--model` value for a

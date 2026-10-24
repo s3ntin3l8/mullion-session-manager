@@ -1332,6 +1332,12 @@ export const OPS: Record<string, OpSpec> = {
               // The parent's own posture is the ceiling. `requested` may only
               // narrow it: unset means "inherit", and an explicit true still
               // cannot exceed what the parent has.
+              //
+              // A NON-boolean value ("true", 1) is neither unset nor `true`,
+              // so it narrows to false — the fail-closed reading. The socket
+              // body is not schema-validated before this point (only
+              // POST /api/sessions would 400 it), so this is the only place
+              // a nonsense value can be caught.
               const parentSkipPermissions =
                 (parentLookup.result as { skipPermissions?: unknown } | undefined)
                   ?.skipPermissions === true;

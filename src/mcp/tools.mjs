@@ -271,9 +271,10 @@ const spawnChildSession = {
         description:
           "Append the agent's skip-permissions flag. From inside a normal agent session " +
           "(session scope) this can only ever NARROW: a child is never more permissive " +
-          "than the session that spawned it. Pass true and the child gets it only if " +
-          "your own session already runs with permissions skipped; pass false (or omit " +
-          "it) and the child inherits your posture.",
+          "than the session that spawned it. Leave it out and the child inherits your " +
+          "posture exactly; pass true and the child gets it only if your own session " +
+          "already runs with permissions skipped; pass false and the child is narrowed " +
+          "to prompts-on.",
       },
       parentSessionId: {
         type: "string",
