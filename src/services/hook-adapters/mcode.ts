@@ -664,13 +664,18 @@ function writeFileAtomic(targetPath: string, contents: string, mode: number): vo
  * environment is the mcode process's environment, plus the server's own `env`,
  * plus any override.
  *
- * (There is a SECOND, unrelated stdio transport in the same bundle — the MCP
- * SDK's own `StdioClientTransport`, whose `start()` uses
+ * (There is a SECOND stdio transport in the same bundle — the MCP SDK's own
+ * `StdioClientTransport`, whose `start()` uses
  * `env: { ...Lbr(), ...this._serverParams.env }` with `Lbr()` copying only a
- * six-variable allowlist (HOME, LOGNAME, PATH, SHELL, TERM, USER). That is
- * NOT the path a local plugin's MCP server takes — it is the path for an MCP
- * server whose transport mcode did not build itself. The plugin path is
- * `dce`/`cce` above.)
+ * six-variable allowlist (HOME, LOGNAME, PATH, SHELL, TERM, USER). `ace` —
+ * the class `cce` builds — EXTENDS that same class, so a reader who greps
+ * `Lbr()` will land on the allowlist and can easily conclude the opposite.
+ * The env wins here for one precise reason: `_serverParams.env` is ALREADY
+ * `{...Fbr(), …}` — the whole process env — so it overrides every allowlisted
+ * key. The allowlist only applies when `_serverParams.env` does not already
+ * carry them, which is the path for an MCP server whose transport mcode did
+ * not build itself. A local plugin's MCP server takes the `dce`/`cce` path
+ * above.)
  *
  * So the credentials reach Mullion's MCP server with **no new plumbing at
  * all**: mcode's own spawn hands the mcode process's environment down, and the

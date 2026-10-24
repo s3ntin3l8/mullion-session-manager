@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext } from "../../src/services/hook-adapters/types.js";
+import { baseSession as baseSessionFixture } from "./launch-plan-fixture.js";
 
 const callOrder: string[] = [];
 
@@ -70,29 +71,9 @@ function mkTmpDir(prefix: string): string {
   return dir;
 }
 
-function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> = {}) {
-  return {
-    id: "42",
-    cwd: "/tmp/project",
-    command: "bash",
-    socketPath: "/tmp/sessions/42.sock",
-    hookToken: "test-hook-token",
-    hookSocketPath: "/tmp/sessions/hooks.sock",
-    controlSocketPath: "/tmp/sessions/mullion.sock",
-    sessionsDir: "/tmp/sessions",
-    sshAuthSock: "",
-    authEnabled: false,
-    env: {},
-    injectAgentGuide: true,
-    injectProjectBriefing: true,
-    injectMullionBundle: true,
-    skipPermissions: false,
-    initialPrompt: undefined,
-    briefingOverride: undefined,
-    workflowConventionsText: undefined,
-    ...overrides,
-  };
-}
+// The fixture lives in its own module so that other tests can build a session
+// the same way (see the mcode adapter's MCP-credential test).
+const baseSession = baseSessionFixture;
 
 const ORIGINAL_ENV = { ...process.env };
 

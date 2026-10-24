@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { buildLaunchPlan } from "../../../src/services/launch-plan.js";
+import { baseSession } from "../launch-plan-fixture.js";
 import {
   existsSync,
   mkdtempSync,
@@ -501,23 +502,12 @@ describe("buildMcodeMcpConfig — the plugin's MCP server declaration (#1783)", 
   // MULLION_HOOK_TOKEN, MULLION_SOCKET_PATH and MULLION_SESSION_ID from its
   // own environment.
   it("delivers the credentials through the SESSION env, not through the entry", () => {
-    const plan = buildLaunchPlan({
-      id: "42",
-      cwd: "/tmp/project",
-      command: "mcode",
-      socketPath: "/tmp/sessions/42.sock",
-      hookToken: "the-hook-token",
-      hookSocketPath: "/tmp/sessions/hooks.sock",
-      controlSocketPath: "/tmp/sessions/mullion.sock",
-      sessionsDir: "/tmp/sessions",
-      sshAuthSock: "",
-      authEnabled: false,
-      env: {},
-      injectAgentGuide: true,
-      injectProjectBriefing: true,
-      injectMullionBundle: true,
-      skipPermissions: false,
-    });
+    const plan = buildLaunchPlan(
+      baseSession({
+        command: "mcode",
+        hookToken: "the-hook-token",
+      }),
+    );
 
     // (1) The session's env — which becomes the mcode process's env.
     expect(plan.env.MULLION_HOOK_SOCKET).toBe("/tmp/sessions/hooks.sock");
