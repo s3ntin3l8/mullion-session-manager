@@ -253,7 +253,7 @@ describe("agentEnrollmentPlugin", () => {
       // agent's own .env — the file the launchd launcher sources.
       fs.writeFileSync(
         path.join(mullionHome, ".env"),
-        "MULLION_ENROLLMENT_TOKEN=rotated-secret\n",
+        "MULLION_ENROLLMENT_TOKEN=rotated-secret\n", // pragma: allowlist secret
         "utf8",
       );
 
@@ -353,7 +353,7 @@ describe("agentEnrollmentPlugin", () => {
       process.env.MULLION_AGENT_TOKEN = "static-token-1";
       fs.writeFileSync(
         path.join(mullionHome, ".env"),
-        "MULLION_AGENT_TOKEN=static-token-2\n",
+        "MULLION_AGENT_TOKEN=static-token-2\n", // pragma: allowlist secret
         "utf8",
       );
 
