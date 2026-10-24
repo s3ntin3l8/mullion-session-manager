@@ -248,12 +248,36 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
     app.hostHeartbeatTracker?.recordSuccess(hostId);
     app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
 
-    const project = { hostId: "local", placement: "auto" } as const;
+    // Issue #1724 — the project is on the remote host, so the remote host
+    // is a candidate at all. The preview and the spawn path must agree on
+    // WHICH host, and they only can if both are asked the same question.
+    const project = {
+      hostId: "local",
+      placement: "auto",
+      cwd: LOCAL_CWD,
+      hostCwds: JSON.stringify({ [hostId]: REMOTE_CWD }),
+    } as const;
     const announced = resolvePlacement(app, { project, unattended: true });
     const previewed = previewPlacement(app, { project, unattended: true });
 
     expect(previewed).toEqual(announced);
     expect(previewed.hostId).toBe(hostId);
+  });
+
+  it("answers the SAME way when the project is on no other host", async () => {
+    const hostId = await registerHost("idle-agent");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+
+    // The other half of the rule: a host the project is NOT on is not a
+    // candidate, so both paths fall back to the project's own host — and
+    // they must fall back the same way.
+    const project = { hostId: "local", placement: "auto", cwd: LOCAL_CWD } as const;
+    const announced = resolvePlacement(app, { project, unattended: true });
+    const previewed = previewPlacement(app, { project, unattended: true });
+
+    expect(previewed).toEqual(announced);
+    expect(previewed.hostId).toBe("local");
   });
 
   it("announces NOTHING — a preview is not a placement", async () => {

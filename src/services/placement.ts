@@ -257,7 +257,7 @@ export function chooseHost(
   }
 
   const considered: ConsideredHost[] = eligible.map((candidate) => {
-    const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity)!;
+    const capacity = (candidate.isLocal ? context.localCapacity : candidate.capacity)!;
     return {
       hostId: candidate.hostId,
       loadAverage1m: capacity.loadAverage1m,
@@ -310,10 +310,7 @@ export function chooseHost(
   };
 }
 
-function capacityOf(
-  candidate: PlacementCandidate,
-  context: PlacementContext,
-): HostCapacity {
+function capacityOf(candidate: PlacementCandidate, context: PlacementContext): HostCapacity {
   return (candidate.isLocal ? context.localCapacity : candidate.capacity)!;
 }
 
@@ -389,10 +386,7 @@ interface PlacementProject {
  * a failure means (fall back to the project's host), because only the caller
  * knows whether this was a real placement or a preview.
  */
-function collectCandidates(
-  app: FastifyInstance,
-  project: PlacementProject,
-): CollectedCandidates {
+function collectCandidates(app: FastifyInstance, project: PlacementProject): CollectedCandidates {
   const localCapacity = measureHostCapacity(app);
   // Issue #1724 — the per-host cwd map, parsed ONCE (the keys are
   // operator-supplied and become property names, so it is parsed into a
