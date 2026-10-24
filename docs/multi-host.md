@@ -459,6 +459,19 @@ Docker detection are all cross-platform. The macOS **launchd** deployment —
 systemd unit, and `deploy/install.sh` picks it from `uname -s` and skips the
 systemd prerequisite checks on darwin.
 
+**Installing a Mac needs no clone.** The release tarball ships `deploy/`, so
+a Mac (like any host) can be installed straight from a published release:
+
+```sh
+curl -fsSL -o mullion-install.sh \
+  https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
+sh mullion-install.sh --role primary ~/opt/mullion
+```
+
+The bootstrap fetches the release, verifies its checksum, and runs the
+`deploy/install.sh` inside it — the same installer the clone path runs. See
+[`deploy/README.md`](../deploy/README.md)'s "Installing without a clone".
+
 **What is different.** A macOS primary's **local** sessions run under the
 darwin scope backend — the same detached `dtach` backend an agent's sessions
 use — so every local session on a Mac dogfoods the macOS scope path. The
