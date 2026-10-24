@@ -110,6 +110,53 @@ describe("Settings -> Hosts", () => {
     vi.unstubAllGlobals();
   });
 
+  // Issue #1726 / roadmap 8.12 — the capacity line: how busy each host is.
+  it("shows how busy a host is — its platform, cores, load and free memory", async () => {
+    hostsDb[0].platform = "linux";
+    hostsDb[0].capacity = {
+      platform: "linux",
+      logicalCores: 12,
+      loadAverage1m: 1.234,
+      memory: { totalBytes: 32 * 1024 ** 3, freeBytes: 8.2 * 1024 ** 3 },
+      sessions: { tracked: 2, alive: 1 },
+      sampledAt: new Date().toISOString(),
+    };
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    const row = await screen.findByTestId("host-row-remote-1");
+    expect(within(row).getByText(/12 cores/)).toBeInTheDocument();
+    expect(within(row).getByText(/load 1\.23/)).toBeInTheDocument();
+    expect(within(row).getByText(/free of/)).toBeInTheDocument();
+    expect(within(row).getByText(/Linux/)).toBeInTheDocument();
+  });
+
+  it("shows a host that reports NO capacity as unknown, never as zero", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    const row = await screen.findByTestId("host-row-remote-1");
+    expect(within(row).getByText(/capacity unknown/)).toBeInTheDocument();
+    // The distinction that matters: a missing reading must never read as
+    // "this machine is idle".
+    expect(within(row).queryByText(/load 0\.00/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the numbers but marks them as old when the reading aged out", async () => {
+    hostsDb[0].health = "offline";
+    hostsDb[0].capacity = {
+      platform: "linux",
+      logicalCores: 12,
+      loadAverage1m: 1.234,
+      memory: { totalBytes: 32 * 1024 ** 3, freeBytes: 8.2 * 1024 ** 3 },
+      sessions: { tracked: 2, alive: 1 },
+      sampledAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    };
+    render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+    const row = await screen.findByTestId("host-row-remote-1");
+    expect(within(row).getByText(/load 1\.23/)).toBeInTheDocument();
+    expect(within(row).getByText(/reading from 5 min ago/)).toBeInTheDocument();
+  });
+
   it("prompts to cascade-delete when the host still owns projects, then removes it on confirm", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);

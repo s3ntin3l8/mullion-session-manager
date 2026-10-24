@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
-import { resolvePlacement } from "../../src/services/placement.js";
+import { previewPlacement, resolvePlacement } from "../../src/services/placement.js";
 import * as listHostsModule from "../../src/services/host-registry.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
 
@@ -151,5 +151,113 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     expect(decision.considered).toEqual([]);
     expect(decision.fellBack).toBe(false);
     expect(decision.reason).toMatch(/pinned/);
+  });
+});
+
+// Issue #1726 / roadmap 8.12 — the PREVIEW. It answers "where would a new
+// session land right now, and why?" with the SAME decision the spawn path
+// makes, so it cannot drift from reality — but it announces nothing, because
+// no placement happened.
+describe("previewPlacement — the same decision, announced to nobody (issue #1726)", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeAll(async () => {
+    fs.rmSync(tmpDb, { force: true });
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    app = await buildApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    closeDb();
+    fs.rmSync(tmpDb, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  beforeEach(() => {
+    app.db.delete(hosts).where("id != 'local'").run();
+    app.hostCapacityTracker?.pruneMissing(new Set());
+  });
+
+  async function registerHost(name: string): Promise<string> {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    return res.json().id as string;
+  }
+
+  it("decides EXACTLY what resolvePlacement would decide", async () => {
+    const hostId = await registerHost("idle-agent");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+
+    const project = { hostId: "local", placement: "auto" } as const;
+    const announced = resolvePlacement(app, { project, unattended: true });
+    const previewed = previewPlacement(app, { project, unattended: true });
+
+    expect(previewed).toEqual(announced);
+    expect(previewed.hostId).toBe(hostId);
+  });
+
+  it("announces NOTHING — a preview is not a placement", async () => {
+    const hostId = await registerHost("idle-agent");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+
+    const spy = vi.spyOn(app.log, "info");
+    try {
+      previewPlacement(app, {
+        project: { hostId: "local", placement: "auto" },
+        unattended: true,
+      });
+      const messages = spy.mock.calls.map((call) => call[1]);
+      expect(messages).not.toContain("placement: chose a host");
+      expect(messages).not.toContain("placement: pinned to the project's host");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("announces nothing for a PINNED project either", async () => {
+    const spy = vi.spyOn(app.log, "info");
+    try {
+      const decision = previewPlacement(app, {
+        project: { hostId: "local", placement: "pinned" },
+      });
+      expect(decision.hostId).toBe("local");
+      expect(decision.reason).toMatch(/pinned/);
+      const messages = spy.mock.calls.map((call) => call[1]);
+      expect(messages).not.toContain("placement: pinned to the project's host");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("falls back to the project's host when the candidate set cannot be built", async () => {
+    const spy = vi.spyOn(listHostsModule, "listHosts").mockImplementation(() => {
+      throw new Error("the database is on fire");
+    });
+    try {
+      const decision = previewPlacement(app, {
+        project: { hostId: "local", placement: "auto" },
+      });
+      expect(decision.hostId).toBe("local");
+      expect(decision.fellBack).toBe(true);
+      expect(decision.reason).toMatch(/could not be evaluated/);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("answers for a project that does not exist yet (the create modal's preview)", async () => {
+    // The preview takes the would-be host and mode, so the create-project
+    // modal can ask BEFORE the row is saved.
+    const decision = previewPlacement(app, {
+      project: { hostId: "local", placement: "auto" },
+    });
+    expect(decision.hostId).toBe("local");
+    expect(decision.considered.length).toBeGreaterThan(0);
   });
 });
