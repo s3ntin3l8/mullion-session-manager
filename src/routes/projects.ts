@@ -142,6 +142,10 @@ interface CreateProjectBody {
   name: string;
   cwd: string;
   hostId?: string;
+  // Issue #1723 / roadmap 8.9 — the placement opt-in: "auto" lets each of
+  // this project's sessions land on an eligible host of its own; absent means
+  // the column's "pinned" default (every session on the project's own host).
+  placement?: "pinned" | "auto";
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
   // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
@@ -168,6 +172,11 @@ interface UpdateProjectBody {
   // tier — see task-agent-resolve.ts).
   defaultAgent?: string | null;
   defaultReviewAgent?: string | null;
+  // Issue #1723 / roadmap 8.9 — the placement mode: "pinned" (the default —
+  // every session runs on the project's own host) or "auto" (an eligible
+  // host is chosen per session; see services/placement.ts). The opt-in is
+  // explicit and per project: nothing changes until someone sets it.
+  placement?: "pinned" | "auto";
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
   // see schema.ts's own doc comment on these two columns.
@@ -228,6 +237,9 @@ const createProjectSchema = {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
       hostId: { type: "string", minLength: 1 },
+      // Issue #1723 / roadmap 8.9 — "auto" opts the project into automatic
+      // placement; absent means the column's "pinned" default.
+      placement: { type: "string", enum: ["pinned", "auto"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -242,6 +254,9 @@ const updateProjectSchema = {
     properties: {
       name: { type: "string", minLength: 1 },
       cwd: { type: "string", minLength: 1 },
+      // Issue #1723 / roadmap 8.9 — the placement opt-in; see the column's
+      // own comment in schema.ts.
+      placement: { type: "string", enum: ["pinned", "auto"] },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
@@ -3615,7 +3630,7 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const { name, cwd, createDir, gitInit } = request.body;
+      const { name, cwd, createDir, gitInit, placement } = request.body;
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
       if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
@@ -3693,7 +3708,14 @@ export async function projectsRoute(app: FastifyInstance) {
 
       const [created] = app.db
         .insert(projects)
-        .values({ name, cwd: resolvedCwd, hostId })
+        .values({
+          name,
+          cwd: resolvedCwd,
+          hostId,
+          // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
+          // column's default), so an existing project is untouched.
+          ...(placement === undefined ? {} : { placement }),
+        })
         .returning()
         .all();
       await maybeRegisterProjectWebhook(app, created);
@@ -3734,6 +3756,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoFetch,
         defaultAgent,
         defaultReviewAgent,
+        placement,
         mergeOnApprove,
         autoApprove,
         maxAutoReturnRounds,
@@ -3794,6 +3817,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoFetch === undefined &&
         defaultAgent === undefined &&
         defaultReviewAgent === undefined &&
+        placement === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         maxAutoReturnRounds === undefined &&
@@ -3805,7 +3829,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -3859,6 +3883,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(autoFetch !== undefined ? { autoFetch } : {}),
           ...(defaultAgent !== undefined ? { defaultAgent } : {}),
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
+          // Issue #1723 / roadmap 8.9 — the placement opt-in.
+          ...(placement !== undefined ? { placement } : {}),
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),

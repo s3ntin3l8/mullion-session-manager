@@ -213,6 +213,12 @@ export interface Project {
   // "local" for this same process, or a registered remote host's id (issue
   // #26). Every session under a project inherits its host.
   hostId: string;
+  // Issue #1723 / roadmap 8.9 — the placement mode: "pinned" (the default —
+  // every session under this project runs on its host) or "auto" (an
+  // eligible host is chosen per session). Not rendered anywhere yet — the
+  // Fleet UI is #1726; this is the same deliberate forward-plumbing as
+  // `lastSeenAt` on the host list.
+  placement?: "pinned" | "auto";
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
