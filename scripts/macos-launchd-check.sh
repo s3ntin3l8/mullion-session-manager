@@ -132,8 +132,24 @@ SBX_BIN="$SBX/bin"
 SBX_HOME="$SBX/home"
 mkdir -p "$SBX_BIN" "$SBX_HOME"
 
-for cmd in node npm dtach curl tar shasum stat readlink mv find sort dirname basename \
-  mkdir rm ln chmod grep cut sed awk mktemp tr cat wc env bash sh sleep date id; do
+# The binaries the installer reaches for BEFORE its role check — the
+# prerequisite check, the platform detection and the .env role parsing
+# (grep | tail | cut). A missing one makes the installer fail for the
+# wrong reason, which is exactly how the role-switch check once passed on a
+# DEFAULT instead of on the seeded .env (issue #1801). So: fail loudly
+# rather than silently skip.
+for cmd in node npm dtach curl tar grep tail cut dirname mkdir; do
+  resolved="$(command -v "$cmd" 2>/dev/null || true)"
+  if [ -z "$resolved" ]; then
+    echo "MISSING: $cmd is not on this host — the sandbox cannot run the installer" >&2
+    exit 2
+  fi
+  ln -sf "$resolved" "$SBX_BIN/$cmd"
+done
+
+# The rest of what the installer may reach for. Best-effort: these are not
+# needed for the checks below.
+for cmd in shasum stat readlink mv find sort basename rm ln chmod sed awk mktemp tr cat wc env bash sh sleep date id head; do
   resolved="$(command -v "$cmd" 2>/dev/null || true)"
   [ -n "$resolved" ] && ln -sf "$resolved" "$SBX_BIN/$cmd"
 done
@@ -147,6 +163,13 @@ cat >"$SBX_BIN/uname" <<'EOF'
 if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
 EOF
 chmod +x "$SBX_BIN/uname"
+
+# The com.mullion.* jobs and plists that exist on THIS host before the
+# sandboxed runs — so the checks below can assert that the runs did not
+# change them (a before/after comparison can fail; "no com.mullion.* job
+# exists" cannot, on a host that has one).
+JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
 
 echo
 echo "=== 4. the installer refuses cleanly when launchctl is missing ==="
@@ -163,12 +186,19 @@ else
       fail "the installer refused, but without naming launchctl: $(tail -2 "$TMPD/install-nolaunchctl.log" | head -1)"
     fi
   fi
-  # The refusal must not have left anything behind on the real machine.
-  if [ -f "$HOME/Library/LaunchAgents/com.mullion.primary.plist" ] &&
-    grep -q "$TMPD" "$HOME/Library/LaunchAgents/com.mullion.primary.plist" 2>/dev/null; then
-    fail "the installer wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
-  else
+  # The refusal must not have touched the real machine: no new plist, no
+  # new job.
+  PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
+  JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+  if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
     pass "the refusal left the real ~/Library/LaunchAgents untouched"
+  else
+    fail "the refusal wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
+  fi
+  if [ "$JOBS_BEFORE" = "$JOBS_AFTER" ]; then
+    pass "the refusal left the real launchd jobs untouched"
+  else
+    fail "the refusal installed a launchd job on the REAL host — the sandbox is not holding"
   fi
 fi
 
@@ -186,23 +216,32 @@ chmod +x "$SBX_BIN/launchctl"
 
 ROLE_HOME="$SBX_HOME/role-home"
 mkdir -p "$ROLE_HOME"
+# The seeded role is the OPPOSITE of the requested one on purpose: if the
+# installer could not read the .env, it would fall back to its default
+# ("primary"), and a request for "primary" would then be ACCEPTED — so a
+# broken parse can no longer look like a successful refusal.
 cat >"$ROLE_HOME/.env" <<'EOF'
-MULLION_ROLE=primary
+MULLION_ROLE=agent
 EOF
 chmod 600 "$ROLE_HOME/.env"
-if PATH="$SBX_BIN" HOME="$SBX_HOME" "$REPO_DIR/deploy/install.sh" --role agent \
+if PATH="$SBX_BIN" HOME="$SBX_HOME" "$REPO_DIR/deploy/install.sh" --role primary \
   "$ROLE_HOME" >"$TMPD/install-roleswitch.log" 2>&1; then
-  fail "the installer accepted a role switch over a primary .env — it should have refused"
+  fail "the installer accepted a role switch over an agent .env — it should have refused"
 else
   if grep -q "MULLION_ROLE" "$TMPD/install-roleswitch.log"; then
     pass "the installer refused the role switch and named the role"
   else
     fail "the installer refused, but without naming the role: $(tail -2 "$TMPD/install-roleswitch.log" | head -1)"
   fi
-  if grep -q "MULLION_ROLE=primary" "$ROLE_HOME/.env"; then
+  if grep -q "MULLION_ROLE=agent" "$ROLE_HOME/.env"; then
     pass "the refused install left the existing .env untouched"
   else
     fail "the refused install modified the existing .env"
+  fi
+  if grep -q "$SBX_HOME" "$TMPD/install-roleswitch.log"; then
+    pass "the installer worked inside the sandbox HOME"
+  else
+    fail "the installer's log never mentions the sandbox HOME — the sandbox is not holding"
   fi
 fi
 

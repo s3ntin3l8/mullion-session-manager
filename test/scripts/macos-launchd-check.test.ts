@@ -12,6 +12,10 @@
 //      had no such check, so a checklist item (#1794's) was silently
 //      uncovered. The body also drifted the other way — the platform-branch
 //      check the header listed was a SKIP in the body.
+//
+// The rest of this file pins the specific ways the script once could not
+// fail: the sandbox it runs the installer in, the `uname` shim it writes,
+// and the order it does those in.
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
@@ -24,26 +28,26 @@ const SCRIPT = fileURLToPath(new URL("../../scripts/macos-launchd-check.sh", imp
 const SOURCE = fs.readFileSync(SCRIPT, "utf8");
 
 describe("scripts/macos-launchd-check.sh", () => {
-  it("refuses to run on a non-macOS host, with a clear message", async () => {
-    // The Linux CI runner is exactly this case: the script needs launchd.
-    let failed = false;
-    let output = "";
-    try {
-      await execFileAsync("bash", [SCRIPT], { timeout: 20_000 });
-    } catch (err) {
-      failed = true;
-      const e = err as { code?: number; stdout?: string; stderr?: string };
-      output = `${e.stdout ?? ""}${e.stderr ?? ""}`;
-      expect(e.code).toBe(2);
-    }
-    // On a macOS host the script runs for real, so this assertion only holds
-    // where the script refused — which is what CI does.
-    if (failed) {
+  // On a macOS host the script runs for real (it takes a few seconds), so
+  // the "refuses on a non-macOS host" case only applies where the script
+  // refuses — which is where CI runs it.
+  it.skipIf(process.platform === "darwin")(
+    "refuses to run on a non-macOS host, with a clear message",
+    async () => {
+      let failed = false;
+      let output = "";
+      try {
+        await execFileAsync("bash", [SCRIPT], { timeout: 20_000 });
+      } catch (err) {
+        failed = true;
+        const e = err as { code?: number; stdout?: string; stderr?: string };
+        output = `${e.stdout ?? ""}${e.stderr ?? ""}`;
+        expect(e.code).toBe(2);
+      }
+      expect(failed).toBe(true);
       expect(output).toContain("this check only makes sense on macOS");
-    } else {
-      expect(process.platform).toBe("darwin");
-    }
-  });
+    },
+  );
 
   it("lists the same numbered sections in its header and its body", () => {
     // The header's list: `#   1. …`, `#   2. …`, … (continuation lines do
@@ -63,19 +67,50 @@ describe("scripts/macos-launchd-check.sh", () => {
     // The earlier version symlinked /usr/bin/uname into the sandbox and then
     // wrote the shim THROUGH that symlink, which macOS refuses (SIP) — so
     // the shim never existed and the check ran against the real platform.
-    // The shim must be created as a real file.
+    // The shim must be created as a real file, and the symlink it would
+    // have been written through must be removed FIRST.
     const writes = SOURCE.match(/cat >"\$SBX_BIN\/uname"/g) ?? [];
     expect(writes.length).toBe(1);
-    // …and the symlink it would have written through must be removed first.
     expect(SOURCE).toMatch(/rm -f "\$SBX_BIN\/uname"/);
+    expect(SOURCE.indexOf('rm -f "$SBX_BIN/uname"')).toBeLessThan(
+      SOURCE.indexOf('cat >"$SBX_BIN/uname"'),
+    );
   });
 
   it("sandbox the installer: a temp HOME and a PATH without /bin", () => {
     // PATH="$SBX_BIN" alone is what makes launchctl (which lives in /bin)
     // genuinely unreachable — a PATH that still contained the real /bin
-    // could never prove the refusal.
-    expect(SOURCE).toMatch(/PATH="\$SBX_BIN" HOME="\$SBX_HOME"/);
-    // …and the HOME must be the sandbox's, never the real one.
+    // could never prove the refusal. The pre-fix shape was
+    // PATH="$FAKEBIN:$PATH", and this assertion is that it is gone.
+    const sandboxed = SOURCE.match(/PATH="\$SBX_BIN" HOME="\$SBX_HOME"/g) ?? [];
+    // Both installer runs (the missing-launchctl one and the role-switch
+    // one) must be sandboxed.
+    expect(sandboxed.length).toBe(2);
     expect(SOURCE).not.toMatch(/PATH="\$SBX_BIN:\$PATH"/);
+    // …and the HOME must be the sandbox's, never the real one.
+    expect(SOURCE).not.toMatch(/HOME="\$SBX_BIN"/);
+  });
+
+  it("fails loudly when a binary the installer needs is missing", () => {
+    // The sandbox used to skip a binary it could not resolve, which made the
+    // role-switch check pass on the installer's DEFAULT role instead of on
+    // the seeded .env (issue #1801) — the check could not fail. A missing
+    // binary must now stop the script with a clear message.
+    expect(SOURCE).toMatch(/the sandbox cannot run the installer/);
+    // …and the binaries the installer reaches for before its role check
+    // (grep | tail | cut) must all be in the sandbox.
+    for (const cmd of ["grep", "tail", "cut"]) {
+      expect(SOURCE).toMatch(new RegExp(`for cmd in [^\\n]*\\b${cmd}\\b`));
+    }
+  });
+
+  it("seeds the role-switch check with the OPPOSITE role, so a broken parse cannot look like a refusal", () => {
+    // The seeded .env says "agent" and the request is for "primary": if the
+    // installer could not read the .env, it would fall back to its default
+    // ("primary") and ACCEPT the request — so a broken parse shows up as a
+    // failure instead of a pass.
+    expect(SOURCE).toMatch(/MULLION_ROLE=agent/);
+    expect(SOURCE).toMatch(/--role primary\s*\\?$/m);
+    expect(SOURCE).toMatch(/MULLION_ROLE=agent" "\$ROLE_HOME\/\.env"/);
   });
 });
