@@ -765,6 +765,15 @@ directory, and in its own format, because mcode's hook-result parser only
 auto-applies an "allow" unconditionally for a CODEX-format plugin (the
 permission paragraph below has the detail).
 
+**That makes mcode 0.6.12 the floor.** The CODEX plugin format and the
+format-aware auto-approval mapping are both present in **0.6.12**'s own bundle
+— verified by reading its chunks, not only 0.6.13's — so the floor is the
+version Mullion's mcode support was already live-verified against. Below it the
+CODEX plugin is not loaded at all, and since the Claude-format plugin no longer
+carries `PermissionRequest`, the hook would be registered **nowhere** and
+skip-permissions would silently stop working. So the install checks the host's
+mcode version and says so out loud rather than failing quietly.
+
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
 `TEMP`, `TMP`, …) — `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and

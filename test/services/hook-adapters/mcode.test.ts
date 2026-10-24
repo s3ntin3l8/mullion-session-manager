@@ -15,6 +15,9 @@ import {
   mcodeAdapter,
   MCODE_PLUGIN_MARKER_NAME,
   MCODE_PERMISSION_PLUGIN_DIR_NAME,
+  MCODE_MIN_VERSION_FOR_CODEX_PLUGIN,
+  __testing,
+  mcodeSupportsCodexPlugin,
   buildMcodeHooksJson,
   buildMcodePermissionHooksJson,
   buildMcodePluginManifest,
@@ -152,8 +155,34 @@ describe("mcodeAdapter.prepareLaunch", () => {
     // already exist by the time the process launches — a fire-and-forget
     // managedInstall would race that scan and the session would come up
     // with no hooks at all.
-    const plan = mcodeAdapter.prepareLaunch(ctx);
-    expect(plan.managedInstall).toBeUndefined();
+    //
+    // The plugin directory and the shim are HOST-GLOBAL, so this test must
+    // point them at a temp dir: prepareLaunch installs synchronously, and the
+    // install now also sweeps stale manifest directories out of the plugin
+    // dirs it owns. Without the isolation it would rewrite the developer's
+    // real ~/.minimax/plugins/mullion — and, before the ownership marker
+    // existed, could have removed a manifest directory out from under a
+    // user-authored plugin of the same name.
+    const originalDataDir = process.env.MINIMAX_DATA_DIR;
+    const originalHome = process.env.HOME;
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-prepare-launch-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    process.env.HOME = tmp;
+    try {
+      const plan = mcodeAdapter.prepareLaunch(ctx);
+      expect(plan.managedInstall).toBeUndefined();
+      // It landed in the temp dir, not in the real one.
+      expect(existsSync(path.join(tmp, "plugins", "mullion", ".mullion-managed"))).toBe(true);
+      expect(existsSync(path.join(tmp, "plugins", "mullion-permission", ".mullion-managed"))).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+      if (originalDataDir === undefined) delete process.env.MINIMAX_DATA_DIR;
+      else process.env.MINIMAX_DATA_DIR = originalDataDir;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 });
 
@@ -321,6 +350,47 @@ describe("buildMcodePluginManifest", () => {
   it("declares the plugin name mcode requires", () => {
     const manifest = JSON.parse(buildMcodePluginManifest());
     expect(manifest.name).toBe("mullion");
+  });
+});
+
+describe("the CODEX-format plugin's mcode version floor", () => {
+  afterEach(() => {
+    __testing.setMcodeVersion(undefined);
+  });
+
+  it("compares dotted numeric versions", () => {
+    expect(__testing.compareVersions("0.6.12", "0.6.12")).toBe(0);
+    expect(__testing.compareVersions("0.6.11", "0.6.12")).toBeLessThan(0);
+    expect(__testing.compareVersions("0.6.13", "0.6.12")).toBeGreaterThan(0);
+    expect(__testing.compareVersions("0.7.0", "0.6.12")).toBeGreaterThan(0);
+    expect(__testing.compareVersions("1.0.0", "0.6.12")).toBeGreaterThan(0);
+  });
+
+  it("supports the CODEX format from mcode 0.6.12 on", () => {
+    // 0.6.12 is the floor because the CODEX plugin format AND the
+    // format-aware auto-approval mapping are both present in 0.6.12's own
+    // bundle — verified by reading its chunks, not just 0.6.13's.
+    __testing.setMcodeVersion(MCODE_MIN_VERSION_FOR_CODEX_PLUGIN);
+    expect(mcodeSupportsCodexPlugin()).toBe(true);
+    __testing.setMcodeVersion("0.6.13");
+    expect(mcodeSupportsCodexPlugin()).toBe(true);
+  });
+
+  it("does NOT support it below the floor", () => {
+    // Below the floor the CODEX plugin is not loaded at all, and since the
+    // Claude-format plugin no longer carries PermissionRequest, the hook
+    // would be registered nowhere — so the install warns instead of failing
+    // silently.
+    __testing.setMcodeVersion("0.6.11");
+    expect(mcodeSupportsCodexPlugin()).toBe(false);
+  });
+
+  it("treats an unknown version as supported", () => {
+    // The only way the version is unknown is that `mcode --version` could not
+    // be run — which in practice means mcode is not on PATH, and then there
+    // is no mcode session to hook.
+    __testing.setMcodeVersion(null);
+    expect(mcodeSupportsCodexPlugin()).toBe(true);
   });
 });
 

@@ -2583,12 +2583,16 @@ describe("hook adapter emits capability parity (issue: extend surfaced session s
     }
   });
 
-  it("mcode: the CODEX plugin's PermissionRequest reply is the same shape the Claude plugin used", () => {
-    // Issue #1814 — the point of the second plugin is the FORMAT the reply
-    // is delivered through, not the reply itself: mcode's CODEX parser reads
+  it("mcode: the PermissionRequest reply keeps the shape the CODEX parser reads", () => {
+    // Issue #1814 — the second plugin changes the FORMAT the reply is
+    // delivered through, not the reply itself: mcode's CODEX parser reads
     // the same `{hookSpecificOutput:{hookEventName, decision}}` shape the
-    // Claude parser does. If the two ever diverge, the CODEX plugin would
-    // silently stop being able to say "allow" — which is the whole fix.
+    // Claude parser does. (This pins the forwarder's OUTPUT shape. It cannot
+    // compare against a Claude-side PermissionRequest path any more — there
+    // is none, since that hook now lives only in the CODEX plugin — so it is
+    // a regression pin on the shape, not a comparison.) If the shape ever
+    // diverges, the CODEX plugin would silently stop being able to say
+    // "allow" — which is the whole fix.
     expect(formatGateDecision("mcode", "approved", undefined)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",

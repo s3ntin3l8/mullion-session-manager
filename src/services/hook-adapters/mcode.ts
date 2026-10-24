@@ -81,6 +81,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import type { HookAdapterContext, HookLaunchPlan } from "./types.js";
 import type { HookMessageKind } from "../hook-protocol.js";
 import { SHELL_METACHARACTERS_RE, shellQuote, buildModelFlag, resolveHooksDir } from "./shared.js";
@@ -151,6 +152,73 @@ export const MCODE_PLUGIN_DIR_NAME = "mullion";
  * so a directory holding both a `.claude-plugin/` and a `.codex-plugin/` would
  * be loaded as CLAUDE and the whole point would be lost. */
 export const MCODE_PERMISSION_PLUGIN_DIR_NAME = "mullion-permission";
+
+/** The oldest mcode whose CODEX plugin format — and the format-aware
+ * auto-approval mapping that makes it useful — is present.
+ *
+ * Verified by reading mcode's OWN bundle, not just 0.6.13: 0.6.12 already
+ * has `".codex-plugin/plugin.json"` in its plugin loader, the same
+ * `sourceFormat` → `permissionAutoApproval: "any_prompt"` mapping, and the
+ * same `any_prompt`-is-unconditional gate. So the floor is 0.6.12 — the
+ * version Mullion's mcode support was already live-verified against.
+ *
+ * Below the floor the CODEX plugin is not loaded at all, and `PermissionRequest`
+ * would be registered NOWHERE (the Claude-format plugin deliberately no longer
+ * carries it — see MCODE_PERMISSION_PLUGIN_DIR_NAME) — so skip-permissions
+ * would silently stop working. That is why the install checks the host's
+ * version and says so out loud. */
+export const MCODE_MIN_VERSION_FOR_CODEX_PLUGIN = "0.6.12";
+
+/** The host's mcode version, resolved ONCE per process (resolving it spawns
+ * mcode). `null` when it cannot be determined — e.g. mcode is not on PATH,
+ * in which case there is no mcode session to hook anyway. */
+let mcodeVersionCache: string | null | undefined;
+
+function resolveMcodeVersion(): string | null {
+  if (mcodeVersionCache !== undefined) return mcodeVersionCache;
+  try {
+    const out = execFileSync("mcode", ["--version"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    mcodeVersionCache = /^\d+\.\d+\.\d+/.exec(out)?.[0] ?? null;
+  } catch {
+    mcodeVersionCache = null;
+  }
+  return mcodeVersionCache;
+}
+
+/** Compares two dotted numeric versions. */
+function compareVersions(a: string, b: string): number {
+  const left = a.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const right = b.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const diff = (left[index] ?? 0) - (right[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+/** True when the host's mcode is new enough for the CODEX plugin format.
+ *
+ * An UNKNOWN version is treated as supported: the only way it is unknown is
+ * that `mcode --version` could not be run, which in practice means mcode is
+ * not on PATH at all — and then there is no mcode session to hook. */
+export function mcodeSupportsCodexPlugin(): boolean {
+  const version = resolveMcodeVersion();
+  if (version === null) return true;
+  return compareVersions(version, MCODE_MIN_VERSION_FOR_CODEX_PLUGIN) >= 0;
+}
+
+/** Test seams for the version floor. */
+export const __testing = {
+  compareVersions,
+  /** Forces the detected mcode version. `undefined` restores detection. */
+  setMcodeVersion(version: string | null | undefined): void {
+    mcodeVersionCache = version;
+  },
+};
 
 /** Marker file written into the plugin dir so Mullion can tell "this plugin
  * is ours, safe to remove" from "the user put their own plugin here". Same
@@ -642,6 +710,17 @@ function installMcodePluginDir(spec: McodePluginSpec): void {
 export function installMcodePlugin(): void {
   const shimPath = resolveMcodeShimPath();
   const shimSource = resolveMcodeShimSourcePath();
+
+  // The CODEX-format plugin is what makes mcode apply Mullion's "allow". On an
+  // mcode older than the floor, that plugin is not loaded at all — and since
+  // the Claude-format plugin deliberately no longer carries
+  // `PermissionRequest`, the hook would be registered NOWHERE and
+  // skip-permissions would silently stop working. Say so, loudly, instead.
+  if (!mcodeSupportsCodexPlugin()) {
+    console.error(
+      `mcode hook adapter: the installed mcode is ${resolveMcodeVersion()}, which predates the CODEX plugin format (mcode ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN}+). That format is what lets mcode apply Mullion's permission answer, so PermissionRequest cannot be registered — skip-permissions will not work for mcode sessions on this host. Upgrade mcode to ${MCODE_MIN_VERSION_FOR_CODEX_PLUGIN} or newer.`,
+    );
+  }
 
   // The shim first: the plugin's command line references it by path, so a
   // half-installed plugin would point at a missing script.
