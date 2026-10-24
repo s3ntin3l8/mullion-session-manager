@@ -141,15 +141,15 @@ export const DOCKER_STACK_SESSION_NAME_PREFIX = "docker-stack:";
 // under the project runs on the project's own host) or "auto" (an eligible
 // host is chosen per session; see services/placement.ts).
 //
-// Declared HERE rather than in each side that needs it, because it is
-// spelled out in four places that have to agree: the column's enum, the two
-// JSON schemas on the project routes, and the frontend's own type. A typo
-// in one of them would silently mean "pinned" — the safe default, which
-// makes a typo invisible rather than loud. One declaration, one meaning.
+// Declared HERE rather than in each side that needs it, because four
+// places have to agree on this vocabulary: the column's enum, the two JSON
+// schemas on the project routes, and the frontend's own type. A typo in
+// one of them would silently mean "pinned" — the safe default, which makes
+// a typo invisible rather than loud. One declaration, one meaning.
 //
-// The frontend's own type is not a separate spelling either: it is the
-// PlacementMode derived from this list below, so all four places hang off
-// the same declaration.
+// All four read it from here: the first three off the list below, the
+// frontend's type off the PlacementMode derived from that same list — so
+// none of the four is a separate spelling that could drift from the rest.
 export const PLACEMENT_MODES = ["pinned", "auto"] as const;
 
 // The MODE type is DERIVED from the list, never spelled out beside it (the

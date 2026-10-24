@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { LOCAL_HOST_ID, type PlacementMode } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
 
@@ -264,7 +264,13 @@ function markChosen(considered: ConsideredHost[], hostId: string): void {
 export function resolvePlacement(
   app: FastifyInstance,
   opts: {
-    project: { hostId: string; placement: string };
+    // The mode is TYPED, not `string`: the column's value and the shared
+    // mode vocabulary are one thing (PlacementMode is derived from
+    // PLACEMENT_MODES), so a mode that is not in the vocabulary cannot reach
+    // this seam without the compiler saying so. A mode outside the list
+    // would otherwise be silently treated as "pinned" — the safe default,
+    // which makes a typo invisible rather than loud.
+    project: { hostId: string; placement: PlacementMode };
     /** True for an unattended session (a Task Master worker or reviewer). */
     unattended: boolean;
   },
