@@ -87,6 +87,7 @@ const MAX_STALE_QUARANTINE_MS = 30 * 60_000;
 export function resetRunwayQuarantine(): void {
   quarantined.clear();
   lastPolledAt = null;
+  staleCeiling = null;
 }
 
 /**
@@ -110,9 +111,30 @@ export function agentForProvider(app: FastifyInstance, providerId: string): stri
  * provider. Twice the interval means one missed poll is tolerated and two
  * in a row are not.
  */
-function staleCeilingMs(app: FastifyInstance): number {
+function computeStaleCeilingMs(app: FastifyInstance): number {
   const pollSeconds = getStoredSettings(app.db).runway?.pollSeconds ?? 0;
   return Math.max(MAX_STALE_QUARANTINE_MS, pollSeconds * 2 * 1000);
+}
+
+/**
+ * The staleness ceiling, cached.
+ *
+ * Computing it reads the settings row — a select plus a JSON.parse of the
+ * whole blob — and `isAgentQuarantined` runs per candidate in the claim
+ * sweep and per card in `GET /api/runway/quota`, so reading it per call
+ * would make a sidebar render `cards × (select + JSON.parse)`.
+ *
+ * The poll refreshes it on every tick, and it has the settings in hand
+ * already, so the refresh is free. Before any poll has run it is computed
+ * once on first use. An operator who changes the interval therefore sees
+ * the new ceiling from the next sweep tick on, which is the same tick that
+ * refreshes the reading the ceiling is about.
+ */
+let staleCeiling: number | null = null;
+
+function staleCeilingMs(app: FastifyInstance): number {
+  if (staleCeiling === null) staleCeiling = computeStaleCeilingMs(app);
+  return staleCeiling;
 }
 
 /**
@@ -272,6 +294,10 @@ export async function pollRunwayQuota(
 ): Promise<{ changed: boolean; quarantinedAgents: string[] }> {
   const settings = getStoredSettings(app.db);
   const pollSeconds = settings.runway?.pollSeconds ?? 0;
+  // Refresh the cached ceiling from the settings just read — free, and it
+  // keeps the claim path (which reads no settings of its own) in step with
+  // the operator's interval.
+  staleCeiling = Math.max(MAX_STALE_QUARANTINE_MS, pollSeconds * 2 * 1000);
 
   if (!isRunwayConfigured(app)) {
     // Unconfigured: release everything.

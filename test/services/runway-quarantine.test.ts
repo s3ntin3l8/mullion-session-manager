@@ -227,6 +227,29 @@ describe("the Runway quota quarantine (issue #29)", () => {
     expect(agentForProvider(app, "gemini")).toBeNull();
   });
 
+  it("reads the settings ONCE for the staleness ceiling, not once per candidate", () => {
+    // The ceiling depends on the operator's poll interval, and computing it
+    // means reading the settings row — a select plus a JSON.parse of the
+    // whole blob. `isAgentQuarantined` runs per candidate in the claim
+    // sweep and per card in `GET /api/runway/quota`, so reading the
+    // settings per call would make a sidebar render
+    // `cards × (select + JSON.parse)`. The ceiling is cached instead.
+    applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+
+    // Warm the cache the way the claim path would.
+    expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+    const selectSpy = vi.spyOn(app.db, "select");
+    try {
+      for (let i = 0; i < 5; i++) {
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+      }
+      expect(selectSpy).not.toHaveBeenCalled();
+    } finally {
+      selectSpy.mockRestore();
+    }
+  });
+
   describe("the poll", () => {
     it("releases every quarantine when the integration is UNCONFIGURED", async () => {
       // Nothing left to refresh the reading with, and nothing that could
