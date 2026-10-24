@@ -80,6 +80,7 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
         try {
           await app.ready();
           expect(app.devicePanelEnabled).toBe(false);
+          expect(app.devicePanelSupported).toBe(false);
           expect(app.devicePanelUnavailableMessage).toMatch(/not supported on darwin/);
           // The platform reason DOMINATES: telling the operator to set
           // DEVICE_ENABLED=true would send them off to change a .env and
@@ -165,6 +166,7 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           // the CONFIG one — the platform supports it, so setting the flag
           // is the right advice.
           expect(app.devicePanelEnabled).toBe(false);
+          expect(app.devicePanelSupported).toBe(true);
           expect(app.devicePanelUnavailableMessage).toMatch(/set DEVICE_ENABLED=true/);
           expect(app.devicePanelUnavailableMessage).not.toMatch(/not supported/);
         } finally {
