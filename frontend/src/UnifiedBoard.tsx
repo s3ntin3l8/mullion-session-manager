@@ -16,7 +16,7 @@ import {
   adhocSessionsByColumn,
   LANE_COLUMN_ORDER,
   laneColumnTitle,
-} from "./unifiedBoard.js";
+} from "./boardLanes.js";
 import { orderSessionsForColumn, computeKanbanReorder } from "./kanban.js";
 import { TaskDetail } from "./TaskDetail.js";
 import type { Session, TaskStatus } from "./api/index.js";

@@ -40,7 +40,7 @@ import {
   SkillIcon,
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
-import { taskLinkedSessionIds } from "./unifiedBoard.js";
+import { taskLinkedSessionIds } from "./boardLanes.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";

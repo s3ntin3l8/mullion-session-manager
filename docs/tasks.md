@@ -694,7 +694,7 @@ name that reliably identifies which task it belongs to — which an OSC
 update would defeat. Once named, a task session is still hidden from the
 sidebar by default (a new `settings.sessions.showTaskSessions` setting, off
 by default, same persistence mechanism as `hideEndedSessions`) — reusing
-`taskLinkedSessionIds` (`frontend/src/unifiedBoard.ts`) as the membership
+`taskLinkedSessionIds` (`frontend/src/boardLanes.ts`) as the membership
 check. This is a toggle, not a hard exclusion: a `"killed"` task session is
 already filtered out of the sidebar unconditionally (the status check
 above runs first, before this setting is even consulted), so the toggle

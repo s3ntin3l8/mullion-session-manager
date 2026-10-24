@@ -10,7 +10,7 @@ import type {
 } from "./MobileSessionSwitcher.js";
 import type { Session } from "./api/index.js";
 import { buildPickerSections } from "./lib/mobileSessionPicker.js";
-import { taskLinkedSessionIds } from "./unifiedBoard.js";
+import { taskLinkedSessionIds } from "./boardLanes.js";
 import { sessionUnreadCount } from "./eventDescriptions.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { focusPanelForTier, panelSessionId } from "./panelUtils.js";
