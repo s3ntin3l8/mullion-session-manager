@@ -767,7 +767,9 @@ export function uninstallBundleContent(): Promise<BundleContentRemovalResult> {
     }
     if (removeAgyMcpMullionEntry()) legacySwept++;
     // Issue: mcode support — Mullion's mcode integration is a HOST-GLOBAL
-    // plugin (~/.minimax/plugins/mullion/) plus a host-stable shim script,
+    // plugin (~/.minimax/plugins/mullion/ for the Claude-format hooks, plus
+    // ~/.minimax/plugins/mullion-permission/ for the CODEX-format
+    // PermissionRequest hook — issue #1814) plus a host-stable shim script,
     // because mcode retired standalone user hooks (custom hooks must belong
     // to a Plugin) and its plugin directory has no per-session overlay.
     // Removing it belongs here for the same reason removeAgyMcpMullionEntry

@@ -18,14 +18,14 @@ The five integrations below are independently wired per CLI and drift
 independently — this table is the single summary; "Auto-injected agents"
 further down carries the full per-CLI detail each row links back to.
 
-| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                                           | codex                                                                                                                                          | agy                                                                                                                                         | mcode                                                                                                                                                                                                                                                                                                                                               |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 17 hook kinds (`OPENCODE_EMITS`); no blocking hook — a `review_gate` opens beside opencode's own permission dock and answers it via `ctx.permission.reply` (#1594) | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           | 13 hook-protocol kinds (`MCODE_EMITS`); `PermissionRequest` is the one blocking hook — registered through a host-global mcode **plugin** (mcode retired standalone user hooks) and read via a per-session handoff file (mcode's hook child env is a whitelist that drops `MULLION_*`)                                                               |
-| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                                                       | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       | **not wired** — mcode's MCP stdio servers get a fixed env allowlist (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so the session token cannot reach Mullion's MCP server without writing a literal per-session token into a host-global file (which would leak it across sessions). Tracked as a follow-up; the hook channel is unaffected. |
-| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills` pointer for project-specific overrides                                | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          | boot-time global sync (`bundle-sync.ts`) into `<mcode data dir>/skills` (no per-launch fallback — mcode's adapter has no `managedInstall`)                                                                                                                                                                                                          |
-| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model` (not `buildModelFlag` — a config key, not a CLI flag); the small model rides `agents.title.model` — v2 has no `small_model` key    | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`; the offered catalog is read from mcode's own `config.yaml`, read-only (issue #1784)                                                                                                                                                                                              |
-| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn                                      | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      | not possible — mcode's skill data model has no per-skill disable bit                                                                                                                                                                                                                                                                                |
-| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                                             | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills | hand-edit `~/.minimax/plugins/mullion/` (mullion's plugin dir is host-global and carries a `.mullion-managed` marker); `bundle remove` removes the bundle skills                                                                                                                                                                                    |
+| Capability                  | Claude Code                                                                                                                                                       | opencode                                                                                                                                                           | codex                                                                                                                                          | agy                                                                                                                                         | mcode                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hook/event surface          | 21 wire-protocol kinds (`CLAUDE_CODE_EMITS`), from 18 registered Claude Code hooks (see "What's injected" below); `PermissionRequest` is the one blocking hook    | 17 hook kinds (`OPENCODE_EMITS`); no blocking hook — a `review_gate` opens beside opencode's own permission dock and answers it via `ctx.permission.reply` (#1594) | 10 hook events (`CODEX_EMITS`); `PermissionRequest` is the one blocking hook                                                                   | 6 hook events (`AGY_EMITS`); no blocking hook — no `PermissionRequest` equivalent                                                           | 13 hook-protocol kinds (`MCODE_EMITS`); `PermissionRequest` is the one blocking hook — registered through a host-global mcode **plugin** (mcode retired standalone user hooks) and read via a per-session handoff file (mcode's hook child env is a whitelist that drops `MULLION_*`). `PermissionRequest` lives in a SECOND, CODEX-format plugin so mcode applies Mullion's allow unconditionally (#1814) |
+| MCP server (`mullion`)      | ephemeral `--mcp-config` file, per session                                                                                                                        | ephemeral `OPENCODE_CONFIG_CONTENT.mcp.mullion`, per session                                                                                                       | ephemeral `-c mcp_servers.mullion.*` flags, per session                                                                                        | **managed, persistent** merge into `~/.gemini/config/mcp_config.json`                                                                       | **not wired** — mcode's MCP stdio servers get a fixed env allowlist (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so the session token cannot reach Mullion's MCP server without writing a literal per-session token into a host-global file (which would leak it across sessions). Tracked as a follow-up; the hook channel is unaffected.                                                        |
+| Bundle skill/agent delivery | boot-time global sync (`bundle-sync.ts`) into `resolveClaudeConfigDir()/skills`, plus a per-session `--plugin-dir` composed bundle for project-specific overrides | boot-time global sync into `resolveOpenCodeConfigHome()/skills`, plus a per-session `skills` pointer for project-specific overrides                                | boot-time global sync into `resolveCodexAgentsSkillsDir()`, plus a fire-and-forget per-launch `installBundleSkills` fallback                   | boot-time global sync into `resolveAgyGlobalSkillsDir()`/`resolveAgyGlobalAgentsDir()`, plus the same per-launch fallback as codex          | boot-time global sync (`bundle-sync.ts`) into `<mcode data dir>/skills` (no per-launch fallback — mcode's adapter has no `managedInstall`)                                                                                                                                                                                                                                                                 |
+| `--model` injection         | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                                       | `OPENCODE_CONFIG_CONTENT.model` (not `buildModelFlag` — a config key, not a CLI flag); the small model rides `agents.title.model` — v2 has no `small_model` key    | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`                                                                              | `buildModelFlag(command, ctx.model)` via `commandTransform`                                                                                 | `buildModelFlag(command, ctx.model, "-m")` via `commandTransform`; the offered catalog is read from mcode's own `config.yaml`, read-only (issue #1784)                                                                                                                                                                                                                                                     |
+| Task Master skill deny      | none                                                                                                                                                              | `permission.skill.<name>: "deny"` for `brainstorming`/`writing-plans`/`finishing-a-development-branch`, gated on a task spawn                                      | `-c skills.config=[{name,enabled=false}, ...]` for the same three skills (`buildCodexSkillDenyFlag`, issues #965/#1282), gated on a task spawn | not possible — agy's skill data model has no per-skill disable bit at all (see "Skills Manager" below)                                      | not possible — mcode's skill data model has no per-skill disable bit                                                                                                                                                                                                                                                                                                                                       |
+| Removal on uninstall        | nothing persistent to remove (hooks/MCP are ephemeral); bundle skills removable via `mullion bundle remove`                                                       | same as Claude Code — ephemeral hooks/MCP, bundle skills removable via `bundle remove`                                                                             | hand-edit `~/.codex/hooks.json` (see "Removing managed hooks" below); MCP is ephemeral; bundle skills removable via `bundle remove`            | hand-edit `~/.gemini/config/hooks.json`; `bundle remove` also auto-removes the `mullion` entry from `mcp_config.json` and the bundle skills | hand-edit `~/.minimax/plugins/mullion/` AND `~/.minimax/plugins/mullion-permission/` (mullion's plugin dirs are host-global and carry a `.mullion-managed` marker); `bundle remove` removes the bundle skills                                                                                                                                                                                              |
 
 ## What's injected
 
@@ -738,21 +738,48 @@ ways that both follow from mcode's own design.
 
 First, mcode **retired standalone user hooks** — custom hooks must belong to a
 Plugin (mcode's own wording: "Standalone user hooks are no longer supported.
-Custom hooks belong to Plugins."). Mullion therefore installs **one
-host-global plugin** at `~/.minimax/plugins/mullion/` (a `.claude-plugin/
-plugin.json` plus `hooks/hooks.json`), because mcode reads the **Claude Code
-plugin format**: the event names (`SessionStart`, `UserPromptSubmit`,
-`PreToolUse`, `PostToolUse`, `PermissionRequest`, `Stop`, `SessionEnd`) and the
-payload shape
+Custom hooks belong to Plugins."). Mullion therefore installs **two
+host-global plugins** — `~/.minimax/plugins/mullion/` (a `.claude-plugin/
+plugin.json` plus `hooks/hooks.json`) and
+`~/.minimax/plugins/mullion-permission/` (a `.codex-plugin/plugin.json` plus
+`hooks/hooks.json`) — because mcode reads **two plugin formats**, and which one
+decides whether mcode applies Mullion's answer at all (see the permission
+paragraph below).
+
+The **Claude Code format** carries every event except one: `SessionStart`,
+`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SessionEnd`. The
+event names and the payload shape
 (`hook_event_name`, `tool_name`, `tool_input`, `cwd`, `session_id`) are
 Claude Code's. The registered events map through `mapMcodeEvent`
 (`forwarder-core.mjs`), which is the Claude Code mapping — reused rather than
 reimplemented, since the dialect is identical. `PostToolUse` is registered
 twice: once with a `Write|Edit|MultiEdit|NotebookEdit` matcher (→
 `file_change`) and once on `Bash` (→ `git_branch`/`cwd_changed`).
-`PermissionRequest` is registered with **no matcher** — it only fires for the
-tool call that actually needs a decision — and it is the blocking hook that
-carries both the review gate and the skip-permissions auto-approve.
+
+The **CODEX format** carries `PermissionRequest` and nothing else. It is the
+blocking hook — the one that carries both the review gate and the
+skip-permissions auto-approve — and it is registered with **no matcher**, so it
+only fires for the tool call that actually needs a decision. It lives in its own
+directory, and in its own format, because mcode's hook-result parser only
+auto-applies an "allow" unconditionally for a CODEX-format plugin (the
+permission paragraph below has the detail).
+
+**That makes mcode 0.6.12 the floor.** The CODEX plugin format and the
+format-aware auto-approval mapping are both present in **0.6.12**'s own bundle
+— verified by reading its chunks, not only 0.6.13's — so the floor is the
+version Mullion's mcode support was already live-verified against. Below it the
+CODEX plugin is not loaded at all, and since the Claude-format plugin no longer
+carries `PermissionRequest`, the hook would be registered **nowhere** and
+skip-permissions would silently stop working. So the install resolves the host's
+mcode version and says so out loud rather than failing quietly.
+
+The version is probed **in a login shell** — the same shape `agent-detect.ts`
+uses to find the agent binaries — because a spawned session's shell is a login
+shell and sees the PATH the user's profile builds (nvm, direnv, Homebrew…),
+while the Mullion server runs under systemd --user with a minimal PATH.
+Asking the server's own PATH would report "not installed" for an mcode every
+session runs perfectly well, which is the same "fails open, silently" shape
+this check exists to prevent.
 
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
@@ -863,13 +890,13 @@ rather than serving a stale list until a TTL expires.
 **Verified live against a real mcode 0.6.12 (the isolated-profile run).** The
 whole chain has now been exercised end to end, not just unit-tested:
 
-| Link                                                  | Observed                                                                                                                                                                                                           |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| A real mcode TUI loads the plugin and fires its hooks | `session_start`, `turn_start`, `review_gate`, `progress` all arrived at a receiver over the hook socket                                                                                                            |
-| The `PermissionRequest` hook raises a real gate       | `review_gate` in state `waiting`, with a `gateId`, on Mullion's own hook socket                                                                                                                                    |
-| skip-permissions auto-approves it                     | **Mullion's** gate resolved to `"approved"` — mcode had raised a `◆ Approval required — Bash` prompt and Mullion's gate server answered it (mcode's own native dialog is a separate matter — see the caveat below) |
-| A human can answer the gate                           | `POST /api/sessions/:id/review-gate` with `{"decision":"approved"}` resolved a waiting gate to `"approved"`                                                                                                        |
-| No answer in time                                     | the gate **lapsed** (mcode's 10s hook timeout fired) — fail-open, never a denial                                                                                                                                   |
+| Link                                                  | Observed                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A real mcode TUI loads the plugin and fires its hooks | `session_start`, `turn_start`, `review_gate`, `progress` all arrived at a receiver over the hook socket                                                                                                                                                                          |
+| The `PermissionRequest` hook raises a real gate       | `review_gate` in state `waiting`, with a `gateId`, on Mullion's own hook socket                                                                                                                                                                                                  |
+| skip-permissions auto-approves it                     | **Mullion's** gate resolved to `"approved"` — mcode had raised a `◆ Approval required — Bash` prompt and Mullion's gate server answered it. mcode's own native dialog was a separate matter at the time — that is what issue #1814 was, and the CODEX-format plugin now fixes it |
+| A human can answer the gate                           | `POST /api/sessions/:id/review-gate` with `{"decision":"approved"}` resolved a waiting gate to `"approved"`                                                                                                                                                                      |
+| No answer in time                                     | the gate **lapsed** (mcode's 10s hook timeout fired) — fail-open, never a denial                                                                                                                                                                                                 |
 
 The probe ran against a **fully isolated** mcode profile — its own data dir, with
 its own physical `<data dir>/v2/sqlite/` (its runtime-state database), its own empty
@@ -880,15 +907,68 @@ incumbent runtime and aborts the user's other sessions (see `AGENTS.md`). The li
 host's `auth.json`, `config.yaml` and `permission.json` were byte-identical before
 and after.
 
-One caveat this run surfaced, and it is mcode's own behaviour rather than
-Mullion's: **mcode may still show its native permission dialog** even after the
-hook answers "allow". mcode decides that for itself — its hook-result parser
-only auto-applies an allow when the prompt is `hookAutoApprovalEligible`
-(its own permission engine's verdict, and for a Claude-format plugin
-`permissionAutoApproval` is `"ordinary_only"`), so a prompt its engine classes
-as a safety check still reaches mcode's own dialog. Mullion's gate is resolved
-either way; what is left is mcode asking the human once more. Tracked as
-issue [#1814](https://github.com/s3ntin3l8/mullion-session-manager/issues/1814).
+**The caveat this run surfaced is now FIXED — and it was a plugin-FORMAT problem,
+not a hook problem.** The run showed mcode raising its native permission dialog
+_even after_ the hook answered "allow". mcode decides that for itself: its
+hook-result parser only auto-applies an allow when the prompt is
+`hookAutoApprovalEligible`, and for a **Claude-format** plugin
+`permissionAutoApproval` is `"ordinary_only"` — so a prompt its engine classes
+as a safety check (a `rm -rf`, say) still reached mcode's own dialog. Mullion's
+gate was resolved either way; what was left was mcode asking the human once
+more (issue [#1814](https://github.com/s3ntin3l8/mullion-session-manager/issues/1814)).
+
+mcode's own parser is **plugin-format-aware**, and that is the whole lever
+(verified against mcode 0.6.13's own code):
+
+```js
+// mcode 0.6.13, chunks/chunk-7ONY7WH4.js — TMn()
+let i = n.sourceFormat;                       // which MANIFEST the plugin carries
+if (s.behavior === "allow") return … {
+  ...e,
+  permissionDecision: "allow",
+  permissionAutoApproval: i === "CODEX" ? "any_prompt" : "ordinary_only",
+  … };
+
+// …and the gate that consumes it:
+function pur(e, t) {
+  return e.behavior !== "allow" ? false
+    : e.autoApproval === "any_prompt" ? true
+    : e.autoApproval === "ordinary_only" && t.hookAutoApprovalEligible === true;
+}
+```
+
+| plugin manifest               | `sourceFormat` | auto-approval   | mcode's own dialog? |
+| ----------------------------- | -------------- | --------------- | ------------------- |
+| `.minimax-plugin/plugin.json` | `MINIMAX`      | `ordinary_only` | still appears       |
+| `.claude-plugin/plugin.json`  | `CLAUDE`       | `ordinary_only` | still appears       |
+| `.codex-plugin/plugin.json`   | `CODEX`        | `any_prompt`    | **never appears**   |
+
+So Mullion now installs **two** plugin directories: the Claude-format one keeps
+every event **except** `PermissionRequest`, and a CODEX-format one
+(`<data dir>/plugins/mullion-permission/`) carries `PermissionRequest` alone.
+They must be separate directories, because mcode picks the format by which
+manifest file is present, in `MINIMAX > CLAUDE > CODEX` priority.
+
+The whole plugin was NOT converted, and deliberately so: the CODEX dialect
+renames mcode's tool vocabulary (its file-edit tool surfaces as `apply_patch`
+rather than `Write`/`Edit`) and matches `matcher` strings **exactly** instead
+of by regex, so a full conversion would have silently broken Mullion's
+`file_change` / `git_branch` / `todo` / `plan_ready` detection. The split keeps
+every other event in the dialect Mullion's mapping is written against. The
+reply itself is unchanged — mcode's CODEX parser reads the same
+`{hookSpecificOutput: {hookEventName, decision}}` shape the Claude parser does.
+
+The alternatives were checked and ruled out: answering `PreToolUse` with an
+allow hits the same eligibility gate; `permissionMode: bypassPermissions` lives
+in the host-global `config.yaml` that Mullion must never mutate (and the TUI's
+and ACP's setters **write** that file despite the "process-local" naming); and
+`mcode exec --permission full` is process-local but `exec` has no interactive
+permission capability at all.
+
+What remains honest after the fix: a **human** review gate still has only
+mcode's 10-second hook budget before mcode falls back to asking the human
+itself (above), and mcode's own hard-safety denials still apply — they are not
+permission requests, so no hook can allow them.
 
 **The plugin's `hooks.json` shape** (verified against mcode 0.6.12's own
 parser): the document may be `{"hooks": {"<Event>": [...]}}` or
