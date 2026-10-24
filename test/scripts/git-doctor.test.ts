@@ -121,7 +121,7 @@ describe("git-doctor.mjs", () => {
     expect(fsckOutput()).toContain("invalid sha1 pointer in cache-tree");
 
     const result = run();
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
     expect(result.stdout).toContain(tree);
     expect(result.stdout).toContain("invalid sha1 pointer");
     // Report mode never mutates.
@@ -158,14 +158,24 @@ describe("git-doctor.mjs", () => {
     expect(zeroByteObjects()).toEqual([]);
   });
 
-  // The repair is only complete if the objects are readable again AND the
-  // refs came back — so a repair that could not finish must not report
-  // success.
-  it("exits non-zero when an object is genuinely gone", () => {
+  // Two questions, two answers. "Is the clone whole again?" is fsck's call
+  // and decides the exit code; "was anything lost?" is its own outcome — a
+  // clone can be whole again and still have lost an object that was never
+  // committed and is not on the remote.
+  it("exits 2 when the clone is whole again but an object was lost", () => {
     damageTheStagedTree();
     const result = run(["--apply"]);
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("whole again, but some objects could not be recovered");
+  });
+
+  it("exits 1 when the clone is still not whole", () => {
+    // The COMMIT itself is destroyed, so the index cannot be rebuilt and
+    // fsck still has something to report.
+    damage(git(["rev-parse", "HEAD"]));
+    const result = run(["--apply"]);
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain("NOT fully repaired");
+    expect(result.stdout).toContain("the clone is NOT whole");
   });
 
   // The index is re-staged from the working tree, so content that is in the

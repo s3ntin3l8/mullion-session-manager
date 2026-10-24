@@ -21,8 +21,13 @@
 //   node scripts/git-doctor.mjs --apply      # repair
 //   node scripts/git-doctor.mjs --apply --force   # repair, even with staged work
 //
-// Exit codes: 0 = healthy (or repaired), 1 = damage found (report mode) or the
-// repair failed.
+// Exit codes — two questions, two answers:
+//
+//   0 — the clone is healthy, or the repair made it whole.
+//   1 — damage was found (report mode), or the clone is still not whole.
+//   2 — the clone is whole again, but some objects could not be recovered:
+//       they were never committed and are not on the remote, so nothing
+//       references them any more and fsck has nothing to complain about.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -245,7 +250,8 @@ function main() {
         "  (no flags)  report damage; never mutates anything\n" +
         "  --apply     repair: quarantine the zero-byte objects, restore the refs,\n" +
         "              rebuild the affected worktree indexes\n" +
-        "  --force     rebuild the indexes even when there is staged work",
+        "  --force     rebuild the indexes even when there is staged work\n\n" +
+        "Exit codes: 0 whole, 1 not whole, 2 whole again but objects were lost.",
     );
     return 0;
   }
@@ -293,10 +299,9 @@ function main() {
   console.log("");
   console.log("git-doctor: repairing.");
 
-  // The repair is only complete if the objects are readable again AND the
-  // refs came back. Anything short of that leaves the clone broken, and the
-  // exit code has to say so — `make git-doctor APPLY=1` is a health check.
-  let repaired = true;
+  // A failed fetch means the refs could not be restored, so the clone is not
+  // whole — that is a fetch fact, not an fsck one, so it is tracked here.
+  let refsRestored = true;
 
   // Step 1 — quarantine. MOVE, never delete: the quarantine is the recovery
   // point, and it lives inside the git dir so the rename is atomic and
@@ -314,7 +319,7 @@ function main() {
       moved.push({ rel, sha: shaOfLoosePath(rel) });
     } catch (err) {
       console.log(`  could not quarantine ${rel} — ${err.message}`);
-      repaired = false;
+      refsRestored = false;
     }
   }
   console.log(`  quarantined ${moved.length} zero-byte object(s) into ${quarantine}`);
@@ -346,7 +351,7 @@ function main() {
   if (gitTry(["remote", "get-url", "origin"]) === null) {
     console.log("  no 'origin' remote — nothing to restore from");
   } else if (gitTry(["fetch", "origin", "--prune"]) === null) {
-    repaired = false;
+    refsRestored = false;
     console.log("  'git fetch origin --prune' failed — the refs could not be restored.");
   } else {
     console.log("  refs restored from origin");
@@ -361,7 +366,10 @@ function main() {
     console.log(`  all ${stillMissing.length} missing object(s) came back with the fetch`);
   }
   if (unrecovered.length > 0) {
-    repaired = false;
+    // NOT a verdict on the clone: an object that was never committed and is
+    // not on the remote is simply gone, and nothing references it any more,
+    // so fsck has nothing to complain about. The clone can be consistent
+    // again and still have lost something — that is its own outcome.
     console.log(
       `  ${unrecovered.length} object(s) are genuinely gone and must be restored from the remote.`,
     );
@@ -380,9 +388,22 @@ function main() {
   // Step 5 — the verdict. `git fsck` is the authority on whether the clone is
   // whole, and it has to run LAST: it sees the restored refs, the rebuilt
   // indexes and the objects that came back with the fetch.
+  //
+  // Two facts, two answers — and they are NOT the same question:
+  //
+  //   "is the clone consistent again?"  is fsck's call. Exit 0 if it is, 1 if
+  //   it is not. This is also what report mode answers, so the two modes can
+  //   never disagree about whether the clone is whole.
+  //
+  //   "was anything lost?"              is its own outcome: an object that was
+  //   never committed and is not on the remote is simply gone, and nothing
+  //   references it any more, so fsck has nothing to complain about. A clone
+  //   can be whole again and still have lost something — exit 2 says so.
   const remaining = fsckErrors();
+  if (!refsRestored) {
+    console.log("  the refs could not be restored — the clone is not whole.");
+  }
   if (remaining.length > 0) {
-    repaired = false;
     console.log(`  ${remaining.length} fsck error(s) remain:`);
     for (const line of remaining) console.log(`    ${line}`);
   }
@@ -391,9 +412,16 @@ function main() {
   console.log(
     `git-doctor: done. The quarantined files are in ${quarantine} — nothing was deleted.`,
   );
-  if (!repaired) {
-    console.log("git-doctor: the clone is NOT fully repaired — see the messages above.");
+  if (remaining.length > 0) {
+    console.log("git-doctor: the clone is NOT whole — see the messages above.");
     return 1;
+  }
+  if (unrecovered.length > 0) {
+    console.log(
+      "git-doctor: the clone is whole again, but some objects could not be recovered —" +
+        " see the messages above.",
+    );
+    return 2;
   }
   console.log("git-doctor: the clone is whole.");
   return 0;

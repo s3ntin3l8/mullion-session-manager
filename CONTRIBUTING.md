@@ -41,9 +41,11 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
   is never adopted — but it re-stages them from the working tree, so it
   refuses to run when the index holds content that is _not_ in the working
   tree (a partially staged file), because re-staging that would discard what
-  you staged. `FORCE=1` overrides that refusal. The repair exits non-zero if
-  it could not finish, so `make git-doctor APPLY=1` is usable as a health
-  check.
+  you staged. `FORCE=1` overrides that refusal. The exit code says what
+  happened: **0** the clone is whole, **1** it is still not whole, **2** it is
+  whole again but some objects could not be recovered (they were never
+  committed and are not on the remote, so nothing references them any more).
+  So `make git-doctor APPLY=1` is usable as a health check.
 
 ## Demo instance and screenshots
 
