@@ -782,7 +782,7 @@ CODEX plugin cannot ask for anything else: its hook schema accepts neither a
 `shell` key nor an `args` key (both are `CLAUDE`-only), so `{shell: true}` is
 the only shape it can take. So on Windows the CODEX plugin's
 `PermissionRequest` would be launched by `cmd.exe`, and mcode's plugin-format
-support is unverified there. So on Windows this integration is _unsupported and
+support is unverified there. That leaves this integration _unsupported and
 unverified_ — which is a different claim from _known-broken_, and the honest
 one.
 
