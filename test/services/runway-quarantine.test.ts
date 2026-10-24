@@ -98,7 +98,10 @@ describe("the Runway quota quarantine (issue #29)", () => {
     app = await buildApp();
     await app.ready();
     applySettingsPatch(app, {
-      runway: { providerMap: { anthropic: "claude", opencode: "opencode" } },
+      // The settings live in the database and outlive a single test, so
+      // the poll interval is restored here — a test that turns polling off
+      // must not make the next one inherit "never poll".
+      runway: { providerMap: { anthropic: "claude", opencode: "opencode" }, pollSeconds: 60 },
     });
   });
 
@@ -263,6 +266,37 @@ describe("the Runway quota quarantine (issue #29)", () => {
       await pollRunwayQuota(app);
       expect(fetchMock).not.toHaveBeenCalled();
       vi.unstubAllGlobals();
+    });
+
+    it("releases a quarantine with NO reset once it has gone stale", async () => {
+      // With polling off the reading can never be refreshed, and a card
+      // that reported no `reset_at` has no release of its own — so without
+      // a staleness release the entry would strand the agent's tasks until
+      // a restart. A card WITH a reset is not affected: it lifts on its own
+      // when the window closes.
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 0 },
+      });
+      setRunwayKey(app, "runway-admin"); // pragma: allowlist secret
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+        // Still fresh: the quarantine stands.
+        vi.setSystemTime(Date.now() + 29 * 60_000);
+        await pollRunwayQuota(app);
+        expect(isAgentQuarantined(app, "claude")).toBe(true);
+
+        // Past the staleness ceiling: released.
+        vi.setSystemTime(Date.now() + 31 * 60_000);
+        const result = await pollRunwayQuota(app);
+        expect(result.quarantinedAgents).toEqual([]);
+        expect(isAgentQuarantined(app, "claude")).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

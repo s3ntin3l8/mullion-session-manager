@@ -44,7 +44,9 @@ describe("Runway quota integration routes", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     clearRunwayKey(app);
-    applySettingsPatch(app, { runway: { apiUrl: "" } });
+    // The settings persist in the database across tests, so a test that
+    // turns polling off has to turn it back on for the next one.
+    applySettingsPatch(app, { runway: { apiUrl: "", pollSeconds: 60 } });
     resetRunwayCache();
     resetRunwayQuarantine();
   });
@@ -176,6 +178,26 @@ describe("Runway quota integration routes", () => {
       // "No quota information" — NOT an empty list that reads as healthy.
       expect(body.fetchedAt).toBeNull();
       expect(body.agents).toEqual([]);
+    });
+
+    it("honours pollSeconds: 0 — it does not reach Runway with the admin key", async () => {
+      // "Never poll" has to mean it on the READ path too: the badge polls
+      // this route, so a fetch per read would hammer Runway with the admin
+      // key — and against a 10/min limit.
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", pollSeconds: 0 },
+      });
+      await call("PUT", "/api/integrations/runway/key", { key: "runway-admin" }); // pragma: allowlist secret
+
+      const res = await call("GET", "/api/runway/quota");
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.configured).toBe(true);
+      // No snapshot was ever taken, so there is nothing to report — and
+      // nothing was fetched to get one.
+      expect(body.fetchedAt).toBeNull();
+      expect(body.agents).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

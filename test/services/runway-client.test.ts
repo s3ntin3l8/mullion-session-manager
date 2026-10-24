@@ -186,6 +186,10 @@ describe("fetchRunwayLimits", () => {
   });
 
   afterEach(async () => {
+    // The settings live in the database, which outlives a single test —
+    // so a test that turns polling off has to turn it back on, or the
+    // next one inherits "never poll".
+    applySettingsPatch(app, { runway: { pollSeconds: 60 } });
     await app.close();
     resetRunwayCache();
     vi.unstubAllGlobals();
@@ -271,6 +275,44 @@ describe("fetchRunwayLimits", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://runway.example/api/v1/usage/limits");
     expect((init.headers as Record<string, string>)["X-Admin-Key"]).toBe("runway-admin-key");
+  });
+
+  it("never calls out when polling is off, and serves the last snapshot instead", async () => {
+    // `pollSeconds: 0` means "never poll" in the sweep, so the READ path has
+    // to mean it too: the badge route must not reach Runway with the admin
+    // key on every poll of the UI. `Math.max(1, pollSeconds)` would have
+    // turned "never poll" into a one-second cache and a fetch per read.
+    configure();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ limits: [runwayCard({ provider_id: "anthropic", pct_used: 42 })] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // A read while polling is ON populates the cache.
+    const first = await fetchRunwayLimits(app);
+    expect(first).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Polling OFF: the last snapshot is the answer, and nothing is fetched.
+    applySettingsPatch(app, { runway: { pollSeconds: 0 } });
+    const second = await fetchRunwayLimits(app);
+    expect(second).not.toBeNull();
+    expect(second!.cards[0].pctUsed).toBe(42);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("has no snapshot to serve when polling is off from the start", async () => {
+    // Nothing was ever fetched, so there is no last reading: the answer is
+    // null ("no quota information"), never a fetch.
+    configure();
+    applySettingsPatch(app, { runway: { pollSeconds: 0 } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const limits = await fetchRunwayLimits(app);
+    expect(limits).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("drops a card with no provider id rather than mapping it to something", async () => {

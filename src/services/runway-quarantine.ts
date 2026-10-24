@@ -54,6 +54,17 @@ const quarantined = new Map<string, AgentQuarantine>();
  * refresh rather than the sweep tick. */
 let lastPolledAt: number | null = null;
 
+/**
+ * How long a quarantine may stand when NOTHING can refresh or lift it.
+ *
+ * Only reachable with polling OFF: an entry whose card reported no
+ * `reset_at` has no release path of its own, and with no poll coming there
+ * is nothing that could ever lift it. Half an hour is long enough for a
+ * genuinely exhausted provider to be seen, and short enough that a stale
+ * reading cannot strand an agent's tasks for the rest of the day.
+ */
+const MAX_STALE_QUARANTINE_MS = 30 * 60_000;
+
 /** Test hook — forgets every quarantine. */
 export function resetRunwayQuarantine(): void {
   quarantined.clear();
@@ -211,9 +222,28 @@ export async function pollRunwayQuota(
   }
 
   if (pollSeconds <= 0) {
-    // Configured but polling is off: keep the current reading, refresh
+    // Configured but polling is OFF: keep the current reading, refresh
     // nothing.
-    return { changed: false, quarantinedAgents: [...quarantined.keys()] };
+    //
+    // An entry with a KNOWN reset still lifts on its own — the reset time is
+    // known, so `isAgentQuarantined` releases it when the window closes.
+    // An entry with NO reset (a card that reported no `reset_at`) has no
+    // release path at all: no poll will ever refresh it, and nothing else
+    // would lift it. So it is released on a staleness timer instead — past
+    // that, a reading that cannot be refreshed is not worth acting on, and
+    // holding it would strand the agent's tasks indefinitely.
+    const staleBefore = Date.now() - MAX_STALE_QUARANTINE_MS;
+    let released = false;
+    for (const [agent, entry] of [...quarantined]) {
+      if (entry.resetAt === null && entry.since.getTime() <= staleBefore) {
+        quarantined.delete(agent);
+        released = true;
+      }
+    }
+    return {
+      changed: released,
+      quarantinedAgents: [...quarantined.keys()],
+    };
   }
 
   const now = Date.now();

@@ -163,6 +163,15 @@ export async function fetchRunwayLimits(
   const apiUrl = (settings.runway?.apiUrl ?? "").trim();
   if (apiUrl === "") return null;
 
+  const pollSeconds = settings.runway?.pollSeconds ?? DEFAULT_POLL_SECONDS;
+  if (pollSeconds <= 0) {
+    // Polling is OFF: nothing will ever refresh this reading, so the last
+    // snapshot is the answer — and the route must not reach Runway with the
+    // admin key to fetch a fresh one. `Math.max(1, pollSeconds)` would have
+    // turned "never poll" into a one-second cache.
+    return cached !== null && cached.apiUrl === apiUrl ? cached.snapshot : null;
+  }
+
   const now = Date.now();
   if (!opts.force && cached !== null && cached.expiresAt > now && cached.apiUrl === apiUrl) {
     return cached.snapshot;
@@ -198,7 +207,7 @@ export async function fetchRunwayLimits(
   }
 
   const snapshot: RunwayLimits = { fetchedAt: new Date(), cards };
-  const ttl = Math.max(1, settings.runway?.pollSeconds ?? DEFAULT_POLL_SECONDS) * 1000;
+  const ttl = Math.max(1, pollSeconds) * 1000;
   cached = { snapshot, expiresAt: now + ttl, apiUrl };
   return snapshot;
 }

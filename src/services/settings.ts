@@ -1330,19 +1330,22 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
  *
  * The object is built with a NULL PROTOTYPE and `Object.defineProperty`,
  * not `out[key] = value`. The provider id is operator-supplied, so a plain
- * assignment would let a key of `__proto__` write the object's prototype —
- * a real prototype-pollution hole, and the reason CodeQL flags the naive
- * form. With no prototype to pollute and no `[[Set]]` on the way in, a
- * `__proto__` key is just an ordinary own property that nothing looks up.
+ * assignment would hand a key of `__proto__` to the prototype setter. With
+ * the value gated to a string that form was INERT — the `__proto__` setter
+ * ignores a non-object value — but it would become a real
+ * prototype-pollution hole the moment a non-string value were allowed
+ * here, and it is the reason CodeQL flags the naive form. With no
+ * prototype to pollute and no `[[Set]]` on the way in, a `__proto__` key
+ * is just an ordinary own property that nothing looks up.
  *
  * CodeQL's `js/remote-property-injection` still fires on the
  * user-provided property NAME (it does not model the null-prototype
  * containment), so the alert is dismissed in GHAS with this containment
  * argument — the same pattern dock-config.ts's `isSymlinkPath` uses for
- * `js/path-injection`, and for the same reason: the repo's codeql.yml runs
- * plain codeql-action/analyze with no follow-up step that reads a SARIF
- * suppression annotation, so a `// codeql[...]` comment here would not
- * silence anything.
+ * `js/path-injection`, and for the same reason: no step of this repo's
+ * CodeQL workflow reads a SARIF suppression annotation (the analyze step
+ * itself lives in the shared workflow this repo calls), so a
+ * `// codeql[...]` comment here would not silence anything.
  */
 function sanitizeProviderMap(
   value: unknown,
