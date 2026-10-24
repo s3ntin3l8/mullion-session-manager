@@ -630,7 +630,9 @@ const requestReview = {
     "new to review, so push a new commit to ask for another round, or dismiss that review " +
     "first. A session working an ACTIVE Task Master task is refused (409) for that task's own " +
     "PR: Task Master runs the task's review. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
-    "automatically.",
+    "automatically. The result may carry a `marker` object: `written: false` means the in-flight " +
+    "marker (a check run the repository's own review workflow reads) could not be written, with " +
+    "the reason — the review still runs, but that workflow may not see it.",
   inputSchema: {
     type: "object",
     properties: {

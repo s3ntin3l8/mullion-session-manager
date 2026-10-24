@@ -7,7 +7,8 @@ import type { RelayReviewState } from "../shared/types.js";
 import { getGitStatus } from "../services/git-status.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
-import { resolveGitHubToken } from "../services/github-integration.js";
+import { resolveGitHubToken, resolveMarkerTokens } from "../services/github-integration.js";
+import type { MarkerUnavailableReason } from "../services/github-integration.js";
 import { getStoredSettings } from "../services/settings.js";
 import {
   completeReviewMarkerCheckRun,
@@ -137,12 +138,19 @@ interface ReviewTarget {
   headSha: string;
   token: string;
   /**
-   * The token for the in-flight marker (a check run). It needs
-   * `checks: write`, which the read token does not have — absent when no
-   * such token could be resolved, in which case the relay simply keeps no
-   * marker.
+   * The GitHub App token for the in-flight marker (a check run). It needs
+   * `checks: write`, which the read token does not have, and GitHub only lets
+   * an App create check runs — so there is no user-token fallback (#1790).
+   * Null when none could be had, in which case `markerUnavailable` says why
+   * and the relay keeps no marker.
    */
   markerToken?: string | null;
+  markerUnavailable?: Exclude<MarkerUnavailableReason, "write-failed">;
+  /**
+   * The token that can READ check runs (the remembered session): the App's
+   * when it has one, otherwise the user token, which reads fine.
+   */
+  markerReadToken?: string;
 }
 
 interface TriageTarget {
@@ -478,13 +486,7 @@ async function resolveReviewTarget(
       prNumber,
       headSha: pr.headSha,
       token,
-      // The in-flight marker is a check run, and writing one needs
-      // `checks: write` — a scope the read token does not have. The App
-      // install usually has not been approved for it either, so this falls
-      // back to the PAT/OAuth token (a `repo`-scoped user token covers check
-      // runs). Without it the marker write 403s and the cross-entry-point
-      // session sharing never happens.
-      markerToken: await resolveGitHubToken(app, { owner, repo }, "checks"),
+      ...(await resolveMarkerTokens(app, { owner, repo }, token)),
     };
   } catch (err) {
     // Only a genuine 404 means "no such PR". An expired token, a rate
@@ -668,10 +670,13 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           headSha,
           resolveBase: reader.base,
           sessionId,
-          // The token lets the relay read and write the in-flight marker: the
-          // session the previous round ran in, and one for this round. It
-          // needs `checks: write` — the read token does not have it.
-          githubToken: target.markerToken ?? undefined,
+          // Two tokens for the in-flight marker (#1790): any token that can
+          // read check runs finds the session the previous round ran in, but
+          // only a GitHub App token with `checks: write` can write this
+          // round's marker.
+          githubToken: target.markerReadToken,
+          markerWriteToken: target.markerToken ?? undefined,
+          markerUnavailable: target.markerUnavailable,
         });
         // The PR's reviews are read once per request: the delta base and the
         // duplicate-review warning need the same list, and it is a walk of up
@@ -683,6 +688,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           runId: run.runId,
           runStatus: run.status,
           replayed: run.replayed,
+          // Present when the in-flight marker was not written (or was): the
+          // GitHub auto-review only sees this run through it (#1790).
+          ...(run.marker ? { marker: run.marker } : {}),
           // A bot review for this commit may already exist — the repository
           // reviews new PRs on its own, so this fires routinely and is NOT an
           // error (issue #1705). Warn, never refuse.
@@ -724,7 +732,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
         // Close the in-flight marker once the run it names has finished, so a
         // later request does not mistake a finished review for a live one.
         // The shared workflow closes its own marker the same way.
-        if (record?.markerCheckRunId) {
+        if (record?.markerCheckRunId && target.markerToken) {
           const conclusion =
             status.status === "completed"
               ? "success"
@@ -736,7 +744,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           if (conclusion) {
             try {
               await completeReviewMarkerCheckRun(
-                target.markerToken ?? token,
+                target.markerToken,
                 owner,
                 repo,
                 record.markerCheckRunId,

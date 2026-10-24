@@ -37,6 +37,10 @@ import {
   clearGitHubApp,
   resolveGitHubToken,
   resolveReviewerToken,
+  resolveChecksToken,
+  resolveMarkerTokens,
+  markerUnavailableMessage,
+  clearChecksMarkerOutcomesForTests,
   resolveMullionReviewLogins,
   verifyAppCredentials,
   GITHUB_PROVIDER,
@@ -745,6 +749,154 @@ describe("github-integration service", () => {
 
   // #489 remaining scope — non-secret visibility into whether an App is
   // configured and how many accounts it's installed on.
+  // #1790 — the Hermes review marker is a check run, which only a GitHub App
+  // can create. There is no PAT/OAuth fallback, so a missing token says why.
+  describe("resolveChecksToken (#1790)", () => {
+    const repo = { owner: "acme", repo: "widgets" };
+
+    beforeEach(() => {
+      clearChecksMarkerOutcomesForTests();
+      // setPat validates the token against GitHub.
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+    });
+
+    it("returns the App's token", async () => {
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_checks",
+        installationsChecked: null,
+      });
+
+      expect(await resolveChecksToken(app, repo)).toEqual({ token: "ghs_checks" });
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "123",
+        expect.any(String),
+        "acme",
+        "widgets",
+        "checks",
+      );
+      await app.close();
+    });
+
+    it("never falls back to the PAT when no App is configured", async () => {
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+
+      expect(await resolveChecksToken(app, repo)).toEqual({
+        token: null,
+        reason: "app-not-configured",
+      });
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("says not-installed when the App has no installation on the owner", async () => {
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: null, installationsChecked: 3 });
+
+      expect(await resolveChecksToken(app, repo)).toEqual({ token: null, reason: "not-installed" });
+      await app.close();
+    });
+
+    it("says permission-not-granted for a 422 mint, live or cached", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("no checks", 422));
+      expect(await resolveChecksToken(app, repo)).toEqual({
+        token: null,
+        reason: "permission-not-granted",
+      });
+
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: null,
+        installationsChecked: null,
+        failureStatus: 422,
+      });
+      expect(await resolveChecksToken(app, repo)).toEqual({
+        token: null,
+        reason: "permission-not-granted",
+      });
+      await app.close();
+    });
+
+    it("says mint-failed for any other mint failure and rethrows unexpected errors", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("GitHub is down", 502));
+      expect(await resolveChecksToken(app, repo)).toEqual({ token: null, reason: "mint-failed" });
+
+      mockGetInstallationToken.mockRejectedValueOnce(new TypeError("a bug"));
+      await expect(resolveChecksToken(app, repo)).rejects.toThrow(TypeError);
+      await app.close();
+    });
+
+    it("feeds the Settings status with the last outcome", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("no checks", 422));
+      await resolveChecksToken(app, repo);
+
+      const status = await getGitHubAppStatus(app);
+      expect(status.checksMarker).toMatchObject({
+        state: "permission-not-granted",
+        owner: "acme",
+        repo: "widgets",
+      });
+      await app.close();
+    });
+  });
+
+  describe("resolveMarkerTokens (#1790)", () => {
+    beforeEach(() => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+    });
+
+    it("uses the App token for both writing and reading", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_checks",
+        installationsChecked: null,
+      });
+
+      expect(
+        await resolveMarkerTokens(app, { owner: "acme", repo: "widgets" }, "ghs_read"),
+      ).toEqual({ markerToken: "ghs_checks", markerReadToken: "ghs_checks" });
+      await app.close();
+    });
+
+    it("keeps the user token for READING check runs when no App token exists", async () => {
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+
+      expect(
+        await resolveMarkerTokens(app, { owner: "acme", repo: "widgets" }, "ghs_read"),
+      ).toEqual({
+        markerToken: null,
+        markerUnavailable: "app-not-configured",
+        markerReadToken: "ghp_shared",
+      });
+      await app.close();
+    });
+  });
+
+  describe("markerUnavailableMessage (#1790)", () => {
+    it("names each reason", () => {
+      expect(markerUnavailableMessage("app-not-configured", "acme")).toContain("no GitHub App");
+      expect(markerUnavailableMessage("not-installed", "acme")).toContain("not installed on acme");
+      expect(markerUnavailableMessage("permission-not-granted", "acme")).toContain(
+        "Checks: Read & write",
+      );
+      expect(markerUnavailableMessage("mint-failed", "acme")).toContain("could not be minted");
+      expect(markerUnavailableMessage("write-failed", "acme", "HTTP 403")).toContain("HTTP 403");
+    });
+  });
+
   describe("getGitHubAppStatus (#489)", () => {
     it("reports not configured when no App is set", async () => {
       const app = await buildApp();

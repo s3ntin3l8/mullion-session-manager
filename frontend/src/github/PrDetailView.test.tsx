@@ -310,6 +310,30 @@ describe("PrDetailView", () => {
     expect(JSON.parse(String(call[1]?.body))).toEqual({ headSha: "abc" });
   });
 
+  it("says when the re-review's in-flight marker could not be written (#1790)", async () => {
+    stub(PR, (url) =>
+      url.endsWith("/re-review")
+        ? jsonResponse(200, {
+            status: "dispatched",
+            runId: "r",
+            replayed: false,
+            marker: {
+              written: false,
+              reason: "permission-not-granted",
+              message: "no Checks grant",
+            },
+          })
+        : null,
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+    expect(
+      await screen.findByText(
+        "Re-review requested — in-flight marker not written: no Checks grant",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("requests a re-review and surfaces a refusal", async () => {
     stub(PR, (url) =>
       url.endsWith("/re-review")

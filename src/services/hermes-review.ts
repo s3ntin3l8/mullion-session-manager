@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getHermesKey } from "./hermes-integration.js";
 import { createReviewMarkerCheckRun, listCommitCheckRuns } from "./github-write.js";
+import {
+  getConfiguredAppId,
+  markerUnavailableMessage,
+  recordChecksMarkerOutcome,
+} from "./github-integration.js";
+import type { MarkerUnavailableReason } from "./github-integration.js";
 import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
 import { getStoredSettings } from "./settings.js";
 import type { UrlGuardPolicy } from "./url-guard.js";
@@ -236,10 +242,25 @@ export interface RelayTarget {
   /**
    * The GitHub token used to read and write the in-flight marker (issue
    * #1751, #1757). Without it the relay cannot see the session the previous
-   * round ran in, and cannot write one of its own.
+   * round ran in. (Writing the marker needs `markerWriteToken` — a user token
+   * can read check runs but GitHub refuses to create one with it, #1790.)
    */
   githubToken?: string;
+  /**
+   * A GitHub App token with `checks: write`, for writing the marker. Without
+   * it the write is skipped and `markerUnavailable` says why.
+   */
+  markerWriteToken?: string;
+  markerUnavailable?: Exclude<MarkerUnavailableReason, "write-failed">;
 }
+
+/**
+ * What became of the in-flight marker for a dispatched pull-request review
+ * (#1790). Absent for a replayed request, which writes none.
+ */
+export type ReviewMarkerResult =
+  | { written: true; checkRunId: number }
+  | { written: false; reason: MarkerUnavailableReason; message: string };
 
 /**
  * The Hermes session a pull request's review rounds run in — one per PR, so
@@ -423,6 +444,8 @@ export interface ReviewRunRecord {
    * workflow closes its own marker the same way.
    */
   markerCheckRunId?: number;
+  /** Whether the marker was written, and if not, why (#1790). */
+  marker?: ReviewMarkerResult;
   /** The Hermes session the round runs in — the marker remembers it. */
   hermesSessionId?: string;
 }
@@ -476,7 +499,12 @@ function trackRun(incoming: ReviewRunRecord): void {
   // review that posted before the replay).
   const existing = runsById.get(incoming.runId);
   const record = existing
-    ? { ...incoming, sessionId: existing.sessionId, dispatchedAt: existing.dispatchedAt }
+    ? {
+        ...incoming,
+        sessionId: existing.sessionId,
+        dispatchedAt: existing.dispatchedAt,
+        marker: incoming.marker ?? existing.marker,
+      }
     : incoming;
   runsById.delete(record.runId);
   runsById.set(record.runId, record);
@@ -618,9 +646,12 @@ export interface HermesReviewRequest {
   /**
    * The GitHub token used to read and write the in-flight marker (issues
    * #1751, #1757). Without it the relay cannot see the session the previous
-   * round ran in, and cannot write one of its own.
+   * round ran in. Writing the marker needs `markerWriteToken` (#1790).
    */
   githubToken?: string;
+  /** A GitHub App token with `checks: write`; see `RelayTarget`. */
+  markerWriteToken?: string;
+  markerUnavailable?: Exclude<MarkerUnavailableReason, "write-failed">;
 }
 
 /**
@@ -653,8 +684,18 @@ export function assertReviewerConfigured(app: FastifyInstance): string {
  */
 export async function requestHermesReview(
   app: FastifyInstance,
-  { owner, repo, prNumber, headSha, resolveBase, sessionId, githubToken }: HermesReviewRequest,
-): Promise<{ runId: string; status: string; replayed: boolean }> {
+  {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    resolveBase,
+    sessionId,
+    githubToken,
+    markerWriteToken,
+    markerUnavailable,
+  }: HermesReviewRequest,
+): Promise<RelayResult> {
   return requestRelay(app, {
     kind: "pull_request",
     owner,
@@ -664,6 +705,8 @@ export async function requestHermesReview(
     resolveBase,
     sessionId,
     githubToken,
+    markerWriteToken,
+    markerUnavailable,
   });
 }
 
@@ -696,6 +739,14 @@ async function findLiveRun(
   }
 }
 
+/** What a dispatched relay run returns. */
+export interface RelayResult {
+  runId: string;
+  status: string;
+  replayed: boolean;
+  marker?: ReviewMarkerResult;
+}
+
 /**
  * Dispatches a relay run for any target kind (issue #1629). A pull request
  * review and an issue triage are the same job with a different target and a
@@ -705,7 +756,7 @@ async function findLiveRun(
 export async function requestRelay(
   app: FastifyInstance,
   target: RelayTarget,
-): Promise<{ runId: string; status: string; replayed: boolean }> {
+): Promise<RelayResult> {
   const { owner, repo, number } = target;
   const settings = getStoredSettings(app.db).reviewRelay;
   const { apiUrl, model, cooldownMinutes } = settings;
@@ -882,28 +933,55 @@ export async function requestRelay(
     // request through either entry point sees the other's in-flight review
     // (issue #1751) and continues in its session (issue #1757).
     let markerCheckRunId: number | undefined;
-    if (
-      target.kind === "pull_request" &&
-      target.headSha &&
-      sessionId &&
-      target.githubToken &&
-      !run.replayed
-    ) {
-      try {
-        markerCheckRunId = await createReviewMarkerCheckRun(target.githubToken, owner, repo, {
-          name: REVIEW_MARKER_NAME,
-          headSha: target.headSha,
-          externalId: run.runId,
-          sessionId,
-          detailsUrl: `https://github.com/${owner}/${repo}/pull/${number}`,
-        });
-      } catch (err) {
-        // A marker that cannot be written is not a failed review: the run is
-        // already on its way, and the next request simply cannot see it.
-        app.log.warn(
-          { err, owner, repo, prNumber: number },
-          "could not write the in-flight marker for the review run",
-        );
+    let marker: ReviewMarkerResult | undefined;
+    if (target.kind === "pull_request" && target.headSha && sessionId && !run.replayed) {
+      if (!target.markerWriteToken) {
+        // No App token with `checks: write` (#1790): GitHub refuses a check
+        // run from a user token, so the write is skipped — and the caller is
+        // told why instead of finding out from the GHA auto-review failing.
+        // A caller that supplies neither a token nor a reason still gets one:
+        // having no App token to write with is, in effect, no App.
+        const reason =
+          target.markerUnavailable ?? (target.githubToken ? "app-not-configured" : null);
+        if (reason) {
+          marker = { written: false, reason, message: markerUnavailableMessage(reason, owner) };
+        }
+      } else {
+        try {
+          markerCheckRunId = await createReviewMarkerCheckRun(
+            target.markerWriteToken,
+            owner,
+            repo,
+            {
+              name: REVIEW_MARKER_NAME,
+              headSha: target.headSha,
+              externalId: run.runId,
+              sessionId,
+              detailsUrl: `https://github.com/${owner}/${repo}/pull/${number}`,
+            },
+          );
+          marker = { written: true, checkRunId: markerCheckRunId };
+          recordChecksMarkerOutcome(getConfiguredAppId(app), { owner, repo }, "ok");
+        } catch (err) {
+          // A marker that cannot be written is not a failed review: the run is
+          // already on its way, and the next request simply cannot see it.
+          app.log.warn(
+            { err, owner, repo, prNumber: number },
+            "could not write the in-flight marker for the review run",
+          );
+          const detail =
+            err instanceof Error && "statusCode" in err
+              ? `HTTP ${String(err.statusCode)}`
+              : undefined;
+          // Settings shows the last marker outcome: a refused write (the App
+          // minted a token but GitHub still said no) must not read as "ok".
+          recordChecksMarkerOutcome(getConfiguredAppId(app), { owner, repo }, "write-failed");
+          marker = {
+            written: false,
+            reason: "write-failed",
+            message: markerUnavailableMessage("write-failed", owner, detail),
+          };
+        }
       }
     }
     trackRun({
@@ -916,9 +994,15 @@ export async function requestRelay(
       sessionId: target.sessionId,
       dispatchedAt: Date.now(),
       markerCheckRunId,
+      marker,
       hermesSessionId: sessionId,
     });
-    return { runId: run.runId, status: run.status, replayed: run.replayed };
+    return {
+      runId: run.runId,
+      status: run.status,
+      replayed: run.replayed,
+      ...(marker ? { marker } : {}),
+    };
   } catch (err) {
     if (last === undefined) lastRequested.delete(cooldownKey);
     else lastRequested.set(cooldownKey, last);
@@ -1140,6 +1224,8 @@ export interface ReviewRunStatus {
   prNumber: number;
   headSha: string;
   dispatchedAt: string;
+  /** Whether the in-flight marker was written, and why not (#1790). */
+  marker?: ReviewMarkerResult;
 }
 
 function toStatus(record: ReviewRunRecord, run: Record<string, unknown> | null): ReviewRunStatus {
@@ -1158,6 +1244,7 @@ function toStatus(record: ReviewRunRecord, run: Record<string, unknown> | null):
     prNumber: record.prNumber,
     headSha: record.headSha,
     dispatchedAt: new Date(record.dispatchedAt).toISOString(),
+    ...(record.marker ? { marker: record.marker } : {}),
   };
 }
 
