@@ -803,11 +803,15 @@ interface CreateRollback {
 async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise<void> {
   if (rb.done) return;
   rb.done = true;
-  if (rb.hostId === undefined) return;
-  const backend = () => resolveBackend(app, rb.hostId!);
-  if (rb.sessionId !== undefined) {
+  // Either host is enough to have something to undo: the scope's host (the
+  // terminate) or the worktree's host (the worktree/branch cleanup). They
+  // are two INDEPENDENT fields (issue #1722) — so the gate has to name
+  // both, or a rollback that only ever made a worktree would be skipped
+  // and leave the worktree and its branch behind.
+  if (rb.hostId === undefined && rb.worktreeHostId === undefined) return;
+  if (rb.sessionId !== undefined && rb.hostId !== undefined) {
     try {
-      await backend().terminate(String(rb.sessionId));
+      await resolveBackend(app, rb.hostId).terminate(String(rb.sessionId));
     } catch (err) {
       app.log.warn({ err, sessionId: rb.sessionId }, "create rollback: terminate failed");
     }
