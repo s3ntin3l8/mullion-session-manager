@@ -84,7 +84,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookLaunchPlan } from "./types.js";
 import type { HookMessageKind } from "../hook-protocol.js";
 import { SHELL_METACHARACTERS_RE, shellQuote, buildModelFlag, resolveHooksDir } from "./shared.js";
-import { runLoginShell } from "../../services/login-shell.js";
+import { runLoginShell } from "../login-shell.js";
 
 /** The adapter's stable id — also the `<agent>` argv the shared forwarder
  * receives, so forwarder-core.mjs can dispatch to `mapMcodeEvent`. */
