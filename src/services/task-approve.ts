@@ -54,9 +54,19 @@ export function cleanupTaskWorktree(
           project,
         )
       : project.hostId;
-  // The parent directory the worktree sits under, ON THAT HOST.
-  const cwdOnHost =
-    projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds)) ?? project.cwd;
+  // The parent directory the worktree sits under, ON THAT HOST. Null when
+  // the project is not mapped there — in which case that host cannot be
+  // holding the worktree, so there is nothing to remove. The project's own
+  // root is NOT a stand-in here: it is a path that host does not have, and
+  // removing against it fails silently and leaks the worktree.
+  const cwdOnHost = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
+  if (cwdOnHost === null) {
+    app.log.warn(
+      { projectId: project.id, hostId },
+      "task cleanup: no path for this project on that host — the worktree there cannot be removed",
+    );
+    return;
+  }
   void resolveBackend(app, hostId)
     .removeWorktreeIfClean(task.worktreePath, cwdOnHost)
     .catch((err) => {
