@@ -73,6 +73,12 @@ function isDisabled(): boolean {
   return process.env.MULLION_RESOLVE_INTERACTIVE_ENV === "0";
 }
 
+/** What a failed resolve leaves in effect — worded for the first resolve
+ * (nothing cached yet) vs. a rescan (the previous PATH is kept). */
+function fallbackNote(): string {
+  return resolved ? "keeping the previous PATH" : "using the service environment's PATH";
+}
+
 function runInteractiveShell(shell: string): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -93,6 +99,10 @@ function runInteractiveShell(shell: string): Promise<string | null> {
       stdout += chunk.toString("utf8");
     });
     const timer = setTimeout(() => {
+      log?.warn(
+        { shell, timeoutMs: RESOLVE_TIMEOUT_MS },
+        `user-shell-env: interactive shell timed out; ${fallbackNote()}`,
+      );
       child.kill();
       setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -100,7 +110,10 @@ function runInteractiveShell(shell: string): Promise<string | null> {
       finish(null);
     }, RESOLVE_TIMEOUT_MS);
     child.on("error", (err) => {
-      log?.warn({ err, shell }, "user-shell-env: failed to spawn the interactive shell");
+      log?.warn(
+        { err, shell },
+        `user-shell-env: failed to spawn the interactive shell; ${fallbackNote()}`,
+      );
       finish(null);
     });
     child.on("close", () => finish(stdout));
@@ -128,10 +141,12 @@ export function resolveUserShellEnv(): Promise<void> {
       // Only overwrite on success: a failed rescan (rc hiccup, timeout) must
       // not discard the PATH an earlier resolve already found.
       if (path) resolved = { path };
-      else
+      // stdout === null already logged its own reason (timeout / spawn error);
+      // here the shell ran but printed no PATH between the markers.
+      else if (stdout !== null)
         log?.warn(
           { shell },
-          "user-shell-env: no PATH from the interactive shell (timeout or unparseable output); keeping any previous value",
+          `user-shell-env: no PATH from the interactive shell (unparseable output); ${fallbackNote()}`,
         );
     })
     .finally(() => {

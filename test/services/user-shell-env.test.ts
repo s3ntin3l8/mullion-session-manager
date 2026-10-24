@@ -100,6 +100,10 @@ describe("resolveUserShellEnv", () => {
     await resolveUserShellEnv();
     expect(spawned).toHaveLength(1);
     expect(spawned[0].args[0]).toBe("-ilc");
+    // CI is ubuntu-only: pin the script so the macOS-portable form can't regress
+    // (macOS's /usr/bin/env has no -0).
+    expect(spawned[0].args[1]).toContain('"$PATH"');
+    expect(spawned[0].args[1]).not.toMatch(/\benv\b/);
     expect(spawned[0].opts.stdio).toEqual(["ignore", "pipe", "ignore"]);
     expect(getUserShellPath()).toBe("/home/u/.minimax-code/bin:/usr/bin");
   });
@@ -121,9 +125,15 @@ describe("resolveUserShellEnv", () => {
     await resolveUserShellEnv();
     invalidateUserShellEnv();
     stdoutToEmit = "garbage";
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    setUserShellEnvLogger(logger);
     await resolveUserShellEnv();
     expect(spawned).toHaveLength(2);
     expect(getUserShellPath()).toBe("/home/u/.minimax-code/bin:/usr/bin");
+    expect(logger.warn).toHaveBeenCalledWith(
+      { shell: "/usr/bin/zsh" },
+      expect.stringContaining("keeping the previous PATH"),
+    );
   });
 
   it("logs why it fell back: unparseable output, spawn error, unsupported shell", async () => {
@@ -134,7 +144,7 @@ describe("resolveUserShellEnv", () => {
     await resolveUserShellEnv();
     expect(logger.warn).toHaveBeenCalledWith(
       { shell: "/usr/bin/zsh" },
-      expect.stringContaining("no PATH from the interactive shell"),
+      expect.stringContaining("using the service environment's PATH"),
     );
 
     resetUserShellEnvForTests();
@@ -144,6 +154,8 @@ describe("resolveUserShellEnv", () => {
       expect.objectContaining({ err: spawnError }),
       expect.stringContaining("failed to spawn"),
     );
+    // a spawn error is reported once, not again as "no PATH"
+    expect(logger.warn).toHaveBeenCalledTimes(2);
 
     resetUserShellEnvForTests();
     process.env.SHELL = "/usr/bin/fish";
@@ -162,12 +174,19 @@ describe("resolveUserShellEnv", () => {
 
   it("times out to null when the shell never answers", async () => {
     vi.useFakeTimers();
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    setUserShellEnvLogger(logger);
     try {
       stdoutToEmit = null;
       const p = resolveUserShellEnv();
       await vi.advanceTimersByTimeAsync(5_000);
       await p;
       expect(getUserShellPath()).toBeNull();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        { shell: "/usr/bin/zsh", timeoutMs: 5_000 },
+        expect.stringContaining("timed out"),
+      );
     } finally {
       vi.useRealTimers();
     }
