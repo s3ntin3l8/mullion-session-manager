@@ -90,6 +90,21 @@ describe("readSessionsDirHistory", () => {
     expect(history.dirs).toEqual([]);
     expect(history.warning).toMatch(/does not have the expected shape/);
   });
+
+  it("applies the bound on READ too, so an over-long file cannot widen the set", () => {
+    // The bound is not only a write-time rule: a file with more entries
+    // than the limit (hand-edited, or written by a build with a different
+    // limit) must not put more dirs into the owned set than the limit
+    // allows.
+    const home = makeHome();
+    const many = Array.from({ length: SESSIONS_DIR_HISTORY_LIMIT + 4 }, (_, i) =>
+      path.join(home, `sessions-${i}`),
+    );
+    writeFileSync(trailFile(home), JSON.stringify({ dirs: many }));
+    const history = readSessionsDirHistory(home);
+    expect(history.dirs).toHaveLength(SESSIONS_DIR_HISTORY_LIMIT);
+    expect(history.dirs).toEqual(many.slice(-SESSIONS_DIR_HISTORY_LIMIT));
+  });
 });
 
 describe("recordSessionsDir", () => {
@@ -138,6 +153,34 @@ describe("recordSessionsDir", () => {
     const history = recordSessionsDir("", path.join(tmpdir(), "sessions"));
     expect(history.dirs).toEqual([]);
     expect(history.warning).toBeUndefined();
+  });
+
+  it("leaves the file alone when the dir is already its newest entry", () => {
+    // The early-return path: the file is exactly what would be written, so
+    // it is not rewritten.
+    const home = makeHome();
+    const dir = path.join(home, "sessions");
+    recordSessionsDir(home, dir);
+    const before = readFileSync(trailFile(home), "utf8");
+    const history = recordSessionsDir(home, dir);
+    expect(history.dirs).toEqual([dir]);
+    expect(readFileSync(trailFile(home), "utf8")).toBe(before);
+  });
+
+  it("trims an over-long file on the next record", () => {
+    // The write path heals a file that is over the bound, even when the
+    // dir it would record is already the newest entry.
+    const home = makeHome();
+    const many = Array.from({ length: SESSIONS_DIR_HISTORY_LIMIT + 4 }, (_, i) =>
+      path.join(home, `sessions-${i}`),
+    );
+    const newest = many[many.length - 1];
+    writeFileSync(trailFile(home), JSON.stringify({ dirs: many }));
+    const history = recordSessionsDir(home, newest);
+    expect(history.dirs).toHaveLength(SESSIONS_DIR_HISTORY_LIMIT);
+    const onDisk = JSON.parse(readFileSync(trailFile(home), "utf8")) as { dirs: string[] };
+    expect(onDisk.dirs).toHaveLength(SESSIONS_DIR_HISTORY_LIMIT);
+    expect(onDisk.dirs[onDisk.dirs.length - 1]).toBe(newest);
   });
 
   it("reports an unwritable install root and keeps the dirs it already had", () => {

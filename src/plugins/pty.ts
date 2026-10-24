@@ -450,15 +450,21 @@ export function resolveSessionsDirs(
 //
 // Note that it is no longer a PURE function of its one input: the resolver
 // it delegates to also RECORDS the dir it resolved in the install root's
-// trail (issue #1771). That is still safe to call more than once — the
-// record is the same dir, and the write is atomic — but callers that only
-// want the dir should not expect the call to leave the disk untouched.
+// trail (issue #1771) — but only when it is given one. With no install root
+// (the default, and every dev checkout) nothing is read and nothing is
+// written, so the call leaves the disk untouched; with one, it records the
+// dir. Callers that want the trail to be kept pass the install root, and
+// calling it more than once is safe either way: the record is the same dir,
+// and the write is atomic.
 //
 // The OWNERSHIP set (resolveSessionsDirs) is what callers that resolve
 // SCOPES need; this wrapper is the "which dir do the sockets live in"
 // question on its own.
-export function ensureSessionsDir(configured: string): string {
-  return resolveSessionsDirs(configured).current;
+export function ensureSessionsDir(
+  configured: string,
+  options: { mullionHome?: string } = {},
+): string {
+  return resolveSessionsDirs(configured, options).current;
 }
 
 // The fallback lives under the platform's temp dir under a predictable

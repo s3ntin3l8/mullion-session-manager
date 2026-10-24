@@ -90,8 +90,30 @@ export function sessionsDirHistoryPath(mullionHome: string): string {
  * Reads the trail. Never throws: a missing file is the normal case (the
  * first boot, and every boot of an install that never moved), and a
  * corrupt or unreadable one is reported through `warning` and ignored.
+ *
+ * The BOUND is applied here, not only on the write path: a file with more
+ * entries than the limit (a hand-edited one, or one written by a build
+ * with a different limit) must not widen the owned set beyond what the
+ * limit allows — the oldest entries are dropped from the view, and the
+ * next write trims the file itself.
  */
 export function readSessionsDirHistory(mullionHome: string): SessionsDirHistory {
+  const raw = readRawHistory(mullionHome);
+  return {
+    dirs: raw.dirs.slice(-SESSIONS_DIR_HISTORY_LIMIT),
+    ...(raw.warning === undefined ? {} : { warning: raw.warning }),
+  };
+}
+
+/**
+ * Reads the trail WITHOUT applying the bound.
+ *
+ * The write path needs the whole list: a file that is over the bound has to
+ * be rewritten (trimmed), not kept as it is, and the "already recorded"
+ * early return may only skip the write when the file is already exactly
+ * what would be written.
+ */
+function readRawHistory(mullionHome: string): SessionsDirHistory {
   const file = sessionsDirHistoryPath(mullionHome);
   // No install root — nowhere to keep a trail, and nothing to trail.
   if (file === "") return { dirs: [] };
@@ -147,9 +169,17 @@ export function recordSessionsDir(mullionHome: string, dir: string): SessionsDir
   if (file === "") return { dirs: [] };
 
   const resolved = path.resolve(dir);
-  const existing = readSessionsDirHistory(mullionHome);
-  // Already the newest entry — the file is exactly what we would write.
-  if (existing.dirs[existing.dirs.length - 1] === resolved) return existing;
+  const existing = readRawHistory(mullionHome);
+  const trimmed = existing.dirs.slice(-SESSIONS_DIR_HISTORY_LIMIT);
+  // Already the newest entry AND the file is within the bound — the file is
+  // exactly what we would write, so there is nothing to write. (A file over
+  // the bound is NOT skipped: it gets trimmed by the write below.)
+  if (trimmed.length === existing.dirs.length && trimmed[trimmed.length - 1] === resolved) {
+    return {
+      dirs: trimmed,
+      ...(existing.warning === undefined ? {} : { warning: existing.warning }),
+    };
+  }
 
   const dirs = [...existing.dirs.filter((entry) => entry !== resolved), resolved].slice(
     -SESSIONS_DIR_HISTORY_LIMIT,
@@ -160,7 +190,7 @@ export function recordSessionsDir(mullionHome: string, dir: string): SessionsDir
     // The trail is an aid, not a requirement: an unwritable install root
     // must not stop the boot. The dirs we already had are still returned.
     return {
-      dirs: existing.dirs,
+      dirs: trimmed,
       warning: `the sessions-dir history at ${file} could not be written and was not updated: ${errorMessage(err)}`,
     };
   }

@@ -30,6 +30,7 @@ import {
   ptyPlugin,
   resolveSessionsDirs,
 } from "../../src/plugins/pty.js";
+import { SESSIONS_DIR_HISTORY_LIMIT } from "../../src/services/sessions-dir-history.js";
 import { envPlugin } from "../../src/plugins/env.js";
 import { dbPlugin } from "../../src/plugins/db.js";
 import { buildApp } from "../../src/app.js";
@@ -360,6 +361,44 @@ describe("resolveSessionsDirs — the sessions-dir HISTORY (issue #1771)", () =>
     expect(dirs.current).toBe(path.resolve(short));
     expect(dirs.owned).toContain(path.resolve(short));
     expect(dirs.historyWarning).toMatch(/not readable JSON/);
+  });
+
+  it("does not let an over-long trail file widen the owned set", () => {
+    // The bound is enforced on READ too: a file with more entries than the
+    // limit (hand-edited, or written by a build with a different limit)
+    // must not put more dirs into the owned set than the limit allows.
+    const home = makeInstallRoot();
+    const many = Array.from({ length: SESSIONS_DIR_HISTORY_LIMIT + 4 }, (_, i) =>
+      path.join(tmpdir(), `ms-trail-entry-${i}`),
+    );
+    writeFileSync(path.join(home, "sessions-dirs.json"), JSON.stringify({ dirs: many }));
+    const short = path.join(tmpdir(), "ms-history-sessions-test-6");
+    const dirs = resolveSessionsDirs(short, { mullionHome: home });
+    const ownedEntries = many.filter((dir) => dirs.owned.includes(dir));
+    // At most the limit's worth of trail entries are owned — the newest
+    // ones, with the oldest dropped.
+    expect(ownedEntries.length).toBeLessThanOrEqual(SESSIONS_DIR_HISTORY_LIMIT);
+    expect(dirs.owned).toContain(many[many.length - 1]);
+    expect(dirs.owned).not.toContain(many[0]);
+  });
+
+  it("records the trail through ensureSessionsDir too, when given an install root", () => {
+    // The wrapper is the "which dir do the sockets live in" API: a caller
+    // that wants the trail kept must be able to say so, rather than the
+    // trail depending on which entry point happened to be used.
+    const home = makeInstallRoot();
+    const short = path.join(tmpdir(), "ms-history-sessions-test-7");
+    expect(ensureSessionsDir(short, { mullionHome: home })).toBe(path.resolve(short));
+    const written = JSON.parse(readFileSync(path.join(home, "sessions-dirs.json"), "utf8")) as {
+      dirs: string[];
+    };
+    expect(written.dirs).toContain(path.resolve(short));
+  });
+
+  it("leaves the disk alone through ensureSessionsDir without an install root", () => {
+    // No install root — nothing to keep a trail in, so nothing is written.
+    const short = path.join(tmpdir(), "ms-history-sessions-test-8");
+    expect(ensureSessionsDir(short)).toBe(path.resolve(short));
   });
 });
 
