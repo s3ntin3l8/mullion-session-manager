@@ -22,7 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext } from "../../src/services/hook-adapters/types.js";
-import { baseSession as baseSessionFixture } from "./launch-plan-fixture.js";
+import { baseSession } from "./launch-plan-fixture.js";
 
 const callOrder: string[] = [];
 
@@ -73,7 +73,6 @@ function mkTmpDir(prefix: string): string {
 
 // The fixture lives in its own module so that other tests can build a session
 // the same way (see the mcode adapter's MCP-credential test).
-const baseSession = baseSessionFixture;
 
 const ORIGINAL_ENV = { ...process.env };
 

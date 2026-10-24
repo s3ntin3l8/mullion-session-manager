@@ -4,14 +4,17 @@
  * session's env.
  *
  * It is a separate module (not a helper inside one test file) so that a test
- * in ANOTHER file can build a session the same way — and so that the fixture
- * stays in step with the `LaunchPlanSession` interface: `baseSession` is
- * typed as `LaunchPlanSession`, so a field the interface gains later breaks
- * the COMPILER here rather than silently turning into `undefined` at runtime.
+ * in ANOTHER file can build a session the same way, and so the shape is
+ * written down in exactly one place.
  *
- * (The test tree is not covered by the repo's `tsconfig.json` — it covers
- * `src/` alone — so this file is not type-checked by `npm run typecheck`.
- * It is still the single place the shape is written down.)
+ * `baseSession` is typed as `LaunchPlanSession`, which is what keeps the
+ * fixture honest ABOUT ITS INTENT — but it is not a compiler guarantee
+ * today: the repo's `tsconfig.json` covers `src/` alone, so the test tree is
+ * NOT type-checked by `npm run typecheck`. The annotation documents the
+ * required shape (a field the interface gains shows up as a missing key in
+ * this file, for whoever next type-checks the test tree) rather than failing
+ * the build. Writing the fixture inline in a test file is how the mcode
+ * adapter's test ended up omitting ten required fields in the first place.
  */
 
 import type { LaunchPlanSession } from "../../src/services/launch-plan.js";
