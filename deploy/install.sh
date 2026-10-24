@@ -873,9 +873,11 @@ EOF
 else
   # docs/ is NOT part of the release payload (only deploy/ is), so this one
   # cites the repository rather than a path that only exists in a checkout.
+  # $REPO, not a hardcoded name — the installer parameterises the repository
+  # precisely so a fork can publish its own releases.
   cat <<EOF
 
-Next steps (see https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/multi-host.md):
+Next steps (see https://github.com/$REPO/blob/main/docs/multi-host.md):
   - If you used self-registration (Path 1 in $MULLION_HOME/.env), this
     agent should already be self-registering with the primary — check
     Settings -> Hosts on the primary for a new "enrolled" host, or watch
