@@ -21,6 +21,7 @@ import {
   buildMcodePermissionHooksJson,
   buildMcodePluginManifest,
   buildMcodePermissionPluginManifest,
+  buildMcodeMcpConfig,
   buildMcodeHookHandoff,
   installMcodePlugin,
   removeMcodePlugin,
@@ -460,6 +461,39 @@ describe("buildMcodePermissionPluginManifest", () => {
   });
 });
 
+describe("buildMcodeMcpConfig — the plugin's MCP server declaration (#1783)", () => {
+  const parsed = JSON.parse(buildMcodeMcpConfig("/abs/mcp/server.mjs", "/usr/bin/node"));
+
+  it("declares Mullion's MCP server as a stdio server", () => {
+    expect(parsed.mcpServers.mullion).toEqual({
+      type: "stdio",
+      command: "/usr/bin/node",
+      args: ["/abs/mcp/server.mjs"],
+    });
+  });
+
+  it("carries NO env — a per-session secret must never reach a host-global file", () => {
+    // The per-session credentials ride the mcode PROCESS's environment
+    // (launch-plan.ts already injects MULLION_HOOK_SOCKET /
+    // MULLION_HOOK_TOKEN / MULLION_SOCKET_PATH into every session's env),
+    // and mcode hands its whole process env down to the MCP server it
+    // spawns. So there is nothing secret to write here.
+    expect(parsed.mcpServers.mullion.env).toBeUndefined();
+  });
+
+  it("uses only the fields mcode's compatible MCP schema accepts", () => {
+    // mcode rejects unknown fields in a plugin's MCP entry as
+    // MCP_CONFIG_UNSUPPORTED, so the entry carries exactly three.
+    expect(Object.keys(parsed.mcpServers.mullion).sort()).toEqual(["args", "command", "type"]);
+  });
+
+  it("is byte-identical across calls", () => {
+    expect(buildMcodeMcpConfig("/abs/mcp/server.mjs", "/usr/bin/node")).toBe(
+      buildMcodeMcpConfig("/abs/mcp/server.mjs", "/usr/bin/node"),
+    );
+  });
+});
+
 /** Directory entries, tolerating a missing directory. */
 function listDir(dir: string): string[] {
   try {
@@ -528,6 +562,12 @@ describe("install/remove the host-global plugin", () => {
       expect(existsSync(path.join(permissionDir, ".claude-plugin"))).toBe(false);
       expect(existsSync(path.join(permissionDir, ".minimax-plugin"))).toBe(false);
 
+      // Issue #1783 — the plugin declares Mullion's MCP server, in ONE plugin
+      // only: both plugins are loaded by every mcode, and two declarations
+      // would start Mullion's MCP server twice.
+      expect(existsSync(path.join(pluginDir, ".mcp.json"))).toBe(true);
+      expect(existsSync(path.join(permissionDir, ".mcp.json"))).toBe(false);
+
       // The plugin must carry no per-session data.
       const hooks = readFileSync(path.join(pluginDir, "hooks", "hooks.json"), "utf8");
       expect(hooks).not.toContain(ctx.hookToken);
@@ -535,6 +575,12 @@ describe("install/remove the host-global plugin", () => {
       const permissionHooks = readFileSync(path.join(permissionDir, "hooks", "hooks.json"), "utf8");
       expect(permissionHooks).not.toContain(ctx.hookToken);
       expect(permissionHooks).not.toContain(ctx.hookSocketPath);
+      // The MCP declaration must not carry the session's token either — the
+      // credentials ride the mcode process's env, not a host-global file.
+      const mcpConfig = readFileSync(path.join(pluginDir, ".mcp.json"), "utf8");
+      expect(mcpConfig).not.toContain(ctx.hookToken);
+      expect(mcpConfig).not.toContain(ctx.hookSocketPath);
+      expect(JSON.parse(mcpConfig).mcpServers.mullion.env).toBeUndefined();
 
       removeMcodePlugin();
       expect(existsSync(pluginDir)).toBe(false);
