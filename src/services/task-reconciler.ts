@@ -1389,12 +1389,21 @@ async function attemptAutoRebase(
   // for the same reasoning: null here means there is no directory to
   // resume the worktree in, which is a failure, not a silent fallback to a
   // path that does not exist on this host.
+  //
+  // Checked BEFORE the "an attempt is in progress" and "gave up" returns
+  // below: those report a task as still working, and a task that can never
+  // be rebased would then keep saying "in progress" until the rebase
+  // window lapsed, with the real cause only in the log. This is the one
+  // state the operator has to act on, so it is the one that has to be
+  // VISIBLE.
   const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
   if (workerCwd === null) {
-    app.log.warn(
-      { taskId: task.id, hostId: workerHostId },
-      "task auto-rebase: the worker's host has no path for this project — the worktree cannot be resumed there",
+    recordMergeError(
+      app,
+      task.id,
+      "Conflicts with main — the worker's host has no path for this project, so the rebase cannot run there",
     );
+    return;
   }
   const backend = resolveBackend(app, workerHostId);
 
@@ -1527,17 +1536,6 @@ async function attemptAutoRebase(
   // actually is. Deriving it from the PROJECT's root would name a
   // directory that does not exist on the worker's host when the two
   // differ, and the resume below would then collide with it.
-  if (workerCwd === null) {
-    // The worker's host has no path for this project, so there is no
-    // directory to resume the worktree in — and no stale attempt to clear.
-    // Say the real cause instead of a missing branch.
-    recordMergeError(
-      app,
-      task.id,
-      "Conflicts with main — the worker's host has no path for this project, so the rebase cannot run there",
-    );
-    return;
-  }
   const stalePath = deriveWorktreePath(workerCwd, branchName);
   await backend.removeWorktree(stalePath, workerCwd).catch((err) => {
     app.log.warn(
@@ -4462,11 +4460,16 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
     const resolvedTaskMaster = resolveTaskMasterConfig(app);
     const budgetMinutes = resolvedTaskMaster.budgetMinutes;
 
+    // Grouped by the host that RUNS the session — the worker's own host,
+    // which after placement is not necessarily the project's host (#1724).
+    // The liveness below is read from that host, so asking the project's
+    // would report a placed worker as not running.
     const byHost = new Map<string, typeof rows>();
     for (const row of rows) {
-      const group = byHost.get(row.project.hostId) ?? [];
+      const hostId = resolveTaskWorkerHost(app, row.task);
+      const group = byHost.get(hostId) ?? [];
       group.push(row);
-      byHost.set(row.project.hostId, group);
+      byHost.set(hostId, group);
     }
 
     await Promise.all(
