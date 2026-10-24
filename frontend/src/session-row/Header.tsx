@@ -43,6 +43,13 @@ export interface HeaderProps {
   agentBinary: string;
   dot: ReactNode;
   statusLabel: ReactNode;
+  // Issue #29 — the Runway quota chip for this session's agent, already
+  // built by SessionRow (it owns the snapshot and the agent's CLI name) and
+  // rendered right next to the agent's identity. It is a ReactNode, not
+  // data, for the same reason `dot`/`statusLabel` are: this component stays
+  // prop-driven and never reads the store or the quota itself. Absent →
+  // nothing is rendered at all.
+  quotaBadge?: ReactNode;
   // Sidebar declutter — the chevron now toggles ALL of SessionRow's history
   // sections (session-row/Details.tsx: git/files/agents/said), not just git
   // as the surrounding prop names' history suggests (`alwaysExpandGit`/
@@ -82,6 +89,7 @@ export function Header({
   agentBinary,
   dot,
   statusLabel,
+  quotaBadge,
   hasDetails,
   alwaysExpandGit,
   gitLineExpanded,
@@ -162,6 +170,11 @@ export function Header({
         </span>
       )}
       {statusLabel}
+      {/* Issue #29 — the Runway quota chip, next to the agent's identity:
+        it answers "is this agent's provider out of quota?" without the
+        operator having to open the row's details. It renders nothing at all
+        when Runway has nothing to say (see QuotaBadge). */}
+      {quotaBadge}
       {/* Sidebar declutter — was row 3's git-only toggle (issue #202); now
         gates every history section session-row/Details.tsx renders (git,
         files, agents, the agent's last message), not just git. `hasDetails`

@@ -604,6 +604,11 @@ function renderPane(
         cooldownMinutes: 10,
         reviewerBotLogin: "s3ntin3l8-hermes[bot]",
       },
+      runway: {
+        apiUrl: "",
+        providerMap: { anthropic: "claude", opencode: "opencode" },
+        pollSeconds: 60,
+      },
       browser: { framerate: -1, maxInstances: -1 },
       devices: { discoveryEnabled: "inherit", emulatorHeadless: "inherit", emulatorGpu: null },
       server: { logLevel: "inherit" },

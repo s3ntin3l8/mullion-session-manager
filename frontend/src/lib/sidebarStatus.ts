@@ -10,7 +10,13 @@
 // plan's own (stale) line-range citation for this cluster, but are the same
 // character of helper and were included here rather than splitting the
 // dot-class family across two homes.
-import type { GitHubCiStatus, GitStatus, NotificationEvent, SubagentInfo } from "../api/index.js";
+import type {
+  GitHubCiStatus,
+  GitStatus,
+  NotificationEvent,
+  RunwayAgentQuota,
+  SubagentInfo,
+} from "../api/index.js";
 
 // Same clean/dirty/conflict/none taxonomy as ProjectHeader's own inline
 // gitStatus handling in Sidebar.tsx — that call site stays inline rather
@@ -127,4 +133,49 @@ export function fileChangeLetter(action: FileChangeSummary["action"]): "A" | "D"
   if (action === "create") return "A";
   if (action === "delete") return "D";
   return "M";
+}
+
+// Issue #29 — the Runway quota reading for ONE agent.
+//
+// Runway reports one entry per provider CARD, so the same agent can appear
+// several times (two windows of the same provider, two models of one
+// provider). The agent's reading is therefore the WORST of its entries, not
+// whichever entry happens to come first: a single exhausted card puts the
+// agent out of quota.
+export interface RunwayQuotaSummary {
+  // The provider map value that matched ("claude-code", "claude", …).
+  agent: string;
+  // The Runway provider id the reading came from ("anthropic", …).
+  providerId: string;
+  // The percentage of the quota used, when Runway reports one.
+  pctUsed: number | null;
+  // The provider is out of quota, or the agent is quarantined because of it.
+  out: boolean;
+}
+
+export function summarizeRunwayQuota(
+  agents: RunwayAgentQuota[],
+  agent: string,
+): RunwayQuotaSummary | null {
+  const entries = agents.filter((entry) => entry.agent === agent);
+  if (entries.length === 0) return null;
+  const used = entries.map((entry) => entry.pctUsed).filter((pct): pct is number => pct !== null);
+  return {
+    agent,
+    providerId: entries[0].providerId,
+    pctUsed: used.length === 0 ? null : Math.max(...used),
+    out: entries.some((entry) => entry.exhausted || entry.quarantined),
+  };
+}
+
+// Same good/pending/bad/none vocabulary the other sidebar dots use
+// (sessionPrDotClass above): "pending" is a provider that is nearly out, not
+// an error — only a provider that IS out (or a quarantined agent) is "bad".
+export function runwayQuotaDotClass(
+  summary: RunwayQuotaSummary,
+): "good" | "pending" | "bad" | "none" {
+  if (summary.out) return "bad";
+  if (summary.pctUsed === null) return "none";
+  if (summary.pctUsed >= 90) return "pending";
+  return "good";
 }

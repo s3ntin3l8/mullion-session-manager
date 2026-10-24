@@ -78,6 +78,11 @@ describe("Settings -> Integrations", () => {
       if (url === "/api/integrations/github/webhooks/status" && method === "GET") {
         return Promise.resolve(jsonResponse(200, { enabled: false }));
       }
+      // The Runway section lives in the same settings section — it asks for
+      // its own (write-only) key summary.
+      if (url === "/api/integrations/runway" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { hasKey: false, updatedAt: null }));
+      }
       if (url === "/api/integrations/github/webhooks" && method === "POST") {
         return Promise.resolve(jsonResponse(200, { reposSucceeded: 3, reposFailed: 0 }));
       }

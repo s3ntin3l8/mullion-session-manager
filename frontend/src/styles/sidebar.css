@@ -1405,6 +1405,23 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Issue #29 — the Runway quota chip, next to a session row's agent identity
+   (session-row/QuotaBadge.tsx). Same chip shape as
+   .session-background-task-chip above — same flex row, same
+   .github-panel-ci-dot good/pending/bad vocabulary — minus the
+   click/expand affordance: a quota reading is a fact, not something to
+   open. */
+.session-quota-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  color: var(--dim);
+  font-size: 10.5px;
+  font-family: "Geist Mono", monospace;
+  white-space: nowrap;
+}
 .session-item-close {
   flex-shrink: 0;
   background: none;
