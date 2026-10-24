@@ -185,7 +185,11 @@ describe("scripts/assemble-release-tarball.sh", () => {
   });
 
   it("keeps macOS's Finder metadata out of the payload", async () => {
-    await run("bash", [path.join(fixture, "scripts", "assemble-release-tarball.sh"), VERSION, outDir]);
+    await run("bash", [
+      path.join(fixture, "scripts", "assemble-release-tarball.sh"),
+      VERSION,
+      outDir,
+    ]);
 
     expect(tarballEntries().filter((e) => e.endsWith(".DS_Store"))).toEqual([]);
   });
