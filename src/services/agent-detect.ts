@@ -1,4 +1,5 @@
 import { runLoginShell } from "./login-shell.js";
+import { invalidateUserShellEnv, resolveUserShellEnv } from "./user-shell-env.js";
 import { getCodexHookTrust, type CodexHookTrust } from "./hook-adapters/codex-trust.js";
 import type { HookMessageKind } from "./hook-protocol.js";
 import { claudeCodeAdapter } from "./hook-adapters/claude-code.js";
@@ -156,7 +157,10 @@ let refreshPromise: Promise<DetectedAgent[]> | null = null;
 
 function refreshAgents(): Promise<DetectedAgent[]> {
   if (refreshPromise) return refreshPromise;
-  refreshPromise = detectAgents()
+  // The probe's env (buildSessionEnv) only includes the user's interactive-rc
+  // PATH once it has been resolved — wait for it so detection and launch agree.
+  refreshPromise = resolveUserShellEnv()
+    .then(() => detectAgents())
     .then((data) => {
       cache = { data, expiresAt: Date.now() + CACHE_TTL_MS };
       return data;
@@ -173,7 +177,11 @@ function refreshAgents(): Promise<DetectedAgent[]> {
  * `forceRefresh` waits on the login-shell probes — otherwise every palette
  * open after the 60s TTL would block on them. */
 export async function getCachedAgents(forceRefresh = false): Promise<DetectedAgent[]> {
-  if (forceRefresh) return refreshAgents();
+  if (forceRefresh) {
+    // An explicit rescan: the user may just have edited their rc file.
+    invalidateUserShellEnv();
+    return refreshAgents();
+  }
   if (cache) {
     if (cache.expiresAt <= Date.now()) {
       // Best-effort — detectAgents' probes never reject, but don't let an

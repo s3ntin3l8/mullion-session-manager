@@ -1,5 +1,6 @@
 import { schema as envSchema } from "../plugins/env.js";
 import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
+import { getUserShellPath, mergePaths } from "./user-shell-env.js";
 
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
 // never bleed from the server process into a spawned terminal session.
@@ -164,5 +165,9 @@ export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.P
   // force this the same way COLORTERM is forced above rather than passing
   // through the server's own (possibly absent) TERM.
   env.TERM = "xterm-256color";
+  // PATH entries the user's interactive rc adds (~/.zshrc, ~/.bashrc) — the
+  // `-lc` shells Mullion spawns never read them. See user-shell-env.ts.
+  const userPath = getUserShellPath();
+  if (userPath) env.PATH = mergePaths(env.PATH, userPath);
   return env;
 }

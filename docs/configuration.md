@@ -30,6 +30,18 @@ a way that doesn't coerce to `false`).
 | `PROJECTS_ROOTS`    | _(empty)_         | comma-separated dirs to scan for `GET /api/projects/discover`                                                                                                                                                                                                                                  |
 | `CRS_CONFIG_DIR`    | `~/.config/crs`   | global launcher/dock config dir (a project's own `.crs/` wins)                                                                                                                                                                                                                                 |
 
+### Where a session's `PATH` comes from
+
+Agent detection and every session run `$SHELL -lc …` (login, non-interactive), which
+does not read `~/.zshrc` or an interactive-only `~/.bashrc`. Many installers (nvm, bun,
+pyenv, opencode, mcode, …) add their `PATH` line only there, so Mullion resolves your
+interactive shell's `PATH` once (a throwaway `$SHELL -ilc`, bash and zsh only, 5 s
+timeout) and merges the entries your service environment lacks. A rescan
+(`GET /api/agents?refresh=1`) re-resolves it after you edit your
+rc file. If an rc file misbehaves without a TTY, set `MULLION_RESOLVE_INTERACTIVE_ENV=0`
+in the service environment to skip this; anything on `PATH` via `~/.zshenv` or
+`~/.profile` is always picked up regardless.
+
 ## Database and sessions
 
 | Variable                        | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

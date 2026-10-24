@@ -41,6 +41,15 @@ let lastSpawnOpts: { stdio?: unknown } | undefined;
 // What `opencode --version` prints (issue #1593); null = the probe prints nothing.
 let opencodeVersionOutput: string | null = null;
 
+// resolveUserShellEnv() would spawn a real interactive shell through the same
+// faked child_process — covered by user-shell-env.test.ts, kept out of here.
+vi.mock("../../src/services/user-shell-env.js", () => ({
+  resolveUserShellEnv: () => Promise.resolve(),
+  invalidateUserShellEnv: () => {},
+  getUserShellPath: () => null,
+  mergePaths: (base: string | undefined) => base ?? "",
+}));
+
 // getCodexHookTrust() reads the REAL ~/.codex (unless CODEX_HOME is set) —
 // mocked here for the same reason child_process is faked above: detectAgents
 // must not depend on whatever Codex hook-trust state happens to exist on the
