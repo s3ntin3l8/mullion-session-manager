@@ -210,7 +210,7 @@ mkdir -p "$ROLE_HOME"
 # then write a plist, bootstrap a job and link the CLI into the REAL home.
 PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
 JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-CLI_BEFORE="$(ls -ld "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
+CLI_BEFORE="$(readlink "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
 # The seeded role is the OPPOSITE of the requested one on purpose: if the
 # installer could not read the .env, it would fall back to its default
 # ("primary"), and a request for "primary" would then be ACCEPTED — so a
@@ -233,29 +233,41 @@ else
   else
     fail "the refused install modified the existing .env"
   fi
-  # …and the real machine is unchanged: no new plist, no new job, and the
-  # CLI link the installer creates is not touched. (Comparing the real
-  # home's state is what can actually fire: the installer never PRINTS the
-  # real $HOME, so a log grep for it cannot tell a sandboxed run from an
-  # unsandboxed one.)
-  PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
-  JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-  CLI_AFTER="$(ls -ld "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
-  if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
-    pass "the run left the real ~/Library/LaunchAgents untouched"
-  else
-    fail "the run wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
-  fi
-  if [ "$JOBS_BEFORE" = "$JOBS_AFTER" ]; then
-    pass "the run left the real launchd jobs untouched"
-  else
-    fail "the run installed a launchd job on the REAL host — the sandbox is not holding"
-  fi
-  if [ "$CLI_BEFORE" = "$CLI_AFTER" ]; then
-    pass "the run left the real ~/.local/bin/mullion untouched"
-  else
-    fail "the run wrote the CLI link into the REAL home — the sandbox is not holding"
-  fi
+fi
+
+# …and the real machine is unchanged, WHICHOUTCOME the run had. These
+# comparisons live BELOW the branch on purpose: on the refusal path the
+# installer stops at its .env role check, long before any plist, job or CLI
+# write, so comparing there could never fire — the only path where the
+# sandbox could leak is the one where the installer got PAST the check
+# (a role switch it should have refused), and that is the `then` branch
+# above.
+#
+# Comparing the real home's state is what can actually fire: the installer
+# never PRINTS the real $HOME, so a log grep for it cannot tell a sandboxed
+# run from an unsandboxed one.
+PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
+JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
+# The link's TARGET, not its mtime: a leaked install that removes and
+# re-creates the link with the same target would otherwise read equal.
+CLI_AFTER="$(readlink "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
+if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
+  pass "the run left the real ~/Library/LaunchAgents untouched"
+else
+  fail "the run wrote a plist into the REAL ~/Library/LaunchAgents — the sandbox is not holding"
+fi
+if [ "$JOBS_BEFORE" = "$JOBS_AFTER" ]; then
+  pass "the run left the real launchd jobs untouched"
+else
+  fail "the run installed a launchd job on the REAL host — the sandbox is not holding"
+fi
+# The CLI link is created only after a successful download and `npm ci`, so
+# this line stays green on a host with no network even in the double-fault
+# case — it is one signal, not the whole story.
+if [ "$CLI_BEFORE" = "$CLI_AFTER" ]; then
+  pass "the run left the real ~/.local/bin/mullion untouched"
+else
+  fail "the run wrote the CLI link into the REAL home — the sandbox is not holding"
 fi
 
 echo
