@@ -4,7 +4,7 @@
 // local `makeSession`/`makeProject`/`makeTask`/`makeHost`/`makeWorkspace`
 // helpers already independently reinvented in SessionRow.test.tsx,
 // UnifiedBoard.test.tsx, Sidebar.test.tsx, kanban.test.ts,
-// unifiedBoard.test.ts, hostStatus.test.ts, and WorkspaceSwitcher.test.tsx).
+// boardLanes.test.ts, hostStatus.test.ts, and WorkspaceSwitcher.test.tsx).
 //
 // Deliberately builder FUNCTIONS, not static exported constants: every real
 // usage overrides a handful of fields per test case (`makeSession({ status:

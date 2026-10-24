@@ -4,7 +4,7 @@ import {
   adhocSessionsByColumn,
   LANE_COLUMN_ORDER,
   laneColumnTitle,
-} from "./unifiedBoard.js";
+} from "./boardLanes.js";
 import { makeSession, makeTask } from "./test/fixtures.js";
 
 describe("taskLinkedSessionIds", () => {
