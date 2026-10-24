@@ -101,8 +101,8 @@ export function agentForProvider(app: FastifyInstance, providerId: string): stri
 }
 
 /**
- * How long a quarantine may stand on a reading that can no longer be
- * refreshed.
+ * The staleness ceiling for a given poll interval — the ONE place the
+ * policy is written down.
  *
  * The ceiling is the LARGER of the fixed half hour and twice the operator's
  * poll interval. The interval matters: with a one-hour poll, a ceiling of
@@ -111,9 +111,12 @@ export function agentForProvider(app: FastifyInstance, providerId: string): stri
  * provider. Twice the interval means one missed poll is tolerated and two
  * in a row are not.
  */
-function computeStaleCeilingMs(app: FastifyInstance): number {
-  const pollSeconds = getStoredSettings(app.db).runway?.pollSeconds ?? 0;
+function ceilingFor(pollSeconds: number): number {
   return Math.max(MAX_STALE_QUARANTINE_MS, pollSeconds * 2 * 1000);
+}
+
+function computeStaleCeilingMs(app: FastifyInstance): number {
+  return ceilingFor(getStoredSettings(app.db).runway?.pollSeconds ?? 0);
 }
 
 /**
@@ -297,7 +300,7 @@ export async function pollRunwayQuota(
   // Refresh the cached ceiling from the settings just read — free, and it
   // keeps the claim path (which reads no settings of its own) in step with
   // the operator's interval.
-  staleCeiling = Math.max(MAX_STALE_QUARANTINE_MS, pollSeconds * 2 * 1000);
+  staleCeiling = ceilingFor(pollSeconds);
 
   if (!isRunwayConfigured(app)) {
     // Unconfigured: release everything.
