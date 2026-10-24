@@ -32,6 +32,18 @@ import {
   HermesUnavailableError,
   testHermesConnection,
 } from "../services/hermes-review.js";
+import {
+  clearRunwayKey,
+  getRunwayIntegration,
+  setRunwayKey,
+} from "../services/runway-integration.js";
+import {
+  fetchRunwayLimits,
+  isCardExhausted,
+  isCardWindowReset,
+} from "../services/runway-client.js";
+import { agentForProvider, agentQuarantineInfo } from "../services/runway-quarantine.js";
+import { getStoredSettings } from "../services/settings.js";
 
 interface SetTokenBody {
   token: string;
@@ -397,4 +409,86 @@ export async function integrationsRoute(app: FastifyInstance) {
       return { ok: true };
     },
   );
+
+  // Issue #29 — the Runway quota integration. The admin key is write-only,
+  // same "never echo secrets back" posture as the GitHub token route and
+  // the Hermes key above: GET returns only { hasKey, updatedAt }. The
+  // non-secret half (URL, provider map, poll interval) lives in
+  // settings.runway.
+  app.get("/api/integrations/runway", async () => getRunwayIntegration(app));
+
+  app.put<{ Body: { key: string } }>(
+    "/api/integrations/runway/key",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["key"],
+          additionalProperties: false,
+          properties: { key: { type: "string", minLength: 1 } },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request) => setRunwayKey(app, request.body.key),
+  );
+
+  app.delete("/api/integrations/runway", async (_request, reply) => {
+    clearRunwayKey(app);
+    reply.code(204);
+  });
+
+  // The quota state, for the session/dock badge.
+  //
+  // `configured` is false when there is no URL or no key — the badge then
+  // renders nothing at all, which is the "degrade to not-shown when
+  // unconfigured" convention the other optional integrations follow.
+  //
+  // A fetch failure yields `agents: []` — "no quota information", never
+  // "quota exhausted". The client must not read an empty list as "every
+  // agent is fine" either: `fetchedAt` is null in that case.
+  app.get("/api/runway/quota", async () => {
+    const settings = getStoredSettings(app.db);
+    const configured =
+      (settings.runway?.apiUrl ?? "").trim() !== "" && getRunwayIntegration(app).hasKey;
+    if (!configured) {
+      return { configured: false, fetchedAt: null, agents: [] };
+    }
+
+    const limits = await fetchRunwayLimits(app);
+    if (limits === null) {
+      return { configured: true, fetchedAt: null, agents: [] };
+    }
+
+    const agents: Array<{
+      agent: string;
+      providerId: string;
+      pctUsed: number | null;
+      resetAt: string | null;
+      exhausted: boolean;
+      quarantined: boolean;
+    }> = [];
+    for (const card of limits.cards) {
+      const agent = agentForProvider(app, card.providerId);
+      if (agent === null) continue;
+      agents.push({
+        agent,
+        providerId: card.providerId,
+        pctUsed: card.pctUsed,
+        resetAt: card.resetAt?.toISOString() ?? null,
+        // The SAME helpers the quarantine decides with — re-deriving the
+        // exhaustion here would ignore the `used_value >= limit_value` path
+        // and the reset lift, and the badge would then claim "Mullion will
+        // not claim a task onto <agent>" about a claim the gate allows.
+        exhausted: isCardExhausted(card) && !isCardWindowReset(card),
+        quarantined: agentQuarantineInfo(app, agent).quarantined,
+      });
+    }
+
+    return {
+      configured: true,
+      fetchedAt: limits.fetchedAt.toISOString(),
+      agents,
+    };
+  });
 }

@@ -38,7 +38,9 @@ function TextSettingRow({
 }) {
   // Call sites pass `key={value}`, so a value changed from outside (e.g. the
   // settings refetch) remounts this with a fresh draft — no effect needed to
-  // sync state from props.
+  // sync state from props. The key is PREFIXED with the field's name: an
+  // empty value would make the key "", and several of these fields are empty
+  // at once — sibling rows with the same key are rejected by React.
   const [draft, setDraft] = useState(value);
   const commit = () => {
     const next = draft.trim();
@@ -284,7 +286,7 @@ export function ReviewRelaySection() {
           <TextSettingRow
             label="API URL"
             desc="Base URL of the Hermes API server (a review-bot profile whose GitHub App can post reviews)."
-            key={relay.apiUrl}
+            key={`relay-apiUrl:${relay.apiUrl}`}
             value={relay.apiUrl}
             placeholder="http://hermes.local:8643"
             onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
@@ -292,7 +294,7 @@ export function ReviewRelaySection() {
           <TextSettingRow
             label="Model"
             desc="The model name the API server advertises."
-            key={relay.model}
+            key={`relay-model:${relay.model}`}
             value={relay.model}
             width={180}
             onCommit={(v) => updateSettings({ reviewRelay: { model: v } })}
@@ -300,7 +302,7 @@ export function ReviewRelaySection() {
           <TextSettingRow
             label="Prompt repository"
             desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
-            key={relay.promptRepo}
+            key={`relay-promptRepo:${relay.promptRepo}`}
             value={relay.promptRepo}
             placeholder="owner/repo"
             width={220}
@@ -309,14 +311,14 @@ export function ReviewRelaySection() {
           <TextSettingRow
             label="Prompt path"
             desc="Path of the review prompt inside that repository."
-            key={relay.promptPath}
+            key={`relay-promptPath:${relay.promptPath}`}
             value={relay.promptPath}
             onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
           />
           <TextSettingRow
             label="Triage prompt repository"
             desc="Optional. Public owner/repo holding a custom issue-triage prompt; leave empty for Mullion's built-in triage prompt."
-            key={relay.triagePromptRepo}
+            key={`relay-triagePromptRepo:${relay.triagePromptRepo}`}
             value={relay.triagePromptRepo}
             placeholder="owner/repo"
             width={220}
@@ -325,14 +327,14 @@ export function ReviewRelaySection() {
           <TextSettingRow
             label="Triage prompt path"
             desc="Path of the issue-triage prompt inside that repository."
-            key={relay.triagePromptPath}
+            key={`relay-triagePromptPath:${relay.triagePromptPath}`}
             value={relay.triagePromptPath}
             onCommit={(v) => updateSettings({ reviewRelay: { triagePromptPath: v } })}
           />
           <TextSettingRow
             label="Reviewer bot login"
             desc="The GitHub login of the bot that posts the review. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree."
-            key={relay.reviewerBotLogin}
+            key={`relay-reviewerBotLogin:${relay.reviewerBotLogin}`}
             value={relay.reviewerBotLogin}
             placeholder="name[bot]"
             width={220}

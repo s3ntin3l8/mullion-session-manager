@@ -72,6 +72,11 @@ describe("Settings -> Integrations -> Review relay", () => {
       if (url === "/api/integrations/hermes" && method === "GET") {
         return Promise.resolve(jsonResponse(200, hermes));
       }
+      // The Runway section lives next to the review relay in the same
+      // settings section — it asks for its own (write-only) key summary.
+      if (url === "/api/integrations/runway" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, { hasKey: false, updatedAt: null }));
+      }
       if (url === "/api/integrations/hermes/key" && method === "PUT") {
         const { key } = JSON.parse(String(init?.body)) as { key: string };
         if (key === "reject-me") {
@@ -121,11 +126,18 @@ describe("Settings -> Integrations -> Review relay", () => {
     return screen.findByTestId("review-relay-section");
   }
 
+  // Scoped to the relay's own section: the Runway section sits next to it in
+  // the same settings section and has a "Save key"/"Clear key" button of its
+  // own, so an unscoped query would match both.
+  function relay() {
+    return within(screen.getByTestId("review-relay-section"));
+  }
+
   it("shows the relay as not configured by default", async () => {
     await renderCard();
     expect(await screen.findByText("Review relay not configured")).toBeInTheDocument();
     expect(screen.getByText(/Set the API URL and API key/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Clear key" })).not.toBeInTheDocument();
+    expect(relay().queryByRole("button", { name: "Clear key" })).not.toBeInTheDocument();
   });
 
   it("saves the key write-only: clears the input and never shows it back", async () => {
@@ -135,7 +147,7 @@ describe("Settings -> Integrations -> Review relay", () => {
     expect(input).toHaveAttribute("type", "password");
 
     await user.type(input, "sekret-key");
-    await user.click(screen.getByRole("button", { name: "Save key" }));
+    await user.click(relay().getByRole("button", { name: "Save key" }));
 
     expect(await screen.findByText("API key set")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -150,14 +162,14 @@ describe("Settings -> Integrations -> Review relay", () => {
 
   it("disables Save while the key field is empty", async () => {
     await renderCard();
-    expect(screen.getByRole("button", { name: "Save key" })).toBeDisabled();
+    expect(relay().getByRole("button", { name: "Save key" })).toBeDisabled();
   });
 
   it("shows an inline error when the key is rejected", async () => {
     const user = userEvent.setup();
     await renderCard();
     await user.type(screen.getByPlaceholderText("Hermes API key"), "reject-me");
-    await user.click(screen.getByRole("button", { name: "Save key" }));
+    await user.click(relay().getByRole("button", { name: "Save key" }));
     expect(await screen.findByText(/bad key format/)).toBeInTheDocument();
     expect(screen.getByText("Review relay not configured")).toBeInTheDocument();
   });
@@ -166,7 +178,7 @@ describe("Settings -> Integrations -> Review relay", () => {
     hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
     const user = userEvent.setup();
     await renderCard();
-    await user.click(await screen.findByRole("button", { name: "Clear key" }));
+    await user.click(await relay().findByRole("button", { name: "Clear key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "/api/integrations/hermes",

@@ -34,6 +34,7 @@ import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
+import { agentQuarantineInfo, isAgentQuarantined } from "./runway-quarantine.js";
 
 // Shared by claimTask's and retryTask's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
@@ -49,7 +50,7 @@ export type EnqueueTaskOutcome =
   | { ok: true; task: typeof tasks.$inferSelect }
   | {
       ok: false;
-      reason: "not-found" | "not-ready" | "no-seed-channel";
+      reason: "not-found" | "not-ready" | "no-seed-channel" | "agent-quarantined";
       detail?: string;
     };
 
@@ -124,6 +125,34 @@ export async function enqueueTask(
       reason: "no-seed-channel",
       detail: `The resolved agent (${command}) can't receive an initial prompt — refusing to auto-claim with no instructions. Claim manually instead.`,
     };
+  }
+
+  // Issue #29 — the Runway quota check, BEFORE anything is reserved.
+  //
+  // This is the point the whole feature exists for: a task whose agent's
+  // provider is out of quota must not be claimed, because claiming it takes
+  // a concurrency slot it cannot use and then fails later for a reason the
+  // operator cannot see.
+  //
+  // The agent is known here — `command` is the resolved CLI — and nothing
+  // has been persisted yet, so refusing here costs nothing.
+  //
+  // A MANUAL claim is not refused: a human is present, they may know the
+  // quota recovered, and refusing a deliberate act would be worse than
+  // letting it fail. It is logged instead.
+  if (isAgentQuarantined(app, command)) {
+    const info = agentQuarantineInfo(app, command);
+    if (opts.auto) {
+      return {
+        ok: false,
+        reason: "agent-quarantined",
+        detail: `The resolved agent (${command}) is out of quota (${info.reason ?? "quota exhausted"}) — refusing to auto-claim.`,
+      };
+    }
+    app.log.warn(
+      { agent: command, reason: info.reason },
+      "[task-claim] claiming a quarantined agent manually — the provider is out of quota",
+    );
   }
 
   // Derive the branch name through deriveTaskBranchName (git-worktree.ts)

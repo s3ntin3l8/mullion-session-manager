@@ -14,6 +14,8 @@ import type {
   WebhookRegistrationResult,
   GitHubIntegration,
   HermesIntegration,
+  RunwayIntegration,
+  RunwayQuota,
   ReviewRun,
   ReviewMarker,
   SetGitHubAppResult,
@@ -167,6 +169,20 @@ export const githubApi = {
 
   testHermesConnection: () =>
     request<{ ok: boolean }>("/api/integrations/hermes/test", { method: "POST" }),
+
+  // Runway quota integration (issue #29) — the admin key is write-only,
+  // same never-echo-secrets shape as setHermesKey.
+  getRunwayIntegration: () => request<RunwayIntegration>("/api/integrations/runway"),
+
+  setRunwayKey: (key: string) =>
+    request<RunwayIntegration>("/api/integrations/runway/key", {
+      method: "PUT",
+      body: JSON.stringify({ key }),
+    }),
+
+  clearRunwayKey: () => request<void>("/api/integrations/runway", { method: "DELETE" }),
+
+  getRunwayQuota: () => request<RunwayQuota>("/api/runway/quota"),
 
   // Runs the Mullion server dispatched to the review bot, with live status.
   listReviews: () => request<{ runs: ReviewRun[] }>("/api/reviews"),

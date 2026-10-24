@@ -166,6 +166,49 @@ describe("sanitizeExternalReadRoots", () => {
   });
 });
 
+describe("sanitizeSettings — the Runway provider map (issue #29)", () => {
+  it("keeps a __proto__ key as an ordinary own property, leaving Object.prototype untouched", () => {
+    // The provider id is operator-supplied and becomes a property NAME, so
+    // the naive `out[key] = value` would hand `__proto__` to the prototype
+    // setter. The map is built with a null-prototype object and
+    // `Object.defineProperty` instead, so the key is just an own property
+    // that nothing looks up. This pins that against a future simplification
+    // back to the assignment form.
+    // sanitizeSettings is called directly, not through mergeSettings: the
+    // merge path drops "__proto__" on the way in (deepMerge only ever
+    // writes keys drawn from the base), so going through it would test
+    // deepMerge rather than the sanitiser.
+    //
+    // JSON.parse builds "__proto__" as an ordinary own-enumerable key (it
+    // bypasses the accessor), so the name really does reach the sanitiser
+    // as operator-supplied input.
+    const providerMap = JSON.parse('{"__proto__":"claude","anthropic":"claude"}') as Record<
+      string,
+      string
+    >;
+
+    const result = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      runway: { ...DEFAULT_SETTINGS.runway, providerMap },
+    });
+
+    expect(Object.prototype as Record<string, unknown>).not.toHaveProperty("claude");
+    expect(result.runway.providerMap["__proto__"]).toBe("claude");
+    expect(result.runway.providerMap.anthropic).toBe("claude");
+  });
+
+  it("drops an empty provider id or agent name", () => {
+    const result = sanitizeSettings({
+      ...DEFAULT_SETTINGS,
+      runway: {
+        ...DEFAULT_SETTINGS.runway,
+        providerMap: { "": "claude", anthropic: "" },
+      },
+    });
+    expect(Object.keys(result.runway.providerMap)).toEqual([]);
+  });
+});
+
 describe("sanitizeSettings", () => {
   it("keeps only allowlisted ~/.cache ids in diskCleanup.cacheDirs (#1606)", () => {
     const dirty = mergeSettings({

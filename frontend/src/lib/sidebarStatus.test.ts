@@ -6,6 +6,7 @@ import {
   fileChangeLetter,
   isSubagentLive,
   partitionSubagents,
+  runwayReadingAge,
   sessionGitDotClass,
   sessionPrDotClass,
   subagentDotClass,
@@ -191,5 +192,27 @@ describe("fileChangeDotClass / fileChangeLetter", () => {
     expect(fileChangeLetter("delete")).toBe("D");
     expect(fileChangeDotClass("modify")).toBe("pending");
     expect(fileChangeLetter("modify")).toBe("M");
+  });
+});
+
+describe("runwayReadingAge", () => {
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it("says how old the reading is", () => {
+    const now = at("2026-01-01T12:00:00.000Z");
+    expect(runwayReadingAge("2026-01-01T11:59:30.000Z", now)).toBe("just now");
+    expect(runwayReadingAge("2026-01-01T11:56:00.000Z", now)).toBe("4 min ago");
+    expect(runwayReadingAge("2026-01-01T10:00:00.000Z", now)).toBe("2 h ago");
+    expect(runwayReadingAge("2025-12-30T12:00:00.000Z", now)).toBe("2 d ago");
+  });
+
+  it("never reports a negative age for a reading from the future", () => {
+    // A clock skew between Mullion and Runway must not produce "-3 min ago".
+    const now = at("2026-01-01T12:00:00.000Z");
+    expect(runwayReadingAge("2026-01-01T12:05:00.000Z", now)).toBe("just now");
+  });
+
+  it("says 'unknown' for an unparseable timestamp", () => {
+    expect(runwayReadingAge("not a date", at("2026-01-01T12:00:00.000Z"))).toBe("unknown");
   });
 });
