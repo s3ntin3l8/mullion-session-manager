@@ -99,6 +99,15 @@ done
 
 REPO="${REPO_OVERRIDE:-$DEFAULT_REPO}"
 
+# No install root means there is nothing to install into. Diagnose it HERE,
+# before the network calls: install.sh would eventually reject it too, but
+# only after this script had resolved a release and pulled ~9 MB.
+if [ -z "$INSTALL_ROOT" ]; then
+  echo "mullion-install: no install root given (the <mullion-home> argument)." >&2
+  usage
+  exit 1
+fi
+
 # --- prerequisites -----------------------------------------------------------
 
 for bin in bash curl tar; do
@@ -135,11 +144,16 @@ echo "    install root:    ${INSTALL_ROOT:-<not given>}"
 # --- download + verify --------------------------------------------------------
 
 TMP_DIR="$(mktemp -d)"
-# shellcheck disable=SC2329  # invoked indirectly, by the trap below
+# shellcheck disable=SC2329  # invoked indirectly, by the traps below
 cleanup() {
   rm -rf "$TMP_DIR"
 }
-trap cleanup EXIT INT TERM
+# The EXIT trap alone would run the cleanup on a signal but then let the
+# script CONTINUE, with $TMP_DIR already deleted, and only die at the next
+# command under `set -e`. Exiting explicitly says what is meant: interrupt
+# the run, clean up, stop.
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 TARBALL_NAME="mullion-$VERSION.tgz"
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
@@ -148,9 +162,13 @@ echo "==> Downloading $TARBALL_NAME"
 curl -fsSL -o "$TMP_DIR/$TARBALL_NAME" "$BASE_URL/$TARBALL_NAME"
 curl -fsSL -o "$TMP_DIR/$TARBALL_NAME.sha256" "$BASE_URL/$TARBALL_NAME.sha256"
 
-# The checksum is the ONLY thing standing between the user and a tampered
-# asset, so this fails CLOSED: a mismatch aborts the install, nothing is
-# extracted, and nothing is installed.
+# The checksum detects a corrupted or mismatched download — a truncated
+# transfer, a CDN serving the wrong asset, a tarball swapped between the
+# checksum and the download. It does NOT protect against a tampered RELEASE:
+# the .sha256 comes from the same release, over the same TLS connection, as
+# the tarball, so anyone who can change one can change the other. It is a
+# transport-integrity check, and this fails CLOSED on it: a mismatch aborts
+# the install, nothing is extracted, and nothing is installed.
 echo "==> Verifying the checksum"
 if command -v sha256sum >/dev/null 2>&1; then
   (cd "$TMP_DIR" && sha256sum -c "$TARBALL_NAME.sha256") || {
