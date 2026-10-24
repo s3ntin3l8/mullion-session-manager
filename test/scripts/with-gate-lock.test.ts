@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,11 +21,37 @@ const run = (args: string[], env: Record<string, string> = {}) =>
 // `flock -n` exits non-zero when someone still holds the lock.
 const lockIsHeld = () => spawnSync("flock", ["-n", lockPath(), "true"]).status !== 0;
 
+// Wrappers started by a test run detached (their own session/process group, so
+// they get default signal handling like a real hook) and are killed by group in
+// afterEach - a plain `.kill()` would only reach the bash wrapper and leave its
+// command lingering.
+const started: ChildProcess[] = [];
+const startWrapper = (args: string[]) => {
+  const child = spawn("bash", [script, ...args], { cwd: repo, env: gitEnv(), detached: true });
+  started.push(child);
+  return child;
+};
+const childOf = (wrapper: ChildProcess) =>
+  Number(
+    spawnSync("pgrep", ["-P", String(wrapper.pid)], { encoding: "utf8" }).stdout.split("\n")[0],
+  );
+const isAlive = (pid: number) => spawnSync("kill", ["-0", String(pid)]).status === 0;
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 beforeEach(() => {
   repo = fs.mkdtempSync(path.join(os.tmpdir(), "gate-lock-"));
   execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
 });
-afterEach(() => fs.rmSync(repo, { recursive: true, force: true }));
+afterEach(() => {
+  for (const c of started.splice(0)) {
+    try {
+      process.kill(-c.pid!, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+  fs.rmSync(repo, { recursive: true, force: true });
+});
 
 describe.skipIf(!hasFlock)("with-gate-lock.sh", () => {
   it("runs the command and propagates its exit code", () => {
@@ -51,29 +77,43 @@ describe.skipIf(!hasFlock)("with-gate-lock.sh", () => {
   });
 
   it("makes a second caller wait for the first, naming the holder", async () => {
-    const first = spawn("bash", [script, "sleep", "1.5"], { cwd: repo, env: gitEnv() });
-    await new Promise((r) => setTimeout(r, 400));
+    startWrapper(["sleep", "1.5"]);
+    await sleepMs(400);
     const started = Date.now();
     const second = run(["true"]);
     expect(second.status).toBe(0);
     expect(Date.now() - started).toBeGreaterThan(500);
     expect(second.stderr).toMatch(/another worktree's test gate is running \(pid \d+ in /);
-    first.kill();
   });
 
   it("gives up with a clear error when the wait times out", async () => {
-    const first = spawn("bash", [script, "sleep", "3"], { cwd: repo, env: gitEnv() });
-    await new Promise((r) => setTimeout(r, 400));
+    startWrapper(["sleep", "3"]);
+    await sleepMs(400);
     const second = run(["true"], { MULLION_GATE_LOCK_TIMEOUT: "1" });
     expect(second.status).toBe(1);
     expect(second.stderr).toMatch(/gave up waiting/);
-    first.kill();
   });
 
   it("MULLION_NO_GATE_LOCK=1 bypasses the lock even while it is held", async () => {
-    const first = spawn("bash", [script, "sleep", "2"], { cwd: repo, env: gitEnv() });
-    await new Promise((r) => setTimeout(r, 400));
+    startWrapper(["sleep", "2"]);
+    await sleepMs(400);
     expect(run(["true"], { MULLION_NO_GATE_LOCK: "1" }).status).toBe(0);
-    first.kill();
   });
+
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "forwards %s to the command and releases the lock instead of orphaning the suite",
+    async (signal) => {
+      const wrapper = startWrapper(["sleep", "30"]);
+      await sleepMs(500);
+      const cmd = childOf(wrapper);
+      expect(cmd).toBeGreaterThan(0);
+      expect(lockIsHeld()).toBe(true);
+
+      process.kill(wrapper.pid!, signal);
+      await sleepMs(600);
+
+      expect(isAlive(cmd)).toBe(false);
+      expect(lockIsHeld()).toBe(false);
+    },
+  );
 });

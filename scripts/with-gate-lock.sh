@@ -39,6 +39,25 @@ fi
 echo "pid $$ in $PWD since $(date -Is)" >"$holder"
 
 # Not `exec`, and fd 9 closed for the child (see header).
+#
+# `set -m` gives the child its own process group with default signal handling.
+# Without it bash starts a background child with SIGINT/SIGQUIT ignored, so
+# Ctrl-C would stop the wrapper but not the suite. Since the child is then
+# outside the terminal's foreground group, forward the terminating signals to
+# it explicitly; otherwise a TERM sent only to the wrapper would drop the lock
+# while the suite kept running.
+set -m
+"$@" 9>&- &
+child=$!
+trap 'kill -s TERM -- "-$child" 2>/dev/null || true' TERM
+trap 'kill -s INT -- "-$child" 2>/dev/null || true' INT
+trap 'kill -s HUP -- "-$child" 2>/dev/null || true' HUP
+
+# `wait` returns early (status > 128) when a trapped signal arrives; keep
+# waiting until the child has really exited.
 status=0
-"$@" 9>&- || status=$?
+while :; do
+  wait "$child" && status=0 || status=$?
+  kill -0 "$child" 2>/dev/null || break
+done
 exit "$status"
