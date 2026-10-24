@@ -86,6 +86,7 @@ describe("hermes review relay", () => {
         provider: "hermes",
         apiUrl: API,
         model: "hermes-agent",
+        modelProvider: "",
         promptRepo: "acme/.github",
         promptPath: "review.md",
         cooldownMinutes: 10,
@@ -426,6 +427,40 @@ describe("hermes review relay", () => {
       expect(body.model).toBe("hermes-agent");
       expect(body.input).toContain("Target: pr #7 in repo acme/widgets");
       expect(body.input).toContain("REVIEW PROMPT BODY");
+    });
+
+    describe("which model the run asks for (#1775)", () => {
+      const dispatchedBody = async () => {
+        await requestHermesReview(app, PR);
+        const [post] = calls("/v1/runs");
+        return JSON.parse((post[1] as RequestInit).body as string);
+      };
+
+      it("sends no provider for the profile default, whatever is stored", async () => {
+        // The alias already means "the profile's own chain"; a stale provider
+        // must not turn it into an override.
+        applySettingsPatch(app, {
+          reviewRelay: { model: "hermes-agent", modelProvider: "openrouter" },
+        });
+        const body = await dispatchedBody();
+        expect(body.model).toBe("hermes-agent");
+        expect(body).not.toHaveProperty("provider");
+      });
+
+      it("qualifies an override with its provider", async () => {
+        applySettingsPatch(app, {
+          reviewRelay: { model: "claude-sonnet-5-5", modelProvider: "anthropic" },
+        });
+        const body = await dispatchedBody();
+        expect(body).toMatchObject({ model: "claude-sonnet-5-5", provider: "anthropic" });
+      });
+
+      it("sends a bare custom model when no provider is stored", async () => {
+        applySettingsPatch(app, { reviewRelay: { model: "my-model", modelProvider: "" } });
+        const body = await dispatchedBody();
+        expect(body.model).toBe("my-model");
+        expect(body).not.toHaveProperty("provider");
+      });
     });
 
     it("a retry of the same range reuses the key, and so does a later request for it", async () => {

@@ -114,6 +114,8 @@ export type {
   SetGitHubAppResult,
   GitHubIntegration,
   HermesIntegration,
+  HermesModelOptions,
+  HermesModelProvider,
   RunwayIntegration,
   RunwayAgentQuota,
   RunwayQuota,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
-import type { HermesIntegration, ReviewRun } from "../../api/index.js";
+import type { HermesIntegration, HermesModelOptions, ReviewRun } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
 import {
   GroupHeading,
@@ -13,6 +13,13 @@ import {
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
+import { ModelPicker } from "../ModelPicker.js";
+import {
+  PROFILE_DEFAULT_MODEL,
+  parseRelayModel,
+  relayModelOptions,
+  relayModelValue,
+} from "../relayModel.js";
 
 // Hermes review relay (src/services/hermes-review.ts): lets an agent's
 // `request_review` ask the Mullion server to POST a review request straight to
@@ -235,6 +242,41 @@ export function ReviewRelaySection() {
 
   const ready = relay.apiUrl !== "" && !!integration?.hasKey;
 
+  // The model picker's inventory (issue #1775). Re-fetched when the URL or the
+  // key changes; `fetched.key` says which of those the answer belongs to, so a
+  // stale answer is never shown for the new settings (and no effect has to
+  // reset state).
+  const optionsKey = ready ? `${relay.apiUrl}|${integration?.updatedAt ?? ""}` : "";
+  const [fetched, setFetched] = useState<{ key: string; result: HermesModelOptions } | null>(null);
+  useEffect(() => {
+    if (!optionsKey) return;
+    let cancelled = false;
+    api
+      .getHermesModelOptions()
+      .then((result) => {
+        if (!cancelled) setFetched({ key: optionsKey, result });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFetched({ key: optionsKey, result: { available: false, reason: "unreachable" } });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [optionsKey]);
+  const modelOptions = optionsKey && fetched?.key === optionsKey ? fetched.result : null;
+  const modelProviders = modelOptions?.available ? modelOptions.providers : [];
+  const modelHint = !ready
+    ? "Set the API URL and key to load the model list; Custom… works meanwhile."
+    : modelOptions === null
+      ? "Loading models from Hermes…"
+      : modelOptions.available
+        ? null
+        : modelOptions.reason === "unauthorized"
+          ? "Hermes rejected the API key, so the model list could not load. Use Custom…."
+          : "Couldn't load the model list from Hermes. Use Custom… to type a model ID.";
+
   const providerRow = (
     <Row
       label="Reviewer"
@@ -291,13 +333,16 @@ export function ReviewRelaySection() {
             placeholder="http://hermes.local:8643"
             onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
           />
-          <TextSettingRow
+          <ModelPicker
             label="Model"
-            desc="The model name the API server advertises."
-            key={`relay-model:${relay.model}`}
-            value={relay.model}
-            width={180}
-            onCommit={(v) => updateSettings({ reviewRelay: { model: v } })}
+            ariaLabel="Review relay model"
+            desc="Profile default uses the model priority configured on the Hermes profile. Any other entry overrides that chain for relay runs only."
+            warning={modelHint}
+            value={relayModelValue(relay.model, relay.modelProvider)}
+            options={relayModelOptions(modelProviders)}
+            defaultLabel={`Profile default (${PROFILE_DEFAULT_MODEL})`}
+            allowCustom
+            onChange={(v) => updateSettings({ reviewRelay: parseRelayModel(v, modelProviders) })}
           />
           <TextSettingRow
             label="Prompt repository"

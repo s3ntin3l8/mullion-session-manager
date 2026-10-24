@@ -22,6 +22,7 @@ const NOT_CONFIGURED_APP = {
 describe("Settings -> Integrations -> Review relay", () => {
   let hermes: { hasKey: boolean; updatedAt: string | null };
   let testResponse: () => Response;
+  let modelOptions: () => Response;
   let reviewRuns: Array<Record<string, unknown>>;
   let reviewsResponse: (() => Response) | null;
   let settingsPatches: Array<Record<string, unknown>>;
@@ -40,6 +41,7 @@ describe("Settings -> Integrations -> Review relay", () => {
     });
     hermes = { hasKey: false, updatedAt: null };
     testResponse = () => jsonResponse(200, { ok: true });
+    modelOptions = () => jsonResponse(200, { available: false, reason: "unreachable" });
     reviewRuns = [];
     reviewsResponse = null;
     settingsPatches = [];
@@ -88,6 +90,9 @@ describe("Settings -> Integrations -> Review relay", () => {
       if (url === "/api/integrations/hermes" && method === "DELETE") {
         hermes = { hasKey: false, updatedAt: null };
         return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (url === "/api/integrations/hermes/model-options" && method === "GET") {
+        return Promise.resolve(modelOptions());
       }
       if (url === "/api/integrations/hermes/test" && method === "POST") {
         return Promise.resolve(testResponse());
@@ -314,6 +319,118 @@ describe("Settings -> Integrations -> Review relay", () => {
     hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
     await renderCard();
     expect(await screen.findByText("Review relay ready")).toBeInTheDocument();
+  });
+
+  describe("model picker (#1775)", () => {
+    const PROVIDERS = [
+      { provider: "anthropic", name: "Anthropic", models: ["claude-sonnet-5-5"] },
+      { provider: "openrouter", name: "OpenRouter", models: ["llama3:8b", "x/y:free"] },
+    ];
+    const picker = () => screen.getByLabelText("Review relay model");
+
+    function configure(reviewRelay: Record<string, unknown> = {}) {
+      hermes = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          reviewRelay: {
+            ...DEFAULT_SETTINGS.reviewRelay,
+            provider: "hermes",
+            apiUrl: "http://192.168.2.6:8642/p/review-bot",
+            ...reviewRelay,
+          },
+        },
+        settingsLoaded: true,
+      });
+    }
+
+    it("defaults to the profile default, then offers Hermes' models", async () => {
+      configure();
+      modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
+      await renderCard();
+      expect(
+        await within(picker()).findByRole("option", { name: "claude-sonnet-5-5 (Anthropic)" }),
+      ).toBeInTheDocument();
+      expect(
+        within(picker()).getByRole("option", { name: "llama3:8b (OpenRouter)" }),
+      ).toBeInTheDocument();
+      expect(picker()).toHaveValue("");
+      expect(
+        within(picker()).getByRole("option", { name: "Profile default (hermes-agent)" }),
+      ).toBeInTheDocument();
+    });
+
+    it("stores the model with its provider, splitting only on the first colon", async () => {
+      configure();
+      modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
+      const user = userEvent.setup();
+      await renderCard();
+      await within(picker()).findByRole("option", { name: "llama3:8b (OpenRouter)" });
+      await user.selectOptions(picker(), "llama3:8b (OpenRouter)");
+      await waitFor(() =>
+        expect(settingsPatches).toContainEqual({
+          reviewRelay: { model: "llama3:8b", modelProvider: "openrouter" },
+        }),
+      );
+    });
+
+    it("goes back to the profile default with the alias and no provider", async () => {
+      configure({ model: "claude-sonnet-5-5", modelProvider: "anthropic" });
+      modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
+      const user = userEvent.setup();
+      await renderCard();
+      await within(picker()).findByRole("option", { name: "claude-sonnet-5-5 (Anthropic)" });
+      expect(picker()).toHaveValue("anthropic:claude-sonnet-5-5");
+      await user.selectOptions(picker(), "Profile default (hermes-agent)");
+      await waitFor(() =>
+        expect(settingsPatches).toContainEqual({
+          reviewRelay: { model: "hermes-agent", modelProvider: "" },
+        }),
+      );
+    });
+
+    it("says so and keeps Custom… working when Hermes can't list models", async () => {
+      configure();
+      const user = userEvent.setup();
+      await renderCard();
+      expect(
+        await screen.findByText(/Couldn't load the model list from Hermes/),
+      ).toBeInTheDocument();
+      await user.selectOptions(picker(), "Custom…");
+      await user.type(screen.getByLabelText("Review relay model (custom model ID)"), "my-model");
+      await user.tab();
+      await waitFor(() =>
+        expect(settingsPatches).toContainEqual({
+          reviewRelay: { model: "my-model", modelProvider: "" },
+        }),
+      );
+    });
+
+    it("blames the key when Hermes rejects it", async () => {
+      configure();
+      modelOptions = () => jsonResponse(200, { available: false, reason: "unauthorized" });
+      await renderCard();
+      expect(await screen.findByText(/Hermes rejected the API key/)).toBeInTheDocument();
+    });
+
+    it("shows a stored model the list doesn't know (e.g. an old bad value) as custom", async () => {
+      configure({ model: "review-bot" });
+      modelOptions = () => jsonResponse(200, { available: true, providers: PROVIDERS });
+      await renderCard();
+      expect(await screen.findByDisplayValue("review-bot")).toBeInTheDocument();
+      expect(picker()).toHaveValue("__custom__");
+    });
+
+    it("asks Hermes nothing until a URL and key are set", async () => {
+      await renderCard();
+      expect(
+        await screen.findByText(/Set the API URL and key to load the model list/),
+      ).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/integrations/hermes/model-options",
+        expect.anything(),
+      );
+    });
   });
 
   describe("recent reviews", () => {

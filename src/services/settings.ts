@@ -464,8 +464,13 @@ export interface AppSettings {
     provider: "none" | "hermes";
     // Base URL of the Hermes API server, e.g. http://host:8643 (no trailing path).
     apiUrl: string;
-    // Model name the API server advertises (API_SERVER_MODEL_NAME).
+    // Model for relay runs. "hermes-agent" (the API server's virtual alias,
+    // API_SERVER_MODEL_NAME) = the Hermes profile's own model priority; any
+    // other value overrides it for relay runs only.
     model: string;
+    // Hermes provider slug the model belongs to (from /api/model/options).
+    // Empty = send the bare model. Ignored while `model` is the alias.
+    modelProvider: string;
     // Optional "owner/repo" holding a custom review prompt, fetched
     // unauthenticated. Empty = Mullion's built-in prompt.
     promptRepo: string;
@@ -693,6 +698,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     provider: "none",
     apiUrl: "",
     model: "hermes-agent",
+    modelProvider: "",
     promptRepo: "",
     promptPath: "hermes-review-prompt.md",
     triagePromptRepo: "",
@@ -1276,6 +1282,10 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       provider: settings.reviewRelay.provider === "hermes" ? "hermes" : "none",
       apiUrl: safeString(settings.reviewRelay.apiUrl, DEFAULT_SETTINGS.reviewRelay.apiUrl),
       model: safeString(settings.reviewRelay.model, DEFAULT_SETTINGS.reviewRelay.model),
+      modelProvider: safeString(
+        settings.reviewRelay.modelProvider,
+        DEFAULT_SETTINGS.reviewRelay.modelProvider,
+      ),
       promptRepo: safeString(
         settings.reviewRelay.promptRepo,
         DEFAULT_SETTINGS.reviewRelay.promptRepo,

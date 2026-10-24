@@ -24,6 +24,16 @@ const PROMPT_TIMEOUT_MS = 5_000;
 // finished) a timeout here is a real failure, not "accepted and running".
 const DISPATCH_TIMEOUT_MS = 15_000;
 const STATUS_TIMEOUT_MS = 10_000;
+// Hermes builds the model inventory with catalog and pricing enrichment, so it
+// can be slow: give it the dispatch budget, not the health check's.
+const MODEL_OPTIONS_TIMEOUT_MS = 15_000;
+// The payload carries per-model pricing and capability hints for every
+// provider (an aggregator lists thousands of models).
+const MODEL_OPTIONS_MAX_BYTES = 8_000_000;
+// More than this in one dropdown is unusable; the Custom entry covers the rest.
+const MAX_MODELS_PER_PROVIDER = 300;
+/** The API server's virtual model: "use the Hermes profile's own model chain". */
+export const HERMES_PROFILE_DEFAULT_MODEL = "hermes-agent";
 const MAX_RUN_OUTPUT_CHARS = 4_000;
 const MAX_TRACKED_RUNS = 200;
 const MAX_LISTED_RUNS = 20;
@@ -628,6 +638,62 @@ export async function testHermesConnection(app: FastifyInstance): Promise<void> 
   await checkHealth(baseUrl(apiUrl), true);
 }
 
+export interface HermesModelProvider {
+  /** Hermes provider slug — what a run's `provider` field takes. */
+  provider: string;
+  name: string;
+  models: string[];
+}
+
+/**
+ * Settings → Integrations model picker: the provider/model inventory the
+ * Hermes dashboard and TUI use (`GET /api/model/options`, same bearer key as
+ * the run API; `/v1/models` only lists the virtual alias). Only providers
+ * Hermes can actually route to are kept.
+ */
+export async function listHermesModelOptions(app: FastifyInstance): Promise<HermesModelProvider[]> {
+  const { apiUrl } = getStoredSettings(app.db).reviewRelay;
+  if (!apiUrl) throw new HermesNotConfiguredError("Set the Hermes API URL first");
+  const key = getHermesKey(app);
+  if (!key) throw new HermesNotConfiguredError("Set the Hermes API key first");
+  // No `refresh`: it busts Hermes' provider catalog cache and probes every
+  // custom endpoint.
+  const res = await hermesFetch(baseUrl(apiUrl), key, "/api/model/options?include_unconfigured=0", {
+    method: "GET",
+    timeoutMs: MODEL_OPTIONS_TIMEOUT_MS,
+  });
+  if (!res.ok) throw await unavailableFromResponse(res, "model options unavailable");
+  const text = await readBounded(res, MODEL_OPTIONS_MAX_BYTES).catch(() => null);
+  let body: unknown;
+  try {
+    body = text === null ? null : JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  const rows = (body as { providers?: unknown } | null)?.providers;
+  if (!Array.isArray(rows)) {
+    throw new HermesUnavailableError(
+      "Hermes returned no model options",
+      `unexpected /api/model/options body: ${String(text).slice(0, 200)}`,
+    );
+  }
+  const out: HermesModelProvider[] = [];
+  for (const row of rows as Array<Record<string, unknown>>) {
+    const slug = typeof row.slug === "string" ? row.slug : "";
+    if (!slug || row.authenticated === false || !Array.isArray(row.models)) continue;
+    const models = [
+      ...new Set(row.models.filter((m): m is string => typeof m === "string" && m !== "")),
+    ].slice(0, MAX_MODELS_PER_PROVIDER);
+    if (models.length === 0) continue;
+    out.push({
+      provider: slug,
+      name: typeof row.name === "string" && row.name ? row.name : slug,
+      models,
+    });
+  }
+  return out;
+}
+
 export interface HermesReviewRequest {
   owner: string;
   repo: string;
@@ -760,6 +826,10 @@ export async function requestRelay(
   const { owner, repo, number } = target;
   const settings = getStoredSettings(app.db).reviewRelay;
   const { apiUrl, model, cooldownMinutes } = settings;
+  // A provider only qualifies a real model; the alias already means "whatever
+  // the profile is configured with".
+  const provider =
+    model !== HERMES_PROFILE_DEFAULT_MODEL && settings.modelProvider ? settings.modelProvider : "";
   const key = assertReviewerConfigured(app);
   const promptRepo = target.kind === "issue" ? settings.triagePromptRepo : settings.promptRepo;
   const promptPath = target.kind === "issue" ? settings.triagePromptPath : settings.promptPath;
@@ -871,6 +941,7 @@ export async function requestRelay(
           dispatched = await dispatchReview(root, key, {
             idempotencyKey,
             model,
+            provider,
             kind: target.kind,
             owner,
             repo,
@@ -1123,6 +1194,8 @@ async function dispatchReview(
   r: {
     idempotencyKey: string;
     model: string;
+    /** Provider slug qualifying `model`; empty = send the bare model. */
+    provider: string;
     kind: RelayTargetKind;
     owner: string;
     repo: string;
@@ -1142,6 +1215,7 @@ async function dispatchReview(
 
   const body = JSON.stringify({
     model: r.model,
+    ...(r.provider ? { provider: r.provider } : {}),
     input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt),
     // The session id is what makes the review rounds of one pull request
     // continue the same conversation. Without it Hermes derives the session
