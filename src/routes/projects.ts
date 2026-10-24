@@ -21,6 +21,7 @@ import {
   type PlacementMode,
 } from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
@@ -1144,6 +1145,74 @@ export async function projectsRoute(app: FastifyInstance) {
         isRegistered: registeredCwds.has(c.cwd),
       }));
       return discovered;
+    },
+  );
+
+  // ---------------------------------------------------------------------------
+  // The placement PREVIEW — issue #1726 / roadmap 8.12.
+  // ---------------------------------------------------------------------------
+  //
+  // "Where would a new session land right now, and why?" — the question a
+  // user has to be able to answer before they turn automatic placement on.
+  //
+  // It runs the SAME decision function the spawn path uses
+  // (services/placement.ts's previewPlacement, which is the one
+  // resolvePlacement also calls), so the preview cannot drift from what
+  // would actually happen. It differs only in that it announces nothing
+  // (no "placement: chose a host" line — no placement happened) and in
+  // that it writes nothing at all: it is a read.
+  //
+  // Two routes, one decision:
+  //   - GET  /api/projects/:id/placement-preview — an existing project.
+  //   - POST /api/projects/placement-preview    — a project that does not
+  //     exist yet (the create-project modal asks BEFORE the row is saved),
+  //     with the would-be host and mode in the body.
+  //
+  // The answer is a NOW reading: load moves between the preview and the
+  // spawn, so the UI labels it as such.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/placement-preview",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const decision = previewPlacement(app, {
+        project: { hostId: project.hostId, placement: project.placement },
+      });
+      return { placement: project.placement, ...decision };
+    },
+  );
+
+  app.post<{ Body: { hostId: string; placement?: PlacementMode } }>(
+    "/api/projects/placement-preview",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        body: {
+          type: "object",
+          required: ["hostId"],
+          properties: {
+            hostId: { type: "string" },
+            // The shared mode vocabulary — the same enum the project's own
+            // create/PATCH schemas use, so a preview can never be asked
+            // about a mode the project could not actually be set to.
+            placement: { type: "string", enum: [...PLACEMENT_MODES] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { hostId } = request.body;
+      // A preview for a host that is not registered would answer a question
+      // about a machine Mullion does not know — say so rather than guess.
+      if (!getHostRow(app, hostId)) return reply.notFound(`Unknown host ${hostId}`);
+      const placement = request.body.placement ?? "pinned";
+      const decision = previewPlacement(app, { project: { hostId, placement } });
+      return { placement, ...decision };
     },
   );
 

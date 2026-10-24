@@ -255,6 +255,103 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new
+  // session land right now, and why?" It is the same decision the spawn
+  // path makes, so the answer cannot drift from what would happen.
+  it("previews the placement of an existing project", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "preview-project", cwd, placement: "auto" },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json();
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(preview.statusCode).toBe(200);
+    const body = preview.json();
+    expect(body.placement).toBe("auto");
+    expect(typeof body.hostId).toBe("string");
+    expect(body.reason.length).toBeGreaterThan(0);
+    // The comparison table rides along, so a UI can show WHY rather than
+    // just the winner.
+    expect(Array.isArray(body.considered)).toBe(true);
+    expect(body.fellBack).toBe(false);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("previews a PINNED project as pinned, without scoring anything", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "pinned-preview", cwd },
+    });
+    const { id } = created.json();
+
+    const preview = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview`,
+    });
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json().placement).toBe("pinned");
+    expect(preview.json().hostId).toBe("local");
+    expect(preview.json().considered).toEqual([]);
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("404s a preview for a project that does not exist", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "GET", url: "/api/projects/999999/placement-preview" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("previews a project that does not exist YET (the create modal's question)", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "local", placement: "auto" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().placement).toBe("auto");
+    expect(typeof res.json().hostId).toBe("string");
+    await app.close();
+  });
+
+  it("404s a preview for a host that is not registered", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "no-such-host", placement: "auto" },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("rejects a preview for a mode outside the shared vocabulary", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/projects/placement-preview",
+      payload: { hostId: "local", placement: "whatever" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("lists projects in case-insensitive alphabetical order", async () => {
     const app = await buildApp();
 

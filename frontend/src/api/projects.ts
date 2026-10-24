@@ -10,13 +10,32 @@ import type {
   CreateProjectPlacementOptions,
   CreateProjectResult,
   DiscoveredProject,
+  PlacementPreview,
   ProjectUrl,
   AgentRuleTarget,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
+import type { PlacementMode } from "../../../src/shared/constants.js";
 
 export const projectsApi = {
   listProjects: () => request<Project[]>("/api/projects"),
+
+  // Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new
+  // session land right now, and why?". The server runs the SAME decision
+  // function the spawn path uses, so the answer cannot drift from what
+  // would actually happen; it is a read and it announces nothing.
+  //
+  // Two shapes, one decision: the id-keyed one for a project that exists,
+  // and the body-keyed one for the create-project modal, which asks BEFORE
+  // the row is saved and therefore has no id to ask with.
+  getPlacementPreview: (id: number) =>
+    request<PlacementPreview>(`/api/projects/${id}/placement-preview`),
+
+  previewPlacement: (opts: { hostId: string; placement: PlacementMode }) =>
+    request<PlacementPreview>("/api/projects/placement-preview", {
+      method: "POST",
+      body: JSON.stringify(opts),
+    }),
 
   createProject: (
     name: string,

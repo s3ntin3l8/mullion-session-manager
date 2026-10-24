@@ -5,6 +5,7 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
 import { deriveHostStatus, type PingState } from "../../hostStatus.js";
+import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
@@ -30,6 +31,36 @@ const HOST_UPDATE_IN_FLIGHT_PHASES = new Set([
   "restarting",
 ]);
 
+/**
+ * How busy this host is, as one quiet line — issue #1726 / roadmap 8.12.
+ *
+ * "capacity unknown" is a real answer, not a missing one: a host that never
+ * reported (an older agent build, or one that has not been polled yet) is
+ * shown as unknown, NEVER as a zero — a zero load would read as "this
+ * machine is idle", which is the one thing a missing reading must never
+ * say. A reading that aged out keeps its numbers and says how old they are.
+ */
+function HostCapacityLine({ host }: { host: Host }) {
+  const capacity = formatHostCapacityNow(host);
+  if (!capacity.known) {
+    return <span>{capacity.platform ? `${capacity.platform} · ` : ""}capacity unknown</span>;
+  }
+  const age = formatCapacityAge(capacity.ageMs);
+  return (
+    <span>
+      {[
+        capacity.platform,
+        capacity.cores !== null ? `${capacity.cores} cores` : null,
+        capacity.load !== null ? `load ${capacity.load}` : null,
+        capacity.memory,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(" · ")}
+      {capacity.stale && age ? ` (reading from ${age})` : ""}
+    </span>
+  );
+}
+
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
   const [addOpen, setAddOpen] = useState(false);
@@ -49,6 +80,12 @@ export function HostsSection() {
   const [updateInfo, setUpdateInfo] = useState<Record<string, HostUpdateStatus>>({});
   const [applyingUpdate, setApplyingUpdate] = useState<Record<string, boolean>>({});
   const [applyError, setApplyError] = useState<Record<string, string>>({});
+
+  // The local host is a row in the `hosts` table too (migration 0008 seeds
+  // it), so it is filtered out of the REMOTE list below — but its row is
+  // where this machine's own capacity reading comes from, and "how busy am
+  // I" is the first question a user has about their own box.
+  const localHost = hosts.find((h) => h.id === LOCAL_HOST_ID);
 
   const refreshHostUpdate = (hostId: string) => {
     api
@@ -229,7 +266,15 @@ export function HostsSection() {
           icon={<HostsIcon size={15} />}
           dot="on"
           title="This machine"
-          subtitle="local"
+          subtitle={
+            localHost ? (
+              <>
+                local · <HostCapacityLine host={localHost} />
+              </>
+            ) : (
+              "local"
+            )
+          }
           trailing={
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>
@@ -253,7 +298,13 @@ export function HostsSection() {
                 icon={<HostsIcon size={15} />}
                 dot={display.dot}
                 title={host.name}
-                subtitle={host.baseUrl ?? ""}
+                subtitle={
+                  <>
+                    {host.baseUrl ?? ""}
+                    {host.baseUrl ? " · " : ""}
+                    <HostCapacityLine host={host} />
+                  </>
+                }
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     {display.label && (

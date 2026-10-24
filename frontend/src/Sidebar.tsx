@@ -596,10 +596,12 @@ export function Sidebar({
               newProjectRef.current = null;
             }
           }}
-          onCreate={async ({ name, cwd, hostId, createDir, gitInit }) => {
+          onCreate={async ({ name, cwd, hostId, createDir, gitInit, placement }) => {
             const project = await useDashboardStore
               .getState()
-              .createProject(name, cwd, hostId, { createDir, gitInit });
+              // Issue #1726 / roadmap 8.12 — the placement mode rides in the
+              // same opts bag as createDir/gitInit.
+              .createProject(name, cwd, hostId, { createDir, gitInit, placement });
             newProjectRef.current = { id: project.id, name: project.name };
             return project;
           }}
@@ -1113,6 +1115,9 @@ function ProjectHeader({
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               initialConventionalCommitTitles={project.conventionalCommitTitles}
               initialAutoTagRelease={project.autoTagRelease}
+              // Issue #1726 / roadmap 8.12 — the project's own placement
+              // mode, so the control opens showing what it is today.
+              initialPlacement={project.placement}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -1127,6 +1132,7 @@ function ProjectHeader({
                 autoTagRelease,
                 createDir,
                 gitInit,
+                placement,
               }) =>
                 useDashboardStore.getState().updateProject(project.id, {
                   name,
@@ -1141,6 +1147,10 @@ function ProjectHeader({
                   autoTagRelease,
                   createDir,
                   gitInit,
+                  // Issue #1726 / roadmap 8.12 — the placement mode is a
+                  // plain patch field (updateProject's Pick union already
+                  // accepts it).
+                  placement,
                 })
               }
             />

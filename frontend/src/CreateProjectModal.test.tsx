@@ -15,6 +15,8 @@ vi.mock("./api/index.js", async (importOriginal) => {
       ...actual.api,
       listProjectActions: vi.fn(),
       recheckReleasePlease: vi.fn(),
+      getPlacementPreview: vi.fn(),
+      previewPlacement: vi.fn(),
     },
   };
 });
@@ -36,6 +38,174 @@ function fieldSelect(labelText: string): HTMLSelectElement {
 
 beforeEach(() => {
   vi.mocked(api.listProjectActions).mockReset();
+  vi.mocked(api.getPlacementPreview).mockReset();
+  vi.mocked(api.previewPlacement).mockReset();
+  // Default answers, so a test that renders the modal without caring about
+  // one of these fetches still has a promise to await (the hook calls
+  // .then() on whatever the fetcher returns).
+  vi.mocked(api.listProjectActions).mockResolvedValue([]);
+  const preview = {
+    placement: "auto" as const,
+    hostId: "local",
+    reason: "the only eligible host",
+    considered: [],
+    fellBack: false,
+  };
+  vi.mocked(api.getPlacementPreview).mockResolvedValue(preview);
+  vi.mocked(api.previewPlacement).mockResolvedValue(preview);
+});
+
+// Issue #1726 / roadmap 8.12 — the placement control: "pinned" (today's
+// behaviour) vs "automatic" (the policy chooses), and the LIVE preview that
+// answers "where would a new session land right now, and why?".
+describe("CreateProjectModal — the placement control (issue #1726)", () => {
+  it("defaults to PINNED — every existing project behaves exactly as before", () => {
+    render(
+      <CreateProjectModal
+        mode="create"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const pinned = screen.getByRole("radio", { name: /on a chosen host/i });
+    const automatic = screen.getByRole("radio", { name: /automatic/i });
+    expect(pinned).toBeChecked();
+    expect(automatic).not.toBeChecked();
+  });
+
+  it("opens showing the project's OWN mode", () => {
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialPlacement="auto"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: /automatic/i })).toBeChecked();
+  });
+
+  it("sends 'auto' when the user picks Automatic", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /automatic/i }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ placement: "auto" }));
+  });
+
+  it("shows WHERE a new session would land, and WHY", async () => {
+    vi.mocked(api.getPlacementPreview).mockResolvedValue({
+      placement: "auto",
+      hostId: "mac-mini",
+      reason: "least loaded of the eligible hosts",
+      considered: [],
+      fellBack: false,
+    });
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialPlacement="auto"
+        hosts={[
+          {
+            id: "mac-mini",
+            name: "mac-mini",
+            baseUrl: "http://mac",
+            isLocal: false,
+            hasToken: true,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            health: "online",
+            lastSeenAt: null,
+            lastCheckedAt: null,
+          },
+        ]}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText(/mac-mini/)).toBeInTheDocument());
+    expect(screen.getByText(/least loaded of the eligible hosts/)).toBeInTheDocument();
+    // It is a NOW reading, and the UI says so — load moves between the
+    // preview and the spawn.
+    expect(screen.getByText(/right now/i)).toBeInTheDocument();
+  });
+
+  it("shows NO preview for a pinned project — there is no decision to explain", () => {
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.queryByText(/right now/i)).not.toBeInTheDocument();
+    expect(api.getPlacementPreview).not.toHaveBeenCalled();
+  });
+
+  it("says so when the preview cannot be read, rather than showing nothing", async () => {
+    vi.mocked(api.getPlacementPreview).mockRejectedValue(new Error("boom"));
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialPlacement="auto"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/couldn't read the placement preview/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("previews by HOST in create mode — the project does not exist yet", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="create"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    await user.click(screen.getByRole("radio", { name: /automatic/i }));
+    await waitFor(() => expect(api.previewPlacement).toHaveBeenCalled());
+    expect(vi.mocked(api.previewPlacement).mock.calls[0][0]).toEqual({
+      hostId: "local",
+      placement: "auto",
+    });
+  });
 });
 
 // Focused on the issue #28 phase 7 "use detected port" suggestion — the
@@ -284,6 +454,9 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,
+      // Issue #1726 / roadmap 8.12 — the placement mode travels with
+      // the payload in both modes (pinned is the default).
+      placement: "pinned",
     });
   });
 
@@ -322,6 +495,9 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       maxAutoReturnRounds: null,
       conventionalCommitTitles: true,
       autoTagRelease: false,
+      // Issue #1726 / roadmap 8.12 — the placement mode travels with
+      // the payload in both modes (pinned is the default).
+      placement: "pinned",
     });
   });
 
@@ -360,6 +536,9 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: true,
+      // Issue #1726 / roadmap 8.12 — the placement mode travels with
+      // the payload in both modes (pinned is the default).
+      placement: "pinned",
     });
   });
 
@@ -399,6 +578,9 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,
+      // Issue #1726 / roadmap 8.12 — the placement mode travels with
+      // the payload in both modes (pinned is the default).
+      placement: "pinned",
     });
   });
 
@@ -727,6 +909,9 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,
+      // Issue #1726 / roadmap 8.12 — the placement mode travels with
+      // the payload in both modes (pinned is the default).
+      placement: "pinned",
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });

@@ -207,9 +207,42 @@ it can be explained rather than guessed at.
 The drain flag the policy consults (a host that is parked and takes no new
 work) arrives with
 [#1725](https://github.com/s3ntin3l8/mullion-session-manager/issues/1725);
-until then no host is ever drained. The UI for any of this —
-the capacity numbers, the placement reason, the drain switch — is
-[#1726](https://github.com/s3ntin3l8/mullion-session-manager/issues/1726).
+until then no host is ever drained.
+
+### Seeing it in the UI
+
+**The fleet's capacity — Settings → Hosts.** Every host row carries its
+platform, how many things it can do at once, its 1-minute load average and
+how much memory is free. Two rules the display keeps:
+
+- **A host that reports no capacity shows _unknown_, never zero.** An older
+  agent build (or one that has not been polled yet) simply has no reading —
+  and a zero load would read as "this machine is idle", which is the one
+  thing a missing reading must never say.
+- **A reading is a reading, not a fact.** Capacity is cached on the
+  heartbeat sweep, so a host that stopped reporting keeps its last numbers
+  — shown, but marked with their age (_"reading from 3 min ago"_).
+
+**The placement control — Add/Edit project.** A project's mode is chosen in
+the same dialog as its name and path: _On a chosen host_ (today's
+behaviour, the default) or _Automatic_. Choosing _Automatic_ shows a **live
+preview** of where a new session would land and why:
+
+> Right now a new session would land on **mac-mini** — least loaded: 1.20
+> load on 12 cores (0.10 per core).
+
+The preview is the server's own decision, run by the same function the spawn
+path uses — so it cannot promise something the placement would not do. It
+is a **now** reading (load moves between the preview and the spawn), and it
+is answered without placing anything: a preview announces no decision and
+writes nothing. Two shapes, one decision: an existing project is asked
+about by its id, and the create-project dialog asks with the host and mode
+it would save, before the project exists.
+
+The reason for a session that was _already_ placed is a different thing —
+that decision is made at spawn time, so it is
+[#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724)'s
+to record. Until then the server log holds it.
 
 ## Treat agent credentials like credentials
 

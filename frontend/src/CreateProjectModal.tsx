@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
-import type { Host, Launcher } from "./api/index.js";
+import type { Host, Launcher, PlacementMode, PlacementPreview } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -62,6 +62,11 @@ interface CreateProjectModalProps {
     // rejection. `gitInit` only has an effect when `createDir` is also set.
     createDir?: boolean;
     gitInit?: boolean;
+    // Issue #1726 / roadmap 8.12 — the placement mode. Sent in BOTH modes:
+    // on create it rides the same opts bag as createDir/gitInit, and on
+    // edit it is a plain patch field. `undefined` means "not applicable"
+    // (the create path passes it through, the edit path patches it).
+    placement?: PlacementMode;
   }) => Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
@@ -94,6 +99,11 @@ interface CreateProjectModalProps {
   initialMaxAutoReturnRounds?: number | null;
   initialConventionalCommitTitles?: boolean | null;
   initialAutoTagRelease?: boolean | null;
+  // Issue #1726 / roadmap 8.12 — the project's placement mode. Defaults to
+  // "pinned", which is every existing project's mode (and the column's
+  // default), so a project opened without this prop behaves exactly as
+  // before.
+  initialPlacement?: PlacementMode;
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -124,11 +134,19 @@ export function CreateProjectModal({
   initialMaxAutoReturnRounds = null,
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
+  initialPlacement = "pinned",
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
   const [namePlaceholder, setNamePlaceholder] = useState("my-project");
   const [hostId, setHostId] = useState(LOCAL_HOST_ID);
+  // Issue #1726 / roadmap 8.12 — the placement mode ("pinned" | "auto") and
+  // the LIVE preview of where a new session would land. The preview is a
+  // now-reading, not a promise: load moves between the preview and the
+  // spawn, which is why the UI says "right now".
+  const [placement, setPlacement] = useState<PlacementMode>(initialPlacement);
+  const [preview, setPreview] = useState<PlacementPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [devServerUrl, setDevServerUrl] = useState(initialDevServerUrl ?? "");
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? UNSET_AGENT);
   const [defaultReviewAgent, setDefaultReviewAgent] = useState(
@@ -177,6 +195,10 @@ export function CreateProjectModal({
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
+  // The host's name for the preview line — the local host is "this machine"
+  // in the UI (its API row is named "Local").
+  const previewHostName = (id: string) =>
+    id === LOCAL_HOST_ID ? "this machine" : (hosts.find((h) => h.id === id)?.name ?? id);
   // #741 — the install-wide review-agent default this project's own unset
   // option falls through to (TaskMasterSection's Default review agent),
   // shown in the "Use global default (…)" label below.
@@ -198,6 +220,35 @@ export function CreateProjectModal({
       // resolves — same "reset then fetch" shape as SkillsPanel.tsx's own
       // fetchSkills effect.
       onStart: () => setLaunchersLoadError(false),
+    },
+  );
+
+  // The placement PREVIEW — issue #1726 / roadmap 8.12.
+  //
+  // One question, two shapes: a project that exists is asked about by its
+  // id; a project that does not exist yet (this modal, in create mode) is
+  // asked about with the would-be host and mode. Both go to the server's
+  // ONE decision function, so the answer is what would actually happen.
+  useAsyncData(
+    () => {
+      if (isEdit && projectId !== undefined) return api.getPlacementPreview(projectId);
+      // Create mode: the host the project would be pinned to. The preview
+      // only cares about the mode in this path, but the host travels along
+      // so the server can fall back to it.
+      return api.previewPlacement({ hostId, placement: "auto" });
+    },
+    (result) => {
+      setPreview(result);
+      setPreviewError(null);
+    },
+    () => {
+      setPreview(null);
+      setPreviewError("could not read the placement preview");
+    },
+    [placement, isEdit, projectId, hostId],
+    {
+      enabled: placement === "auto",
+      onStart: () => setPreviewError(null),
     },
   );
 
@@ -277,6 +328,10 @@ export function CreateProjectModal({
           : undefined,
         conventionalCommitTitles: isEdit ? conventionalCommitTitles : undefined,
         autoTagRelease: isEdit ? autoTagRelease : undefined,
+        // Issue #1726 / roadmap 8.12 — the placement mode rides along in
+        // both modes: on create it goes in the same opts bag as
+        // createDir/gitInit, on edit it is a plain patch field.
+        placement,
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -354,7 +409,61 @@ export function CreateProjectModal({
         </div>
 
         <div className="create-modal-body">
-          {!isEdit && remoteHosts.length > 0 && (
+          {/* Issue #1726 / roadmap 8.12 — the placement control.
+              "Pinned" is today's behaviour exactly (every session runs on
+              the project's own host); "automatic" opts the project into the
+              placement policy. The control is shown in both modes — a
+              project may be switched to automatic before a second host
+              exists, and the preview below then explains the fallback
+              honestly instead of hiding the option. */}
+          <label className="create-modal-field">
+            <span className="create-modal-field-label">Where sessions run</span>
+            <span
+              className="create-modal-input-row"
+              role="radiogroup"
+              aria-label="Where sessions run"
+            >
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="radio"
+                  name="project-placement"
+                  checked={placement === "pinned"}
+                  onChange={() => setPlacement("pinned")}
+                />
+                On a chosen host
+              </label>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="radio"
+                  name="project-placement"
+                  checked={placement === "auto"}
+                  onChange={() => setPlacement("auto")}
+                />
+                Automatic
+              </label>
+            </span>
+            <span className="create-modal-field-hint">
+              {placement === "auto"
+                ? "Mullion picks the least loaded eligible host for each new session."
+                : "Every session under this project runs on the project's own host."}
+            </span>
+            {placement === "auto" && (
+              <span className="create-modal-field-hint">
+                {previewError ? (
+                  <>Couldn't read the placement preview — {previewError}.</>
+                ) : preview ? (
+                  <>
+                    Right now a new session would land on{" "}
+                    <strong>{previewHostName(preview.hostId)}</strong> — {preview.reason}.
+                  </>
+                ) : (
+                  "Reading where a new session would land…"
+                )}
+              </span>
+            )}
+          </label>
+
+          {!isEdit && remoteHosts.length > 0 && placement === "pinned" && (
             <label className="create-modal-field">
               <span className="create-modal-field-label">Host</span>
               <span className="create-modal-input-row">
