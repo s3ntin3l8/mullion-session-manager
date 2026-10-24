@@ -1,3 +1,11 @@
+# Stop at the first failing hook. This is global, so it also applies to the
+# pre-commit stage (a lint/whitespace failure hides later checks until it is
+# fixed). The point is pre-push: without it a failed vitest hook still ran
+# patch-coverage, which found no coverage report and re-ran the whole suite
+# (see scripts/check-patch-coverage.mjs) - doubling the load at exactly the
+# moment the host was already struggling.
+fail_fast: true
+
 repos:
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -127,7 +135,7 @@ repos:
       # suite a second time to regenerate it.
       - id: npm-test
         name: vitest (unit tests, backend)
-        entry: npm run test:coverage
+        entry: scripts/with-gate-lock.sh npm run test:coverage
         language: system
         files: '^(?!frontend/).*\.(ts|tsx|js|jsx|mjs|cjs)$'
         pass_filenames: false
@@ -135,7 +143,7 @@ repos:
 
       - id: npm-test-frontend
         name: vitest (unit tests, frontend)
-        entry: npm --prefix frontend run test:coverage
+        entry: scripts/with-gate-lock.sh npm --prefix frontend run test:coverage
         language: system
         files: '^frontend/.*\.(ts|tsx|js|jsx)$'
         pass_filenames: false

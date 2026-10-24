@@ -70,6 +70,13 @@ How this repo applies the conventions above — facts and commands, not rules.
   disk), and the **≥75% patch-coverage check**
   (`npm run check:patch-coverage`). It is **not** `make lint` — lint is a
   **pre-commit** hook only, path-scoped to the workspace you touched.
+  `.pre-commit-config.yaml` sets `fail_fast: true` (a failed test hook no
+  longer triggers a second full suite run via patch-coverage), and the two
+  test hooks run through `scripts/with-gate-lock.sh`, a repo-wide `flock`
+  that makes concurrent pushes from different worktrees queue rather than
+  overload the host (`MULLION_NO_GATE_LOCK=1` bypasses it,
+  `MULLION_GATE_LOCK_TIMEOUT` bounds the wait). If your push is waiting on
+  that lock, let it wait — don't poll load and retry.
 - **Running the gate: once, not twice.** `make test` and the pre-push
   hook's `test:coverage` are the **same suite** — the hook's version adds
   istanbul instrumentation, and runs it precisely so the coverage JSON
