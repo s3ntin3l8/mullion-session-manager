@@ -79,10 +79,14 @@ export interface SshAgentFanoutHandle {
    * even though it is still desired — the same escape hatch the events
    * subscriber has. Issue #1719 (roadmap 8.5) is the reason it is needed
    * here now: a host that went to sleep leaves its socket HALF-OPEN (the
-   * network vanished without a FIN), so the "close" handler that schedules
-   * the reconnect never fires, and the fan-out stays wedged on a dead
-   * socket until the process restarts. The heartbeat notices the host came
-   * back and forces the reconnect.
+   * network vanished without a FIN), and the host-heartbeat notices the host
+   * came back and forces the reconnect.
+   *
+   * Note this fan-out is NOT strictly dependent on it: the mux
+   * (ssh-agent-mux.ts) PINGs every 15s and terminates a connection whose
+   * PONG does not arrive within 10s, so a half-open socket here is torn
+   * down and reconnected by this module's own machinery within ~25s. The
+   * force-reconnect recovers sooner and does not rely on that detection.
    */
   reconcile: (opts?: { forceReconnect?: Iterable<string> }) => void;
   /** Closes every open/pending fan-out connection and stops all reconnect
@@ -406,10 +410,11 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
         : new Set<string>();
 
     // Issue #1719 (roadmap 8.5) — a host whose socket was severed by a
-    // suspend is half-open, so its "close" event never arrives and the
-    // reconnect below is never scheduled. Forcing its teardown here makes
-    // the normal "open a fan-out for every desired host" pass below
-    // reconnect it with a fresh socket.
+    // suspend is half-open, so its "close" event may never arrive and the
+    // reconnect below is never scheduled on its own. Forcing its teardown
+    // here makes the normal "open a fan-out for every desired host" pass
+    // below reconnect it with a fresh socket. (The mux's own PING/PONG
+    // detection usually gets there first — see reconcile()'s doc comment.)
     const forceReconnect = new Set(opts?.forceReconnect ?? []);
 
     for (const [hostId, f] of fanouts) {

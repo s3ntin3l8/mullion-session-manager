@@ -87,7 +87,7 @@ export function startKeepAwake(
   }
 
   if (app.config.MULLION_KEEP_AWAKE === false) {
-    app.log.info("[keep-awake] disabled by MULLION_KEEP_AWAKE=0 — the host may idle-sleep");
+    app.log.info("[keep-awake] disabled by MULLION_KEEP_AWAKE=false — the host may idle-sleep");
     return {
       sync: () => {},
       isArmed: () => false,

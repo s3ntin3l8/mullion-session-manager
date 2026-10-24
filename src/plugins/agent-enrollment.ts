@@ -1,7 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import os from "node:os";
-import { reloadDotenvOverrides, resolveDotenvPath } from "./env.js";
+import { reloadDotenvOverrides } from "./env.js";
 
 // Issue #245 / roadmap 7.1 — the agent-side half of agent-initiated
 // registration. Agent-role-only, and inert unless both MULLION_PRIMARY_URL
@@ -129,6 +129,12 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // two overlapping renewals would race on app.agentSession and the renewal
   // timer itself.
   let renewInFlight = false;
+  // The same guard for the bootstrap loop: a resume can fire while the
+  // boot-time registration loop is still retrying against an unreachable
+  // primary, and two concurrent loops would double the registration rate
+  // and could BOTH succeed — the first session would then never be
+  // deregistered.
+  let registerInFlight = false;
 
   // Issue #1719 (roadmap 8.5) — the credential this agent holds is read from
   // the env file ONCE, at boot (env.ts's loadDotenvOverrides). An admin who
@@ -152,7 +158,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   //     only the bootstrap token would leave the inbound gate rejecting the
   //     primary's new token.
   function refreshCredentialsFromEnvFile(): boolean {
-    const reloaded = reloadDotenvOverrides(resolveDotenvPath(app.config.MULLION_HOME));
+    const reloaded = reloadDotenvOverrides(app.config.MULLION_HOME);
     let changed = false;
 
     const agentToken = reloaded.MULLION_AGENT_TOKEN;
@@ -227,40 +233,46 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   }
 
   async function registerWithRetry(): Promise<void> {
-    let attempt = 0;
-    while (!stopped) {
-      try {
-        const session = await callRegister(app, { token: app.config.MULLION_ENROLLMENT_TOKEN });
-        // See the identical recheck in renew() — onClose may have fired
-        // while this call was in flight.
-        if (stopped) return;
-        app.log.info({ hostId: session.hostId }, "[agent-enrollment] registered with primary");
-        scheduleRenewal(session);
-        return;
-      } catch (err) {
-        // Issue #1719 — a 401 means the credential was REJECTED, which for a
-        // sleeping host is most often a stale copy of a rotated one. Re-read
-        // the env file once and, if the value actually changed, retry
-        // immediately with the fresh one instead of burning the backoff on a
-        // value already proven bad. (A second 401 with an unchanged token
-        // falls through to the normal backoff — the retry only ever fires
-        // when the file really did change, so this cannot spin.)
-        if (isUnauthorized(err) && refreshCredentialsFromEnvFile()) {
-          app.log.info(
-            "[agent-enrollment] bootstrap credential changed on disk, retrying immediately",
+    if (registerInFlight) return;
+    registerInFlight = true;
+    try {
+      let attempt = 0;
+      while (!stopped) {
+        try {
+          const session = await callRegister(app, { token: app.config.MULLION_ENROLLMENT_TOKEN });
+          // See the identical recheck in renew() — onClose may have fired
+          // while this call was in flight.
+          if (stopped) return;
+          app.log.info({ hostId: session.hostId }, "[agent-enrollment] registered with primary");
+          scheduleRenewal(session);
+          return;
+        } catch (err) {
+          // Issue #1719 — a 401 means the credential was REJECTED, which for a
+          // sleeping host is most often a stale copy of a rotated one. Re-read
+          // the env file once and, if the value actually changed, retry
+          // immediately with the fresh one instead of burning the backoff on a
+          // value already proven bad. (A second 401 with an unchanged token
+          // falls through to the normal backoff — the retry only ever fires
+          // when the file really did change, so this cannot spin.)
+          if (isUnauthorized(err) && refreshCredentialsFromEnvFile()) {
+            app.log.info(
+              "[agent-enrollment] bootstrap credential changed on disk, retrying immediately",
+            );
+            attempt++;
+            continue;
+          }
+          const delay =
+            REGISTER_RETRY_DELAYS_MS[Math.min(attempt, REGISTER_RETRY_DELAYS_MS.length - 1)];
+          app.log.warn(
+            { err, attempt, delayMs: delay },
+            "[agent-enrollment] registration failed, retrying",
           );
+          await sleep(delay);
           attempt++;
-          continue;
         }
-        const delay =
-          REGISTER_RETRY_DELAYS_MS[Math.min(attempt, REGISTER_RETRY_DELAYS_MS.length - 1)];
-        app.log.warn(
-          { err, attempt, delayMs: delay },
-          "[agent-enrollment] registration failed, retrying",
-        );
-        await sleep(delay);
-        attempt++;
       }
+    } finally {
+      registerInFlight = false;
     }
   }
 

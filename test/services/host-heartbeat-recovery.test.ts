@@ -50,7 +50,7 @@ function fakeHost(id: string) {
 }
 
 describe("HostHeartbeatTracker: recovery detection", () => {
-  it("reports a recovery only when a known-unreachable host comes back", () => {
+  it("reports a recovery only when the host had been unreachable for at least two pings", () => {
     const tracker = new HostHeartbeatTracker();
 
     // A FIRST contact is not a recovery — there is no earlier unreachable
@@ -61,25 +61,33 @@ describe("HostHeartbeatTracker: recovery detection", () => {
     // Still online — not a recovery.
     expect(tracker.recordSuccess("h1")).toBe(false);
 
-    // Degraded (one missed ping) → online IS a recovery.
+    // ONE missed ping is often one dropped packet. Tearing down a working
+    // connection on that basis would penalise a healthy host for a hiccup,
+    // so it is not a recovery.
+    tracker.recordFailure("h1");
+    expect(tracker.getHealth("h1").status).toBe("degraded");
+    expect(tracker.recordSuccess("h1")).toBe(false);
+
+    // TWO consecutive misses mean the network really was down — which is
+    // what leaves a socket half-open. That IS a recovery (and the status is
+    // still "degraded" at two misses; it only reaches "offline" at three).
+    tracker.recordFailure("h1");
     tracker.recordFailure("h1");
     expect(tracker.getHealth("h1").status).toBe("degraded");
     expect(tracker.recordSuccess("h1")).toBe(true);
 
-    // Offline (three missed pings) → online IS a recovery too.
-    tracker.recordFailure("h1");
-    tracker.recordFailure("h1");
-    tracker.recordFailure("h1");
-    expect(tracker.getHealth("h1").status).toBe("offline");
-    expect(tracker.recordSuccess("h1")).toBe(true);
-  });
-
-  it("does not report a recovery for a host that goes straight back to online", () => {
-    const tracker = new HostHeartbeatTracker();
-    tracker.recordFailure("h1");
-    tracker.recordSuccess("h1");
     // The transition already happened — a further success is not a new one.
     expect(tracker.recordSuccess("h1")).toBe(false);
+  });
+
+  it("reports a recovery after two misses even while the status is still degraded", () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordFailure("h1");
+    tracker.recordFailure("h1");
+    // Two misses is the threshold; the status only reaches "offline" at the
+    // third. The recovery must not wait for the third.
+    expect(tracker.getHealth("h1").status).toBe("degraded");
+    expect(tracker.recordSuccess("h1")).toBe(true);
   });
 });
 
@@ -96,7 +104,8 @@ describe("startHostHeartbeat: onHostRecovered", () => {
   });
 
   it("calls onHostRecovered when a host comes back, and not while it stays online", async () => {
-    // Two misses (degraded), then a success (the host woke up).
+    // Two misses (the host was unreachable for two consecutive pings), then a
+    // success — the host woke up.
     pingMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
 
     const onHostRecovered = vi.fn();
@@ -126,9 +135,9 @@ describe("startHostHeartbeat: onHostRecovered", () => {
 
   it("keeps reconciling the other hosts when one host's recovery handler throws", async () => {
     mockListHosts.mockReturnValue([fakeHost("h1"), fakeHost("h2")]);
-    // Both hosts miss a ping first, so both are DEGRADED and their next
-    // success is a recovery.
-    pingMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
+    // Both hosts miss two consecutive pings, so both are due a recovery on
+    // the next sweep.
+    pingMock.mockResolvedValue(false);
 
     const onHostRecovered = vi.fn((hostId: string) => {
       if (hostId === "h1") throw new Error("handler exploded");
@@ -141,6 +150,10 @@ describe("startHostHeartbeat: onHostRecovered", () => {
 
     const cleanup = startHostHeartbeat(app, undefined, onHostRecovered);
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onHostRecovered).not.toHaveBeenCalled();
+
+    pingMock.mockResolvedValue(true);
     await vi.advanceTimersByTimeAsync(30_000);
 
     // Both hosts recovered; the throwing one did not stop the other.
@@ -163,7 +176,7 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
   });
 
   it("forces a reconnect of BOTH the events subscription and the ssh-agent fan-out when a host recovers", async () => {
-    pingMock.mockResolvedValueOnce(false).mockResolvedValue(true);
+    pingMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
 
     const app = Fastify();
     app.decorate("config", { MULLION_ROLE: "primary" } as never);
@@ -176,6 +189,10 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
     await app.ready();
 
     await vi.advanceTimersByTimeAsync(0); // first sweep: the host misses
+    expect(reconfigureEvents).not.toHaveBeenCalled();
+    expect(reconfigureFanout).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(30_000); // second miss
     expect(reconfigureEvents).not.toHaveBeenCalled();
     expect(reconfigureFanout).not.toHaveBeenCalled();
 

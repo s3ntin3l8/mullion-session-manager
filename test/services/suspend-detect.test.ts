@@ -70,7 +70,7 @@ describe("startSuspendWatcher", () => {
     watcher.stop();
   });
 
-  it("does not fire on an ordinary tick, nor on a gap shorter than the threshold", () => {
+  it("does not fire below the threshold, and DOES fire exactly at it", () => {
     vi.useFakeTimers();
     const clock = fakeClock();
     const watcher = startSuspendWatcher(mockApp(), { intervalMs: 1000, now: clock.now });
@@ -81,16 +81,16 @@ describe("startSuspendWatcher", () => {
     clock.advance(1000);
     vi.advanceTimersByTime(1000);
 
-    // A late tick that is still under the threshold (one missed interval on
-    // a loaded host) must NOT read as a suspend.
-    clock.advance(1000 + 500);
-    vi.advanceTimersByTime(1500);
+    // ONE missed tick on a loaded host (a 2-interval gap) is NOT a suspend.
+    clock.advance(2000);
+    vi.advanceTimersByTime(2000);
     expect(onResume).not.toHaveBeenCalled();
 
-    // Exactly at the threshold is not "past" it.
-    clock.advance(1000 * (SUSPEND_GAP_INTERVALS - 1) - 500);
-    vi.advanceTimersByTime(1000 * (SUSPEND_GAP_INTERVALS - 1));
-    expect(onResume).not.toHaveBeenCalled();
+    // A gap of exactly the threshold (three intervals) IS a suspend — the
+    // implementation fires at >=, not >.
+    clock.advance(3000);
+    vi.advanceTimersByTime(3000);
+    expect(onResume).toHaveBeenCalledTimes(1);
 
     watcher.stop();
   });

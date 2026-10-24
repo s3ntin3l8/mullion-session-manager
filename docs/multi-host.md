@@ -317,7 +317,7 @@ caffeinate -dimsu -w <pid>
 ```
 
 The assertion is held **only while there are live sessions** — an idle but
-installed agent still lets the laptop sleep. Set `MULLION_KEEP_AWAKE=0` in
+installed agent still lets the laptop sleep. Set `MULLION_KEEP_AWAKE=false` in
 the agent's `.env` to turn it off entirely (useful on a battery-powered
 laptop on a long train ride).
 

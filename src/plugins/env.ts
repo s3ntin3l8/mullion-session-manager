@@ -462,10 +462,16 @@ export const schema = {
     // power assertion while it has live sessions, so an idle macOS laptop
     // does not suspend mid-work. Default ON: a machine that suspends while a
     // build is running silently stops making progress, which is the exact
-    // failure this setting exists to prevent. Set it to 0 on a host whose
-    // owner would rather the machine sleep than hold a power assertion —
-    // e.g. a battery-powered laptop on a long train ride. Inert off macOS
-    // (there is no `caffeinate` there, and the service no-ops).
+    // failure this setting exists to prevent. Set it to `false` on a host
+    // whose owner would rather the machine sleep than hold a power
+    // assertion — e.g. a battery-powered laptop on a long train ride.
+    // Inert off macOS (there is no `caffeinate` there, and the service
+    // no-ops).
+    //
+    // A plain boolean, like every other boolean here: env-schema's AJV
+    // coerces only the strings "true" and "false", so `0` is NOT a valid
+    // value — it fails the schema, which fails the env plugin, which fails
+    // the boot. Write `false`.
     MULLION_KEEP_AWAKE: {
       type: "boolean",
       default: true,
@@ -947,33 +953,23 @@ export function loadDotenvOverrides(path = ".env"): NodeJS.Dict<string> {
 // does NOT mutate app.config. The caller decides what to do with a changed
 // value (see agent-enrollment.ts's own credential-recovery path).
 //
-// An EXPLICIT path is always read — the caller asked for that exact file. The
-// DEFAULT path is never read under test, so a test run can never pick up the
-// developer's real .env. (This is a NEW guard on a NEW function; the older
-// loadDotenvOverrides() above keeps its own, stricter one untouched.)
-export function reloadDotenvOverrides(path?: string): NodeJS.Dict<string> {
-  if (path === undefined && process.env.NODE_ENV === "test") return {};
-  const resolved = path ?? resolveDotenvPath();
-  if (!existsSync(resolved)) return {};
-  return parseEnv(readFileSync(resolved, "utf8"));
+// `mullionHome` is the install root the running process already holds in
+// app.config. When it is set, THAT install's .env is read — "$MULLION_HOME/
+// .env", the file scripts/run-with-env.sh sources and the file an operator
+// edits. When it is empty (a dev checkout), the ".env" at cwd is used, and
+// that default path is NEVER read under test: a test run must not be able to
+// pick up the developer's real .env and present its secrets to a primary.
+export function reloadDotenvOverrides(mullionHome?: string): NodeJS.Dict<string> {
+  if (mullionHome && mullionHome.length > 0) {
+    return readDotenvFile(join(mullionHome, ".env"));
+  }
+  if (process.env.NODE_ENV === "test") return {};
+  return readDotenvFile(".env");
 }
 
-/**
- * The env file a running Mullion should treat as authoritative.
- *
- * "$MULLION_HOME/.env" when MULLION_HOME is set (an installed agent or
- * primary — the launchd launcher's own rule, see scripts/run-with-env.sh),
- * otherwise ".env" at cwd (a dev checkout).
- *
- * `mullionHome` is an explicit override so a caller inside the app can pass
- * the value it already holds in app.config rather than re-reading
- * process.env — app.config is the sanctioned way the rest of this app reads
- * its own config.
- */
-export function resolveDotenvPath(mullionHome?: string): string {
-  const home = mullionHome ?? process.env.MULLION_HOME;
-  if (home && home.length > 0) return join(home, ".env");
-  return ".env";
+function readDotenvFile(path: string): NodeJS.Dict<string> {
+  if (!existsSync(path)) return {};
+  return parseEnv(readFileSync(path, "utf8"));
 }
 
 export const envPlugin = fp(async (app) => {

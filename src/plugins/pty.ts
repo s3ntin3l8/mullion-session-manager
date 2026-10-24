@@ -694,7 +694,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // like a primary does, and it is the agent that is most likely to be a
   // laptop somebody closes the lid on.
   //
-  // Inert everywhere but macOS, and no-ops when MULLION_KEEP_AWAKE=0 — see
+  // Inert everywhere but macOS, and no-ops when MULLION_KEEP_AWAKE=false — see
   // services/keep-awake.ts for why it is an app-level child armed on live
   // sessions rather than an always-on launchd job.
   const keepAwake = startKeepAwake(app);

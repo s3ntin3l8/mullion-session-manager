@@ -46,6 +46,12 @@ export const DEFAULT_SUSPEND_POLL_INTERVAL_MS = 15_000;
  * suspend would fire spurious resume events. A real macOS sleep is measured
  * in minutes at the very least, so a 3-interval threshold (45s at the default
  * poll) separates the two cleanly with room to spare.
+ *
+ * The consequence worth stating plainly: the host must be unresponsive for
+ * at least that long before a resume is reported. A 45-second stall (one
+ * long synchronous git operation) reads as a resume — which is harmless
+ * here (the resume handler only refreshes credentials and re-arms the
+ * keep-awake), but it is not free.
  */
 export const SUSPEND_GAP_INTERVALS = 3;
 
@@ -109,8 +115,17 @@ export function startSuspendWatcher(
     const at = now();
     const previous = lastTickAt;
     lastTickAt = at;
-    if (previous === null) return; // First sample establishes the baseline.
+    // The FIRST sample only establishes the baseline, so a suspend that
+    // begins within the first poll interval of the process's life is not
+    // detected. That is deliberate: there is nothing to compare against
+    // yet, and an agent that has just booted has no session to revalidate.
+    if (previous === null) return;
     const gap = at - previous;
+    // A backwards clock jump (an NTP correction, a manual clock change)
+    // yields a NEGATIVE gap, which is below the threshold — so it never
+    // fires, and the baseline follows the shifted clock. A forward jump
+    // (an NTP step) fires a spurious resume, which the resume handler
+    // absorbs harmlessly.
     if (gap < thresholdMs) return; // An ordinary tick — no suspend happened.
 
     // The gap spans the sleep plus the one interval that was due at

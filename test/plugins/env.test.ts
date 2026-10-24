@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildApp } from "../../src/app.js";
-import { loadDotenvOverrides } from "../../src/plugins/env.js";
+import { loadDotenvOverrides, reloadDotenvOverrides } from "../../src/plugins/env.js";
 
 describe("env plugin", () => {
   // Load-bearing: PORT/LOG_LEVEL are set by "respects environment variable
@@ -315,6 +315,89 @@ describe("env plugin", () => {
       process.env.NODE_ENV = "development";
 
       expect(loadDotenvOverrides("/nonexistent/path/.env")).toEqual({});
+    });
+  });
+
+  // Issue #1719 (roadmap 8.5) — the agent's credential re-read.
+  describe("reloadDotenvOverrides", () => {
+    let tmpDir: string | undefined;
+    const originalNodeEnv = process.env.NODE_ENV;
+
+    afterEach(() => {
+      if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+      tmpDir = undefined;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    });
+
+    it("reads $MULLION_HOME/.env — the file the launchd launcher sources", () => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=rotated\n");
+
+      expect(reloadDotenvOverrides(tmpDir)).toEqual({
+        MULLION_ENROLLMENT_TOKEN: "rotated",
+      });
+    });
+
+    it("never reads the DEFAULT .env under test — a developer's real secrets must not leak into a test run", () => {
+      // The default path is the .env at cwd. A developer checkout has one,
+      // full of real credentials; a test run must never read it (and so
+      // never overwrite app.config's credentials with them).
+      process.env.NODE_ENV = "test";
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=developer\n");
+      const originalCwd = process.cwd();
+      process.chdir(tmpDir);
+      try {
+        expect(reloadDotenvOverrides()).toEqual({});
+      } finally {
+        process.chdir(originalCwd);
+      }
+    });
+
+    it("reads the default .env outside test mode", () => {
+      process.env.NODE_ENV = "development";
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=developer\n");
+      const originalCwd = process.cwd();
+      process.chdir(tmpDir);
+      try {
+        expect(reloadDotenvOverrides()).toEqual({
+          MULLION_ENROLLMENT_TOKEN: "developer",
+        });
+      } finally {
+        process.chdir(originalCwd);
+      }
+    });
+
+    it("returns {} when the file doesn't exist", () => {
+      expect(reloadDotenvOverrides("/nonexistent/path")).toEqual({});
+    });
+  });
+
+  // Issue #1719 (roadmap 8.5) — MULLION_KEEP_AWAKE's value contract.
+  describe("MULLION_KEEP_AWAKE", () => {
+    afterEach(() => {
+      delete process.env.MULLION_KEEP_AWAKE;
+    });
+
+    it("is a plain boolean, and `false` is the documented way to turn it off", async () => {
+      // env-schema's AJV coerces only the strings "true" and "false"; any
+      // other string (including "0") fails the schema, which fails the env
+      // plugin, which fails the boot — and the launchd job then
+      // crash-loops. That is why the docs say `false` and not `0`.
+      process.env.MULLION_KEEP_AWAKE = "false";
+      const app = await buildApp();
+      try {
+        expect(app.config.MULLION_KEEP_AWAKE).toBe(false);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("rejects `0` — the boot fails rather than silently ignoring it", async () => {
+      process.env.MULLION_KEEP_AWAKE = "0";
+      await expect(buildApp()).rejects.toThrow(/MULLION_KEEP_AWAKE/);
     });
   });
 });
