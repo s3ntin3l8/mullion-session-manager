@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.3.44](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.43...v0.3.44) (2026-10-24)
+
+
+### Features
+
+* **agents:** support mcode (MiniMax Code) as a hosted agent CLI ([#1793](https://github.com/s3ntin3l8/mullion-session-manager/issues/1793)) ([570ee64](https://github.com/s3ntin3l8/mullion-session-manager/commit/570ee64d71b271813c67af794c0b6d5c13ca127b))
+* **deploy:** launchd deployment for both roles + a launchctl self-update path ([#1718](https://github.com/s3ntin3l8/mullion-session-manager/issues/1718)) ([#1785](https://github.com/s3ntin3l8/mullion-session-manager/issues/1785)) ([aa012fc](https://github.com/s3ntin3l8/mullion-session-manager/commit/aa012fc0ed3df79c2cee3737e438a652bc58e270))
+
+
+### Bug Fixes
+
+* **deploy:** make node-pty's prebuilt spawn-helper executable on macOS ([#1805](https://github.com/s3ntin3l8/mullion-session-manager/issues/1805)) ([d7f0fbb](https://github.com/s3ntin3l8/mullion-session-manager/commit/d7f0fbbcfbcc487904a880a66bf5bf82e642d60c))
+* **deploy:** scope the other-role job teardown to the install root ([#1806](https://github.com/s3ntin3l8/mullion-session-manager/issues/1806)) ([b1ff641](https://github.com/s3ntin3l8/mullion-session-manager/commit/b1ff641b6e82c240bda91f4d9590193083790e62))
+* log who deletes a session and how its attach client exits ([#1789](https://github.com/s3ntin3l8/mullion-session-manager/issues/1789)) ([466e2ef](https://github.com/s3ntin3l8/mullion-session-manager/commit/466e2ef8df3502693d6f898dc53452cc64f672ab))
+* **pty:** the sessions-dir fallback root is a stable per-user directory ([#1762](https://github.com/s3ntin3l8/mullion-session-manager/issues/1762)) ([#1777](https://github.com/s3ntin3l8/mullion-session-manager/issues/1777)) ([3e893e8](https://github.com/s3ntin3l8/mullion-session-manager/commit/3e893e8c2bdc71dfb45bac56ae2bb5d2c556adcb))
+* **review-relay:** stop the OAuth fallback for the Hermes marker and surface a failed write ([#1795](https://github.com/s3ntin3l8/mullion-session-manager/issues/1795)) ([caf487f](https://github.com/s3ntin3l8/mullion-session-manager/commit/caf487f436bb8ab287282ac9107aaa8bfc3b4f7d)), closes [#1790](https://github.com/s3ntin3l8/mullion-session-manager/issues/1790)
+* **scope:** own every sessions dir this instance has used ([#1770](https://github.com/s3ntin3l8/mullion-session-manager/issues/1770)) ([#1772](https://github.com/s3ntin3l8/mullion-session-manager/issues/1772)) ([4a49c88](https://github.com/s3ntin3l8/mullion-session-manager/commit/4a49c88a9ad6ce09f76c48cdf40979ff6d904bcc))
+* **scripts:** make the macOS launchd check actually check, and stop mutating the host ([#1807](https://github.com/s3ntin3l8/mullion-session-manager/issues/1807)) ([ef61deb](https://github.com/s3ntin3l8/mullion-session-manager/commit/ef61debe593453ac0df6063143dafa5f82f1fd7b))
+* **sessions:** a sessions dir this install moved away from stays owned ([#1771](https://github.com/s3ntin3l8/mullion-session-manager/issues/1771)) ([#1809](https://github.com/s3ntin3l8/mullion-session-manager/issues/1809)) ([c18c72d](https://github.com/s3ntin3l8/mullion-session-manager/commit/c18c72d932d54619f23a3f3318e401dc581b4ac1))
+* stop concurrent pre-push test gates from overloading the host ([#1799](https://github.com/s3ntin3l8/mullion-session-manager/issues/1799)) ([abc4b4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/abc4b4abe1a38e18c11e1c6170441dec625735c4))
+* **task-master:** name opencode v2's per-call model in the delegation clause ([#1781](https://github.com/s3ntin3l8/mullion-session-manager/issues/1781)) ([35a9c42](https://github.com/s3ntin3l8/mullion-session-manager/commit/35a9c42ccf0f6d044d1689161cb357a10dfc3883))
+* **terminal:** join hard-wrapped file paths into one link ([#1778](https://github.com/s3ntin3l8/mullion-session-manager/issues/1778)) ([189f227](https://github.com/s3ntin3l8/mullion-session-manager/commit/189f22785c3a45d04dd56dc8a8ef60f10589509b))
+* **test:** three environmental failures that made a small delivery take four hours ([#1788](https://github.com/s3ntin3l8/mullion-session-manager/issues/1788)) ([5824662](https://github.com/s3ntin3l8/mullion-session-manager/commit/582466211cf963e81055d1d5f2e41f837eb9eaf1))
+
 ## [0.3.43](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.42...v0.3.43) (2026-10-23)
 
 
