@@ -209,10 +209,26 @@ function rebuildIndex(worktreePath, force) {
       // has to come in on stdin, so this call's stdin is a pipe — the
       // default `stdio` here ignores it, and an EMPTY pathspec would mean
       // "everything".
-      git(["-C", worktreePath, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], {
-        input: stagedPaths.map((p) => `${p}\0`).join(""),
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      //
+      // `--literal-pathspecs` matters: without it the paths are GLOBS, and a
+      // staged file literally named `*.md` (or `:(top)x`) would widen the
+      // re-stage to every file it matches — the leak the pathspec was added
+      // to close.
+      git(
+        [
+          "-C",
+          worktreePath,
+          "--literal-pathspecs",
+          "add",
+          "-A",
+          "--pathspec-from-file=-",
+          "--pathspec-file-nul",
+        ],
+        {
+          input: stagedPaths.map((p) => `${p}\0`).join(""),
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
     }
     console.log(`  ${worktreePath}: index rebuilt`);
     return true;
@@ -304,8 +320,9 @@ function main() {
   console.log(`  quarantined ${moved.length} zero-byte object(s) into ${quarantine}`);
 
   // Step 2 — probe. An object that was only SHADOWED by the empty file (it is
-  // in the pack) reads fine now; one that was genuinely deleted still does not,
-  // and has to come back from the remote.
+  // in the pack) reads fine now; one that was genuinely deleted still does not.
+  // This is informational — the authoritative answer comes after the fetch,
+  // which can bring the object back.
   const stillMissing = [];
   for (const { sha } of moved) {
     const result = probe(sha);
@@ -317,26 +334,57 @@ function main() {
     }
   }
   if (stillMissing.length > 0) {
-    repaired = false;
     console.log(
-      `  ${stillMissing.length} object(s) are genuinely gone and must be restored from the remote.`,
+      `  ${stillMissing.length} object(s) are not in the local pack — they must come from the remote.`,
     );
   }
 
-  // Step 3 — restore the refs.
-  const fetched = gitTry(["fetch", "origin", "--prune"]);
-  if (fetched === null) {
+  // Step 3 — restore the refs. A fetch that fails means the refs could not
+  // be restored, so the clone is not whole. A clone with NO origin has no
+  // remote refs to restore, so there is nothing for the fetch to do — that is
+  // not a failure.
+  if (gitTry(["remote", "get-url", "origin"]) === null) {
+    console.log("  no 'origin' remote — nothing to restore from");
+  } else if (gitTry(["fetch", "origin", "--prune"]) === null) {
     repaired = false;
     console.log("  'git fetch origin --prune' failed — the refs could not be restored.");
   } else {
     console.log("  refs restored from origin");
   }
 
+  // Step 3b — re-probe. The fetch can bring an object back — one that was
+  // gone locally but is reachable from the remote comes with it. So the
+  // health verdict has to be taken AFTER the fetch, not before: a clone that
+  // the fetch repaired is whole, and must not be reported as broken.
+  const unrecovered = stillMissing.filter((sha) => !probe(sha).ok);
+  if (stillMissing.length > 0 && unrecovered.length === 0) {
+    console.log(`  all ${stillMissing.length} missing object(s) came back with the fetch`);
+  }
+  if (unrecovered.length > 0) {
+    repaired = false;
+    console.log(
+      `  ${unrecovered.length} object(s) are genuinely gone and must be restored from the remote.`,
+    );
+  }
+
   // Step 4 — rebuild the affected worktree indexes.
   console.log("  rebuilding worktree indexes:");
   const paths = worktrees();
   for (const worktreePath of paths) {
-    if (!rebuildIndex(worktreePath, FORCE)) repaired = false;
+    // A rebuild that fails is reported, but it does not by itself condemn the
+    // clone: whether anything is actually still broken is settled by the fsck
+    // below, which sees the index as it is.
+    rebuildIndex(worktreePath, FORCE);
+  }
+
+  // Step 5 — the verdict. `git fsck` is the authority on whether the clone is
+  // whole, and it has to run LAST: it sees the restored refs, the rebuilt
+  // indexes and the objects that came back with the fetch.
+  const remaining = fsckErrors();
+  if (remaining.length > 0) {
+    repaired = false;
+    console.log(`  ${remaining.length} fsck error(s) remain:`);
+    for (const line of remaining) console.log(`    ${line}`);
   }
 
   console.log("");
@@ -347,6 +395,7 @@ function main() {
     console.log("git-doctor: the clone is NOT fully repaired — see the messages above.");
     return 1;
   }
+  console.log("git-doctor: the clone is whole.");
   return 0;
 }
 

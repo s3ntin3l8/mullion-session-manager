@@ -222,6 +222,80 @@ describe("git-doctor.mjs", () => {
     expect(git(["diff", "--cached", "--name-only"])).not.toContain("notes.md");
   });
 
+  // A pathspec is a GLOB by default, so a staged file literally named `*.md`
+  // widens the re-stage to every tracked file it matches — the leak the
+  // pathspec was added to close. `--literal-pathspecs` is what stops it.
+  it("re-stages a file whose name looks like a glob, literally", () => {
+    // A tracked file the glob would match, but which was never staged.
+    fs.writeFileSync(path.join(repo, "b.md"), "committed\n");
+    git(["add", "b.md"]);
+    git(["commit", "-q", "-m", "two"]);
+    // The staged file, whose name is literally `*.md`.
+    fs.writeFileSync(path.join(repo, "*.md"), "literal\n");
+    git(["--literal-pathspecs", "add", "--", "*.md"]);
+    const tree = git(["write-tree"]);
+    damage(tree);
+    // …and an unstaged edit to the tracked file the glob would match.
+    fs.writeFileSync(path.join(repo, "b.md"), "edited\n");
+
+    run(["--apply"]);
+    const staged = git(["diff", "--cached", "--name-only"]);
+    // The literal file is staged…
+    expect(staged).toContain("*.md");
+    // …and the file the glob would have swept in is NOT.
+    expect(staged).not.toContain("b.md");
+  });
+
+  // The verdict has to be taken AFTER the fetch: an object that is gone
+  // locally but reachable from the remote comes back with it, and a clone
+  // that the fetch repaired is whole — it must not be reported as broken.
+  //
+  // A local clone HARDLINKS the remote's objects, so destroying one in the
+  // clone would destroy it in the remote too. `--no-hardlinks` keeps them
+  // separate.
+  it("takes the verdict after the fetch — an object it brings back is not reported as gone", () => {
+    const remote = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-remote-"));
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-work-"));
+    const clone = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-clone-"));
+    try {
+      execFileSync("git", ["init", "-q", "--bare", remote], { env: gitEnv() });
+      execFileSync("git", ["-C", remote, "symbolic-ref", "HEAD", "refs/heads/main"], {
+        env: gitEnv(),
+      });
+      execFileSync("git", ["init", "-q", work], { env: gitEnv() });
+      fs.writeFileSync(path.join(work, "a.txt"), "hello\n");
+      git(["add", "a.txt"], work);
+      git(["commit", "-q", "-m", "one"], work);
+      git(["remote", "add", "origin", remote], work);
+      git(["push", "-q", "origin", "HEAD:refs/heads/main"], work);
+
+      execFileSync("git", ["clone", "-q", "--no-hardlinks", remote, clone], { env: gitEnv() });
+      const tree = git(["rev-parse", "HEAD^{tree}"], clone);
+      // Destroy it: the zero-byte loose object IS the damage, and the tree is
+      // loose in this clone (nothing is packed), so it is genuinely gone.
+      fs.chmodSync(path.join(clone, ".git", "objects", tree.slice(0, 2), tree.slice(2)), 0o644);
+      fs.writeFileSync(path.join(clone, ".git", "objects", tree.slice(0, 2), tree.slice(2)), "");
+      // The refs that claimed it are gone too — the #1836 scenario, and the
+      // reason the fetch has to re-download the objects.
+      git(["update-ref", "-d", "refs/heads/main"], clone);
+      git(["update-ref", "-d", "refs/remotes/origin/main"], clone);
+
+      const result = spawnSync("node", [script, "--apply"], {
+        cwd: clone,
+        encoding: "utf8",
+        env: gitEnv(),
+      });
+      expect(result.stdout).toContain("came back with the fetch");
+      expect(result.stdout).not.toContain("genuinely gone");
+      // The object really is readable again.
+      expect(git(["cat-file", "-t", tree], clone)).toBe("tree");
+    } finally {
+      for (const dir of [remote, work, clone]) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("refuses, with a clear message, outside a git checkout", () => {
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "not-a-repo-"));
     try {
