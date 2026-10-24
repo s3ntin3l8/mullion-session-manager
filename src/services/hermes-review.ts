@@ -939,12 +939,12 @@ export async function requestRelay(
         // No App token with `checks: write` (#1790): GitHub refuses a check
         // run from a user token, so the write is skipped — and the caller is
         // told why instead of finding out from the GHA auto-review failing.
-        if (target.markerUnavailable) {
-          marker = {
-            written: false,
-            reason: target.markerUnavailable,
-            message: markerUnavailableMessage(target.markerUnavailable, owner),
-          };
+        // A caller that supplies neither a token nor a reason still gets one:
+        // having no App token to write with is, in effect, no App.
+        const reason =
+          target.markerUnavailable ?? (target.githubToken ? "app-not-configured" : null);
+        if (reason) {
+          marker = { written: false, reason, message: markerUnavailableMessage(reason, owner) };
         }
       } else {
         try {
@@ -961,6 +961,7 @@ export async function requestRelay(
             },
           );
           marker = { written: true, checkRunId: markerCheckRunId };
+          recordChecksMarkerOutcome(getConfiguredAppId(app), { owner, repo }, "ok");
         } catch (err) {
           // A marker that cannot be written is not a failed review: the run is
           // already on its way, and the next request simply cannot see it.

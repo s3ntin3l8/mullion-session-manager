@@ -706,6 +706,11 @@ describe("hermes review relay", () => {
       expect((result.marker as { message: string }).message).toContain("Checks: Read & write");
     });
 
+    it("never skips the marker silently when a caller gives neither a token nor a reason (#1790)", async () => {
+      const result = await requestHermesReview(app, { ...PR, githubToken: "user-token" });
+      expect(result.marker).toMatchObject({ written: false, reason: "app-not-configured" });
+    });
+
     it("still reads the remembered session with the read token when no marker can be written", async () => {
       let readAuth = "";
       checkRuns = async (init?: RequestInit) => {

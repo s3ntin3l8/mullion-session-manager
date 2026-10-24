@@ -574,7 +574,7 @@ export function markerUnavailableMessage(
     case "not-installed":
       return `the GitHub App is not installed on ${owner} — the GitHub auto-review cannot see this run`;
     case "permission-not-granted":
-      return "the GitHub App installation has not granted Checks: Read & write — accept the permission on the installation; until then the GitHub auto-review cannot see this run";
+      return "GitHub refused the App's Checks token (HTTP 422) — the installation has not granted Checks: Read & write, or does not include this repository; fix that on the installation, and until then the GitHub auto-review cannot see this run";
     case "mint-failed":
       return "the GitHub App token for Checks could not be minted — the GitHub auto-review cannot see this run (see the server log)";
     case "write-failed":
@@ -658,7 +658,10 @@ export async function resolveChecksToken(
     }
   };
   const result = await outcome();
-  recordChecksMarkerOutcome(appId, repo, result.token ? "ok" : (result.reason ?? "mint-failed"));
+  // Only a failure is recorded here: "ok" means a marker was WRITTEN, which
+  // only the write site knows (a replay or a request with no session writes
+  // nothing and must not reset an earlier failure).
+  if (!result.token) recordChecksMarkerOutcome(appId, repo, result.reason ?? "mint-failed");
   return result;
 }
 

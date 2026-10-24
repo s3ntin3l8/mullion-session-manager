@@ -760,7 +760,7 @@ describe("github-integration service", () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
     });
 
-    it("returns the App's token and records it as ok", async () => {
+    it("returns the App's token", async () => {
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
