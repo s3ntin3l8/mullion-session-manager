@@ -223,6 +223,37 @@ describe("chooseHost — the placement decision table (issue #1723)", () => {
     }
   });
 
+  it("gives an interactive session the local bonus only when the PROJECT is local", async () => {
+    // "Local" is the warm place to run a session only when the checkout is
+    // already here. For a project that lives on a remote host, the local
+    // machine does not have its code, so the local bonus does not apply and
+    // the session follows the same least-loaded rule as an unattended one.
+    // The local host is BUSY here (7 load on 8 cores) and the remote is
+    // idle (1 on 8), so which host wins says exactly one thing: whether
+    // the local BONUS applied.
+    const busyLocal = capacity(7, 8);
+    const candidates = [
+      localCandidate(),
+      candidate({ hostId: "remote-idle", capacity: capacity(1, 8) }),
+    ];
+
+    // The project is local: the bonus keeps the interactive session here,
+    // even though the remote is the idler one.
+    const localPreferred = chooseHost(
+      candidates,
+      context({ unattended: false, pinnedHostId: "local", localCapacity: busyLocal }),
+    );
+    expect(localPreferred.hostId).toBe("local");
+
+    // The project lives on a remote host: "local" is not where its code
+    // is, so there is no bonus, and the idle remote wins by load.
+    const remoteHostedProject = chooseHost(
+      candidates,
+      context({ unattended: false, pinnedHostId: "remote-pinned", localCapacity: busyLocal }),
+    );
+    expect(remoteHostedProject.hostId).toBe("remote-idle");
+  });
+
   it("never throws, whatever it is handed", () => {
     const weird = [
       chooseHost([candidate({ capacity: null })], context({ localCapacity: null })),

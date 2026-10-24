@@ -15,7 +15,7 @@ import { getStoredSettings } from "../services/settings.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
-import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX, PLACEMENT_MODES } from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -114,6 +114,7 @@ import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
 import type {
+  PlacementMode,
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleasePullRequestStatus,
@@ -145,7 +146,7 @@ interface CreateProjectBody {
   // Issue #1723 / roadmap 8.9 — the placement opt-in: "auto" lets each of
   // this project's sessions land on an eligible host of its own; absent means
   // the column's "pinned" default (every session on the project's own host).
-  placement?: "pinned" | "auto";
+  placement?: PlacementMode;
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
   // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
@@ -176,7 +177,7 @@ interface UpdateProjectBody {
   // every session runs on the project's own host) or "auto" (an eligible
   // host is chosen per session; see services/placement.ts). The opt-in is
   // explicit and per project: nothing changes until someone sets it.
-  placement?: "pinned" | "auto";
+  placement?: PlacementMode;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
   // see schema.ts's own doc comment on these two columns.
@@ -238,8 +239,9 @@ const createProjectSchema = {
       cwd: { type: "string", minLength: 1 },
       hostId: { type: "string", minLength: 1 },
       // Issue #1723 / roadmap 8.9 — "auto" opts the project into automatic
-      // placement; absent means the column's "pinned" default.
-      placement: { type: "string", enum: ["pinned", "auto"] },
+      // placement; absent means the column's "pinned" default. The modes
+      // come from PLACEMENT_MODES, the shared declaration.
+      placement: { type: "string", enum: [...PLACEMENT_MODES] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -256,7 +258,7 @@ const updateProjectSchema = {
       cwd: { type: "string", minLength: 1 },
       // Issue #1723 / roadmap 8.9 — the placement opt-in; see the column's
       // own comment in schema.ts.
-      placement: { type: "string", enum: ["pinned", "auto"] },
+      placement: { type: "string", enum: [...PLACEMENT_MODES] },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },

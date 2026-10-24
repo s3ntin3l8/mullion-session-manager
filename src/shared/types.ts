@@ -487,3 +487,15 @@ export interface RelayReviewState {
   /** A link to the landed review on GitHub. */
   htmlUrl?: string;
 }
+
+/**
+ * The placement mode of a project — issue #1723 / roadmap 8.9.
+ *
+ * "pinned" (the default) keeps today's behaviour exactly: every session
+ * under the project runs on the project's own host. "auto" opts the project
+ * into automatic placement.
+ *
+ * Mirrors PLACEMENT_MODES in src/shared/constants.ts, which is the runtime
+ * source of truth (the column's enum and the routes' JSON schemas use it).
+ */
+export type PlacementMode = "pinned" | "auto";

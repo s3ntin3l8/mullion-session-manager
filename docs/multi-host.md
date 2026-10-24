@@ -168,6 +168,13 @@ moved. Automatic placement ([#1723](https://github.com/s3ntin3l8/mullion-session
   choice is recorded on the session row (`sessions.hostId`), so where a
   session ended up is visible afterwards rather than being re-derived.
 
+  **This mode is not in effect yet.** The policy and the opt-in are in
+  place, but nothing calls them at spawn time — that is
+  [#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724).
+  Until then a session still runs on its project's host whatever the mode
+  says, and the decision and its reason live in the server log rather than
+  in an API response.
+
 Set it with the project API — `placement: "auto"` on `POST /api/projects`, or
 on `PATCH /api/projects/:id` to switch a project in or out.
 
@@ -183,7 +190,10 @@ a capacity is not a failure — it is simply not a candidate.
   loaded eligible machine.
 - _Interactive_ sessions are **local-preferred** — terminal latency matters
   to a human at a keyboard — and spill to another host only when the local
-  one is not eligible.
+  one is not eligible. The preference applies when the project's own host is
+  the local one, i.e. when the checkout is already here; a project that
+  lives on a remote host follows the same least-loaded rule as an unattended
+  one, because "local" is not where its code is.
 - Hosts are compared by **load per core**, not by raw load: load 4 on a
   16-core machine is a quarter of its capacity, load 4 on a 4-core machine
   is all of it.
@@ -191,8 +201,8 @@ a capacity is not a failure — it is simply not a candidate.
 **Placement never fails a spawn.** If no host is eligible, the project's own
 host is used and the session starts anyway — a placement is an optimization,
 never a gate. Every decision records why it was made (_"least loaded:
-mac-mini at 1.2 load on 12 cores (0.10 per core)"_), in the server log and
-in the API response, so it can be explained rather than guessed at.
+mac-mini at 1.2 load on 12 cores (0.10 per core)"_), in the server log, so
+it can be explained rather than guessed at.
 
 The drain flag the policy consults (a host that is parked and takes no new
 work) arrives with

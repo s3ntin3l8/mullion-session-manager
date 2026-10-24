@@ -34,6 +34,7 @@ import type {
   RelayReviewState,
 } from "../../../src/shared/types.js";
 import type { TaskStatus } from "../../../src/shared/constants.js";
+import type { PlacementMode } from "../../../src/shared/types.js";
 
 export type { GitPullReason, GitPullResult };
 export type {
@@ -217,8 +218,12 @@ export interface Project {
   // every session under this project runs on its host) or "auto" (an
   // eligible host is chosen per session). Not rendered anywhere yet — the
   // Fleet UI is #1726; this is the same deliberate forward-plumbing as
-  // `lastSeenAt` on the host list.
-  placement?: "pinned" | "auto";
+  // `lastSeenAt` on the host list. NOT optional: the column is notNull with
+  // a default, so every row carries it.
+  //
+  // The type itself is the shared one (src/shared/types.ts), so a mode
+  // added on the backend cannot drift here.
+  placement: PlacementMode;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -2229,6 +2234,19 @@ export interface CreateProjectDirOptions {
   createDir?: boolean;
   // Only takes effect when this request actually creates the directory.
   gitInit?: boolean;
+}
+
+// The placement mode as an OPT-IN on creation — issue #1723 / roadmap 8.9.
+// "auto" lets each of the project's sessions land on an eligible host of
+// its own; absent means the column's "pinned" default.
+//
+// The mode is spelled out here rather than imported from the backend: the
+// frontend is a separate build with its own tsconfig, so the shared
+// constant cannot be imported across the boundary — the backend's own
+// PLACEMENT_MODES (src/services/placement.ts) is the single source of TRUTH
+// for the backend, and this union is the frontend's mirror of it.
+export interface CreateProjectPlacementOptions {
+  placement?: PlacementMode;
 }
 
 // Extra fields the backend only includes when `createDir` was requested —

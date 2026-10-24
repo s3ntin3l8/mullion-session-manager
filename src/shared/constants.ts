@@ -132,3 +132,18 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 // reconstruction of an ephemeral control from a live session list can
 // recognize this prefix without duplicating the string.
 export const DOCKER_STACK_SESSION_NAME_PREFIX = "docker-stack:";
+
+// ---------------------------------------------------------------------------
+// db/schema.ts — PLACEMENT_MODES / PlacementMode (issue #1723, roadmap 8.9)
+// ---------------------------------------------------------------------------
+//
+// The placement mode of a project: "pinned" (the default — every session
+// under the project runs on the project's own host) or "auto" (an eligible
+// host is chosen per session; see services/placement.ts).
+//
+// Declared HERE rather than in each side that needs it, because it is
+// spelled out in four places that have to agree: the column's enum, the two
+// JSON schemas on the project routes, and the frontend's own type. A typo
+// in one of them would silently mean "pinned" — the safe default, which
+// makes a typo invisible rather than loud. One declaration, one meaning.
+export const PLACEMENT_MODES = ["pinned", "auto"] as const;

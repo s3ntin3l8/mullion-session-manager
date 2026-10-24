@@ -123,8 +123,11 @@ function loadPerCore(capacity: HostCapacity): number {
  *   2. NO ELIGIBLE HOST → the project's own host. The fallback is the whole
  *      point: a placement decision is an optimization, never a gate, and the
  *      spawn that follows must succeed either way.
- *   3. INTERACTIVE + the local host is eligible → the local host. Terminal
- *      latency matters to a human at a keyboard.
+ *   3. INTERACTIVE + the local host is eligible + the PROJECT's own host is
+ *      the local one → the local host. Terminal latency matters to a human
+ *      at a keyboard — but only when the repo is already here; for a
+ *      remote-hosted project "local" is not the warm place, and the
+ *      checkout would have to be materialized there anyway.
  *   4. OTHERWISE → the least loaded eligible host, per core. An unattended
  *      session lands here directly: the local host gets NO bonus, it
  *      competes on its own load — which is what drains the primary onto
@@ -164,8 +167,16 @@ export function chooseHost(
     };
   });
 
+  // The local bonus is for INTERACTIVE sessions, and only when the project's
+  // own host IS the local one — i.e. when the repo is already here. For a
+  // project that lives on a REMOTE host, "local" is not the warm place to
+  // run it: the checkout is not on this machine, so the session would need
+  // its own copy materialized there anyway (the caller's job, #1724), and
+  // the latency argument does not apply. Such a project follows the same
+  // least-loaded rule as an unattended one.
   const local = eligible.find((candidate) => candidate.isLocal);
-  if (!context.unattended && local !== undefined) {
+  const projectIsLocal = context.pinnedHostId === LOCAL_HOST_ID;
+  if (!context.unattended && local !== undefined && projectIsLocal) {
     markChosen(considered, local.hostId);
     return {
       hostId: local.hostId,
@@ -276,25 +287,45 @@ export function resolvePlacement(
 
   // The local host is measured on demand (issue #1721) — it is this
   // process, so its reading is always fresh.
-  const localCapacity = measureHostCapacity(app);
-
-  const candidates: PlacementCandidate[] = listHosts(app).map((host) => {
-    const isLocal = host.id === LOCAL_HOST_ID;
-    const health = app.hostHeartbeatTracker?.getHealth(host.id);
-    return {
-      hostId: host.id,
-      isLocal,
-      // Only "online" is eligible. The local host reads as online by
-      // construction (host-heartbeat.ts says so explicitly); a remote host
-      // that has never been reached reads as "pending".
-      online: health?.status === "online",
-      // Issue #1725 owns the drain flag; until it lands, nothing is drained.
-      drained: false,
-      // The local host's reading is in the context, not here (it is
-      // measured live rather than polled).
-      capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
+  let localCapacity: HostCapacity | null;
+  let candidates: PlacementCandidate[];
+  try {
+    localCapacity = measureHostCapacity(app);
+    candidates = listHosts(app).map((host) => {
+      const isLocal = host.id === LOCAL_HOST_ID;
+      const health = app.hostHeartbeatTracker?.getHealth(host.id);
+      return {
+        hostId: host.id,
+        isLocal,
+        // Only "online" is eligible. The local host reads as online by
+        // construction (host-heartbeat.ts says so explicitly); a remote host
+        // that has never been reached reads as "pending".
+        online: health?.status === "online",
+        // Issue #1725 owns the drain flag; until it lands, nothing is drained.
+        drained: false,
+        // The local host's reading is in the context, not here (it is
+        // measured live rather than polled).
+        capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
+      };
+    });
+  } catch (err) {
+    // The seam must never fail a spawn, not just the policy: the DB read
+    // or the measurement threw BEFORE chooseHost() was reached, and a
+    // placement decision that cannot be made is not a reason to refuse the
+    // work. Fall back to the project's own host — which is where the
+    // session would have gone anyway.
+    const decision: PlacementDecision = {
+      hostId: project.hostId,
+      reason: `placement could not be evaluated — fell back to the project's host ${project.hostId}`,
+      considered: [],
+      fellBack: true,
     };
-  });
+    app.log.warn(
+      { err, hostId: decision.hostId, placement: project.placement },
+      "placement: could not evaluate the candidates, using the project's host",
+    );
+    return decision;
+  }
 
   const decision = chooseHost(candidates, {
     pinnedHostId: project.hostId,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -6,6 +6,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { resolvePlacement } from "../../src/services/placement.js";
+import * as listHostsModule from "../../src/services/host-registry.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
 
 // Issue #1723 / roadmap 8.9 — the assembler's half: what goes INTO the
@@ -115,6 +116,26 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     expect(decision.fellBack).toBe(false);
     expect(decision.considered[0].hostId).toBe("local");
     expect(decision.considered[0].logicalCores).toBeGreaterThan(0);
+  });
+
+  it("falls back to the project's host when the candidate set cannot be built", async () => {
+    // The seam must never fail a spawn either: the DB read or the
+    // measurement throws BEFORE the policy is reached, and a placement
+    // decision that cannot be made is not a reason to refuse the work.
+    const spy = vi.spyOn(listHostsModule, "listHosts").mockImplementation(() => {
+      throw new Error("the database is on fire");
+    });
+    try {
+      const decision = resolvePlacement(app, {
+        project: { hostId: "local", placement: "auto" },
+        unattended: true,
+      });
+      expect(decision.hostId).toBe("local");
+      expect(decision.fellBack).toBe(true);
+      expect(decision.reason).toMatch(/could not be evaluated/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("a PINNED project never scores — it takes the project's own host", async () => {

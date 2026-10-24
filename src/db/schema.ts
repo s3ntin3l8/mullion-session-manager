@@ -14,7 +14,7 @@ import { sql } from "drizzle-orm";
 // keeps working unchanged.
 // TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
 // import, not `import type`.
-import { TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
+import { PLACEMENT_MODES, TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
 
 export { TASK_STATUSES, type TaskStatus };
 
@@ -169,10 +169,9 @@ export const projects = sqliteTable("projects", {
     .default("local")
     .references(() => hosts.id),
   // Issue #1723 / roadmap 8.9 — "pinned" (the default) or "auto"; see the
-  // block comment above.
-  placement: text("placement", { enum: ["pinned", "auto"] })
-    .notNull()
-    .default("pinned"),
+  // block comment above. The modes come from PLACEMENT_MODES (the shared
+  // declaration every other spelling of them uses).
+  placement: text("placement", { enum: PLACEMENT_MODES }).notNull().default("pinned"),
   // Where this project's dev server listens — issue #28. A bare port
   // ("5173") or a full "scheme://host:port" URL; the preview proxy
   // (src/plugins/preview-proxy.ts) parses this to find the upstream.
