@@ -83,7 +83,13 @@ import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookLaunchPlan } from "./types.js";
 import type { HookMessageKind } from "../hook-protocol.js";
-import { SHELL_METACHARACTERS_RE, shellQuote, buildModelFlag, resolveHooksDir } from "./shared.js";
+import {
+  SHELL_METACHARACTERS_RE,
+  shellQuote,
+  buildModelFlag,
+  resolveHooksDir,
+  resolveMcpServerPath,
+} from "./shared.js";
 import { runLoginShell } from "../login-shell.js";
 
 /** The adapter's stable id — also the `<agent>` argv the shared forwarder
@@ -611,7 +617,104 @@ function writeFileAtomic(targetPath: string, contents: string, mode: number): vo
   }
 }
 
-/** One plugin directory Mullion installs for mcode. */
+/**
+ * The `.mcp.json` that points mcode at Mullion's own MCP server (issue #1783).
+ *
+ * ## Why the server is DECLARED IN THE PLUGIN
+ *
+ * The plugin directory is host-global and Mullion-owned (it carries the
+ * `.mullion-managed` marker), so declaring the MCP server there keeps the
+ * USER's own `~/.minimax/mcp.json` — the file that lists their own MCP servers
+ * — completely untouched. mcode's plugin loader reads a plugin's MCP servers
+ * from the plugin's `.mcp.json` (and from the manifest's `mcpServers` key),
+ * through the same path it uses for the host-global file.
+ *
+ * ## Why the entry carries NO SECRET
+ *
+ * Mullion ALREADY puts the per-session credentials in every session's env:
+ * `launch-plan.ts` injects `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and
+ * `MULLION_SOCKET_PATH` after the env scrub (its lines 283, 284 and 291).
+ * Those three are exactly the ones `src/mcp/client.mjs`'s `MullionClient`
+ * reads out of its own environment.
+ *
+ * And mcode hands the mcode PROCESS's whole environment down to an MCP server
+ * it starts. In mcode 0.6.13 (`chunks/chunk-H6JEREKX.js`) that is the MCP
+ * client's own transport factory:
+ *
+ * ```js
+ * function dce(t, e) {
+ *   switch (t.type) {
+ *     case "stdio": return cce(t, { env: e?.env });
+ *     …
+ * }}
+ * function cce(t, e) {
+ *   return new ace({ command: t.command, args: t.args, env: Ubr(t.env, e?.env), … });
+ * }
+ * function Ubr(t, e) { return { ...Fbr(), ...t ?? {}, ...e ?? {} }; }
+ * function Fbr() {
+ *   let t = {};
+ *   for (const [e, r] of Object.entries(process.env)) {
+ *     if (typeof r === "string") t[e] = r;
+ *   }
+ *   return t;
+ * }
+ * ```
+ *
+ * `Fbr()` copies EVERY string entry of `process.env`, so the MCP child's
+ * environment is the mcode process's environment, plus the server's own `env`,
+ * plus any override.
+ *
+ * (There is a SECOND stdio transport in the same bundle — the MCP SDK's own
+ * `StdioClientTransport`, whose `start()` uses
+ * `env: { ...Lbr(), ...this._serverParams.env }` with `Lbr()` copying only a
+ * six-variable allowlist (HOME, LOGNAME, PATH, SHELL, TERM, USER). `ace` —
+ * the class `cce` builds — EXTENDS that same class, so a reader who greps
+ * `Lbr()` will land on the allowlist and can easily conclude the opposite.
+ * The env wins here for one precise reason: `_serverParams.env` is ALREADY
+ * `{...Fbr(), …}` — the whole process env — so it overrides every allowlisted
+ * key. The allowlist only applies when `_serverParams.env` does not already
+ * carry them, which is the path for an MCP server whose transport mcode did
+ * not build itself. A local plugin's MCP server takes the `dce`/`cce` path
+ * above.)
+ *
+ * So the credentials reach Mullion's MCP server with **no new plumbing at
+ * all**: mcode's own spawn hands the mcode process's environment down, and the
+ * three variables are already in it.
+ *
+ * Measured, not assumed: a stub server named by a plugin's `.mcp.json`
+ * recorded `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN`, `MULLION_SOCKET_PATH`
+ * and `MULLION_SESSION_ID` from its own environment — along with the rest of
+ * the mcode process's environment.
+ *
+ * The entry therefore carries only `type`, `command` and `args` — which is
+ * also all mcode's "compatible" MCP schema accepts (it rejects unknown
+ * fields as `MCP_CONFIG_UNSUPPORTED`), and which keeps every per-session
+ * secret out of a host-global file.
+ *
+ * Exported for tests. Pure, no I/O.
+ */
+export function buildMcodeMcpConfig(
+  mcpServerPath: string = resolveMcpServerPath(),
+  execPath: string = process.execPath,
+): string {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        mullion: {
+          type: "stdio",
+          command: execPath,
+          args: [mcpServerPath],
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * One plugin directory Mullion installs for mcode.
+ */
 interface McodePluginSpec {
   /** The plugin directory, under `<dataDir>/plugins/`. */
   dir: string;
@@ -622,6 +725,10 @@ interface McodePluginSpec {
   manifest: string;
   /** The `hooks/hooks.json` contents. */
   hooks: string;
+  /** The `.mcp.json` contents, or null when this plugin declares no MCP
+   * server. Only ONE plugin may declare it — mcode would otherwise start
+   * Mullion's MCP server twice, once per plugin. */
+  mcpConfig: string | null;
 }
 
 /** The manifest directories mcode recognises, in its own detection priority
@@ -641,12 +748,17 @@ function mcodePluginSpecs(): McodePluginSpec[] {
       manifestRelPath: path.join(".claude-plugin", "plugin.json"),
       manifest: buildMcodePluginManifest(),
       hooks: buildMcodeHooksJson(shimPath),
+      // The MCP server is declared by the CLAUDE-format plugin only: both
+      // plugins are loaded by every mcode, and two declarations would start
+      // Mullion's MCP server twice.
+      mcpConfig: buildMcodeMcpConfig(),
     },
     {
       dir: resolveMcodePermissionPluginDir(),
       manifestRelPath: path.join(".codex-plugin", "plugin.json"),
       manifest: buildMcodePermissionPluginManifest(),
       hooks: buildMcodePermissionHooksJson(shimPath),
+      mcpConfig: null,
     },
   ];
 }
@@ -724,6 +836,23 @@ function installMcodePluginDir(spec: McodePluginSpec): void {
   // would load a plugin with no hooks and no error.
   writeFileAtomic(path.join(spec.dir, spec.manifestRelPath), spec.manifest, 0o644);
   writeFileAtomic(path.join(spec.dir, "hooks", "hooks.json"), spec.hooks, 0o644);
+  if (spec.mcpConfig !== null) {
+    // The plugin's MCP server declaration (issue #1783). It carries NO
+    // secret — the credentials ride the mcode process's own environment,
+    // and mcode hands that down to the MCP server it starts.
+    writeFileAtomic(path.join(spec.dir, ".mcp.json"), spec.mcpConfig, 0o644);
+  } else {
+    // A leftover `.mcp.json` in a directory that no longer declares the
+    // server would start Mullion's MCP server a SECOND time — the exact
+    // failure the "exactly one plugin declares it" invariant guards against.
+    // So the invariant is enforced, not assumed.
+    try {
+      rmSync(path.join(spec.dir, ".mcp.json"), { force: true });
+    } catch {
+      // Best-effort: a stale declaration left behind is reported by mcode
+      // itself (MCP_SERVER_DUPLICATE), not by us failing an install.
+    }
+  }
   writeFileAtomic(
     path.join(spec.dir, MCODE_PLUGIN_MARKER_NAME),
     MCODE_PLUGIN_MARKER_CONTENT,

@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext } from "../../src/services/hook-adapters/types.js";
+import { baseSession } from "./launch-plan-fixture.js";
 
 const callOrder: string[] = [];
 
@@ -68,30 +69,6 @@ function mkTmpDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tmpDirs.push(dir);
   return dir;
-}
-
-function baseSession(overrides: Partial<Parameters<typeof buildLaunchPlan>[0]> = {}) {
-  return {
-    id: "42",
-    cwd: "/tmp/project",
-    command: "bash",
-    socketPath: "/tmp/sessions/42.sock",
-    hookToken: "test-hook-token",
-    hookSocketPath: "/tmp/sessions/hooks.sock",
-    controlSocketPath: "/tmp/sessions/mullion.sock",
-    sessionsDir: "/tmp/sessions",
-    sshAuthSock: "",
-    authEnabled: false,
-    env: {},
-    injectAgentGuide: true,
-    injectProjectBriefing: true,
-    injectMullionBundle: true,
-    skipPermissions: false,
-    initialPrompt: undefined,
-    briefingOverride: undefined,
-    workflowConventionsText: undefined,
-    ...overrides,
-  };
 }
 
 const ORIGINAL_ENV = { ...process.env };

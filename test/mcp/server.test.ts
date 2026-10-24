@@ -76,8 +76,12 @@ class ResponseReader {
  */
 function spawnServer(env: NodeJS.ProcessEnv = {}): ChildProcessWithoutNullStreams {
   const base = { ...process.env };
+  // No session credentials: the server must still start and serve, and report
+  // that it cannot reach a Mullion session (issue #1783 — the user's own
+  // personal mcode loads Mullion's plugin, so this IS the state it runs in).
   delete base.MULLION_HOOK_SOCKET;
   delete base.MULLION_HOOK_TOKEN;
+  delete base.MULLION_SOCKET_PATH;
   return spawn(process.execPath, [SERVER_PATH], {
     env: { ...base, ...env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -220,5 +224,35 @@ describe("mcp/server.mjs (issue #271)", () => {
 
     const response = await reader.waitForId(1);
     expect(response.result).toBeDefined();
+  });
+
+  // Issue #1783 — Mullion's mcode PLUGIN declares this MCP server, so the
+  // USER'S OWN personal mcode (not spawned by Mullion) starts it too, with no
+  // session credentials in its environment. That must not break their
+  // session: the server keeps serving, and every tool reports that it cannot
+  // reach a Mullion session.
+  it("stays alive and serving when it has no session credentials at all", async () => {
+    // spawnServer() strips every credential var, so this IS the fully
+    // credential-less case a personal mcode produces.
+    child = spawnServer();
+    const reader = new ResponseReader(child);
+
+    // A tool call with no credentials comes back as a clean, tool-level
+    // error — not a crash and not a protocol error.
+    send(child, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "list_sessions", arguments: {} },
+    });
+    const first = await reader.waitForId(1);
+    expect(first.result).toBeDefined();
+    expect((first.result as { isError: boolean }).isError).toBe(true);
+
+    // ...and the server is still there afterwards, so the agent's session is
+    // not left with a dead MCP server.
+    send(child, { jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const second = await reader.waitForId(2);
+    expect(second.result).toBeDefined();
   });
 });
