@@ -102,9 +102,13 @@ function runInteractiveShell(shell: string): Promise<string | null> {
       );
     },
     onError: (err) => {
+      // Not only a spawn failure: the child's 'error' event also fires when a
+      // KILL fails (the deadline's SIGTERM, say). The message therefore says
+      // what the failure means — no interactive PATH — rather than what
+      // caused it; the cause is in `err`.
       log?.warn(
         { err, shell },
-        `user-shell-env: failed to spawn the interactive shell; ${fallbackNote()}`,
+        `user-shell-env: could not resolve the interactive PATH; ${fallbackNote()}`,
       );
     },
   });
