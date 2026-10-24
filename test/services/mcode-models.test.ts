@@ -159,6 +159,25 @@ provider:
     expect(parseMcodeModelCatalog(config)).toEqual(["minimax/Allowed"]);
   });
 
+  it("REPORTS a whitelist it had to ignore", () => {
+    // The same situation is also what a typo'd or not-yet-populated
+    // whitelist looks like, so the dropped entries must be reportable.
+    const config = `
+provider:
+  minimax:
+    models:
+      Allowed: {}
+    whitelist:
+      - "MiniMax-M4"
+      - "MiniMax-M5"
+`;
+    const diagnostics = { ignoredWhitelists: [] };
+    expect(parseMcodeModelCatalog(config, diagnostics)).toEqual(["minimax/Allowed"]);
+    expect(diagnostics.ignoredWhitelists).toEqual([
+      { providerId: "minimax", entries: ["MiniMax-M4", "MiniMax-M5"] },
+    ]);
+  });
+
   it("reads the custom_provider subtree too", () => {
     const config = `
 custom_provider:
@@ -326,5 +345,24 @@ provider:
       "minimax/MiniMax-M3.1-Flash",
       "minimax/MiniMax-M3",
     ]);
+  });
+
+  it("never serves one data dir's catalog to another mid-read", async () => {
+    // The in-flight slot is keyed by config path, so a caller for dir B
+    // while dir A is being read starts its OWN read instead of receiving A's
+    // catalog.
+    const one = dataDir(STOCK_CONFIG);
+    const two = dataDir(`
+provider:
+  other:
+    models:
+      Only-Here: {}
+`);
+    const [a, b] = await Promise.all([
+      listMcodeModels({ dataDir: one }),
+      listMcodeModels({ dataDir: two }),
+    ]);
+    expect(a).toEqual(["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"]);
+    expect(b).toEqual(["other/Only-Here"]);
   });
 });

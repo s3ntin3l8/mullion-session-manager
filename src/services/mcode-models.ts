@@ -141,6 +141,23 @@ function whitelistEntryMatches(entry: string, providerId: string, modelId: strin
 }
 
 /**
+ * What a parse found that the caller may want to report.
+ *
+ * A `whitelist` is a filter Mullion does not own, so an entry that matches no
+ * model makes the whole whitelist uninterpretable — and an uninterpretable
+ * filter must not empty the picker (see parseMcodeModelCatalog). That is the
+ * right behaviour, but it is also what a TYPO'd or not-yet-populated
+ * whitelist looks like, so the dropped entries are reported rather than
+ * swallowed: the picker then offers models mcode itself would refuse, and the
+ * operator needs to be able to see why.
+ */
+export interface McodeCatalogDiagnostics {
+  /** Providers whose whitelist matched nothing, and the entries that were
+   * dropped. */
+  ignoredWhitelists: Array<{ providerId: string; entries: string[] }>;
+}
+
+/**
  * Parses a mcode `config.yaml` into the catalog of `provider/model` ids.
  *
  * Pure — exported for tests. Never throws: an unparseable document, a
@@ -150,9 +167,13 @@ function whitelistEntryMatches(entry: string, providerId: string, modelId: strin
  * A provider's `whitelist` restricts which of its models are selectable. It is
  * honoured only when it actually matches something: a whitelist in a shape
  * this service does not understand would otherwise filter out every model and
- * leave the picker empty, which is worse than not applying it at all.
+ * leave the picker empty, which is worse than not applying it at all. The
+ * dropped entries are recorded in `diagnostics` when one is supplied.
  */
-export function parseMcodeModelCatalog(yamlText: string): string[] {
+export function parseMcodeModelCatalog(
+  yamlText: string,
+  diagnostics?: McodeCatalogDiagnostics,
+): string[] {
   let document: unknown;
   try {
     document = YAML.parse(yamlText);
@@ -187,8 +208,12 @@ export function parseMcodeModelCatalog(yamlText: string): string[] {
     );
     // A whitelist that matches nothing is in a shape we do not understand, so
     // it is not applied — an empty catalog is a worse answer than an
-    // unrestricted one.
+    // unrestricted one. The dropped entries are reported so a typo'd or
+    // not-yet-populated whitelist is diagnosable.
     const restricted = allowed.length > 0;
+    if (!restricted && entries.length > 0) {
+      diagnostics?.ignoredWhitelists.push({ providerId, entries });
+    }
 
     for (const modelId of modelIds) {
       if (restricted && !allowed.some((entry) => whitelistEntryMatches(entry, providerId, modelId)))
@@ -218,11 +243,14 @@ interface CatalogCacheEntry {
 
 let cache: CatalogCacheEntry | null = null;
 
-/** The in-flight read, so N concurrent requests share ONE file read. Wrapped
- * in an object with an id so the "is this still the current read?" check
- * compares numbers — comparing the promises themselves is what CodeQL's
- * `js/missing-await` rule flags. */
-let pending: { id: number; promise: Promise<string[]> } | null = null;
+/** The in-flight reads, keyed by config path, so N concurrent callers for the
+ * SAME path share ONE file read — and a caller for a DIFFERENT path never
+ * receives another path's catalog.
+ *
+ * Each entry is wrapped in an object with a numeric id so the "is this still
+ * the current read?" check compares numbers rather than comparing promises,
+ * which is what CodeQL's `js/missing-await` rule flags. */
+const pending = new Map<string, { id: number; promise: Promise<string[]> }>();
 let pendingCounter = 0;
 
 /** What one look at the config file found. */
@@ -284,8 +312,11 @@ export interface McodeModelCatalogOptions {
 export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Promise<string[]> {
   const configPath = resolveMcodeConfigPath(opts.dataDir ?? resolveMcodeDataDir());
 
-  // Concurrency: one file read shared by N simultaneous callers.
-  if (pending !== null) return pending.promise;
+  // Concurrency: one file read shared by N simultaneous callers for the SAME
+  // path. A caller for a different path starts its own read — the slot is
+  // keyed, so it can never receive another path's catalog.
+  const inFlight = pending.get(configPath);
+  if (inFlight !== undefined) return await inFlight.promise;
 
   const id = ++pendingCounter;
   const promise = (async () => {
@@ -302,7 +333,17 @@ export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Prom
         // for THIS path and this file's mtime — so the entry is there.
         return cache?.models ?? [];
       }
-      const models = parseMcodeModelCatalog(read.text);
+      const diagnostics: McodeCatalogDiagnostics = { ignoredWhitelists: [] };
+      const models = parseMcodeModelCatalog(read.text, diagnostics);
+      for (const ignored of diagnostics.ignoredWhitelists) {
+        // A whitelist that matched nothing was dropped (see
+        // parseMcodeModelCatalog) — which is also what a typo'd or
+        // not-yet-populated whitelist looks like, so say which one it was.
+        console.debug("[mcode-models] ignored a whitelist that matched no model", {
+          providerId: ignored.providerId,
+          entries: ignored.entries,
+        });
+      }
       cache = { configPath, mtimeMs: read.mtimeMs, models };
       return models;
     } catch {
@@ -311,17 +352,17 @@ export async function listMcodeModels(opts: McodeModelCatalogOptions = {}): Prom
       return [];
     }
   })();
-  pending = { id, promise };
+  pending.set(configPath, { id, promise });
 
   try {
     return await promise;
   } finally {
-    if (pending?.id === id) pending = null;
+    if (pending.get(configPath)?.id === id) pending.delete(configPath);
   }
 }
 
 /** Drops the cached catalog. Exported for tests. */
 export function resetMcodeModelsCache(): void {
   cache = null;
-  pending = null;
+  pending.clear();
 }
