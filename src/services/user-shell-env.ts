@@ -123,8 +123,9 @@ function runInteractiveShell(shell: string): Promise<string | null> {
 /**
  * Resolves (once; concurrent callers share one shell) the interactive shell's
  * PATH. Never rejects — failure, timeout, an unsupported shell, or the
- * `MULLION_RESOLVE_INTERACTIVE_ENV=0` opt-out all leave the cache empty, which
- * means buildSessionEnv() behaves exactly as before.
+ * `MULLION_RESOLVE_INTERACTIVE_ENV=0` opt-out leave the cache as it was: empty
+ * on the first resolve (buildSessionEnv() then behaves exactly as before), or
+ * the previous PATH on a rescan.
  */
 export function resolveUserShellEnv(): Promise<void> {
   if (settled || isDisabled()) return Promise.resolve();

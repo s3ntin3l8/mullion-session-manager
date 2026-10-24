@@ -148,6 +148,7 @@ describe("resolveUserShellEnv", () => {
     );
 
     resetUserShellEnvForTests();
+    logger.warn.mockClear();
     spawnError = new Error("ENOENT");
     await resolveUserShellEnv();
     expect(logger.warn).toHaveBeenCalledWith(
@@ -155,7 +156,7 @@ describe("resolveUserShellEnv", () => {
       expect.stringContaining("failed to spawn"),
     );
     // a spawn error is reported once, not again as "no PATH"
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
 
     resetUserShellEnvForTests();
     process.env.SHELL = "/usr/bin/fish";
