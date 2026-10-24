@@ -210,7 +210,7 @@ mkdir -p "$ROLE_HOME"
 # then write a plist, bootstrap a job and link the CLI into the REAL home.
 PLISTS_BEFORE="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
 JOBS_BEFORE="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-CLI_BEFORE="$(readlink "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
+CLI_BEFORE="$(stat -f '%i %m %N' "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
 # The seeded role is the OPPOSITE of the requested one on purpose: if the
 # installer could not read the .env, it would fall back to its default
 # ("primary"), and a request for "primary" would then be ACCEPTED — so a
@@ -235,7 +235,7 @@ else
   fi
 fi
 
-# …and the real machine is unchanged, WHICHOUTCOME the run had. These
+# …and the real machine is unchanged, whichever outcome the run had. These
 # comparisons live BELOW the branch on purpose: on the refusal path the
 # installer stops at its .env role check, long before any plist, job or CLI
 # write, so comparing there could never fire — the only path where the
@@ -248,9 +248,11 @@ fi
 # run from an unsandboxed one.
 PLISTS_AFTER="$(ls -1 "$HOME/Library/LaunchAgents" 2>/dev/null | grep '^com\.mullion\.' | sort -u || true)"
 JOBS_AFTER="$(launchctl list 2>/dev/null | grep -o 'com\.mullion\.[A-Za-z0-9.-]*' | sort -u || true)"
-# The link's TARGET, not its mtime: a leaked install that removes and
-# re-creates the link with the same target would otherwise read equal.
-CLI_AFTER="$(readlink "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
+# The link's identity: its inode, its mtime AND its target. A leaked
+# install creates a NEW link (a different inode) pointing into the
+# sandbox, and even an install that removes and re-creates it with the
+# same target gets a new inode — the target alone would read equal.
+CLI_AFTER="$(stat -f '%i %m %N' "$HOME/.local/bin/mullion" 2>/dev/null || echo none)"
 if [ "$PLISTS_BEFORE" = "$PLISTS_AFTER" ]; then
   pass "the run left the real ~/Library/LaunchAgents untouched"
 else
