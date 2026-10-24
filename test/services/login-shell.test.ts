@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import type * as ChildProcess from "node:child_process";
 
 /**
  * `runLoginShell` is the helper every agent probe goes through
@@ -9,9 +10,16 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 
 const spawnMock = vi.fn();
 
-vi.mock("node:child_process", () => ({
-  spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+// The original module is spread through, so anything else in this test's
+// module graph that imports from node:child_process still gets the real
+// exports — only `spawn` is replaced.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return {
+    ...actual,
+    spawn: (...args: unknown[]) => spawnMock(...args),
+  };
+});
 
 import { runLoginShell } from "../../src/services/login-shell.js";
 
