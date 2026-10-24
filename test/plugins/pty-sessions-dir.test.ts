@@ -1,9 +1,19 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, statSync, symlinkSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os, { tmpdir } from "node:os";
 import path from "node:path";
 import type * as ChildProcess from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // ensureSessionsDir only touches the filesystem, but mock child_process so
 // nothing in this file's import graph can ever fire a real systemd-run
@@ -42,6 +52,28 @@ const FALLBACK_SUBDIR = path.join(".mullion", "sessions");
 function fallbackUnder(home: string): string {
   return path.join(home, FALLBACK_SUBDIR, `ms-${hash}`);
 }
+
+/**
+ * A fresh, empty install root (MULLION_HOME) for the history tests.
+ *
+ * The name is short on purpose, like the scratch home's above: it is only
+ * ever a parent of the trail file here, but a long name would make the
+ * assertions about absolute paths noisier than they need to be.
+ */
+function makeInstallRoot(): string {
+  const home = mkdtempSync(path.join(TEST_TMPDIR, "mi-"));
+  installRoots.push(home);
+  return home;
+}
+
+/** The install roots made by makeInstallRoot, removed after each test. */
+const installRoots: string[] = [];
+
+afterEach(() => {
+  while (installRoots.length > 0) {
+    rmSync(installRoots.pop() as string, { recursive: true, force: true });
+  }
+});
 
 // The longest socket name a sessions dir has to hold: a 12-digit
 // session-id socket.
@@ -252,6 +284,82 @@ describe("resolveSessionsDirs — the sessions dir and the OWNERSHIP set (issue 
   it("resolves every owned dir to an absolute path", () => {
     const dirs = resolveSessionsDirs(configured);
     for (const dir of dirs.owned) expect(path.isAbsolute(dir)).toBe(true);
+  });
+});
+
+// Issue #1771 — the HISTORY: the trail of dirs this install has resolved,
+// kept in the install root (MULLION_HOME). The compat roots above can only
+// name what an earlier RELEASE would have used for the same configured
+// path, so they cannot name the dir an operator moved SESSIONS_DIR away
+// from, nor the fallback a changed TMPDIR produced.
+describe("resolveSessionsDirs — the sessions-dir HISTORY (issue #1771)", () => {
+  it("records the resolved dir in the install root's trail", () => {
+    const home = makeInstallRoot();
+    const short = path.join(tmpdir(), "ms-history-sessions-test");
+    const dirs = resolveSessionsDirs(short, { mullionHome: home });
+    const written = JSON.parse(readFileSync(path.join(home, "sessions-dirs.json"), "utf8")) as {
+      dirs: string[];
+    };
+    expect(written.dirs).toContain(path.resolve(short));
+    expect(dirs.current).toBe(path.resolve(short));
+  });
+
+  it("owns a dir an EARLIER run resolved, even though this run resolves elsewhere", () => {
+    // The case the issue is about: the sessions dir moved (an operator moved
+    // SESSIONS_DIR, or TMPDIR's value changed between runs). The scope's
+    // socket sits in the OLD dir, which no derivation can name — only the
+    // trail can.
+    const home = makeInstallRoot();
+    const moved = path.join(tmpdir(), "ms-moved-sessions-dir");
+    writeFileSync(path.join(home, "sessions-dirs.json"), JSON.stringify({ dirs: [moved] }));
+    const short = path.join(tmpdir(), "ms-history-sessions-test-2");
+    const dirs = resolveSessionsDirs(short, { mullionHome: home });
+    expect(dirs.owned).toContain(moved);
+  });
+
+  it("owns only the current dir, the compat roots and the trail — nothing else", () => {
+    // Issue #1137 — the owned set may only name dirs this instance itself
+    // created. The trail is the only thing that may widen it, and the trail
+    // holds nothing but resolved dirs. So every dir in the set is either the
+    // one this run resolved, one an earlier run recorded, or a compat root:
+    // a fallback-shaped name (`ms-<8 hex>`) derived from THIS configured
+    // path's own hash.
+    const home = makeInstallRoot();
+    const recorded = path.join(tmpdir(), "ms-recorded-dir");
+    writeFileSync(path.join(home, "sessions-dirs.json"), JSON.stringify({ dirs: [recorded] }));
+    const short = path.join(tmpdir(), "ms-history-sessions-test-3");
+    const dirs = resolveSessionsDirs(short, { mullionHome: home });
+    expect(dirs.owned).toContain(path.resolve(short));
+    expect(dirs.owned).toContain(recorded);
+    for (const dir of dirs.owned) {
+      const isCurrent = dir === path.resolve(short);
+      const isRecorded = dir === recorded;
+      const isCompatRoot = /^ms-[0-9a-f]{8}$/.test(path.basename(dir));
+      expect(isCurrent || isRecorded || isCompatRoot).toBe(true);
+    }
+  });
+
+  it("changes nothing when there is no install root (a dev checkout)", () => {
+    // MULLION_HOME is empty in a dev checkout: there is no trail, so the
+    // result is exactly today's.
+    const short = path.join(tmpdir(), "ms-history-sessions-test-4");
+    const withoutHome = resolveSessionsDirs(short);
+    const withEmptyHome = resolveSessionsDirs(short, { mullionHome: makeInstallRoot() });
+    expect(withoutHome.current).toBe(withEmptyHome.current);
+    expect(withoutHome.owned).toEqual(withEmptyHome.owned);
+    expect(withoutHome.historyWarning).toBeUndefined();
+  });
+
+  it("ignores a corrupt trail file and still resolves", () => {
+    // Never fatal: the boot continues with the dirs the resolver can
+    // derive, and the operator is told why the trail is incomplete.
+    const home = makeInstallRoot();
+    writeFileSync(path.join(home, "sessions-dirs.json"), "{not json");
+    const short = path.join(tmpdir(), "ms-history-sessions-test-5");
+    const dirs = resolveSessionsDirs(short, { mullionHome: home });
+    expect(dirs.current).toBe(path.resolve(short));
+    expect(dirs.owned).toContain(path.resolve(short));
+    expect(dirs.historyWarning).toMatch(/not readable JSON/);
   });
 });
 
