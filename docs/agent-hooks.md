@@ -780,6 +780,36 @@ while the Mullion server runs under systemd --user with a minimal PATH.
 Asking the server's own PATH would report "not installed" for an mcode every
 session runs perfectly well, which is the same "fails open, silently" shape
 this check exists to prevent.
+**mcode's MCP server is declared by the plugin, and carries no secret.** The
+Claude-format plugin also carries a `.mcp.json` naming Mullion's own MCP
+server, so an mcode session gets the same `mullion` tools the other four agents
+have. Two things make that safe:
+
+- **The plugin directory is Mullion's own.** It carries the `.mullion-managed`
+  marker, so declaring the server there never touches the user's own
+  `~/.minimax/mcp.json` — the file that lists THEIR MCP servers — and
+  `bundle remove` takes the declaration away with the rest of the plugin.
+- **The entry carries no secret.** mcode spawns a stdio MCP server with
+  `env: { …allowlist, …ALL of mcode's process.env, …entry.env }` — it copies
+  every string entry of the mcode process's own environment — and Mullion
+  already puts `MULLION_HOOK_SOCKET`, `MULLION_HOOK_TOKEN` and
+  `MULLION_SOCKET_PATH` into every session's env (`launch-plan.ts`, after the
+  env scrub). Those are exactly the three variables `src/mcp/client.mjs`'s
+  `MullionClient` reads out of its own environment, so the credentials reach
+  the MCP server with no new plumbing and no per-session token is ever
+  written to a host-global file.
+
+The entry itself carries only `type`, `command` and `args` — which is also all
+mcode's "compatible" MCP schema accepts; an unknown field is rejected as
+`MCP_CONFIG_UNSUPPORTED`. Exactly one plugin declares it: both plugins are
+loaded by every mcode, and two declarations would start Mullion's MCP server
+twice.
+
+The **user's own personal mcode** loads this plugin too, so it starts the MCP
+server with no session credentials. That does not break their session: the
+server keeps serving and every tool reports that it cannot reach a Mullion
+session — the same "serve and degrade cleanly" contract
+`test/mcp/server.test.ts` already pins.
 
 Second, mcode runs a plugin hook as a **child process whose environment is a
 strict whitelist** (`PATH`, `HOME`, `LANG`, `TERM`, `SHELL`, `USER`, `TMPDIR`,
