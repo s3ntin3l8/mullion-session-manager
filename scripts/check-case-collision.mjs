@@ -107,7 +107,11 @@ function walk(dir) {
   }
   const where = path.relative(ROOT, dir) || ".";
   const reported = [];
-  const alreadyReported = (files) => reported.some((list) => list.every((f) => files.includes(f)));
+  // True when the CURRENT set is a subset of an already-reported one: a
+  // three-file family is reported once, as the widest set. (The direction
+  // matters: "every member of the CURRENT set is in the earlier one" — not
+  // the other way round.)
+  const alreadyReported = (files) => reported.some((list) => files.every((f) => list.includes(f)));
   for (const list of stems.values()) {
     if (list.length > 1) {
       const files = list.slice().sort();

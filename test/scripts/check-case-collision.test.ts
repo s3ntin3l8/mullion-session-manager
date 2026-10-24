@@ -160,6 +160,42 @@ describe("check-case-collision.mjs", () => {
     expect(reported.length).toBe(1);
   });
 
+  it("reports a three-name family once, as the widest set", async (ctx) => {
+    // "Foo.ts" / "foo.ts" / "FOO.tsx" is ONE family: the stem rule sees
+    // {Foo.ts, foo.ts} and the full-name rule sees {Foo.ts, foo.ts, FOO.tsx}
+    // — hmm, actually the reverse: the stem rule matches all three (the
+    // stem "foo" is shared), the full-name rule matches the two that share
+    // a full name. Either way the family must be reported once, and the
+    // subset test has to ask the right way round: is the CURRENT set inside
+    // an already-reported one?
+    write("src/Foo.ts");
+    write("src/foo.ts");
+    write("src/FOO.tsx");
+    if (sameFile("src/Foo.ts", "src/foo.ts") || sameFile("src/Foo.ts", "src/FOO.tsx")) {
+      ctx.skip();
+      return;
+    }
+
+    let failed = false;
+    let output = "";
+    try {
+      await execFileAsync(process.execPath, [SCRIPT, root]);
+    } catch (err) {
+      failed = true;
+      output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
+    }
+    expect(failed).toBe(true);
+    // Every name in the family is reported …
+    expect(output).toContain("Foo.ts");
+    expect(output).toContain("foo.ts");
+    expect(output).toContain("FOO.tsx");
+    // … and the family is reported ONCE.
+    const reported = output
+      .split("\n")
+      .filter((line) => line.includes("Foo.ts") && line.includes("foo.ts"));
+    expect(reported.length).toBe(1);
+  });
+
   it("ignores assets that share a stem but not their name (favicon.ico, favicon.svg)", async () => {
     // Different full names: unambiguous, and they coexist on a Mac.
     write("frontend/public/favicon.ico");
