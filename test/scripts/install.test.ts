@@ -779,7 +779,6 @@ exit 0
       const { stdout } = await runScript(["--role", "primary", mullionHome]);
 
       const log = readLaunchctlLog();
-      const domain = `gui/${process.getuid?.() ?? 501}`;
       expect(
         log.some((line) => line.includes("bootout") && line.includes("com.mullion.agent")),
       ).toBe(false);
