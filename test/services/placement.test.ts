@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   chooseHost,
+  parseHostCwds,
+  projectCwdOnHost,
+  serializeHostCwds,
   type PlacementCandidate,
   type PlacementContext,
 } from "../../src/services/placement.js";
@@ -37,6 +40,10 @@ function candidate(overrides: Partial<PlacementCandidate> = {}): PlacementCandid
     online: true,
     drained: false,
     capacity: capacity(1, 8),
+    // Issue #1724 — by default the candidate HAS the project, so the
+    // tests below that are about other rules are not accidentally about
+    // this one.
+    projectCwd: "/repo",
     ...overrides,
   };
 }
@@ -298,5 +305,85 @@ describe("chooseHost — the placement decision table (issue #1723)", () => {
     for (const decision of weird) {
       expect(decision.hostId).toBeTruthy();
     }
+  });
+});
+
+describe("a host the project is not on is not a candidate (issue #1724)", () => {
+  it("skips a candidate whose projectCwd is null", () => {
+    // A session runs in a directory. A host that does not have the
+    // project cannot host a session for it — the checkout would have to be
+    // materialized there first, which is a different feature. So the host
+    // is not a CANDIDATE: not a failure, just not eligible.
+    const decision = chooseHost(
+      [candidate({ hostId: "remote-a", projectCwd: null }), candidate({ hostId: "remote-b" })],
+      context(),
+    );
+    expect(decision.hostId).toBe("remote-b");
+    expect(decision.fellBack).toBe(false);
+  });
+
+  it("falls back to the project's own host when NO candidate has the project", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "remote-a", projectCwd: null }), localCandidate({ projectCwd: null })],
+      context(),
+    );
+    expect(decision.hostId).toBe("local");
+    expect(decision.fellBack).toBe(true);
+  });
+
+  it("keeps a candidate that HAS the project", () => {
+    const decision = chooseHost([candidate({ projectCwd: "/repo" })], context());
+    expect(decision.hostId).toBe("remote-a");
+    expect(decision.fellBack).toBe(false);
+  });
+});
+
+describe("the per-host cwd map (issue #1724)", () => {
+  it("reads the map as a JSON object", () => {
+    const map = parseHostCwds('{"remote-a":"/srv/repo"}');
+    expect(map["remote-a"]).toBe("/srv/repo");
+  });
+
+  it("treats a missing or malformed map as an empty one", () => {
+    // An unparseable map must not make a host eligible: the safest reading
+    // of "I cannot tell where the project is" is "nowhere".
+    expect(Object.keys(parseHostCwds(null))).toEqual([]);
+    expect(Object.keys(parseHostCwds(""))).toEqual([]);
+    expect(Object.keys(parseHostCwds("not json"))).toEqual([]);
+    expect(Object.keys(parseHostCwds("[1,2]"))).toEqual([]);
+    expect(Object.keys(parseHostCwds('{"a":1}'))).toEqual([]);
+  });
+
+  it("keeps a __proto__ key as an ordinary own property", () => {
+    // The map's KEYS are operator-supplied and become property names, so
+    // __proto__ must never reach a prototype setter.
+    const map = parseHostCwds('{"__proto__":"/srv/repo"}');
+    expect(Object.prototype).not.toHaveProperty("/srv/repo");
+    expect(Object.getPrototypeOf(map)).toBeNull();
+    expect(map["__proto__"]).toBe("/srv/repo");
+  });
+
+  it("round-trips through the column", () => {
+    const serialized = serializeHostCwds({ "remote-a": "/srv/repo" });
+    expect(serialized).toBe('{"remote-a":"/srv/repo"}');
+    expect(parseHostCwds(serialized)["remote-a"]).toBe("/srv/repo");
+  });
+
+  it("drops empty paths and an empty map serializes to null", () => {
+    expect(serializeHostCwds({ "remote-a": "" })).toBeNull();
+    expect(serializeHostCwds({})).toBeNull();
+    expect(serializeHostCwds(null)).toBeNull();
+  });
+
+  it("resolves the project's own path on its own host, and the map's on another", () => {
+    const project = { hostId: "local", cwd: "/home/x/repo", hostCwds: '{"remote-a":"/srv/repo"}' };
+    const map = parseHostCwds(project.hostCwds);
+    expect(projectCwdOnHost(project, "local", map)).toBe("/home/x/repo");
+    expect(projectCwdOnHost(project, "remote-a", map)).toBe("/srv/repo");
+    // A host with no entry does not have the project — and there is
+    // deliberately NO variant that falls back to the project's own root:
+    // that path does not exist on the other host, and using it would put a
+    // session in a directory that is not there.
+    expect(projectCwdOnHost(project, "remote-b", map)).toBeNull();
   });
 });

@@ -16,6 +16,7 @@ const PROJECT: Project = {
   cwd: "/home/x/mullion",
   hostId: "local",
   placement: "pinned",
+  hostCwds: {},
   devServerUrl: "5173",
   detectedDevServerPort: null,
   currentBranch: null,

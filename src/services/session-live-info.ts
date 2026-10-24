@@ -227,6 +227,30 @@ export function resolveSessionHostId(
   return resolveProjectHostId(app, row.projectId);
 }
 
+/**
+ * The host a task's WORKER session runs on — and therefore the host its
+ * worktree is on.
+ *
+ * Issue #1724 / roadmap 8.10: the reviewer and the rebase worker READ the
+ * task's worktree, so they must run where that worktree is. The worker's own
+ * session row records the host it was placed on (sessions.hostId, issue
+ * #1722); the project's host is the fallback for a task whose worker never
+ * started (or whose row predates placement).
+ *
+ * A task's sessions therefore share ONE host — the worker decides it, and
+ * the rest join it.
+ */
+export function resolveTaskWorkerHost(
+  app: FastifyInstance,
+  task: { sessionId: number | null; projectId: number },
+): string {
+  if (task.sessionId !== null) {
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+    if (row !== undefined) return resolveSessionHostId(app, row);
+  }
+  return resolveProjectHostId(app, task.projectId);
+}
+
 // Batch size for the inArray lookup below — same value and same reasoning as
 // event-store.ts's own OWNERSHIP_LOOKUP_CHUNK_SIZE (its filterHostOwnership
 // is the sibling collision guard for persisted events; this one guards the

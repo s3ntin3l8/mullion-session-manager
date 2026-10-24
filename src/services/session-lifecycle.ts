@@ -32,6 +32,7 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { parseHostCwds, projectCwdOnHost, resolvePlacement } from "./placement.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import {
   readProjectBriefing,
@@ -347,6 +348,28 @@ export type CreateSessionParams = CreateSessionBody & {
   // column, no migration). Not part of CreateSessionBody, no public route
   // sets this — same posture as briefingOverride/projectSkill above.
   taskId?: number;
+  // Issue #1724 / roadmap 8.10 — "this session is unattended" (a Task Master
+  // worker or reviewer), which is what the placement policy scores on: an
+  // unattended session gets NO local bonus, because the goal is to drain the
+  // primary onto the least-loaded eligible machine. An interactive session
+  // is local-PREFERRED, because terminal latency matters to a human.
+  //
+  // NOT part of CreateSessionBody: no public route sets it — the placement
+  // mode is the project's opt-in, and the unattended/interactive distinction
+  // is a property of the CALLER (Task Master spawn sites), not of the user.
+  // Same posture as `taskId` above.
+  unattended?: boolean;
+  // Issue #1724 / roadmap 8.10 — "this session MUST run on this host",
+  // bypassing the placement policy entirely.
+  //
+  // For a session that has to be where ANOTHER session is: the reviewer and
+  // the rebase worker read the task's worktree, so they must run on the host
+  // that holds it — the host its worker session was placed on. Scoring them
+  // independently would put the reviewer on a different machine from the
+  // diff it is supposed to read.
+  //
+  // NOT part of CreateSessionBody: no public route sets it. Task Master only.
+  hostId?: string;
 };
 
 export type CreateSessionResult =
@@ -382,6 +405,10 @@ export type CreateSessionResult =
   | { ok: false; reason: "parent-wrong-project" }
   | { ok: false; reason: "parent-is-child" }
   | { ok: false; reason: "cwd-outside-project" }
+  // Issue #1724 — the session was pinned to a host the project is not on,
+  // and the caller supplied no directory of its own. There is nowhere for
+  // it to run: the project's own path does not exist on that host.
+  | { ok: false; reason: "host-unknown-project"; detail?: string }
   | { ok: false; reason: "child-cap-exceeded" }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
@@ -855,6 +882,106 @@ const fail = (reason: Extract<CreateSessionResult, { ok: false }>["reason"]): St
   result: { ok: false, reason } as CreateSessionResult,
 });
 
+/**
+ * Where a session will run, and why.
+ *
+ * Issue #1724 / roadmap 8.10. The HOST and the project's path ON THAT HOST
+ * travel together: a session runs in a directory, so a host without the
+ * project cannot host it, and the worktree is cut from the project root
+ * there.
+ */
+interface SessionPlacement {
+  /** The host the session runs on. */
+  hostId: string;
+  /** The project's working directory ON THAT HOST. */
+  cwd: string;
+  /** Why — the placement decision's own words (issue #1723). */
+  reason: string;
+}
+
+/**
+ * The placement decision for a session being created.
+ *
+ * Three inputs, in order of precedence:
+ *
+ *   1. `params.hostId` — an EXPLICIT host (Task Master only): the session
+ *      must run where another session is (the reviewer and the rebase worker
+ *      read the task's worktree, so they must be on the host that holds it).
+ *      The placement policy is not consulted at all.
+ *   2. `resolvePlacement()` (issue #1723) — the policy's choice, for an
+ *      "auto" project. It never fails: with no eligible host it falls back
+ *      to the project's own host, which is where the session would have gone
+ *      anyway.
+ *   3. The project's own host — a "pinned" project, or any project the
+ *      policy short-circuits.
+ *
+ * The cwd is the project's root ON THE CHOSEN HOST: `projects.cwd` for the
+ * project's own host, and the operator's per-host map
+ * (`projects.hostCwds`) for any other. A caller-supplied `params.cwd` is a
+ * path the CALLER chose on a host it knows (Task Master's rebase worker,
+ * pointing at an existing worktree), so it is used as-is and the map is not
+ * consulted for it.
+ */
+function resolveSessionPlacement(
+  app: FastifyInstance,
+  project: ProjectRow,
+  params: CreateSessionParams,
+):
+  | { ok: true; placement: SessionPlacement }
+  | { ok: false; reason: "host-unknown-project"; detail: string } {
+  const hostCwds = parseHostCwds(project.hostCwds);
+
+  if (params.hostId !== undefined) {
+    // The caller knows better than the policy: this session has to be
+    // somewhere specific. The reason says so, so the log does not read as a
+    // decision nobody made.
+    //
+    // The directory comes from the CALLER when it supplied one — Task
+    // Master's reviewer points at the task's worktree, which lives on the
+    // host it was placed on — and from the map when it did not. When
+    // neither is available there is NO directory for this session on that
+    // host, and the project's own path is not an answer: it does not exist
+    // there. So the session is refused, with a reason.
+    const mapped = projectCwdOnHost(project, params.hostId, hostCwds);
+    if (mapped === null && params.cwd === undefined) {
+      return {
+        ok: false,
+        reason: "host-unknown-project",
+        detail: `the project has no path on host ${params.hostId}`,
+      };
+    }
+    return {
+      ok: true,
+      placement: {
+        hostId: params.hostId,
+        cwd: mapped ?? project.cwd,
+        reason: `placed by the caller on ${params.hostId} (it must share a host with another session)`,
+      },
+    };
+  }
+
+  const decision = resolvePlacement(app, {
+    project: {
+      hostId: project.hostId,
+      placement: project.placement,
+      cwd: project.cwd,
+      hostCwds: project.hostCwds,
+    },
+    unattended: params.unattended === true,
+  });
+
+  return {
+    ok: true,
+    placement: {
+      hostId: decision.hostId,
+      // The policy only ever picks a host the project IS on (that is an
+      // eligibility rule), so this is never null here.
+      cwd: projectCwdOnHost(project, decision.hostId, hostCwds) ?? project.cwd,
+      reason: decision.reason,
+    },
+  };
+}
+
 async function createSessionRecordInner(
   app: FastifyInstance,
   params: CreateSessionParams,
@@ -877,14 +1004,23 @@ async function createSessionRecordInner(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) return { ok: false, reason: "unknown-project" };
-  // Issue #1722 / roadmap 8.8 — THE host this session is created on, named
+  // Issue #1724 / roadmap 8.10 — THE host this session is created on, named
   // once and used for everything that has to agree about it: the row the
   // insert writes, the spawn the backend is resolved for, the seed stashed
   // into it, the worktree closures that clean up after it, AND the rollback
-  // (rb.hostId — which is what a failed create unwinds through). Today it
-  // is the project's host — the placement decision; #1724 replaces THIS
-  // ONE value with the placement policy's choice, and everything follows it.
-  const placementHost = project.hostId;
+  // (rb.hostId — which is what a failed create unwinds through).
+  //
+  // It is the PLACEMENT policy's choice (issue #1723): the project's own host
+  // for a "pinned" project, and a decided host for an "auto" one. The
+  // decision carries the project's path ON THAT HOST — a session runs in a
+  // directory, so the host and the directory have to agree, and the worktree
+  // is cut from the project root ON THAT HOST.
+  const placementResult = resolveSessionPlacement(app, project, params);
+  if (!placementResult.ok) {
+    return { ok: false, reason: placementResult.reason, detail: placementResult.detail };
+  }
+  const placement = placementResult.placement;
+  const placementHost = placement.hostId;
   rb.hostId = placementHost;
 
   const parent = validateParent(app, params);
@@ -894,7 +1030,7 @@ async function createSessionRecordInner(
   // every injection default in resolveSpawnInputs come from this snapshot.
   const sessionSettings = getStoredSettings(app.db).sessions;
 
-  const prepared = await prepareWorktree(app, project, params, rb);
+  const prepared = await prepareWorktree(app, project, params, rb, placement);
   if (!prepared.ok) return prepared.result;
   const cwd = prepared.cwd;
 
@@ -908,11 +1044,18 @@ async function createSessionRecordInner(
   // is, in fact, nested under the project root via `.mullion-worktrees/` —
   // it just never needs this check because it was never caller-supplied.)
   if (parent.parentId !== null && !params.worktree) {
-    const effectiveCwd = path.resolve(cwd ?? project.cwd);
-    const projectRoot = path.resolve(project.cwd);
+    // Issue #1724 — the containment is measured against the project root ON
+    // THE PLACEMENT HOST, because that is the directory the child will be
+    // spawned in. For a pinned project that is `projects.cwd` exactly as
+    // before; for a placed one it is the host's mapped path.
+    const effectiveCwd = path.resolve(cwd ?? placement.cwd);
+    const projectRoot = path.resolve(placement.cwd);
     const withinProject =
       effectiveCwd === projectRoot || effectiveCwd.startsWith(projectRoot + path.sep);
-    if (!withinProject && !(await isSiblingWorktreeCwd(project, effectiveCwd))) {
+    if (
+      !withinProject &&
+      !(await isSiblingWorktreeCwd({ cwd: placement.cwd, hostId: placement.hostId }, effectiveCwd))
+    ) {
       return { ok: false, reason: "cwd-outside-project" };
     }
   }
@@ -925,9 +1068,12 @@ async function createSessionRecordInner(
     sessionSettings.maxChildSessionsPerParent,
     // The host this session is spawned on — the same value the spawn below
     // is routed to (resolveBackend(app, placementHost).spawn(...)).
-    // Issue #1722 / roadmap 8.8; 8.10 replaces it with the placement
+    // Issue #1722 / roadmap 8.8; issue #1724 makes it the placement
     // policy's choice.
     placementHost,
+    // Issue #1724 — the decision's own words, so the row can explain itself
+    // later without the server log.
+    placement.reason,
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
@@ -947,6 +1093,7 @@ async function createSessionRecordInner(
     cwd,
     created.id,
     sessionSettings,
+    placement,
   );
   const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
@@ -995,9 +1142,16 @@ async function prepareWorktree(
   project: ProjectRow,
   params: CreateSessionParams,
   rb: CreateRollback,
+  // Issue #1724 — the host the worktree is cut on, and the project root ON
+  // THAT HOST. The worktree follows the session: a scope's cwd has to exist
+  // where the scope runs.
+  placement: SessionPlacement,
 ): Promise<Step<{ cwd: string | undefined }>> {
   const { worktree } = params;
   const cwd = params.cwd;
+  // The project root on the placement host — the worktree is cut from
+  // THERE, not from the project's own host.
+  const projectRootOnHost = placement.cwd;
   if (worktree?.branch) {
     // Issue #345 — dock-preview worktrees now work on remote hosts too:
     // checkoutBranchWorktree, the worktreeRefresh sync tick, and cleanup
@@ -1009,13 +1163,13 @@ async function prepareWorktree(
     // own "must never surface as a 500" comment below).
     let result;
     try {
-      result = await resolveBackend(app, project.hostId).checkoutBranchWorktree(
-        cwd ?? project.cwd,
+      result = await resolveBackend(app, placement.hostId).checkoutBranchWorktree(
+        cwd ?? projectRootOnHost,
         worktree.branch,
       );
     } catch (err) {
       app.log.warn(
-        { hostId: project.hostId, err },
+        { hostId: placement.hostId, err },
         "checkoutBranchWorktree: host unreachable or rejected the request",
       );
       return fail("worktree-failed");
@@ -1023,21 +1177,21 @@ async function prepareWorktree(
     if (!result) return fail("worktree-failed");
     // Checks out an EXISTING branch detached — nothing to delete but the
     // directory.
-    // The worktree is created on the PROJECT's host — the placement
-    // decision has not been made yet (8.10 moves this to the placement
-    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
-    // rb.hostId (the scope's host): the two are the same host today, and
-    // #1724 makes them differ.
-    rb.worktreeHostId = project.hostId;
+    // The worktree is created on the PLACEMENT host (issue #1724) — the
+    // session runs there, so its directory has to be there — so the rollback
+    // unwinds it there. Recorded SEPARATELY from rb.hostId (the scope's
+    // host) because a caller-supplied cwd (Task Master's rebase worker)
+    // still points at a worktree on the project's own host.
+    rb.worktreeHostId = placement.hostId;
     rb.worktreePath = result.path;
-    rb.parentCwd = params.cwd ?? project.cwd;
+    rb.parentCwd = cwd ?? projectRootOnHost;
     return { ok: true, cwd: result.path };
   }
   if (worktree?.baseRef) {
     const resolved = await resolveWorktreeCwd(
       app,
-      project.hostId,
-      cwd ?? project.cwd,
+      placement.hostId,
+      cwd ?? projectRootOnHost,
       worktree,
       `session-${Date.now()}`,
     );
@@ -1047,14 +1201,11 @@ async function prepareWorktree(
         result: { ok: false, reason: "worktree-failed", detail: resolved.detail },
       };
     }
-    // The worktree is created on the PROJECT's host — the placement
-    // decision has not been made yet (8.10 moves this to the placement
-    // host) — so the rollback unwinds it there. Recorded SEPARATELY from
-    // rb.hostId (the scope's host): the two are the same host today, and
-    // #1724 makes them differ.
-    rb.worktreeHostId = project.hostId;
+    // The worktree is created on the PLACEMENT host (issue #1724) — see the
+    // comment on the branch branch above.
+    rb.worktreeHostId = placement.hostId;
     rb.worktreePath = resolved.path;
-    rb.parentCwd = params.cwd ?? project.cwd;
+    rb.parentCwd = cwd ?? projectRootOnHost;
     rb.branch = resolved.branch;
     return { ok: true, cwd: resolved.path };
   }
@@ -1085,9 +1236,13 @@ function insertRow(
   // The caller (createSessionRecordInner — the ONLY production writer of a
   // session row: `grep -rn "insert(sessions)" src/` finds this one) passes
   // the SAME host the spawn is routed to, so the row and the live scope
-  // cannot disagree. 8.10 replaces the one argument with the placement
-  // policy's choice, and the row follows for free.
+  // cannot disagree. Issue #1724: this is the placement policy's choice, and
+  // the row follows for free.
   hostId: string,
+  // Issue #1724 — WHY the session is on that host, in words. Kept with the
+  // row so the decision can be read back later (the UI shows it, #1726);
+  // the server log is where it comes from.
+  placementReason?: string,
 ): Step<{ row: SessionRow }> {
   const {
     projectId,
@@ -1120,6 +1275,8 @@ function insertRow(
           // docs above). Written ONCE, here, inside the same transaction
           // that enforces the live-child cap.
           hostId,
+          // Issue #1724 — why the session is on that host.
+          ...(placementReason !== undefined ? { placementReason } : {}),
           command,
           name: name ?? null,
           cwd: cwd ?? null,
@@ -1194,6 +1351,9 @@ async function resolveSpawnInputs(
   cwd: string | undefined,
   sessionId: number,
   globalSessionSettings: ReturnType<typeof getStoredSettings>["sessions"],
+  // Issue #1724 — the host the session runs on and the project root THERE.
+  // The spawn's cwd and the scaffold scan both follow it.
+  placement: SessionPlacement,
 ): Promise<SpawnOpts> {
   // Per-project Mullion pinned note (#942 redesign): `params.briefingOverride`
   // (an explicit caller-supplied value, currently unused by any caller) wins;
@@ -1234,8 +1394,13 @@ async function resolveSpawnInputs(
   let scaffoldSkillCommitted = false;
   let scaffoldReviewerCommitted = false;
   if (rawProjectSkill !== undefined || rawProjectReviewerAgent !== undefined) {
-    const scaffoldCwd = cwd ?? project.cwd;
-    const scan = await discoverCommittedScaffoldOnHost(app, project.hostId, scaffoldCwd);
+    // Issue #1724 — the scan follows the SESSION: it looks in the directory
+    // the CLI will actually search (the session's cwd, which for a placed
+    // session is a worktree on the placement host), on the host that holds
+    // it. The question it answers ("is the scaffold committed here?") is the
+    // same wherever the checkout lives — a worktree carries the same commits.
+    const scaffoldCwd = cwd ?? placement.cwd;
+    const scan = await discoverCommittedScaffoldOnHost(app, placement.hostId, scaffoldCwd);
     scaffoldSkillCommitted = scan.skillCommitted;
     scaffoldReviewerCommitted = scan.reviewerCommitted;
     if (scan.warnings.length > 0) {
@@ -1278,7 +1443,10 @@ async function resolveSpawnInputs(
 
   return {
     id: String(sessionId),
-    cwd: cwd ?? project.cwd,
+    // Issue #1724 — the project root on the PLACEMENT host, not the
+    // project's own host's root: a session cannot run in a directory that
+    // does not exist on the machine it runs on.
+    cwd: cwd ?? placement.cwd,
     command: params.command,
     cols: DEFAULT_COLS,
     rows: DEFAULT_ROWS,
@@ -1391,7 +1559,7 @@ async function spawnOrRollback(
     // itself deliberately does NOT do this).
     app.pty.discardPendingSeed(String(sessionId));
     await rollbackCreate(app, rb);
-    app.log.error({ err, hostId: project.hostId }, "session spawn failed, rolled back row");
+    app.log.error({ err, hostId: placementHost }, "session spawn failed, rolled back row");
     return {
       ok: false,
       result: {

@@ -23,7 +23,7 @@ import { createSessionRecord } from "./session-lifecycle.js";
 // cleanupPreviewWorktree is a no-op here regardless — a task worker session
 // is never registered in the preview-worktree map — so only this one matters.
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveSessionHostId } from "./session-live-info.js";
+import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -153,6 +153,11 @@ export async function reseedTaskIfSessionExited(
     // tasks #66 / #67) if the brainstorming skill gates on a clarifying
     // question the worker can't answer.
     taskId: task.id,
+    // Issue #1724 — the re-seed reuses the task's EXISTING worktree
+    // (`cwd: task.worktreePath`), which lives on the host the worker was
+    // placed on, so the re-seed joins that host.
+    unattended: true,
+    hostId: resolveTaskWorkerHost(app, task),
   });
   if (!result.ok) {
     app.log.warn(

@@ -223,6 +223,13 @@ export interface Project {
   // The type itself is the shared one (src/shared/types.ts), so a mode
   // added on the backend cannot drift here.
   placement: PlacementMode;
+  // Issue #1724 / roadmap 8.10 — where this project lives on OTHER hosts, as
+  // `{ "<hostId>": "<absolute path>" }`. A host with no entry does not have the
+  // project, so it is never a placement candidate. Always an object here (the
+  // API speaks the shape it accepts — the column behind it holds JSON).
+  //
+  // NOT optional: the API always sends it, empty when there is no map.
+  hostCwds: Record<string, string>;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.

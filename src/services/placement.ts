@@ -51,6 +51,19 @@ export interface PlacementCandidate {
    * candidate.
    */
   capacity: HostCapacity | null;
+  /**
+   * Where this project lives ON THIS HOST — null when it does not.
+   *
+   * Issue #1724 / roadmap 8.10. A session runs in a directory, so a host
+   * that does not have the project cannot host a session for it: the
+   * checkout would have to be materialized there first, which is a different
+   * feature. The project's own host always has it (`projects.cwd`); every
+   * other host needs the operator's map (`projects.hostCwds`).
+   *
+   * So a null here is NOT a failure — it is simply not a candidate, exactly
+   * like a missing capacity reading.
+   */
+  projectCwd: string | null;
 }
 
 /** What the caller knows about the session being placed. */
@@ -113,13 +126,86 @@ function loadPerCore(capacity: HostCapacity): number {
 }
 
 /**
+ * The per-host cwd map, parsed.
+ *
+ * `projects.hostCwds` is a JSON object `{ "<hostId>": "<absolute path>" }`.
+ *
+ * Parsed into a NULL-PROTOTYPE object and written with
+ * `Object.defineProperty`, so a key of `__proto__` stays an ordinary own
+ * property: the map's KEYS are operator-supplied and become property names,
+ * and `__proto__`'s setter must never see one. A malformed or non-object
+ * value yields an EMPTY map — no host is a candidate, which is the same
+ * answer as "the project lives on its own host and nowhere else".
+ */
+export function parseHostCwds(raw: string | null | undefined): Record<string, string> {
+  const out = Object.create(null) as Record<string, string>;
+  if (raw === null || raw === undefined || raw.trim() === "") return out;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return out;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
+  for (const [hostId, cwd] of Object.entries(parsed)) {
+    if (typeof cwd !== "string" || cwd.trim() === "") continue;
+    Object.defineProperty(out, hostId, {
+      value: cwd,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * The per-host cwd map, serialized for the column.
+ *
+ * The map's KEYS are operator-supplied and become property names when the
+ * map is parsed back, so it is written as JSON and read back into a
+ * null-prototype object (see parseHostCwds). Empty paths are dropped, and
+ * an empty map serializes to null — "this project lives on its own host and
+ * nowhere else", which is what an absent map means.
+ */
+export function serializeHostCwds(map: Record<string, string> | null | undefined): string | null {
+  if (map === null || map === undefined) return null;
+  const entries = Object.entries(map).filter(
+    ([, cwd]) => typeof cwd === "string" && cwd.trim() !== "",
+  );
+  if (entries.length === 0) return null;
+  // Object.fromEntries defines own properties, so a key of "__proto__" stays
+  // an ordinary property — it is never handed to a prototype setter.
+  return JSON.stringify(Object.fromEntries(entries));
+}
+
+/**
+ * The project's working directory ON a given host — null when the project is
+ * not there.
+ *
+ * The project's own host has it at `projects.cwd`; every other host needs
+ * the operator's map (`projects.hostCwds`). A host the project is not on is
+ * not a placement candidate: a session cannot run where its code is not.
+ */
+export function projectCwdOnHost(
+  project: { hostId: string; cwd: string },
+  hostId: string,
+  hostCwds: Record<string, string>,
+): string | null {
+  if (hostId === project.hostId) return project.cwd;
+  return hostCwds[hostId] ?? null;
+}
+
+/**
  * Chooses the host for a session.
  *
  * The rules, in order:
  *
- *   1. ELIGIBLE = online per the heartbeat, not drained, and has reported a
- *      capacity reading. A host with no reading is not a candidate — that
- *      is not a failure, it is just not eligible.
+ *   1. ELIGIBLE = online per the heartbeat, not drained, has reported a
+ *      capacity reading, AND HAS THE PROJECT (issue #1724: a session runs in
+ *      a directory, so a host the project is not on cannot host it). A host
+ *      with no reading — or no checkout — is not a candidate: that is not a
+ *      failure, it is just not eligible.
  *   2. NO ELIGIBLE HOST → the project's own host. The fallback is the whole
  *      point: a placement decision is an optimization, never a gate, and the
  *      spawn that follows must succeed either way.
@@ -144,7 +230,14 @@ export function chooseHost(
   // arrives in the context; every other host carries its own reading.
   const eligible = candidates.filter((candidate) => {
     const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity;
-    return candidate.online && !candidate.drained && capacity !== null;
+    return (
+      candidate.online &&
+      !candidate.drained &&
+      capacity !== null &&
+      // Issue #1724 — the host must have the project: a session runs in a
+      // directory, and this host's directory does not have it.
+      candidate.projectCwd !== null
+    );
   });
 
   if (eligible.length === 0) {
@@ -270,7 +363,20 @@ export function resolvePlacement(
     // this seam without the compiler saying so. A mode outside the list
     // would otherwise be silently treated as "pinned" — the safe default,
     // which makes a typo invisible rather than loud.
-    project: { hostId: string; placement: PlacementMode };
+    project: {
+      hostId: string;
+      placement: PlacementMode;
+      /** The project's path on this host (issue #1724). */
+      cwd: string;
+      /**
+       * The project's path on OTHER hosts, as a JSON object
+       * `{hostId: cwd}` (issue #1724). Null/empty means "this project lives
+       * on its own host and nowhere else", which is every project as of that
+       * migration — so an "auto" project with no map places exactly as it
+       * did before: on its own host.
+       */
+      hostCwds?: string | null;
+    };
     /** True for an unattended session (a Task Master worker or reviewer). */
     unattended: boolean;
   },
@@ -295,6 +401,10 @@ export function resolvePlacement(
   // process, so its reading is always fresh.
   let localCapacity: HostCapacity | null;
   let candidates: PlacementCandidate[];
+  // Issue #1724 — the per-host cwd map, parsed ONCE (the keys are
+  // operator-supplied and become property names, so it is parsed into a
+  // null-prototype object; see parseHostCwds).
+  const hostCwds = parseHostCwds(project.hostCwds);
   try {
     localCapacity = measureHostCapacity(app);
     candidates = listHosts(app).map((host) => {
@@ -312,6 +422,9 @@ export function resolvePlacement(
         // The local host's reading is in the context, not here (it is
         // measured live rather than polled).
         capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
+        // Issue #1724 — where the project lives on THIS host. Null for a
+        // host the project is not on, which makes it not a candidate.
+        projectCwd: projectCwdOnHost(project, host.id, hostCwds),
       };
     });
   } catch (err) {
