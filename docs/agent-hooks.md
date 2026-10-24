@@ -767,13 +767,24 @@ permission paragraph below has the detail).
 
 **Mullion's mcode support is POSIX-only, and is not claimed to work on
 Windows.** Its hook path is a shell script — `src/hooks/mcode-hook-shim.sh`,
-`#!/bin/sh` — and mcode runs a hook command through `sh -c`; every hook shim in
-`src/hooks/` is POSIX, and the tree has no `.cmd` or `.ps1` shim at all.
+`#!/bin/sh` — and mcode runs a hook command through `sh -c` (the Claude-format
+path, pinned in-repo at `src/services/hook-adapters/mcode.ts:406`); every hook
+shim in `src/hooks/` is POSIX, and the tree has no `.cmd` or `.ps1` shim at all.
 Independently of that, mcode's **CODEX** plugin dialect runs a hook command
-through `cmd.exe` on Windows rather than a POSIX shell, and mcode's
-plugin-format support is unverified there. So on Windows this integration is
-_unsupported and unverified_ — which is a different claim from _known-broken_,
-and the honest one.
+through `cmd.exe` on Windows rather than a POSIX shell — read out of mcode's
+own bundle, not assumed: 0.6.13's `chunks/chunk-7ONY7WH4.js` and the same
+shape in 0.6.12's `chunks/chunk-47KWM23C.js` both resolve a hook's spawn
+shape like this. A `CLAUDE`-format plugin's command runs through `sh -c` (or
+Git Bash / PowerShell on Windows). But a **non-`CLAUDE`** `sourceFormat` —
+which is what a CODEX plugin is — falls through to `{shell: true}`, which is
+Node's "run it through the platform's default shell": `cmd.exe` on Windows. A
+CODEX plugin cannot ask for anything else: its hook schema accepts neither a
+`shell` key nor an `args` key (both are `CLAUDE`-only), so `{shell: true}` is
+the only shape it can take. So on Windows the CODEX plugin's
+`PermissionRequest` would be launched by `cmd.exe`, and mcode's plugin-format
+support is unverified there. So on Windows this integration is _unsupported and
+unverified_ — which is a different claim from _known-broken_, and the honest
+one.
 
 **That makes mcode 0.6.12 the floor.** The CODEX plugin format and the
 format-aware auto-approval mapping are both present in **0.6.12**'s own bundle
