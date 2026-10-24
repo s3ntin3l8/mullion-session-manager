@@ -314,7 +314,12 @@ export function claimHost(
       // Issue #1721 — the agent's own self-report. A claim (a
       // manually-provisioned row an agent presents its token for) is still
       // an agent self-report, so its platform is recorded here too.
-      platform: input.platform ?? null,
+      //
+      // An ABSENT platform is not a reset: an agent build that predates
+      // the field does not send one, and that must not erase what a
+      // newer build recorded earlier (the same rule
+      // recordHostSelfReport() applies on the renewal path).
+      ...(input.platform ? { platform: input.platform } : {}),
     })
     .where(eq(hosts.id, matchedRow.id))
     .run();
@@ -379,8 +384,11 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
         // Issue #1721 — the platform is refreshed on every enrollment, not
         // only on the first: an agent's platform does not change, but a
         // RE-ENROLLED agent (a wiped install root re-registering against a
-        // row that survived) may report a different one.
-        platform: input.platform ?? null,
+        // row that survived) may report a different one — and one that
+        // reports NONE (an older build, a downgrade, a mixed fleet) must
+        // not erase what was recorded before. An absent platform is not a
+        // reset, the same rule recordHostSelfReport() applies on renewal.
+        ...(input.platform ? { platform: input.platform } : {}),
       })
       .where(eq(hosts.id, existing.id))
       .run();

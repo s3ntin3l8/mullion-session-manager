@@ -346,7 +346,11 @@ construction, not by two implementations that happen to agree today.
 
 **No second timer.** The capacity poll rides the health sweep above: one
 `/health` ping and one `/internal/capacity` call per tick, on the same
-interval, in the same fan-out.
+interval, in the same fan-out. The capacity call has its **own, shorter
+budget** (2 s, against the ping's 5 s): capacity is advisory input to a
+placement policy, while the ping decides a verdict, so a hung capacity
+route must not add its timeout to the sweep and push the next tick — and
+with it every host's health update — out of schedule.
 
 **Capacity never decides health.** The health verdict comes from the `/health`
 ping alone. An agent build that predates the capacity route answers `404`,
@@ -372,7 +376,19 @@ which is a legitimate state, not a defect. Nothing branches on it.
 `GET /api/hosts` carries both: `platform` per host, and `capacity` per host
 (`null` when the host does not report any). The local host's capacity is
 measured on demand on every request — it has no remote poll to ride, and the
-primitives are cheap.
+primitives are cheap — and its `platform` is this process's own, so the
+response never contradicts itself (`platform: "linux"` beside
+`capacity.platform: "linux"`, never `null` beside `"linux"`).
+
+**One caveat, stated so the placement policy inherits it:**
+`loadAverage1m` is `os.loadavg()[0]`, which is **permanently 0 on win32** —
+the platform reports no load average. A policy that reads `0` as "idle"
+would read every Windows host as idle. Windows is out of Phase 8
+([#1728](https://github.com/s3ntin3l8/mullion-session-manager/issues/1728)),
+and the placement half targets Linux and macOS, but the rule for the future
+policy ([#1723](https://github.com/s3ntin3l8/mullion-session-manager/issues/1723))
+is: treat `platform: "win32"` as _this host reports no load_, never as _this
+host is idle_.
 
 ## Agent updates
 

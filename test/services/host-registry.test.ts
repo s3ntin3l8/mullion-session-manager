@@ -232,6 +232,24 @@ describe("host-registry", () => {
       await app.close();
     });
 
+    it("does NOT erase a recorded platform when the agent RE-enrolls without one", async () => {
+      // An absent report is not a reset: an older build (or a downgrade)
+      // re-registering against a row that survived must not silently null
+      // the platform a newer build recorded — the same rule
+      // recordHostSelfReport() applies on the renewal path.
+      const app = await buildApp();
+      const baseUrl = `http://192.168.1.62:${crypto.randomUUID()}`;
+      const first = enrollHost(app, { baseUrl, hostname: "box-62", platform: "darwin" });
+      expect(getHostRow(app, first.hostId)!.platform).toBe("darwin");
+
+      // The same baseUrl re-enrolls (enrollHost dedupes on it) — this time
+      // without a platform.
+      const second = enrollHost(app, { baseUrl, hostname: "box-62" });
+      expect(second.hostId).toBe(first.hostId);
+      expect(getHostRow(app, second.hostId)!.platform).toBe("darwin");
+      await app.close();
+    });
+
     it("leaves the platform null when the agent reports none", async () => {
       const app = await buildApp();
       const result = enrollHost(app, {

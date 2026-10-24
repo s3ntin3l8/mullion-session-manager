@@ -55,8 +55,11 @@ describe("hosts route (issue #26)", () => {
         sampledAt: expect.any(String),
       }),
     );
-    // A locally-created host has reported no platform of its own.
-    expect(local?.platform).toBeNull();
+    // The LOCAL host's platform is this process's own — the row never had
+    // one (nothing self-reported it), so the API fills it in. One fact,
+    // one place: without this, the same response would say
+    // `platform: null` and `capacity.platform: "linux"` for the same host.
+    expect(local?.platform).toBe(process.platform);
     await app.close();
   });
 

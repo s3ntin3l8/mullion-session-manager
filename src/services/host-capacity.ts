@@ -25,7 +25,17 @@ export interface HostCapacity {
   platform: string;
   /** `os.availableParallelism()` — how many things can run at once here. */
   logicalCores: number;
-  /** The 1-minute load average. 0 on a platform that does not report one. */
+  /**
+   * The 1-minute load average — `os.loadavg()[0]`.
+   *
+   * NOT comparable across platforms: it is permanently 0 on win32 (the
+   * platform does not report one), so a placement policy reading 0 as
+   * "idle" would read every Windows host as idle. Windows is out of
+   * Phase 8 (#1728) and the placement half targets Linux and macOS, but
+   * the contract is stated here so the policy that reads this field
+   * (#1723) inherits the caveat: treat `platform: "win32"` as "this host
+   * reports no load", never as "this host is idle".
+   */
   loadAverage1m: number;
   /** Total and free memory, in bytes. */
   memory: { totalBytes: number; freeBytes: number };

@@ -189,7 +189,7 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
   });
 
   /** A fake agent: answers /health, and /internal/capacity as told. */
-  async function startFakeAgent(capacityStatus: number) {
+  async function startFakeAgent(capacityStatus: number, sampledAt?: string) {
     const hits = { health: 0, capacity: 0 };
     const server = http.createServer((req, res) => {
       if (req.url === "/health") {
@@ -219,7 +219,7 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
             loadAverage1m: 0.5,
             memory: { totalBytes: 1024, freeBytes: 512 },
             sessions: { tracked: 2, alive: 1 },
-            sampledAt: new Date().toISOString(),
+            sampledAt: sampledAt ?? new Date().toISOString(),
           }),
         );
         return;
@@ -260,6 +260,37 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
       // calls with no health ping at all).
       expect(agent.hits.health).toBeGreaterThan(0);
       expect(agent.hits.capacity).toBe(agent.hits.health);
+    } finally {
+      agent.server.close();
+    }
+  }, 20000);
+
+  it("survives a capacity report with an unparseable sampledAt", async () => {
+    // The report comes from a REMOTE host, so its timestamp is untrusted
+    // input: a body without a parseable one (a non-Mullion service behind
+    // an admin-added baseUrl, a proxy, a future build) must not be able to
+    // break GET /api/hosts for the WHOLE fleet with an Invalid time
+    // value.
+    const agent = await startFakeAgent(200, "not-a-timestamp");
+    try {
+      const app = await buildTestApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "bad-timestamp", baseUrl: agent.baseUrl, token: "t" },
+      });
+      const { id } = created.json();
+
+      await waitUntil(() => app.hostCapacityTracker?.get(id) !== undefined, 8000);
+
+      // The entry is stamped with a FINITE time, and the fleet list still
+      // renders — for every host, not just this one.
+      const entry = app.hostCapacityTracker?.get(id);
+      expect(entry?.sampledAt).toBeGreaterThan(0);
+      const res = await app.inject({ method: "GET", url: "/api/hosts" });
+      expect(res.statusCode).toBe(200);
+      const row = (res.json() as Array<Record<string, unknown>>).find((h) => h.id === id);
+      expect(row?.capacity).toEqual(expect.objectContaining({ platform: "linux" }));
     } finally {
       agent.server.close();
     }

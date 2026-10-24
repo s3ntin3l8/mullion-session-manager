@@ -351,6 +351,19 @@ describe("RemoteHostClient", () => {
       );
     });
 
+    it("uses its OWN, shorter timeout — the health ping must not wait on an advisory call", async () => {
+      // Capacity is advisory; the health ping next to it decides a verdict.
+      // A hung capacity route must not add its own timeout to the sweep.
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      try {
+        fetchMock.mockResolvedValue(jsonResponse(200, report));
+        await client().resolveCapacity();
+        expect(timeoutSpy).toHaveBeenLastCalledWith(2_000);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
     it("returns null for a 404 — an agent build that predates the route", async () => {
       fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
       await expect(client().resolveCapacity()).resolves.toBeNull();

@@ -114,10 +114,21 @@ export async function hostsRoute(app: FastifyInstance) {
           : (() => {
               const entry = app.hostCapacityTracker?.get(host.id);
               if (!entry) return null;
-              return { ...entry.capacity, sampledAt: new Date(entry.sampledAt).toISOString() };
+              // The cached timestamp is a number the sweep stamped itself,
+              // but the conversion below must never be the thing that
+              // breaks: an unparseable instant throws a RangeError, and
+              // this map runs for the WHOLE fleet.
+              const sampledAt = Number.isFinite(entry.sampledAt) ? entry.sampledAt : Date.now();
+              return { ...entry.capacity, sampledAt: new Date(sampledAt).toISOString() };
             })();
       return {
         ...host,
+        // The LOCAL host's platform is this process's own — the row simply
+        // never had one, because nothing self-reported it. Reporting it
+        // here keeps one fact in one place: without it, the same response
+        // would say `platform: null` and `capacity.platform: "linux"` for
+        // the same host, and #1726's UI would have to pick a winner.
+        platform: host.id === LOCAL_HOST_ID ? process.platform : host.platform,
         health: health.status,
         lastSeenAt: toIso(health.lastSeenAt),
         lastCheckedAt: toIso(health.lastCheckedAt),

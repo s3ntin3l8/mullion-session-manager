@@ -171,7 +171,14 @@ async function sweepHost(
       );
       return;
     }
-    capacityTracker.record(hostId, report, Date.parse(report.sampledAt));
+    // The report comes from a REMOTE host, so its sampledAt is untrusted
+    // input: a body without a parseable timestamp (a non-Mullion service
+    // behind an admin-added baseUrl, a proxy, a future build) would parse
+    // to NaN, and a NaN timestamp would throw a RangeError later — inside
+    // GET /api/hosts's map, where one bad host would break the list for
+    // the WHOLE fleet. Stamp it here, where the untrusted value enters.
+    const sampledAt = Date.parse(report.sampledAt);
+    capacityTracker.record(hostId, report, Number.isFinite(sampledAt) ? sampledAt : Date.now());
   } catch (err) {
     // A capacity failure NEVER affects the health verdict — it is
     // advisory input to a placement policy, not a liveness signal. The

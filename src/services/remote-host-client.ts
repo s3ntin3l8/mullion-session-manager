@@ -113,6 +113,16 @@ export class HostRequestError extends Error {
 // than returning a default/empty payload on network failure or timeout.
 const REQUEST_TIMEOUT_MS = 5_000;
 
+// Issue #1721 / roadmap 8.7 — the CAPACITY call's own budget, shorter
+// than the default on purpose. Capacity is ADVISORY input to a placement
+// policy, while the health ping next to it decides a verdict; the sweep
+// awaits the capacity call after the ping, so a hung capacity route would
+// otherwise add its own timeout to the sweep and, with the sweep's
+// reentrancy guard, push the NEXT tick (and with it every host's health
+// update) out. Two seconds is generous for a reading of four numbers on
+// the far end of a LAN.
+const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
+
 // Test-only knob (issue #1634): a full local `make test` runs hundreds of real
 // Fastify servers in parallel, and the multi-host integration tests make REAL
 // loopback round trips whose 5s budget the resulting event-loop lag can blow
@@ -603,7 +613,11 @@ export class RemoteHostClient {
    */
   async resolveCapacity(): Promise<HostCapacityReport | null> {
     try {
-      return await this.request<HostCapacityReport>("/internal/capacity");
+      return await this.request<HostCapacityReport>(
+        "/internal/capacity",
+        undefined,
+        CAPACITY_REQUEST_TIMEOUT_MS,
+      );
     } catch (err) {
       if (err instanceof HostRequestError && err.statusCode === 404) return null;
       throw err;
