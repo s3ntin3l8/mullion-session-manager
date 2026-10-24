@@ -195,6 +195,8 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
     health: "pending",
     lastSeenAt: null,
     lastCheckedAt: null,
+    // Issue #1725 — the drain flag: every host carries it.
+    drained: false,
     ...overrides,
   };
 }

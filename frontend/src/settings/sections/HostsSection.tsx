@@ -70,10 +70,13 @@ export function HostsSection() {
   // sessions, and stays usable for manual placement. What it changes is
   // that the placement policy stops CHOOSING it for new work.
   const toggleDrain = (host: Host) => {
-    void updateHost(host.id, { drained: !host.drained }).catch(() => {
-      // The list refreshes on the next poll either way; a failed park is
-      // visible there, and the KebabMenu's own error path covers the
-      // "could not reach the host" case.
+    setDrainError(null);
+    // The failure is SURFACED: the KebabMenu just calls onClick() with no
+    // error handling of its own, so a park that does not reach the server
+    // would otherwise leave the row unchanged with nothing said — the user
+    // would think the switch worked.
+    void updateHost(host.id, { drained: !host.drained }).catch((err: unknown) => {
+      setDrainError(err instanceof Error ? err.message : String(err));
     });
   };
   const [addOpen, setAddOpen] = useState(false);
@@ -85,6 +88,9 @@ export function HostsSection() {
   // own error message already names the project count.
   const [cascadePrompt, setCascadePrompt] = useState<{ id: string; message: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Issue #1725 — a failed park/unpark says so, rather than leaving the
+  // row unchanged with nothing said.
+  const [drainError, setDrainError] = useState<string | null>(null);
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -268,6 +274,10 @@ export function HostsSection() {
     });
   };
 
+  // Issue #1725 — the local host's row is rendered separately from the
+  // registered ones (it is not editable), but it can still be PARKED.
+  const localHost = hosts.find((h) => h.id === LOCAL_HOST_ID);
+
   return (
     <>
       <GroupHeading
@@ -291,6 +301,24 @@ export function HostsSection() {
           trailing={
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>
+              {/* Issue #1725 — the primary can be parked too: parking it is
+                  how you drain it. The local host takes no other edits, but
+                  this one is a placement decision rather than an edit of
+                  the host's identity. */}
+              {localHost?.drained && (
+                <span
+                  style={{ fontSize: 10.5, color: "var(--y)" }}
+                  title="Parked: this machine takes no new work. Nothing on it is stopped."
+                >
+                  parked
+                </span>
+              )}
+              <SecondaryButton
+                onClick={() => localHost && toggleDrain({ ...localHost, id: LOCAL_HOST_ID })}
+                disabled={!localHost}
+              >
+                {localHost?.drained ? "Unpark" : "Park"}
+              </SecondaryButton>
               <SecondaryButton
                 onClick={() => setViewingConfig({ id: LOCAL_HOST_ID, name: "This machine" })}
               >
@@ -429,6 +457,7 @@ export function HostsSection() {
           </div>
         </div>
       )}
+      {drainError && <ErrorText style={{ marginTop: 8 }}>{drainError}</ErrorText>}
       {deleteError && !cascadePrompt && (
         <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>
       )}

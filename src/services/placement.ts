@@ -301,9 +301,10 @@ function collectCandidates(app: FastifyInstance): CollectedCandidates {
  * pinned host, and a remote-placed session's cwd cannot be that path.
  * This module decides the host; it does not move files.
  *
- * The local host is always eligible (it is this process: online per the
- * heartbeat's own rule, and measured live), so the "no eligible host"
- * fallback is reached from here only once #1725's drain flag can park it.
+ * The local host is eligible by default (it is this process: online per
+ * the heartbeat's own rule, and measured live) — so the "no eligible host"
+ * fallback is reached from here once the host is PARKED (#1725's drain
+ * flag), which is exactly what parking the primary is for.
  * The fallback itself is the pure function's, and its table is pinned by
  * test/services/placement.test.ts.
  */

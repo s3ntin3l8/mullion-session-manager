@@ -43,6 +43,8 @@ describe("Settings -> Hosts", () => {
         health: "pending",
         lastSeenAt: null,
         lastCheckedAt: null,
+        // Issue #1725 — the drain flag: every host carries it.
+        drained: false,
         hasProjects: true,
       },
     ];

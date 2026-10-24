@@ -183,7 +183,13 @@ export async function hostsRoute(app: FastifyInstance) {
     { schema: updateHostSchema },
     async (request, reply) => {
       const { id } = request.params;
-      if (id === LOCAL_HOST_ID) return reply.badRequest("the local host cannot be edited");
+      // Issue #1725 — the DRAIN flag is a placement decision, not an edit of
+      // the local host's identity, and it is the one thing about the primary
+      // an operator needs to be able to change: parking the primary is how
+      // you drain it. Everything else about it stays uneditable.
+      if (id === LOCAL_HOST_ID && request.body.drained === undefined) {
+        return reply.badRequest("the local host cannot be edited");
+      }
       if (request.body.baseUrl !== undefined && !isValidHttpUrl(request.body.baseUrl)) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }

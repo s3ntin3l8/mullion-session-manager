@@ -58,22 +58,54 @@ describe("hosts route (issue #26)", () => {
     const listed = await app.inject({ method: "GET", url: "/api/hosts" });
     expect(listed.json().find((h: { id: string }) => h.id === hostId).drained).toBe(true);
 
-    const unparked = await app.inject({
+    // The flag is a COLUMN, so it survives a primary restart — an
+    // operator's decision to park a machine must not expire with the
+    // process. Re-opening the app on the same database is the restart.
+    //
+    // The restart happens WHILE THE HOST IS PARKED: parking, closing,
+    // reopening, and only then reading the flag back. Restarting after
+    // un-parking would prove nothing — it would re-assert the column's
+    // default, and would stay green even if the flag were never
+    // persisted at all.
+    await app.close();
+    const restarted = await buildApp();
+    const relisted = await restarted.inject({ method: "GET", url: "/api/hosts" });
+    expect(relisted.json().find((h: { id: string }) => h.id === hostId).drained).toBe(true);
+
+    // And it can still be un-parked after the restart.
+    const unparked = await restarted.inject({
       method: "PATCH",
       url: `/api/hosts/${hostId}`,
       payload: { drained: false },
     });
     expect(unparked.statusCode).toBe(200);
     expect(unparked.json().drained).toBe(false);
-
-    // The flag is a COLUMN, so it survives a primary restart — an
-    // operator's decision to park a machine must not expire with the
-    // process. Re-opening the app on the same database is the restart.
-    await app.close();
-    const restarted = await buildApp();
-    const relisted = await restarted.inject({ method: "GET", url: "/api/hosts" });
-    expect(relisted.json().find((h: { id: string }) => h.id === hostId).drained).toBe(false);
     await restarted.close();
+  });
+
+  it("parks the LOCAL host — parking the primary is how you drain it", async () => {
+    // The local host takes no other edits (it has no identity to edit),
+    // but the drain flag is a PLACEMENT decision, not an edit of its
+    // identity — and it is the one thing about the primary an operator
+    // needs to be able to change. Parking it is what makes the
+    // no-eligible-host fallback reachable.
+    const app = await buildApp();
+    const parked = await app.inject({
+      method: "PATCH",
+      url: "/api/hosts/local",
+      payload: { drained: true },
+    });
+    expect(parked.statusCode).toBe(200);
+    expect(parked.json().drained).toBe(true);
+
+    // Everything else about the local host is still off limits.
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/api/hosts/local",
+      payload: { name: "not this machine" },
+    });
+    expect(renamed.statusCode).toBe(400);
+    await app.close();
   });
 
   it("parks a host WITHOUT touching anything that runs on it", async () => {
