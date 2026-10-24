@@ -14,8 +14,10 @@
 // ROOT package's own lifecycle scripts on every install — so this runs for the
 // dev checkout AND for every deployed release.
 //
-// Idempotent and safe: a no-op when node-pty has no prebuilds (the Linux
-// case), and a no-op when the helper is already executable.
+// Idempotent and safe: a no-op when node-pty is absent or ships no
+// prebuilds, and a no-op when the helper is already executable by its
+// owner. On Linux it does chmod the (never exec'd) darwin helpers — npm
+// extracts the whole tarball on every platform — which is harmless.
 import { chmodSync, existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
