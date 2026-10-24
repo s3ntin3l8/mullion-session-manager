@@ -299,10 +299,6 @@ function main() {
   console.log("");
   console.log("git-doctor: repairing.");
 
-  // A failed fetch means the refs could not be restored, so the clone is not
-  // whole — that is a fetch fact, not an fsck one, so it is tracked here.
-  let refsRestored = true;
-
   // Step 1 — quarantine. MOVE, never delete: the quarantine is the recovery
   // point, and it lives inside the git dir so the rename is atomic and
   // same-filesystem. It is deliberately outside `objects/`, so git does not
@@ -319,7 +315,6 @@ function main() {
       moved.push({ rel, sha: shaOfLoosePath(rel) });
     } catch (err) {
       console.log(`  could not quarantine ${rel} — ${err.message}`);
-      refsRestored = false;
     }
   }
   console.log(`  quarantined ${moved.length} zero-byte object(s) into ${quarantine}`);
@@ -344,15 +339,17 @@ function main() {
     );
   }
 
-  // Step 3 — restore the refs. A fetch that fails means the refs could not
-  // be restored, so the clone is not whole. A clone with NO origin has no
-  // remote refs to restore, so there is nothing for the fetch to do — that is
-  // not a failure.
+  // Step 3 — restore the refs.
+  //
+  // Whether the fetch could run is a FACT, not a verdict: whether the clone
+  // is whole is fsck's call, and fsck sees the refs the fetch did not
+  // restore. If they are broken, fsck says so; if they are fine, they were
+  // never broken. A clone with NO origin has no remote refs to restore, so
+  // there is nothing for the fetch to do.
   if (gitTry(["remote", "get-url", "origin"]) === null) {
     console.log("  no 'origin' remote — nothing to restore from");
   } else if (gitTry(["fetch", "origin", "--prune"]) === null) {
-    refsRestored = false;
-    console.log("  'git fetch origin --prune' failed — the refs could not be restored.");
+    console.log("  'git fetch origin --prune' could not run — the refs were not restored");
   } else {
     console.log("  refs restored from origin");
   }
@@ -400,9 +397,6 @@ function main() {
   //   references it any more, so fsck has nothing to complain about. A clone
   //   can be whole again and still have lost something — exit 2 says so.
   const remaining = fsckErrors();
-  if (!refsRestored) {
-    console.log("  the refs could not be restored — the clone is not whole.");
-  }
   if (remaining.length > 0) {
     console.log(`  ${remaining.length} fsck error(s) remain:`);
     for (const line of remaining) console.log(`    ${line}`);

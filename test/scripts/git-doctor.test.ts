@@ -169,6 +169,23 @@ describe("git-doctor.mjs", () => {
     expect(result.stdout).toContain("whole again, but some objects could not be recovered");
   });
 
+  // A fetch that could not run is a FACT about the fetch, not a verdict
+  // about the clone: whether the clone is whole is fsck's call, and fsck
+  // sees the refs the fetch did not restore.
+  it("does not contradict itself when the fetch could not run", () => {
+    // An origin that cannot be reached, and an object that is only
+    // shadowed — so the fetch fails and nothing is missing.
+    git(["remote", "add", "origin", "/nonexistent-remote-for-the-test"]);
+    damageAShadowedObject();
+
+    const result = run(["--apply"]);
+    expect(result.stdout).toContain("could not run");
+    // One verdict, and it is fsck's.
+    expect(result.stdout).not.toContain("not whole");
+    expect(result.stdout).toContain("the clone is whole");
+    expect(result.status).toBe(0);
+  });
+
   it("exits 1 when the clone is still not whole", () => {
     // The COMMIT itself is destroyed, so the index cannot be rebuilt and
     // fsck still has something to report.
