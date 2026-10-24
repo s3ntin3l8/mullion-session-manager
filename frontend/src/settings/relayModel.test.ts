@@ -32,6 +32,24 @@ describe("relayModel", () => {
     });
   });
 
+  it("keeps the stored provider while the list can't verify it, so an edit never makes the joined text a model id", () => {
+    // Options failed to load: the stored pair is shown as `provider:model` and
+    // edited as text. An edit under the same provider keeps the provider.
+    expect(parseRelayModel("openrouter:llama3:70b", [], { modelProvider: "openrouter" })).toEqual({
+      model: "llama3:70b",
+      modelProvider: "openrouter",
+    });
+    // Once the list has loaded, an unknown value is a custom bare model.
+    expect(
+      parseRelayModel("openrouter:not-listed", PROVIDERS, { modelProvider: "openrouter" }),
+    ).toEqual({ model: "openrouter:not-listed", modelProvider: "" });
+    // Another prefix is the user's own text.
+    expect(parseRelayModel("other:x", [], { modelProvider: "openrouter" })).toEqual({
+      model: "other:x",
+      modelProvider: "",
+    });
+  });
+
   it("parses null as the profile default and anything unknown as a bare custom model", () => {
     expect(parseRelayModel(null, PROVIDERS)).toEqual({
       model: PROFILE_DEFAULT_MODEL,

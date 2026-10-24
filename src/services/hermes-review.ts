@@ -30,9 +30,18 @@ const MODEL_OPTIONS_TIMEOUT_MS = 15_000;
 // The payload carries per-model pricing and capability hints for every
 // provider (an aggregator lists thousands of models).
 const MODEL_OPTIONS_MAX_BYTES = 8_000_000;
-// More than this in one dropdown is unusable; the Custom entry covers the rest.
+// More than this in one unsearchable dropdown is unusable; the Custom entry
+// covers the rest. The total is shared out between the providers, so fifteen
+// of them cannot add up to thousands of options.
 const MAX_MODELS_PER_PROVIDER = 300;
-/** The API server's virtual model: "use the Hermes profile's own model chain". */
+const MAX_MODELS_TOTAL = 600;
+const MIN_MODELS_PER_PROVIDER = 25;
+/**
+ * The setting's value for "use the Hermes profile's own model chain". It is
+ * only a UI-level name: the API server's virtual model comes from ITS launch
+ * profile (`/p/review-bot/v1/models` advertises `review-bot`), so it is never
+ * put on the wire — a run with no model is the gateway default.
+ */
 export const HERMES_PROFILE_DEFAULT_MODEL = "hermes-agent";
 const MAX_RUN_OUTPUT_CHARS = 4_000;
 const MAX_TRACKED_RUNS = 200;
@@ -677,21 +686,25 @@ export async function listHermesModelOptions(app: FastifyInstance): Promise<Herm
       `unexpected /api/model/options body: ${String(text).slice(0, 200)}`,
     );
   }
-  const out: HermesModelProvider[] = [];
+  const usable: HermesModelProvider[] = [];
   for (const row of rows as Array<Record<string, unknown>>) {
     const slug = typeof row.slug === "string" ? row.slug : "";
     if (!slug || row.authenticated === false || !Array.isArray(row.models)) continue;
     const models = [
       ...new Set(row.models.filter((m): m is string => typeof m === "string" && m !== "")),
-    ].slice(0, MAX_MODELS_PER_PROVIDER);
+    ];
     if (models.length === 0) continue;
-    out.push({
+    usable.push({
       provider: slug,
       name: typeof row.name === "string" && row.name ? row.name : slug,
       models,
     });
   }
-  return out;
+  const perProvider = Math.min(
+    MAX_MODELS_PER_PROVIDER,
+    Math.max(MIN_MODELS_PER_PROVIDER, Math.floor(MAX_MODELS_TOTAL / usable.length)),
+  );
+  return usable.map((p) => ({ ...p, models: p.models.slice(0, perProvider) }));
 }
 
 export interface HermesReviewRequest {
@@ -826,10 +839,12 @@ export async function requestRelay(
   const { owner, repo, number } = target;
   const settings = getStoredSettings(app.db).reviewRelay;
   const { apiUrl, model, cooldownMinutes } = settings;
-  // A provider only qualifies a real model; the alias already means "whatever
-  // the profile is configured with".
-  const provider =
-    model !== HERMES_PROFILE_DEFAULT_MODEL && settings.modelProvider ? settings.modelProvider : "";
+  // The alias means "whatever the profile is configured with", so neither it
+  // nor a provider goes on the wire (see HERMES_PROFILE_DEFAULT_MODEL); a
+  // provider only ever qualifies a real model.
+  const override = model !== HERMES_PROFILE_DEFAULT_MODEL && model !== "";
+  const wireModel = override ? model : "";
+  const provider = override ? settings.modelProvider : "";
   const key = assertReviewerConfigured(app);
   const promptRepo = target.kind === "issue" ? settings.triagePromptRepo : settings.promptRepo;
   const promptPath = target.kind === "issue" ? settings.triagePromptPath : settings.promptPath;
@@ -940,7 +955,7 @@ export async function requestRelay(
         try {
           dispatched = await dispatchReview(root, key, {
             idempotencyKey,
-            model,
+            model: wireModel,
             provider,
             kind: target.kind,
             owner,
@@ -1214,8 +1229,8 @@ async function dispatchReview(
   await checkHealth(root);
 
   const body = JSON.stringify({
-    model: r.model,
-    ...(r.provider ? { provider: r.provider } : {}),
+    ...(r.model ? { model: r.model } : {}),
+    ...(r.model && r.provider ? { provider: r.provider } : {}),
     input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt),
     // The session id is what makes the review rounds of one pull request
     // continue the same conversation. Without it Hermes derives the session

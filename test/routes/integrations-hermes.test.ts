@@ -177,6 +177,19 @@ describe("Hermes review relay integration routes", () => {
       expect(res.json().providers[0].models).toHaveLength(300);
     });
 
+    it("shares the cap between providers, so many of them stay a usable list", async () => {
+      configure();
+      const many = Array.from({ length: 300 }, (_, i) => `m${i}`);
+      fetchMock.mockResolvedValue(
+        options(
+          Array.from({ length: 10 }, (_, i) => ({ slug: `p${i}`, name: `P${i}`, models: many })),
+        ),
+      );
+      const providers = (await call("GET", URL)).json().providers as Array<{ models: string[] }>;
+      expect(providers).toHaveLength(10);
+      expect(providers.every((p) => p.models.length === 60)).toBe(true);
+    });
+
     it("reports unauthorized on a 401 so the UI can say the key is wrong", async () => {
       configure();
       fetchMock.mockResolvedValue(new Response("no", { status: 401 }));

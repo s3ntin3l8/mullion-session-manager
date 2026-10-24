@@ -424,7 +424,8 @@ describe("hermes review relay", () => {
       expect(headers["Idempotency-Key"]).toBe("hermes-review:acme/widgets#7@..abc1234");
       expect(init.redirect).toBe("manual");
       const body = JSON.parse(init.body as string);
-      expect(body.model).toBe("hermes-agent");
+      // The profile default sends no model: the gateway's own default applies.
+      expect(body).not.toHaveProperty("model");
       expect(body.input).toContain("Target: pr #7 in repo acme/widgets");
       expect(body.input).toContain("REVIEW PROMPT BODY");
     });
@@ -436,14 +437,16 @@ describe("hermes review relay", () => {
         return JSON.parse((post[1] as RequestInit).body as string);
       };
 
-      it("sends no provider for the profile default, whatever is stored", async () => {
-        // The alias already means "the profile's own chain"; a stale provider
-        // must not turn it into an override.
+      it("sends neither model nor provider for the profile default, whatever is stored", async () => {
+        // "hermes-agent" is only the API server's alias under ITS launch
+        // profile (a `-p review-bot` gateway advertises `review-bot`), so on
+        // the wire it would be a literal model id again; no model is the
+        // gateway default. A stale provider must not turn it into an override.
         applySettingsPatch(app, {
           reviewRelay: { model: "hermes-agent", modelProvider: "openrouter" },
         });
         const body = await dispatchedBody();
-        expect(body.model).toBe("hermes-agent");
+        expect(body).not.toHaveProperty("model");
         expect(body).not.toHaveProperty("provider");
       });
 

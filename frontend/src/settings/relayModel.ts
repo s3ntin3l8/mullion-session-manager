@@ -26,10 +26,17 @@ export function relayModelValue(model: string, modelProvider: string): string | 
   return model === PROFILE_DEFAULT_MODEL ? null : model;
 }
 
-/** The pair to store for a picker value. A value not in the list is a custom bare model. */
+/**
+ * The pair to store for a picker value. A value not in the list is a custom
+ * bare model — except under the stored provider: when the list could not load,
+ * the stored pair is shown (and edited) as its joined `provider:model` text, so
+ * an edit that keeps the provider prefix must keep the provider, not turn the
+ * joined string into a bare model id.
+ */
 export function parseRelayModel(
   value: string | null,
   providers: HermesModelProvider[],
+  current: { modelProvider: string } = { modelProvider: "" },
 ): { model: string; modelProvider: string } {
   if (value === null) return { model: PROFILE_DEFAULT_MODEL, modelProvider: "" };
   const colon = value.indexOf(":");
@@ -39,6 +46,10 @@ export function parseRelayModel(
     if (providers.some((p) => p.provider === provider && p.models.includes(model))) {
       return { model, modelProvider: provider };
     }
+  }
+  const prefix = `${current.modelProvider}:`;
+  if (current.modelProvider && providers.length === 0 && value.startsWith(prefix)) {
+    return { model: value.slice(prefix.length), modelProvider: current.modelProvider };
   }
   return { model: value, modelProvider: "" };
 }

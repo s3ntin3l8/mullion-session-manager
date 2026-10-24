@@ -406,6 +406,30 @@ describe("Settings -> Integrations -> Review relay", () => {
       );
     });
 
+    it("explains an empty list instead of showing only Profile default and Custom", async () => {
+      configure();
+      modelOptions = () => jsonResponse(200, { available: true, providers: [] });
+      await renderCard();
+      expect(await screen.findByText(/no authenticated provider with models/)).toBeInTheDocument();
+    });
+
+    it("keeps the stored provider when an edit under it is committed while the list is down", async () => {
+      configure({ model: "llama3:8b", modelProvider: "openrouter" });
+      const user = userEvent.setup();
+      await renderCard();
+      expect(await screen.findByText(/Couldn't load the model list/)).toBeInTheDocument();
+      const field = screen.getByLabelText("Review relay model (custom model ID)");
+      expect(field).toHaveValue("openrouter:llama3:8b");
+      await user.clear(field);
+      await user.type(field, "openrouter:llama3:70b");
+      await user.tab();
+      await waitFor(() =>
+        expect(settingsPatches).toContainEqual({
+          reviewRelay: { model: "llama3:70b", modelProvider: "openrouter" },
+        }),
+      );
+    });
+
     it("blames the key when Hermes rejects it", async () => {
       configure();
       modelOptions = () => jsonResponse(200, { available: false, reason: "unauthorized" });

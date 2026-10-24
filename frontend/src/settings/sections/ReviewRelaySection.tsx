@@ -272,7 +272,9 @@ export function ReviewRelaySection() {
     : modelOptions === null
       ? "Loading models from Hermes…"
       : modelOptions.available
-        ? null
+        ? modelProviders.length === 0
+          ? "Hermes has no authenticated provider with models to offer. Use Custom… or set one up on the profile."
+          : null
         : modelOptions.reason === "unauthorized"
           ? "Hermes rejected the API key, so the model list could not load. Use Custom…."
           : "Couldn't load the model list from Hermes. Use Custom… to type a model ID.";
@@ -342,7 +344,9 @@ export function ReviewRelaySection() {
             options={relayModelOptions(modelProviders)}
             defaultLabel={`Profile default (${PROFILE_DEFAULT_MODEL})`}
             allowCustom
-            onChange={(v) => updateSettings({ reviewRelay: parseRelayModel(v, modelProviders) })}
+            onChange={(v) =>
+              updateSettings({ reviewRelay: parseRelayModel(v, modelProviders, relay) })
+            }
           />
           <TextSettingRow
             label="Prompt repository"
