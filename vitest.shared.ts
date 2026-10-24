@@ -50,13 +50,16 @@ export const coverageConfig: CoverageOptions = {
 // here since it isn't a worktree — it's this repo's own frontend workspace).
 export const worktreeExcludes = [".wt/**", ".claude/worktrees/**", ".mullion-worktrees/**"];
 
-// Worker cap for local runs. Vitest sizes its pool to every core the host
-// exposes, so several concurrent suites (one per agent worktree, plus the
+// Default worker cap for local runs. Vitest sizes its pool to every core the
+// host exposes, so several concurrent suites (one per agent worktree, plus the
 // pre-push gate) oversubscribe the box and trip the 20s test timeouts.
-// Override with VITEST_MAX_WORKERS; CI runners are dedicated and small, so
-// they keep Vitest's own default.
-export const maxWorkers: number | undefined = process.env.VITEST_MAX_WORKERS
-  ? Number(process.env.VITEST_MAX_WORKERS)
-  : process.env.CI
-    ? undefined
-    : Math.max(2, Math.floor(availableParallelism() / 3));
+//
+// Precedence: Vitest itself reads `VITEST_MAX_WORKERS` and lets it override
+// whatever `maxWorkers` the config sets, so an explicit env value always wins
+// over this default - including the value Mullion's shell integration exports
+// into agent sessions (sized from the load at session launch). This default
+// is what applies when that variable is unset. CI runners are dedicated and
+// small, so under `CI` it stays unset and Vitest keeps its own default.
+export const maxWorkers: number | undefined = process.env.CI
+  ? undefined
+  : Math.max(2, Math.floor(availableParallelism() / 3));

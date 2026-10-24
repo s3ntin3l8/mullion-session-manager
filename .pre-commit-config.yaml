@@ -1,7 +1,9 @@
-# Stop at the first failing hook. Without this a failed pre-push vitest hook
-# still ran patch-coverage, which found no coverage report and re-ran the
-# whole suite (see scripts/check-patch-coverage.mjs) - doubling the load at
-# exactly the moment the host was already struggling.
+# Stop at the first failing hook. This is global, so it also applies to the
+# pre-commit stage (a lint/whitespace failure hides later checks until it is
+# fixed). The point is pre-push: without it a failed vitest hook still ran
+# patch-coverage, which found no coverage report and re-ran the whole suite
+# (see scripts/check-patch-coverage.mjs) - doubling the load at exactly the
+# moment the host was already struggling.
 fail_fast: true
 
 repos:
