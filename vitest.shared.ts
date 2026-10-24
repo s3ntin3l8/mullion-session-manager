@@ -1,3 +1,4 @@
+import { availableParallelism } from "node:os";
 import type { CoverageOptions } from "vitest/node";
 
 // Shared between the root `vitest.config.ts` and `frontend/vitest.config.ts`
@@ -15,7 +16,9 @@ import type { CoverageOptions } from "vitest/node";
 // and needs it to merge `test-shard` results in `test-merge`.
 export const coverageConfig: CoverageOptions = {
   provider: "v8",
-  reporter: ["text", "json-summary", "json", "html"],
+  // No `html`: nothing reads it, and it writes thousands of small files per
+  // run, which under several concurrent suites is a real IO cost.
+  reporter: ["text", "json-summary", "json"],
   reportsDirectory: "coverage",
 };
 
@@ -46,3 +49,14 @@ export const coverageConfig: CoverageOptions = {
 // whatever else they need excluded (e.g. `frontend/**`, which isn't listed
 // here since it isn't a worktree — it's this repo's own frontend workspace).
 export const worktreeExcludes = [".wt/**", ".claude/worktrees/**", ".mullion-worktrees/**"];
+
+// Worker cap for local runs. Vitest sizes its pool to every core the host
+// exposes, so several concurrent suites (one per agent worktree, plus the
+// pre-push gate) oversubscribe the box and trip the 20s test timeouts.
+// Override with VITEST_MAX_WORKERS; CI runners are dedicated and small, so
+// they keep Vitest's own default.
+export const maxWorkers: number | undefined = process.env.VITEST_MAX_WORKERS
+  ? Number(process.env.VITEST_MAX_WORKERS)
+  : process.env.CI
+    ? undefined
+    : Math.max(2, Math.floor(availableParallelism() / 3));
