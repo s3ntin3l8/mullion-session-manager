@@ -42,7 +42,16 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // fallback root an earlier release shipped for the same configured path).
   // Same input, same pure function pty.ts's own plugin already calls — see
   // ensureSessionsDir's own comment on why this must match exactly.
-  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR);
+  //
+  // Issue #1771 — the install root rides along so the resolver's trail of
+  // the dirs this install has resolved applies here too: a device scope
+  // created before the sessions dir moved stays this instance's own,
+  // without a second mechanism for the device path. The history warning is
+  // not reported here: pty.ts's plugin registers FIRST (see src/app.ts) and
+  // says it once.
+  const sessionsDirs = resolveSessionsDirs(app.config.SESSIONS_DIR, {
+    mullionHome: app.config.MULLION_HOME,
+  });
   const manager = new DeviceManager({
     enabled: app.config.DEVICE_ENABLED,
     adbPath: app.config.DEVICE_ADB_PATH,
