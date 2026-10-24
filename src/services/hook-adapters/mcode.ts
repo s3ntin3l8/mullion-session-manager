@@ -355,6 +355,11 @@ function isMullionMcodeShim(shimPath: string): boolean {
   return contents !== null && contents.includes(MCODE_SHIM_MARKER);
 }
 
+/** Monotonic counter for the scratch-file name, so two installs racing inside
+ * ONE process cannot pick the same `<target>.<pid>.tmp` path. (Two separate
+ * Mullion processes already differ by pid.) */
+let atomicWriteCounter = 0;
+
 /**
  * Writes `contents` to `targetPath` atomically: a sibling `<target>.<pid>.tmp`
  * file is written first and then renamed over the target, so a concurrent
@@ -363,14 +368,15 @@ function isMullionMcodeShim(shimPath: string): boolean {
  * atomic. Mirrors forwarder-shim.ts's own `ensureForwarderShim` write.
  */
 function writeFileAtomic(targetPath: string, contents: string, mode: number): void {
-  const tmpPath = `${targetPath}.${process.pid}.tmp`;
+  atomicWriteCounter += 1;
+  const tmpPath = `${targetPath}.${process.pid}.${atomicWriteCounter}.tmp`;
   try {
     writeFileSync(tmpPath, contents, { mode });
     chmodSync(tmpPath, mode);
     renameSync(tmpPath, targetPath);
   } catch {
-    // Best-effort scratch-file cleanup — a leftover `.<pid>.tmp` is harmless
-    // (nothing ever reads it) and not worth failing the install over.
+    // Best-effort scratch-file cleanup — a leftover `.<pid>.<n>.tmp` is
+    // harmless (nothing ever reads it) and not worth failing the install over.
     try {
       unlinkSync(tmpPath);
     } catch {
@@ -438,15 +444,28 @@ export function installMcodePlugin(): void {
   mkdirSync(path.join(pluginDir, ".claude-plugin"), { recursive: true, mode: 0o755 });
   mkdirSync(path.join(pluginDir, "hooks"), { recursive: true, mode: 0o755 });
 
-  writeFileSync(path.join(pluginDir, ".claude-plugin", "plugin.json"), buildMcodePluginManifest(), {
-    mode: 0o644,
-  });
-  writeFileSync(path.join(pluginDir, "hooks", "hooks.json"), buildMcodeHooksJson(shimPath), {
-    mode: 0o644,
-  });
-  writeFileSync(path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME), MCODE_PLUGIN_MARKER_CONTENT, {
-    mode: 0o644,
-  });
+  // All three go through the ATOMIC writer, not a plain writeFileSync
+  // (Hermes review, PR #1793 — the last open suggestion). mcode scans its
+  // plugin directory ONCE at startup, so a half-written hooks.json is exactly
+  // the failure the atomic shim write prevents: two Mullion sessions
+  // starting mcode at the same moment (Task Master workers) could otherwise
+  // expose a truncated hooks.json to the second mcode's scan, and mcode
+  // would load a plugin with no hooks and no error.
+  writeFileAtomic(
+    path.join(pluginDir, ".claude-plugin", "plugin.json"),
+    buildMcodePluginManifest(),
+    0o644,
+  );
+  writeFileAtomic(
+    path.join(pluginDir, "hooks", "hooks.json"),
+    buildMcodeHooksJson(shimPath),
+    0o644,
+  );
+  writeFileAtomic(
+    path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME),
+    MCODE_PLUGIN_MARKER_CONTENT,
+    0o644,
+  );
 }
 
 /**

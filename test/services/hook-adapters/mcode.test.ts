@@ -1,5 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import {
@@ -242,6 +251,15 @@ describe("buildMcodeHooksJson", () => {
   });
 });
 
+/** Directory entries, tolerating a missing directory. */
+function listDir(dir: string): string[] {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
 describe("buildMcodePluginManifest", () => {
   it("declares the plugin name mcode requires", () => {
     const manifest = JSON.parse(buildMcodePluginManifest());
@@ -343,6 +361,57 @@ describe("install/remove the host-global plugin", () => {
       writeFileSync(shimPath, userShim, { mode: 0o755 });
       installMcodePlugin();
       expect(readFileSync(shimPath, "utf8")).toBe(userShim);
+    } finally {
+      if (realHome === undefined) delete process.env.HOME;
+      else process.env.HOME = realHome;
+    }
+  });
+
+  it("writes every plugin file atomically (a new inode, never an in-place truncate)", () => {
+    // All three plugin files go through the atomic writer (sibling `.tmp` +
+    // rename), because mcode scans its plugin dir ONCE at startup — a
+    // half-written hooks.json would silently load a plugin with no hooks.
+    //
+    // The observable difference between an atomic write and a plain
+    // `writeFileSync` is the INODE: a rename installs a NEW file (new inode),
+    // while a plain write truncates the existing one in place (same inode).
+    // Asserting the inode changes therefore pins the atomic path without
+    // reaching into the implementation.
+    tmp = mkdtempSync(path.join(os.tmpdir(), "mcode-plugin-test-"));
+    process.env.MINIMAX_DATA_DIR = tmp;
+    const realHome = process.env.HOME;
+    process.env.HOME = tmp;
+
+    try {
+      installMcodePlugin();
+      const pluginDir = resolveMcodePluginDir();
+      const files = [
+        path.join(pluginDir, ".claude-plugin", "plugin.json"),
+        path.join(pluginDir, "hooks", "hooks.json"),
+        path.join(pluginDir, MCODE_PLUGIN_MARKER_NAME),
+      ];
+
+      const before = files.map((file) => statSync(file).ino);
+      installMcodePlugin();
+      const after = files.map((file) => statSync(file).ino);
+
+      for (const [index, file] of files.entries()) {
+        expect(after[index], `${file} was written in place, not atomically`).not.toBe(
+          before[index],
+        );
+        // And it is complete: a truncated write would not parse.
+        if (file.endsWith(".json")) {
+          expect(() => JSON.parse(readFileSync(file, "utf8"))).not.toThrow();
+        }
+      }
+
+      // No scratch files survive the rename.
+      const leftovers = [
+        ...listDir(path.join(pluginDir, ".claude-plugin")),
+        ...listDir(path.join(pluginDir, "hooks")),
+        ...listDir(pluginDir),
+      ].filter((name) => name.endsWith(".tmp"));
+      expect(leftovers).toEqual([]);
     } finally {
       if (realHome === undefined) delete process.env.HOME;
       else process.env.HOME = realHome;
