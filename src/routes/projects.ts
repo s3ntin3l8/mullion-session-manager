@@ -86,7 +86,6 @@ import {
   getDefaultBranch,
   type GitHubCiStatus,
   type GitHubPRsStatus,
-  type PROrWithChecks,
   detectReleasePleaseConfig,
 } from "../services/github.js";
 import {
@@ -110,10 +109,10 @@ import { buildHandoffPrompt } from "../services/pr-handoff.js";
 import {
   assertReviewerConfigured,
   getHermesReviewStatus,
-  getReviewRunForPr,
   requestHermesReview,
 } from "../services/hermes-review.js";
-import { getRelayReviewState, replyReviewError, reviewReader } from "./review-relay.js";
+import { getRelayReviewState, overlayRelayRuns } from "../services/relay-review-state.js";
+import { replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
@@ -735,55 +734,6 @@ interface LoadProjectRepoContextOptions {
    * the silent 204 — for actions the user explicitly clicked, where "nothing
    * happened" would be a worse answer than "no token". */
   noTokenMessage?: string;
-}
-
-/**
- * Annotates a project's pull requests with the review relay's state for
- * each (issue #1630).
- *
- * Only a PR the relay knows about costs anything: the run index is
- * in-memory, so a PR with no run in it is left exactly as it was, and the
- * GitHub call that looks for a landed review happens only for the few PRs
- * that actually have a run.
- */
-async function attachRelayReviewState(
-  app: FastifyInstance,
-  prs: PROrWithChecks[],
-  repoRef: { owner: string; repo: string },
-): Promise<PROrWithChecks[]> {
-  // One pass to find the PRs the relay knows about — the same lookup every
-  // annotation would otherwise repeat.
-  const withRuns = new Set(
-    prs
-      .filter((pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null)
-      .map((pr) => pr.number),
-  );
-  if (withRuns.size === 0) return prs;
-  // A read token for the landed check. Without one the PR still shows that a
-  // review was requested — it just cannot say whether it landed (the state
-  // says "could not confirm", not "not landed").
-  //
-  // `resolveGitHubToken` already narrows its own failures the way this repo
-  // does everywhere else: the expected ones fall back to the PAT and a null
-  // answer means "no credentials", while an unexpected one (a bug) is
-  // rethrown. So there is nothing to catch here — a swallowed TypeError
-  // would read as "could not confirm" instead of surfacing.
-  const token = await resolveGitHubToken(app, repoRef, "read");
-  return Promise.all(
-    prs.map(async (pr) => {
-      if (!withRuns.has(pr.number)) return pr;
-      const relayReview = await getRelayReviewState(app, {
-        owner: repoRef.owner,
-        repo: repoRef.repo,
-        prNumber: pr.number,
-        token,
-      });
-      // The list renders the state, the verdict and the author — not the
-      // review's whole text, which the drill-in fetches when it is opened.
-      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
-      return { ...pr, relayReview: summary };
-    }),
-  );
 }
 
 /**
@@ -1982,11 +1932,11 @@ export async function projectsRoute(app: FastifyInstance) {
         reply.code(204);
         return;
       }
-      // The review relay's state per PR (issue #1630) — the panel shows a
-      // "review requested" marker on a PR a review was asked for. Only a PR
-      // with a known relay run costs anything (one GitHub call, memoized);
-      // the rest of the list is untouched.
-      const annotated = await attachRelayReviewState(app, prs, repoRef);
+      // The review relay's state per PR (issues #1630, #1744) — the panel shows
+      // a "review requested" marker on a PR a review was asked for. The poller
+      // annotates the cache with the landed check; this only overlays the
+      // in-memory run index, so the request never waits on GitHub.
+      const annotated = overlayRelayRuns(prs, repoRef);
       return { prs: annotated, prSummary: computePRSummary(annotated) };
     },
   );
@@ -3027,28 +2977,16 @@ export async function projectsRoute(app: FastifyInstance) {
               prsResult[project.id] = null;
               return;
             }
-            // The relay's state for each PR the relay knows about (issue
-            // #1630). This half is where the panel's PR list comes from in a
-            // running app (the batch route feeds the Zustand store, which
-            // shadows the per-project fetch), so annotating only the
-            // per-project route would leave the list's review marker dead.
-            //
-            // A GitHub failure here is expected (a rate limit, a token that
-            // cannot be minted) — the list itself is still good, so it goes
-            // out un-annotated. An unexpected one is a bug and is left loud.
-            try {
-              prsResult[project.id] = {
-                ...status,
-                prs: await attachRelayReviewState(app, status.prs, result.value),
-              };
-            } catch (err) {
-              if (!(err instanceof GitHubApiError)) throw err;
-              app.log.warn(
-                { detail: (err as Error).message, projectId: project.id },
-                "batch git-refs: the review relay's state is unavailable, omitting",
-              );
-              prsResult[project.id] = status;
-            }
+            // The relay's state for each PR the relay knows about (issues
+            // #1630, #1744). This half is where the panel's PR list comes from
+            // in a running app (the batch route feeds the Zustand store, which
+            // shadows the per-project fetch). The poller already annotated the
+            // cache with the landed check, so this stays a pure cache read plus
+            // an in-memory overlay — it never waits on GitHub.
+            prsResult[project.id] = {
+              ...status,
+              prs: overlayRelayRuns(status.prs, result.value),
+            };
           })();
 
           await Promise.all([branchesPromise, prsPromise]);

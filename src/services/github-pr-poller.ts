@@ -15,6 +15,7 @@ import {
 import { gitEnv } from "./git-env.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
+import { annotateRelayReviewState } from "./relay-review-state.js";
 import { diffPrSnapshots, snapshotPr, type PrChange, type PrSnapshot } from "./github-pr-phase.js";
 import {
   createProbeMemo,
@@ -143,6 +144,19 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     const status = await getRepoPRsStatus(token, owner, repo);
     // Review state (GraphQL) is best-effort and never throws.
     await enrichPrsWithReviewState(token, owner, repo, status.prs, app.log);
+    // The review relay's state (issue #1744): the landed check is a GitHub call,
+    // so it happens here, off the request path; the routes read the cache.
+    try {
+      status.prs = await annotateRelayReviewState(app, status.prs, { owner, repo }, token);
+    } catch (err) {
+      // A rate limit or an unmintable token: the PR list is still good, so it
+      // is cached un-annotated. An unexpected error is a bug and stays loud.
+      if (!(err instanceof GitHubApiError)) throw err;
+      app.log.warn(
+        { detail: err.message, owner, repo },
+        "[github-pr-poller] the review relay's state is unavailable, leaving PRs un-annotated",
+      );
+    }
     setRepoPRsStatus(owner, repo, status);
     const changes = pushPrChanges(repoKey, status.prs, projectIds);
     if (changes.length > 0 && projectIds) {

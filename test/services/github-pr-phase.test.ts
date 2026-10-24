@@ -135,6 +135,23 @@ describe("diffPrSnapshots", () => {
     expect(diffPrSnapshots(prev, [snap(1, { mergeable: "CONFLICTING" })])).toHaveLength(1);
   });
 
+  it("reports a review landing (relay state change) so the panel is pushed (#1744)", () => {
+    const requested = snapshotPr({
+      ...snap(1),
+      relayReview: { state: "requested", runId: "run_1" },
+    });
+    const landed = snapshotPr({
+      ...snap(1),
+      relayReview: { state: "landed", runId: "run_1", verdict: "APPROVED" },
+    });
+    expect(requested).toMatchObject({ relayState: "requested", relayVerdict: null });
+    expect(diffPrSnapshots(new Map([[1, requested]]), [landed])).toMatchObject([
+      { number: 1, kind: "updated" },
+    ]);
+    // A PR the relay never touched snapshots as null/null, so it adds no noise.
+    expect(snap(1)).toMatchObject({ relayState: null, relayVerdict: null });
+  });
+
   it("reports opened, updated and closed PRs in that order", () => {
     const prev = new Map([
       [1, snap(1)],

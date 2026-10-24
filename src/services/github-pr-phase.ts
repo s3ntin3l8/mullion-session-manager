@@ -4,6 +4,7 @@
 // out of github.ts so the frontend-facing shape can be unit-tested alone.
 
 import type { GitHubCiStatus } from "./github.js";
+import type { RelayReviewState } from "../shared/types.js";
 
 export type PrReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
 export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
@@ -94,6 +95,10 @@ export interface PrSnapshot {
   unresolvedThreads: number | null;
   commentCount: number | null;
   prPhase: PrPhase;
+  /** The review relay's state for the PR (issue #1744): null when it has no run. */
+  relayState: RelayReviewState["state"] | null;
+  /** The landed review's verdict, so "Review posted" reaches the panel by push. */
+  relayVerdict: string | null;
 }
 
 export interface PrChange {
@@ -103,7 +108,9 @@ export interface PrChange {
   after: PrSnapshot | null;
 }
 
-export function snapshotPr(pr: PrSnapshot): PrSnapshot {
+export function snapshotPr(
+  pr: Omit<PrSnapshot, "relayState" | "relayVerdict"> & { relayReview?: RelayReviewState },
+): PrSnapshot {
   return {
     number: pr.number,
     headSha: pr.headSha,
@@ -116,6 +123,8 @@ export function snapshotPr(pr: PrSnapshot): PrSnapshot {
     unresolvedThreads: pr.unresolvedThreads,
     commentCount: pr.commentCount,
     prPhase: pr.prPhase,
+    relayState: pr.relayReview?.state ?? null,
+    relayVerdict: pr.relayReview?.verdict ?? null,
   };
 }
 
