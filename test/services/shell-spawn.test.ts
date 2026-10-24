@@ -294,6 +294,10 @@ describe("runShellCapture", () => {
     // The escalation is still armed — the child is still alive.
     await vi.advanceTimersByTimeAsync(baseOptions.killEscalationMs);
     expect(kill).toHaveBeenCalledWith("SIGKILL");
+    // Exactly one SIGKILL: the escalation timer is armed ONCE, so a second
+    // timer (which would signal an already-doomed child again) is not a thing
+    // that can happen here.
+    expect(kill).toHaveBeenCalledTimes(2); // SIGTERM + one SIGKILL
 
     await assertion;
   });
