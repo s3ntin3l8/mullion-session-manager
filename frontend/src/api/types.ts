@@ -359,6 +359,13 @@ export interface Host {
   // numbers were measured, so a stale reading can be shown as stale — the
   // UI work is #1726.
   capacity?: HostCapacity | null;
+  // Issue #1725 / roadmap 8.11 — whether this host is PARKED: it takes no
+  // new work (the placement policy stops choosing it), but nothing about
+  // it is torn down and it stays usable for manual placement.
+  //
+  // NOT optional: the column is notNull with a default, so every host
+  // carries it.
+  drained?: boolean;
 }
 
 // Mirrors src/services/host-capacity.ts's HostCapacity 1:1 — issue #1721,

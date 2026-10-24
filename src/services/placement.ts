@@ -36,13 +36,13 @@ export interface PlacementCandidate {
    */
   online: boolean;
   /**
-   * Drained/parked.
+   * Drained/parked: the host takes no new work.
    *
-   * Issue #1725 owns the flag itself — the column, the toggle, and what
-   * "parked" means. This issue only CONSULTS it, so the eligibility rule
-   * is in place from the start and #1725 only has to add the storage and
-   * the switch, not the policy. Until then, every candidate is
-   * `drained: false`.
+   * Issue #1725 / roadmap 8.11 owns the flag — the column, the toggle, and
+   * what "parked" means. It is an INTENT, not a teardown: draining a host
+   * kills no session, removes no worktree and contacts no agent, and the
+   * host stays usable for MANUAL placement. It only makes the host
+   * ineligible for AUTOMATIC placement.
    */
   drained: boolean;
   /**
@@ -269,8 +269,11 @@ function collectCandidates(app: FastifyInstance): CollectedCandidates {
       // construction (host-heartbeat.ts says so explicitly); a remote host
       // that has never been reached reads as "pending".
       online: health?.status === "online",
-      // Issue #1725 owns the drain flag; until it lands, nothing is drained.
-      drained: false,
+      // Issue #1725 / roadmap 8.11 — the host's own drain flag: a parked
+      // host takes no new work, so it is not a candidate. The flag is an
+      // intent, not a teardown: nothing about the host is stopped, and it
+      // stays usable for manual placement.
+      drained: host.drained,
       // The local host's reading is in the context, not here (it is
       // measured live rather than polled).
       capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),

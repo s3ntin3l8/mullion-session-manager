@@ -157,6 +157,38 @@ describe("Settings -> Hosts", () => {
     expect(within(row).getByText(/reading from 5 min ago/)).toBeInTheDocument();
   });
 
+  // Issue #1725 / roadmap 8.11 — the drain switch. Parking is a flag, not
+  // an action, so the row keeps everything else; what changes is that the
+  // host stops being chosen for new work.
+  describe("the drain switch", () => {
+    it("shows a parked host as parked, and un-parks it from the kebab menu", async () => {
+      const user = userEvent.setup();
+      hostsDb[0].drained = true;
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await waitFor(() => expect(within(row).getByText("parked")).toBeInTheDocument());
+
+      await user.click(within(row).getByTitle("More…"));
+      await user.click(await screen.findByText("Unpark host"));
+
+      await waitFor(() => expect(hostsDb[0].drained).toBe(false));
+    });
+
+    it("parks an unparked host from the kebab menu", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await waitFor(() => expect(within(row).queryByText("parked")).not.toBeInTheDocument());
+
+      await user.click(within(row).getByTitle("More…"));
+      await user.click(await screen.findByText("Park host (take no new work)"));
+
+      await waitFor(() => expect(hostsDb[0].drained).toBe(true));
+    });
+  });
+
   it("prompts to cascade-delete when the host still owns projects, then removes it on confirm", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="hosts" />);

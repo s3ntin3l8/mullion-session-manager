@@ -13,7 +13,12 @@ export const hostsApi = {
       body: JSON.stringify({ name, baseUrl, token }),
     }),
 
-  updateHost: (id: string, patch: Partial<{ name: string; baseUrl: string; token: string }>) =>
+  // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no new
+  // work) or un-parks it. A flag, not an action: nothing is terminated.
+  updateHost: (
+    id: string,
+    patch: Partial<{ name: string; baseUrl: string; token: string; drained: boolean }>,
+  ) =>
     request<Host>(`/api/hosts/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(patch),

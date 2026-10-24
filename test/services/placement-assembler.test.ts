@@ -19,6 +19,10 @@ import type { HostCapacity } from "../../src/services/host-capacity.js";
 
 const tmpDb = path.join(os.tmpdir(), `placement-assembler-test-${process.pid}.db`);
 
+/** The project's own path, and the path it has on a remote host. */
+const LOCAL_CWD = "/home/x/repo";
+const REMOTE_CWD = "/srv/repo";
+
 function capacity(loadAverage1m: number, logicalCores: number): HostCapacity {
   return {
     platform: "linux",
@@ -85,6 +89,34 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     // The local host is this process — it is online and measured live, so it
     // is always eligible; the offline remote simply never becomes a
     // candidate.
+    expect(decision.hostId).toBe("local");
+    expect(decision.considered.map((c) => c.hostId)).not.toContain(hostId);
+  });
+
+  it("does not offer a PARKED host — the drain flag comes from the row", async () => {
+    // Issue #1725 / roadmap 8.11 — the flag is the host's own column, so
+    // parking a host is what makes it ineligible: the policy consults
+    // `drained`, and the assembler reads the row.
+    const hostId = await registerHost("parked-agent");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+    const parked = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { drained: true },
+    });
+    expect(parked.statusCode).toBe(200);
+    expect(parked.json().drained).toBe(true);
+
+    const decision = resolvePlacement(app, {
+      project: {
+        hostId: "local",
+        placement: "auto",
+        cwd: LOCAL_CWD,
+        hostCwds: JSON.stringify({ [hostId]: REMOTE_CWD }),
+      },
+      unattended: true,
+    });
     expect(decision.hostId).toBe("local");
     expect(decision.considered.map((c) => c.hostId)).not.toContain(hostId);
   });

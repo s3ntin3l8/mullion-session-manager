@@ -32,6 +32,9 @@ interface UpdateHostBody {
   name?: string;
   baseUrl?: string;
   token?: string;
+  // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
+  // A flag, not an action — nothing is terminated.
+  drained?: boolean;
 }
 
 const createHostSchema = {
@@ -56,6 +59,10 @@ const updateHostSchema = {
       name: { type: "string", minLength: 1 },
       baseUrl: { type: "string", minLength: 1 },
       token: { type: "string", minLength: 1 },
+      // Issue #1725 — the drain flag (park the host / un-park it). A new
+      // host is never parked: parking is a decision about a host that is
+      // already in the fleet.
+      drained: { type: "boolean" },
     },
   },
 };

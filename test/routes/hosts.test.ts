@@ -34,6 +34,95 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1725 / roadmap 8.11 — the DRAIN flag: a host can be parked, so
+  // the placement policy stops choosing it for new work.
+  it("parks a host and un-parks it, and the flag survives a restart", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "parked", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = created.json().id as string;
+    // A new host is never parked.
+    expect(created.json().drained).toBe(false);
+
+    const parked = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { drained: true },
+    });
+    expect(parked.statusCode).toBe(200);
+    expect(parked.json().drained).toBe(true);
+
+    const listed = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(listed.json().find((h: { id: string }) => h.id === hostId).drained).toBe(true);
+
+    const unparked = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { drained: false },
+    });
+    expect(unparked.statusCode).toBe(200);
+    expect(unparked.json().drained).toBe(false);
+
+    // The flag is a COLUMN, so it survives a primary restart — an
+    // operator's decision to park a machine must not expire with the
+    // process. Re-opening the app on the same database is the restart.
+    await app.close();
+    const restarted = await buildApp();
+    const relisted = await restarted.inject({ method: "GET", url: "/api/hosts" });
+    expect(relisted.json().find((h: { id: string }) => h.id === hostId).drained).toBe(false);
+    await restarted.close();
+  });
+
+  it("parks a host WITHOUT touching anything that runs on it", async () => {
+    // Draining is an INTENT, not an action: no session is killed, no
+    // worktree removed, no agent contacted. The host stays exactly as it
+    // was — it just stops being CHOSEN for new work.
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "busy", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = created.json().id as string;
+
+    const parked = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { drained: true },
+    });
+    expect(parked.statusCode).toBe(200);
+
+    // The row is otherwise untouched: same baseUrl, same token presence,
+    // same origin. Parking is not a teardown and not a rename.
+    const listed = await app.inject({ method: "GET", url: "/api/hosts" });
+    const host = listed.json().find((h: { id: string }) => h.id === hostId);
+    expect(host.drained).toBe(true);
+    expect(host.baseUrl).toBe("http://127.0.0.1:1");
+    expect(host.hasToken).toBe(true);
+    expect(host.origin).toBe("manual");
+    await app.close();
+  });
+
+  it("rejects a drain value that is not a boolean", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "h", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = created.json().id as string;
+    const rejected = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { drained: "yes please" },
+    });
+    expect(rejected.statusCode).toBe(400);
+    await app.close();
+  });
+
   // Issue #1721 / roadmap 8.7 — the CAPACITY signal, merged into the same
   // list the health signal already lives in (and the platform the agent
   // reported at enrollment).

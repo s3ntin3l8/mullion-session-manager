@@ -8,7 +8,7 @@ import { deriveHostStatus, type PingState } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
-import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
+import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
 import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
@@ -63,6 +63,19 @@ function HostCapacityLine({ host }: { host: Host }) {
 
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
+
+  // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
+  //
+  // Parking is a FLAG, not an action: the host keeps running, keeps its
+  // sessions, and stays usable for manual placement. What it changes is
+  // that the placement policy stops CHOOSING it for new work.
+  const toggleDrain = (host: Host) => {
+    void updateHost(host.id, { drained: !host.drained }).catch(() => {
+      // The list refreshes on the next poll either way; a failed park is
+      // visible there, and the KebabMenu's own error path covers the
+      // "could not reach the host" case.
+    });
+  };
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
@@ -310,6 +323,17 @@ export function HostsSection() {
                     {display.label && (
                       <span style={{ fontSize: 10.5, color: display.color }}>{display.label}</span>
                     )}
+                    {/* Issue #1725 — the parked state, visible next to the
+                        health: the host is up, it is just taking no new
+                        work. */}
+                    {host.drained && (
+                      <span
+                        style={{ fontSize: 10.5, color: "var(--y)" }}
+                        title="Parked: this host takes no new work. Nothing on it is stopped."
+                      >
+                        parked
+                      </span>
+                    )}
                     {(() => {
                       const info = updateInfo[host.id];
                       if (!info) return null;
@@ -366,6 +390,15 @@ export function HostsSection() {
                           label: "Edit",
                           icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => setEditing(host),
+                        },
+                        {
+                          // Issue #1725 — park / un-park. The label says what
+                          // it DOES, not what it looks like: the host keeps
+                          // running and keeps its sessions.
+                          key: "drain",
+                          label: host.drained ? "Unpark host" : "Park host (take no new work)",
+                          icon: <MoonIcon size={14} style={{ color: "var(--muted)" }} />,
+                          onClick: () => toggleDrain(host),
                         },
                         {
                           key: "delete",
