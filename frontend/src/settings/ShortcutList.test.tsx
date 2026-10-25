@@ -48,4 +48,20 @@ describe("ShortcutList", () => {
     expect(screen.getByText("Command palette")).toBeInTheDocument();
     expect(screen.getByText("Find in scrollback")).toBeInTheDocument();
   });
+
+  it("puts the terminal palette caveat on the chord, not the group header", () => {
+    render(<ShortcutList voiceHotkey="" />);
+
+    expect(
+      screen.getByText("These work anywhere, except when a focused terminal takes the chord."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/including a focused terminal, except Ctrl/)).not.toBeInTheDocument();
+
+    const row = screen.getByText("Command palette").closest(".settings-row");
+    expect(row).toHaveTextContent("⌘ + K also opens it in a terminal");
+    expect(row).toHaveTextContent("Ctrl + K goes to the shell (kill-line)");
+    expect(row).toHaveTextContent(
+      "when on, gives that chord to the terminal instead of the browser and does not open the palette",
+    );
+  });
 });

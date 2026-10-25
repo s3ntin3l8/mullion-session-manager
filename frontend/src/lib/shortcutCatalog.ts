@@ -1,6 +1,6 @@
 import { chordLabel, matchesChord, parseChord } from "./keyChord.js";
 import type { KeyChord } from "./keyChord.js";
-import { DEFAULT_VOICE_CHORD } from "../api/settings.js";
+import { DEFAULT_VOICE_CHORD } from "../api/index.js";
 
 // The cheat sheet and the key listeners have to share one definition of
 // each chord. useGlobalShortcuts.ts and attachKeyConflictHandler used to
@@ -189,7 +189,8 @@ export function shortcutLabels(shortcut: ShortcutDefinition, voiceHotkey: string
 export const COMMAND_PALETTE_SHORTCUT: ShortcutDefinition = {
   id: "command-palette",
   action: "Command palette",
-  detail: "Open the launcher.",
+  detail:
+    "Open the launcher. ⌘ + K also opens it in a terminal; Ctrl + K goes to the shell (kill-line) and does not open the palette. Key-conflict handling → Ctrl + K (“Reserved for command palette”), when on, gives that chord to the terminal instead of the browser and does not open the palette.",
   scope: "app",
   binding: { kind: "either-mod", key: "k", ignoreCase: true, alt: "ignore", shift: "ignore" },
 };

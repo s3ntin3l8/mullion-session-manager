@@ -183,6 +183,7 @@ const BROWSER_RESERVED = [
 // OS-level app" to "collides with Mullion's own paste handling".
 const ALWAYS_CLAIMED: Array<[string, string]> = [
   ["Ctrl+Shift+F", "the scrollback find bar"],
+  // Ctrl+Alt+B and Alt+Meta+B are RIGHT_SIDEBAR_SHORTCUT in shortcutCatalog.ts.
   ["Ctrl+Alt+B", "the right-sidebar toggle"],
   ["Alt+Meta+B", "the right-sidebar toggle"],
   ["Shift+Insert", "paste"],
