@@ -524,13 +524,20 @@ describe("pickBridge", () => {
           priority: 5,
         }),
       );
+      // `priority` is a REQUIRED member of the interface, but the runtime
+      // reads it defensively (`bridge.priority ?? 0`) — so this case builds
+      // the bridge WITHOUT it, which is the shape that fallback exists for.
+      // The cast is the POINT of the test, not a shortcut around it: a
+      // double that supplied 0 by default would silently delete the
+      // coverage this test exists to give.
       app.connectedBridges.set(
         "bridge-no-priority",
-        bridgeDouble({
+        {
+          socket: {} as unknown as ConnectedBridge["socket"],
+          mux: {} as unknown as ConnectedBridge["mux"],
           connectedAt: 1,
           lastPongAt: now,
-          // priority intentionally omitted — must be treated as 0.
-        }),
+        } as unknown as ConnectedBridge,
       );
 
       const picked = pickBridge(app);

@@ -82,6 +82,12 @@ typecheck: ## Run type checking (backend + frontend, incl. the test tree)
 #     DOM lib), so adding it there breaks src/ rather than fixing the
 #     tests. The ONE type the tests are missing is declared in
 #     test/types/dom-shims.d.ts instead (the DOM's own definition).
+#
+# Its include list also covers scripts/**/*.ts, which the MAIN config does
+# not: the main one typechecks exactly one script (drizzle.config.ts) plus
+# the ssh-agent filter generator, while the test tree exercises the demo
+# scripts and the repo's own check scripts — so they come along here, where
+# their types are actually checked.
 typecheck-test: ## Type check the backend's TEST tree alone (issue #1860)
 	npm run typecheck:test
 
