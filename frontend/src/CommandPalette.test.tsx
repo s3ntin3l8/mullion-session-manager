@@ -2899,4 +2899,29 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(o.onOpenTasks).not.toHaveBeenCalled();
   });
+
+  it("labels the footer for a highlighted command instead of Launch in", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, [{ id: "shell:bash", kind: "shell", title: "bash", command: "bash" }]),
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    renderPalette(openers(), { onOpenSettings: vi.fn() });
+
+    // Same walk as the arrow-key test: the default seed is the first
+    // launcher, ArrowUp steps into Task board, then Settings.
+    const bash = await screen.findByRole("button", { name: /bash/ });
+    await waitFor(() => expect(bash).toHaveClass("selected"));
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.keyboard("{ArrowUp}{ArrowUp}");
+
+    const footer = screen.getByText("navigate").closest(".cmd-palette-footer");
+    expect(footer).toBeTruthy();
+    expect(footer?.textContent).toContain("Run Settings");
+    expect(footer?.textContent).not.toMatch(/Launch in/);
+  });
 });

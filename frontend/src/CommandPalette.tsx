@@ -1185,6 +1185,10 @@ export function CommandPalette({
               <>
                 <div className="cmd-palette-group-label">Sessions</div>
                 {matchingSessions.map((session, i) => {
+                  // `i` is already the absolute index — no `blankCommands`
+                  // lead. A blank query empties this group (useCommandSearch
+                  // returns [] when `query.trim() === ""`), so these rows
+                  // only render once that lead is empty.
                   const project = projects.find((p) => p.id === session.projectId);
                   const title = session.name || session.lastTitle || session.command;
                   const subtitleParts = [project?.name, session.liveBranch].filter(
@@ -1225,6 +1229,8 @@ export function CommandPalette({
               <>
                 <div className="cmd-palette-group-label">Workspaces</div>
                 {matchingWorkspaces.map((workspace, i) => {
+                  // Same blank-query invariant as sessions above: this group
+                  // is empty when `query.trim() === ""`, so no Commands lead.
                   const absoluteIndex = matchingSessions.length + i;
                   return (
                     <button
@@ -1326,7 +1332,7 @@ export function CommandPalette({
                       showBreadcrumb
                       selected={absoluteIndex === navIndex}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
-                      onClick={() => runCommand(command)}
+                      onClick={() => activateCommand(command)}
                     />
                   );
                 })}
@@ -1343,7 +1349,7 @@ export function CommandPalette({
             <span className="kbd">↵</span>
             {/* Reflects whichever entry is actually selected, not just the
                 launch-a-command case — "Launch in X" would be misleading
-                once the highlighted row is an existing session/workspace. */}
+                once the highlighted row is a command, session, or workspace. */}
             {subView === "workspace-name"
               ? query.trim()
                 ? `Create ${query.trim()}`
@@ -1356,7 +1362,9 @@ export function CommandPalette({
                   ? "Open session"
                   : navEntry?.type === "workspace"
                     ? "Switch workspace"
-                    : `Launch in ${target?.name ?? "…"}`}
+                    : navEntry?.type === "command"
+                      ? `Run ${navEntry.command.title}`
+                      : `Launch in ${target?.name ?? "…"}`}
           </span>
           {pickerOpen && (
             <span className="cmd-palette-footer-item">
