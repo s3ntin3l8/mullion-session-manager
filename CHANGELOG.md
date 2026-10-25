@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.47](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.46...v0.3.47) (2026-10-25)
+
+
+### Features
+
+* **files:** icon save/discard and config-file highlighting ([#1961](https://github.com/s3ntin3l8/mullion-session-manager/issues/1961)) ([3a7550f](https://github.com/s3ntin3l8/mullion-session-manager/commit/3a7550fc447c3d39a18cd0dc28c6b10df9909603))
+* **sessions:** prompt and wait_for_output a child on another host ([#1963](https://github.com/s3ntin3l8/mullion-session-manager/issues/1963)) ([37b3271](https://github.com/s3ntin3l8/mullion-session-manager/commit/37b3271e00436d63cff7b9cbacb609a0b73deef3))
+* **sessions:** spawn a child on a chosen host or platform ([#1960](https://github.com/s3ntin3l8/mullion-session-manager/issues/1960)) ([e5c7c10](https://github.com/s3ntin3l8/mullion-session-manager/commit/e5c7c10d9d0d1f25b5227d004a254d5dfc53941e))
+
+
+### Bug Fixes
+
+* **bundle-sync:** self-heal a CLI missing from the manifest; isolate tests from the real HOME ([#1946](https://github.com/s3ntin3l8/mullion-session-manager/issues/1946)) ([4c936b9](https://github.com/s3ntin3l8/mullion-session-manager/commit/4c936b936fdc7e8623d368b763f4e46190bc9ce5)), closes [#1944](https://github.com/s3ntin3l8/mullion-session-manager/issues/1944)
+* **uiux:** the two collapsible section headers are keyboard-operable ([#1893](https://github.com/s3ntin3l8/mullion-session-manager/issues/1893)) ([#1938](https://github.com/s3ntin3l8/mullion-session-manager/issues/1938)) ([3af12c5](https://github.com/s3ntin3l8/mullion-session-manager/commit/3af12c5a5efe2e63e737028732052c48a85393f3))
+
 ## [0.3.46](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.45...v0.3.46) (2026-10-25)
 
 
