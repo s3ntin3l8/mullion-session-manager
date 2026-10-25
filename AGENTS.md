@@ -122,6 +122,11 @@ How this repo applies the conventions above — facts and commands, not rules.
   Master's own `mullion/task-*` branches — see `docs/tasks-internals.md`'s
   "External review workflows". Asking through the relay after opening is
   still safe: it refuses a review that is already running or already landed.
+- **A PR that falls behind `main` cannot merge** (`strict: true` branch
+  protection): the merge endpoint answers `405 … 5 of 5 required status
+checks are expected` even with every check green. The remedy is a push to
+  the branch — `gh pr update-branch <pr>` — then a fresh CI cycle. See
+  `docs/ci-cd.md` ("A PR that falls behind `main` cannot merge").
 - **Issues:** use the [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md)
   format.
 - **Spikes must be fully isolated from the host's real agent state.** A probe

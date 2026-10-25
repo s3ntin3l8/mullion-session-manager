@@ -239,6 +239,41 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
+### A PR that falls behind `main` cannot merge (`strict: true`)
+
+`required_status_checks.strict` is **on**, and stays on (#1907). It means a
+PR's head branch must contain `main`'s current tip, with the required checks
+green **on that head SHA**. `pull_request` workflows fire on
+`opened`/`synchronize`/`reopened`, not when the base advances, so a PR that
+is merely _behind_ keeps its green checks but stops being mergeable. The
+merge endpoint then refuses with
+`405 {"message":"5 of 5 required status checks are expected."}` — which names
+neither the cause nor the remedy. (Dependabot only rebases a PR it detects a
+change for, e.g. one in _conflict_; a PR that is only behind is left alone.)
+
+**Remedy:** push to the branch, then wait for a fresh CI cycle (~10 min):
+
+```bash
+gh pr update-branch <pr>        # or "Update branch" in the UI; @dependabot rebase for its PRs
+```
+
+Why it is not "fixed" further:
+
+- **Don't relax `strict`.** It is what guarantees the tree that lands is one
+  CI verified. #1871 was behind a `main` commit that rewrote
+  `scripts/check-patch-coverage.mjs` itself; with strict off that interaction
+  would have landed unverified.
+- **A scheduled "re-run stale PR CI" job does not help.** A re-run leaves the
+  head SHA unchanged, so the PR is still _behind_ and still unmergeable. And
+  an update pushed with `GITHUB_TOKEN` does not trigger workflows, leaving the
+  new head with no checks at all. The push must come from a user/App token.
+- **No merge queue.** The repository is owned by a user account, and merge
+  queues are only available on organization-owned repositories.
+- Task Master's merge sweep already handles this: on `mergeable_state:
+"behind"` it calls `updatePullRequestBranch` and retries on the next tick
+  (`src/services/task-reconciler.ts`). Only manual, agent and Dependabot
+  merges need the remedy above.
+
 **Issue #1360 — this same lookup is a silent no-op for Task Master's own
 CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
 with no operator-side fix.** That feature needs to read exactly this
