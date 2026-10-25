@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { GIT_ENV_KEYS_TO_STRIP } from "../../src/services/git-env.js";
+import { GIT_ENV_KEYS_TO_STRIP, GIT_NO_AUTO_GC } from "../../src/services/git-env.js";
 import {
   cli,
   mergeReadiness,
@@ -260,9 +260,9 @@ describe("rebaseAndPush", () => {
 
     const gitCalls = execFileSyncMock.mock.calls.filter((c) => c[0] === "git");
     expect(gitCalls.map((c) => c[1])).toEqual([
-      ["fetch", "origin"],
-      ["rebase", "origin/main", "feat/x"],
-      ["push", "--force-with-lease", "origin", "feat/x"],
+      [...GIT_NO_AUTO_GC, "fetch", "origin"],
+      [...GIT_NO_AUTO_GC, "rebase", "origin/main", "feat/x"],
+      [...GIT_NO_AUTO_GC, "push", "--force-with-lease", "origin", "feat/x"],
     ]);
     for (const call of gitCalls) {
       const opts = call[2] as { env?: Record<string, string> };

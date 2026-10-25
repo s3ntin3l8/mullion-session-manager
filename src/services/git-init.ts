@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 
 const INIT_TIMEOUT_MS = 10_000;
 
@@ -23,7 +23,7 @@ export async function runGitInit(cwd: string): Promise<{ success: boolean; error
   }
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn("git", ["-C", cwd, "init", "--quiet"], {
+      const child = spawn("git", [...GIT_NO_AUTO_GC, "-C", cwd, "init", "--quiet"], {
         env: gitEnv(),
         stdio: "ignore",
         timeout: INIT_TIMEOUT_MS,

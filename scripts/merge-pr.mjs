@@ -26,7 +26,7 @@
 //   --no-rebase    do not rebase when the PR is behind the base; report it
 //   --timeout <s>  how long to wait for the checks to settle (default 30m)
 import { execFileSync } from "node:child_process";
-import { gitEnv } from "./git-env.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -308,12 +308,15 @@ export function mergePr(prNumber) {
  * extended to scripts/ by #1649 — see test/git-env-guard.test.ts).
  */
 export function rebaseAndPush(branch) {
-  execFileSync("git", ["fetch", "origin"], { stdio: "inherit", env: gitEnv() });
+  execFileSync("git", [...GIT_NO_AUTO_GC, "fetch", "origin"], { stdio: "inherit", env: gitEnv() });
   // Name the branch explicitly, for BOTH the rebase and the push — the
   // script may be run from outside the branch's worktree, and pushing
   // "whatever HEAD happens to be" is not the same thing.
-  execFileSync("git", ["rebase", "origin/main", branch], { stdio: "inherit", env: gitEnv() });
-  execFileSync("git", ["push", "--force-with-lease", "origin", branch], {
+  execFileSync("git", [...GIT_NO_AUTO_GC, "rebase", "origin/main", branch], {
+    stdio: "inherit",
+    env: gitEnv(),
+  });
+  execFileSync("git", [...GIT_NO_AUTO_GC, "push", "--force-with-lease", "origin", branch], {
     stdio: "inherit",
     env: gitEnv(),
   });

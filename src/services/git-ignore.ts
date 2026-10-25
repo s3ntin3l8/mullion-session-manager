@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 
 // Issue: sidebar worktree display's Part B — an agent's `file_change` hook
 // event (pty-manager.ts's Session.emitHookEvent) carries whatever path the
@@ -44,10 +44,14 @@ export function isPathGitIgnored(root: string, filePath: string): Promise<boolea
 
   return new Promise((resolve) => {
     let settled = false;
-    const child = spawnChild("git", ["-C", root, "check-ignore", "-q", "--", resolved], {
-      stdio: ["ignore", "ignore", "ignore"],
-      env: gitEnv(),
-    });
+    const child = spawnChild(
+      "git",
+      [...GIT_NO_AUTO_GC, "-C", root, "check-ignore", "-q", "--", resolved],
+      {
+        stdio: ["ignore", "ignore", "ignore"],
+        env: gitEnv(),
+      },
+    );
 
     const finish = (value: boolean) => {
       if (settled) return;

@@ -1,4 +1,4 @@
-import { SERVER_ENV_KEYS } from "./session-env.js";
+import { GIT_CONFIG_NO_AUTO_GC_ENV, SERVER_ENV_KEYS } from "./session-env.js";
 
 // Issue #822 — the reserved-key predicate shared by dock-config.ts's write
 // path (throws on a reserved key), project-config.ts's read path (drops one
@@ -24,6 +24,14 @@ import { SERVER_ENV_KEYS } from "./session-env.js";
 // MULLION_*-prefixed keys after applying session.env, not the full list.
 const VALID_ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RESERVED_SERVER_ENV_KEYS = new Set<string>(SERVER_ENV_KEYS);
+// Issue #1851 — the gc.auto override buildSessionEnv() sets for the session.
+// GIT_CONFIG_COUNT is already reserved (it is in SERVER_ENV_KEYS, so the
+// scrub removes an ambient one), but the KEY/VALUE pair is not: a session's
+// own `env` is applied AFTER buildSessionEnv()'s scrub (launch-plan.ts), so
+// without reserving these a session could point index 0 at something else —
+// `core.bare=true` being the #1602 hazard again — and turn the gc protection
+// off at the same time.
+const RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS = new Set<string>(Object.keys(GIT_CONFIG_NO_AUTO_GC_ENV));
 
 export function isReservedSessionEnvKey(key: string): boolean {
   if (key.length === 0) return true;
@@ -40,5 +48,6 @@ export function isReservedSessionEnvKey(key: string): boolean {
   // would re-introduce the exact leak the scrub exists to prevent, just
   // from a different source (issue #822, Hermes review).
   if (RESERVED_SERVER_ENV_KEYS.has(key)) return true;
+  if (RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS.has(key)) return true;
   return false;
 }

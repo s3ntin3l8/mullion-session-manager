@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { schema } from "../../src/plugins/env.js";
 import { isReservedSessionEnvKey } from "../../src/services/session-env-keys.js";
 import {
+  GIT_CONFIG_NO_AUTO_GC_ENV,
   HOST_DISPLAY_ENV_KEYS,
   SERVER_ENV_KEYS,
   SESSION_ENV_PASSTHROUGH_KEYS,
@@ -47,7 +48,12 @@ describe("session-env", () => {
         "PREVIEW_AUTH_REQUIRED",
       ];
       const base: NodeJS.ProcessEnv = Object.fromEntries(leaked.map((k) => [k, "leaked"]));
-      expect(buildSessionEnv(base)).toEqual({ COLORTERM: "truecolor", TERM: "xterm-256color" });
+      expect(buildSessionEnv(base)).toEqual({
+        COLORTERM: "truecolor",
+        TERM: "xterm-256color",
+        // Issue #1851 — the gc.auto override every session carries.
+        ...GIT_CONFIG_NO_AUTO_GC_ENV,
+      });
     });
 
     it("passes HOST and LOG_LEVEL through", () => {
@@ -69,7 +75,13 @@ describe("session-env", () => {
       // TERM is not in this list: unlike PATH/HOME/SHELL/LOG_LEVEL it is
       // always overwritten (see the TERM-forcing tests below), same
       // treatment as COLORTERM.
-      expect(result).toEqual({ ...base, COLORTERM: "truecolor", TERM: "xterm-256color" });
+      expect(result).toEqual({
+        ...base,
+        COLORTERM: "truecolor",
+        TERM: "xterm-256color",
+        // Issue #1851 — the gc.auto override every session carries.
+        ...GIT_CONFIG_NO_AUTO_GC_ENV,
+      });
     });
 
     it("strips host display vars so TUIs fall back to OSC 52 for copy", () => {
@@ -91,6 +103,45 @@ describe("session-env", () => {
       const result = buildSessionEnv({ PATH: "/usr/bin", COLORTERM: "" });
 
       expect(result.COLORTERM).toBe("truecolor");
+    });
+
+    // Issue #1851 — an agent CLI's own `git commit` in the user's clone
+    // triggers the same background gc that GIT_NO_AUTO_GC stops Mullion's own
+    // commands from triggering, and Mullion is what launches the agent. So the
+    // override rides in the SESSION's env: env-scoped, so the user's clone
+    // config is untouched and it ends with the session.
+    it("sets the gc.auto override for the session (issue #1851)", () => {
+      const result = buildSessionEnv({});
+      expect(result.GIT_CONFIG_COUNT).toBe("1");
+      expect(result.GIT_CONFIG_KEY_0).toBe("gc.auto");
+      expect(result.GIT_CONFIG_VALUE_0).toBe("0");
+    });
+
+    it("does not inherit an ambient gc.auto override (issue #1851)", () => {
+      // The scrub removes any ambient GIT_CONFIG_COUNT — git reads only
+      // indices 0..COUNT-1, so removing COUNT disables the whole mechanism —
+      // and the session's own pair is then set on top.
+      const result = buildSessionEnv({
+        GIT_CONFIG_COUNT: "3",
+        GIT_CONFIG_KEY_0: "core.bare",
+        GIT_CONFIG_VALUE_0: "true",
+        GIT_CONFIG_KEY_1: "gc.auto",
+        GIT_CONFIG_VALUE_1: "1",
+      });
+      expect(result.GIT_CONFIG_COUNT).toBe("1");
+      expect(result.GIT_CONFIG_KEY_0).toBe("gc.auto");
+      expect(result.GIT_CONFIG_VALUE_0).toBe("0");
+    });
+
+    it("keeps the override when a session's own env is applied on top (issue #1851)", () => {
+      // launch-plan.ts applies session.env AFTER buildSessionEnv()'s scrub,
+      // so the reserved-key check is what stops a session from turning the
+      // protection back off.
+      const sessionEnv = buildSessionEnv({});
+      expect(isReservedSessionEnvKey("GIT_CONFIG_COUNT")).toBe(true);
+      expect(isReservedSessionEnvKey("GIT_CONFIG_KEY_0")).toBe(true);
+      expect(isReservedSessionEnvKey("GIT_CONFIG_VALUE_0")).toBe(true);
+      expect(sessionEnv.GIT_CONFIG_KEY_0).toBe("gc.auto");
     });
 
     it("always forces TERM=xterm-256color, including when inherited TERM is absent (issue #305)", () => {
@@ -278,6 +329,8 @@ describe("session-env", () => {
         SHELL: "/bin/bash",
         COLORTERM: "truecolor",
         TERM: "xterm-256color",
+        // Issue #1851 — the gc.auto override every session carries.
+        ...GIT_CONFIG_NO_AUTO_GC_ENV,
       });
     });
   });
