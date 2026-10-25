@@ -81,7 +81,7 @@ async function boardState(page) {
 
 /** The layout the app autosaved, captured from the PATCH it sends. */
 function captureAutosavedLayout(page) {
-  const captured = { body: null };
+  const captured = { body: null, count: 0 };
   page.on("request", (req) => {
     if (req.method() !== "PATCH") return;
     if (!/\/api\/workspaces\/\d+$/.test(new URL(req.url()).pathname)) return;
@@ -90,8 +90,19 @@ function captureAutosavedLayout(page) {
     } catch {
       captured.body = null;
     }
+    captured.count += 1;
   });
   return captured;
+}
+
+/** Resolves true once a layout PATCH newer than `since` has been captured. */
+async function waitForPatch(autosaved, since, timeoutMs = 15_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (autosaved.count > since) return true;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return false;
 }
 
 async function run(browser, demo) {
@@ -239,6 +250,13 @@ async function run(browser, demo) {
 
     const legacyLayout = {
       ...openLayout,
+      // The spread above carries the captured blob's own `activeGroup`, which
+      // names the group it had — a group this blob no longer has, since both
+      // leaves below are renamed. dockview's getPanel(activeGroup) would then
+      // miss and no group would end up active, so point it at the group that
+      // survives. Without this the blob is one the app could never have
+      // saved.
+      activeGroup: "kept-group",
       grid: {
         ...openLayout.grid,
         root: {
@@ -266,6 +284,7 @@ async function run(browser, demo) {
       },
     };
 
+    const patchesBeforeRestore = autosaved.count;
     await demo.api(`/api/workspaces/${workspaceId}`, {
       method: "PATCH",
       body: JSON.stringify({ layout: legacyLayout }),
@@ -280,6 +299,20 @@ async function run(browser, demo) {
         legacyRestored.watermark === 0 &&
         !legacyRestored.emptyText,
       JSON.stringify(legacyRestored),
+    );
+
+    // The sweep's other half: the cleaned blob is re-saved, so the workspace
+    // stops carrying the legacy id. The autosave is debounced, so wait for a
+    // patch that is NEWER than the one captured before the reload — without
+    // that, the previous (already-clean) payload would satisfy the assertion
+    // on its own.
+    const resaved = await waitForPatch(autosaved, patchesBeforeRestore);
+    check(
+      "the sweep re-saves the cleaned layout without the legacy panel",
+      resaved &&
+        !("tasks" in (autosaved.body?.panels ?? {})) &&
+        Object.keys(autosaved.body?.panels ?? {}).length === 1,
+      JSON.stringify(autosaved.body?.panels ? Object.keys(autosaved.body.panels) : null),
     );
   } finally {
     // The browser context leaks on the failure path otherwise; the demo still
