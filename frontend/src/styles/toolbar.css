@@ -187,7 +187,14 @@
   padding: 2px 5px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--fg) 9%, transparent);
-  color: var(--dim);
+  /* --fg, not --dim: the chip's own fill is a tint of --fg, so it moves the
+     background TOWARD whatever text colour sits on it. --dim on the chip is
+     3.92:1 in the dark theme (3.13:1 once the row underneath is hovered, when
+     the chip's fill composites over a lighter row background) — under the
+     4.5:1 WCAG 1.4.3 threshold for text. The shipped token guard could not
+     see this: it compares a token against a flat surface, and the chip's
+     background is neither flat nor the surface the guard checks. */
+  color: var(--fg);
 }
 /* Same keycap look as .kbd, but for the now-interactive esc/close chips in
    the command palette (CommandPalette.tsx). The plain .kbd rule above is a
@@ -201,7 +208,9 @@
   border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
   border-radius: 5px;
   background: color-mix(in srgb, var(--fg) 9%, transparent);
-  color: var(--dim);
+  /* Same reason as the plain .kbd above: the chip's fill is a tint of --fg,
+     so a subtle token on it cannot clear 4.5:1. */
+  color: var(--fg);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
