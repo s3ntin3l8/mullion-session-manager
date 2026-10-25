@@ -67,17 +67,32 @@
   .toolbar-version-label {
     display: none !important;
   }
-  /* Clip rather than overflow the viewport if the actions still don't fit
-     (e.g. Tasks view's extra Back button on a 360px screen). Phone-only: on
-     a coarse-pointer tablet the 44px buttons fill this 44px-tall group and a
-     clip would cut their focus rings. */
+  /* The actions group never gives up its width. It holds fixed-size touch
+     targets (44px each on a coarse pointer), and the group clips what does
+     not fit — so a group that could shrink would clip its LAST child first,
+     which is the notification bell: reachable in the DOM, invisible on the
+     screen. `flex-shrink: 0` makes that impossible by construction; the
+     session switcher beside it is the only thing that gives way, and it
+     truncates its title instead (`.mobile-session-title`).
+
+     Measured at 320px, the narrowest phone worth supporting: the actions
+     take 112px, the lead 60px, and the switcher keeps 148px. Nothing is
+     clipped (issue #1880's review).
+
+     Phone-only: on a coarse-pointer tablet the 44px buttons fill this
+     44px-tall group, and a clip would cut their focus rings. */
   .toolbar-actions {
     overflow: hidden;
+    flex-shrink: 0;
   }
 
-  /* Phone toolbar: [☰][🔔] [session switcher] [⋯]. The session switcher
-     (MobileSessionSwitcher.tsx) takes the space the hidden .toolbar-center
-     leaves; "+", theme and settings move into the ⋯ app menu. */
+  /* Phone toolbar: [☰] [session switcher] [palette][bell]. The session
+     switcher (MobileSessionSwitcher.tsx) takes the space the hidden
+     .toolbar-center leaves; the palette's button is back on the phone
+     (issue #1880), and the bell sits at the right edge. New session, theme
+     and settings are not in the toolbar here at all: the session picker and
+     the navigator's Settings tab carry them, and Toolbar.tsx renders the ⋯
+     app menu only off the phone tier. */
   .toolbar-mobile-session {
     display: flex !important;
   }

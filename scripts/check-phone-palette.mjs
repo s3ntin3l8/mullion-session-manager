@@ -34,6 +34,12 @@
 //      "Run command…" and a ⌘K chip; at phone width that does not fit, and
 //      the rule that hid the whole button was replaced by one that trims it
 //      to its icon instead.
+//
+// The vocabulary of "hidden" is the same one the Dock's guard uses
+// (scripts/check-dock-availability.ts): a rule can take the button out of the
+// flow, make it invisible, or make it transparent — and `!important` counts,
+// because the rule this script exists to catch was literally
+// `.run-cmd-btn { display: none !important }`.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,7 +76,8 @@ function leafRules(css) {
 }
 
 /**
- * The content of the block whose opening brace is at `open`.
+ * The content of the block whose opening brace is at `open`, and the index
+ * just past its closing brace.
  */
 function blockAt(css, open) {
   let depth = 0;
@@ -78,11 +85,58 @@ function blockAt(css, open) {
     if (css[i] === "{") depth++;
     else if (css[i] === "}") {
       depth--;
-      if (depth === 0) return css.slice(open + 1, i);
+      if (depth === 0) return { content: css.slice(open + 1, i), end: i + 1 };
     }
   }
-  return css.slice(open + 1);
+  return { content: css.slice(open + 1), end: css.length };
 }
+
+/**
+ * Expand `:where(...)` and `:is(...)` into the selectors they stand for.
+ *
+ * `:where(.run-cmd-btn)` matches the button exactly as `.run-cmd-btn` does,
+ * so a scanner that stops at the `:` misses it. The house style makes that
+ * shape common: the phone's own block is wrapped in
+ * `:where(.app[data-tier="phone"])`.
+ */
+function expandFunctional(selector) {
+  const match = /:(?:where|is)\(([^()]*)\)/i.exec(selector);
+  if (!match) return [selector];
+  const out = [];
+  for (const inner of match[1].split(",")) {
+    const rebuilt = `${selector.slice(0, match.index)} ${inner} ${selector.slice(
+      match.index + match[0].length,
+    )}`;
+    out.push(...expandFunctional(rebuilt.replace(/\s+/g, " ").trim()));
+  }
+  return out;
+}
+
+/**
+ * The SUBJECT of a selector: the element the rule applies to.
+ *
+ * The subject is the last compound of the selector — the part after the last
+ * descendant / child / sibling combinator. `.run-cmd-btn .kbd` targets a
+ * DESCENDANT of the button; `.run-cmd-btn`, `:where(.run-cmd-btn)` and
+ * `.toolbar-actions>.run-cmd-btn` target the button itself. A trailing
+ * pseudo-class (`:hover`, `:not(.x)`) does not change the subject.
+ */
+function subjectOf(selector) {
+  const compounds = selector.split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+  const last = compounds[compounds.length - 1] ?? "";
+  return last.replace(/::?[a-z-]+(\([^()]*\))?$/i, "");
+}
+
+/**
+ * A class, matched on a class boundary: `.run-cmd-btn` is the button,
+ * `.run-cmd-label` is not, and `.run-cmd-btn-extra` is neither.
+ */
+const classOf = (name) => new RegExp(`\\.${name}(?![\\w-])`);
+
+// The button's own class, and the two classes of the things inside it.
+const BUTTON_CLASS = classOf("run-cmd-btn");
+const LABEL_CLASS = classOf("run-cmd-label");
+const KBD_CLASS = classOf("kbd");
 
 /**
  * Whether a selector's SUBJECT is the palette button itself.
@@ -95,17 +149,40 @@ function blockAt(css, open) {
 function targetsButton(selector) {
   return selector
     .split(",")
-    .map((part) => part.trim().split(/\s+/).pop() ?? "")
-    .some((compound) =>
-      compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "").startsWith(".run-cmd-btn"),
-    );
+    .flatMap((part) => expandFunctional(part.trim()))
+    .some((part) => BUTTON_CLASS.test(subjectOf(part)));
 }
 
-// The `!important` is part of the pattern on purpose: the rule this script
-// guards against was literally `.run-cmd-btn { display: none !important }`,
-// and a pattern that only matched a bare `display: none` would have passed
-// the regression it exists to catch.
-const HIDE = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
+/**
+ * Whether a selector targets a DESCENDANT of the button carrying `cls`.
+ *
+ * The descendant has to be INSIDE the button (`.run-cmd-btn .run-cmd-label`),
+ * not merely share its name — a `.kbd` chip elsewhere on the page is not the
+ * palette button's keycap.
+ */
+function targetsDescendant(selector, cls) {
+  return selector
+    .split(",")
+    .flatMap((part) => expandFunctional(part.trim()))
+    .some((part) => {
+      const compounds = part.split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+      const subject = (compounds[compounds.length - 1] ?? "").replace(
+        /::?[a-z-]+(\([^()]*\))?$/i,
+        "",
+      );
+      if (!cls.test(subject)) return false;
+      return compounds.slice(0, -1).some((c) => BUTTON_CLASS.test(c));
+    });
+}
+
+// The hide vocabulary, matching the Dock's guard
+// (scripts/check-dock-availability.ts): out of the flow, invisible, or
+// transparent. `!important` is part of the pattern on purpose: the rule this
+// script guards against was literally `.run-cmd-btn { display: none !important
+// }`, and a pattern that only matched a bare `display: none` would have
+// passed the regression it exists to catch.
+const HIDE =
+  /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|content-visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
 
 const cssFiles = readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"));
 
@@ -132,21 +209,64 @@ if (hidden.length > 0) {
 
 const mobile = stripComments(readFileSync(path.join(STYLES_DIR, "mobile.css"), "utf8"));
 const phoneSelector = ':where(.app[data-tier="phone"])';
-const phoneAt = mobile.indexOf(phoneSelector);
-if (phoneAt < 0) {
+
+/**
+ * Every phone block in mobile.css, in source order.
+ *
+ * There is more than one (four, as of this writing), and they are all
+ * top-level, so the LAST rule among them wins — exactly as in the browser.
+ * Looking only at the first block would let a later block quietly undo the
+ * trim.
+ */
+function phoneBlocks(css) {
+  const blocks = [];
+  let from = 0;
+  for (;;) {
+    const at = css.indexOf(phoneSelector, from);
+    if (at < 0) break;
+    const open = css.indexOf("{", at);
+    const { content, end } = blockAt(css, open);
+    blocks.push(content);
+    from = end;
+  }
+  return blocks;
+}
+
+/**
+ * The `display` the phone's own CSS ends up with for one of the button's
+ * descendants — the last rule that says anything about it, across all the
+ * phone blocks.
+ *
+ * The descendant must end up `display: none`: REMOVED from the flow, not
+ * merely made invisible. `opacity: 0` would leave the desktop pill exactly
+ * as wide as before, which is the whole reason the label has to go.
+ */
+function phoneDisplay(blocks, cls) {
+  let decided = null;
+  for (const block of blocks) {
+    for (const rule of leafRules(block)) {
+      if (!targetsDescendant(rule.selector, cls)) continue;
+      const display = /(^|;)\s*display\s*:\s*([^;]+)/i.exec(rule.body);
+      if (!display) continue;
+      decided = display[2]
+        .replace(/!important/gi, "")
+        .trim()
+        .toLowerCase();
+    }
+  }
+  return decided;
+}
+
+const blocks = phoneBlocks(mobile);
+if (blocks.length === 0) {
   fail('mobile.css has no :where(.app[data-tier="phone"]) block to check the palette in.');
 }
-const phoneOpen = mobile.indexOf("{", phoneAt);
-const phoneCss = blockAt(mobile, phoneOpen);
-
-const hides = (selector) =>
-  leafRules(phoneCss).some(
-    (rule) =>
-      rule.selector.includes(selector) && /(^|;)\s*display\s*:\s*none\s*(;|$)/i.test(rule.body),
-  );
-if (!hides(".run-cmd-label") || !hides(".kbd")) {
+const labelDisplay = phoneDisplay(blocks, LABEL_CLASS);
+const kbdDisplay = phoneDisplay(blocks, KBD_CLASS);
+if (labelDisplay !== "none" || kbdDisplay !== "none") {
   fail(
-    "the phone tier does not hide the palette button's label and keycap, so the " +
+    "the phone tier does not hide the palette button's label and keycap " +
+      `(label: ${labelDisplay ?? "unset"}, keycap: ${kbdDisplay ?? "unset"}), so the ` +
       'desktop\'s bordered pill ("Run command…" plus a ⌘K chip) does not fit the ' +
       "phone toolbar (issue #1880).",
   );

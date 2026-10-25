@@ -143,13 +143,14 @@ export function Toolbar({
           <>
             <LayersIcon size={14} />
             <span className="toolbar-center-name">Tasks</span>
-            {/* Desktop-only Back button — sits behind the Tasks title. On
-               phone, `.toolbar-center` is `display: none` (mobile.css:30),
-               so the sibling mobile instance rendered in `.toolbar-actions`
-               below (also marked .toolbar-back-to-workspace) carries the
-               Tasks-view escape hatch instead. tablet.css:217-227 keeps
-               this button's own `width: auto; height: 44px` override on
-               coarse pointers, so its "Back" label still fits. */}
+            {/* Desktop-only Back button — sits behind the Tasks title. The
+                phone has no toolbar escape hatch: `.toolbar-center` is
+                `display: none` on the phone tier (mobile.css), and the
+                phone's Task view lives in the navigator drawer, where
+                picking another tab leaves Task view (PhoneNavigator.tsx).
+                tablet.css:217-227 keeps this button's own
+                `width: auto; height: 44px` override on coarse pointers, so
+                its "Back" label still fits. */}
             <button
               className="toolbar-icon-btn toolbar-back-to-workspace"
               onClick={() => useDashboardStore.getState().setViewMode("list")}
@@ -173,28 +174,39 @@ export function Toolbar({
       </div>
       {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
-        <button
-          className={`run-cmd-btn${phone ? " toolbar-icon-btn" : ""}`}
-          onClick={onOpenLauncher}
-          title={
-            viewMode === "kanban" ? "Command palette (unavailable in Task view)" : "Command palette"
-          }
-          // Phone shows this button icon-only (mobile.css drops the
-          // "Run command…" label and the ⌘K hint), so the visible text that
-          // names it on desktop is not there to name it here (issue #1880).
-          // The phone has no keyboard to speak of, so the palette's own name
-          // is the honest one — and it is the name the tooltip already uses.
-          // Desktop keeps the visible label as its accessible name: an
-          // aria-label there would override the visible text (WCAG 2.5.3).
-          aria-label={phone ? "Command palette" : undefined}
-          disabled={viewMode === "kanban"}
-        >
-          <SearchIcon size={14} strokeWidth={1.9} />
-          <span className="run-cmd-label" style={{ fontSize: 12 }}>
-            Run command…
-          </span>
-          <span className="kbd">⌘K</span>
-        </button>
+        {/* The phone's palette button is OMITTED in Task view, not disabled
+            there. The Task view has no palette on purpose (issue #730), and a
+            disabled control explains itself only through its `title` — which
+            touch never shows. A dead grey icon that cannot be pressed is
+            worse than no icon at all (issue #1880's review). The desktop
+            keeps its disabled button: a mouse user gets the reason on
+            hover. */}
+        {!(phone && viewMode === "kanban") && (
+          <button
+            className={`run-cmd-btn${phone ? " toolbar-icon-btn" : ""}`}
+            onClick={onOpenLauncher}
+            title={
+              viewMode === "kanban"
+                ? "Command palette (unavailable in Task view)"
+                : "Command palette"
+            }
+            // Phone shows this button icon-only (mobile.css drops the
+            // "Run command…" label and the ⌘K hint), so the visible text that
+            // names it on desktop is not there to name it here (issue #1880).
+            // The phone has no keyboard to speak of, so the palette's own name
+            // is the honest one — and it is the name the tooltip already uses.
+            // Desktop keeps the visible label as its accessible name: an
+            // aria-label there would override the visible text (WCAG 2.5.3).
+            aria-label={phone ? "Command palette" : undefined}
+            disabled={viewMode === "kanban"}
+          >
+            <SearchIcon size={14} strokeWidth={1.9} />
+            <span className="run-cmd-label" style={{ fontSize: 12 }}>
+              Run command…
+            </span>
+            <span className="kbd">⌘K</span>
+          </button>
+        )}
         <button
           className="toolbar-icon-btn toolbar-theme-btn"
           onClick={() => useDashboardStore.getState().cycleTheme()}

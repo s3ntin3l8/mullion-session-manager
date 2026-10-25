@@ -199,6 +199,26 @@ describe("Toolbar — phone tier", () => {
     expect(screen.getByRole("button", { name: "Command palette" })).toBe(button);
   });
 
+  it("omits the phone's palette button in Task view instead of disabling it", () => {
+    // The Task view has no palette on purpose (issue #730). The desktop
+    // keeps a disabled button, because a mouse user gets the reason from its
+    // tooltip; touch never shows a `title`, so on the phone a disabled
+    // button would be a dead icon with no explanation. No button is better
+    // than a button that cannot be pressed.
+    viewMode = "kanban";
+    const { container } = render(<Toolbar {...NOOP_PROPS} phone />);
+    expect(container.querySelector(".run-cmd-btn")).toBeNull();
+    expect(screen.queryByTitle("Command palette (unavailable in Task view)")).toBeNull();
+  });
+
+  it("keeps the desktop's palette button in Task view, disabled", () => {
+    // The desktop's contrast case: the button stays, disabled, with the
+    // reason in its tooltip (which a mouse user can read).
+    viewMode = "kanban";
+    render(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.getByTitle("Command palette (unavailable in Task view)")).toBeDisabled();
+  });
+
   it("leaves the desktop's palette button named by its visible label", () => {
     // The desktop keeps the visible "Run command…" text as the accessible
     // name: an aria-label there would override the visible label, which
