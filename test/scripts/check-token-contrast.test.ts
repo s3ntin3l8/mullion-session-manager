@@ -198,6 +198,23 @@ describe("check-token-contrast.mjs", () => {
     expect(result.stderr).toContain("full strength");
   });
 
+  it("fails when the hover lift drops its opacity declaration", async () => {
+    // A lift rule that keeps some other declaration and loses `opacity: 1`
+    // used to pass: an absent opacity was read as 1. The handle would then
+    // inherit the resting fade, which is the permanent de-emphasis this
+    // check exists to refuse.
+    writeSidebar((css) =>
+      css.replace(
+        /(\.workspace-item:hover \.ws-drag-handle \{[^}]*?)opacity: 1;/,
+        "$1cursor: default;",
+      ),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".workspace-item:hover .ws-drag-handle");
+    expect(result.stderr).toContain("it is at unset");
+  });
+
   it("fails when the handle stops being de-emphasised at rest", async () => {
     // Full strength at rest is the more accessible state, so it is not a
     // WCAG failure — but it is the loss of a deliberate presentation state,

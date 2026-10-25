@@ -408,16 +408,26 @@ function readOpacity(declarations) {
 }
 
 /**
- * What the object paints: its text colour, or — for a filled mark — its
- * solid background. A shorthand `background` that is not a single colour
- * (a gradient, a `color-mix`) does not resolve, and the caller says so.
+ * Every solid paint the object declares.
+ *
+ * `color` is the icon. `background-color`, or a `background` that is a
+ * single colour, is a filled mark. An object that declares both is measured
+ * on both — first-match would let a failing fill hide behind a passing
+ * text colour. A `background` shorthand that is not one colour (a gradient,
+ * a `color-mix`) is not a paint this check can composite, and is skipped
+ * rather than reported as the object having no colour.
  */
-function paintedDeclaration(declarations) {
+function paintedDeclarations(declarations) {
+  const paints = [];
   for (const property of ["color", "background-color", "background"]) {
     if (!declarations.has(property)) continue;
-    return { property, value: bareValue(declarations.get(property)) };
+    const value = bareValue(declarations.get(property));
+    if (property === "background" && !/^(?:var\(\s*--[\w-]+\s*\)|#[0-9a-fA-F]{3,8})$/.test(value)) {
+      continue;
+    }
+    paints.push({ property, value });
   }
-  return null;
+  return paints;
 }
 
 for (const faded of FADED_GRAPHICS) {
@@ -467,20 +477,26 @@ for (const faded of FADED_GRAPHICS) {
 
   const lift = declarationsFor(rules, faded.liftSelector);
   const liftOpacity = readOpacity(lift);
+  // An absent opacity is NOT full strength. `readOpacity` reports 1 when the
+  // property is missing so a resting rule with no fade is judged opaque —
+  // the right reading for the rest. On the lift it is the opposite: a rule
+  // that kept some other declaration and dropped `opacity: 1` would inherit
+  // the resting fade, which is the permanent de-emphasis this check exists
+  // to refuse. The declaration has to be there.
   if (!lift.size) {
     failures.push(
       `${faded.file}: "${faded.liftSelector}" is gone, so "${faded.selector}" ` +
         `(${faded.what}) never lifts — the de-emphasis has to lift when the user engages with it`,
     );
-  } else if (!liftOpacity.readable || liftOpacity.opacity !== 1) {
+  } else if (!liftOpacity.present || !liftOpacity.readable || liftOpacity.opacity !== 1) {
     failures.push(
       `${faded.file}: "${faded.liftSelector}" must lift "${faded.selector}" to full strength ` +
-        `(opacity: 1) — it is at ${lift.get("opacity")}`,
+        `(opacity: 1) — it is at ${liftOpacity.present ? lift.get("opacity") : "unset"}`,
     );
   }
 
-  const painted = paintedDeclaration(resting);
-  if (!painted) {
+  const paints = paintedDeclarations(resting);
+  if (paints.length === 0) {
     failures.push(
       `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour and no solid ` +
         `background — nothing paints it any more`,
@@ -488,40 +504,42 @@ for (const faded of FADED_GRAPHICS) {
     continue;
   }
 
-  for (const [themeName, theme] of [
-    ["dark", dark],
-    ["light", light],
-  ]) {
-    const surface = theme[faded.surface];
-    const color = resolvePainted(painted.value, theme);
-    if (!color || !surface) {
-      failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} ` +
-          `(${painted.property}) on --${faded.surface}, which cannot be resolved in the ` +
-          `${themeName} theme`,
-      );
-      continue;
-    }
-    const rendered = renderSample({
-      color,
-      layers: [parseColor(surface)],
-      opacity,
-    });
-    if (!rendered.resolved || rendered.ratio === null) {
-      failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} at ` +
-          `opacity ${opacity} on --${faded.surface} (${surface}) in the ${themeName} theme, ` +
-          `which cannot be measured`,
-      );
-      continue;
-    }
-    if (rendered.ratio < faded.minRatio) {
-      failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.property} ` +
-          `${painted.value} at opacity ${opacity} on --${faded.surface} (${surface}) — ` +
-          `${rendered.ratio.toFixed(2)}:1 in the ${themeName} theme, below the ` +
-          `${faded.minRatio}:1 WCAG 1.4.11 asks of a graphical object`,
-      );
+  for (const painted of paints) {
+    for (const [themeName, theme] of [
+      ["dark", dark],
+      ["light", light],
+    ]) {
+      const surface = theme[faded.surface];
+      const color = resolvePainted(painted.value, theme);
+      if (!color || !surface) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} ` +
+            `(${painted.property}) on --${faded.surface}, which cannot be resolved in the ` +
+            `${themeName} theme`,
+        );
+        continue;
+      }
+      const rendered = renderSample({
+        color,
+        layers: [parseColor(surface)],
+        opacity,
+      });
+      if (!rendered.resolved || rendered.ratio === null) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} at ` +
+            `opacity ${opacity} on --${faded.surface} (${surface}) in the ${themeName} theme, ` +
+            `which cannot be measured`,
+        );
+        continue;
+      }
+      if (rendered.ratio < faded.minRatio) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.property} ` +
+            `${painted.value} at opacity ${opacity} on --${faded.surface} (${surface}) — ` +
+            `${rendered.ratio.toFixed(2)}:1 in the ${themeName} theme, below the ` +
+            `${faded.minRatio}:1 WCAG 1.4.11 asks of a graphical object`,
+        );
+      }
     }
   }
 }
