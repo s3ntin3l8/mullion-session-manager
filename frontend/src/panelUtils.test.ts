@@ -1050,6 +1050,10 @@ describe("findSessionWorkspaces", () => {
   const claiming = (id: number, sessionId: number) =>
     makeWorkspace({ id, layout: { sessionId } as Record<string, unknown> });
 
+  // The claimants' order is not part of the contract, so every assertion
+  // compares sorted ids. See the order note below.
+  const sorted = (ids: number[]) => [...ids].sort((a, b) => a - b);
+
   it("returns every workspace whose saved layout claims the session", () => {
     const workspaces = [
       makeWorkspace({ id: 1, layout: null }),
@@ -1057,7 +1061,7 @@ describe("findSessionWorkspaces", () => {
       makeWorkspace({ id: 3, layout: { sessionId: 9 } as Record<string, unknown> }),
       claiming(4, 7),
     ];
-    expect(findSessionWorkspaces(7, workspaces)).toEqual([2, 4]);
+    expect(sorted(findSessionWorkspaces(7, workspaces))).toEqual([2, 4]);
   });
 
   it("returns an empty array when no workspace claims the session", () => {
@@ -1065,9 +1069,14 @@ describe("findSessionWorkspaces", () => {
     expect(findSessionWorkspaces(7, workspaces)).toEqual([]);
   });
 
-  it("returns the ids in the workspaces array's own order", () => {
+  // The ORDER of the claimants is deliberately not asserted. Order is exactly
+  // what this issue calls arbitrary — the whole point is that no caller may
+  // depend on it — so a test that pinned an order would make a future
+  // `ORDER BY` on the server look like a regression. Membership is the
+  // contract; the order is not.
+  it("returns every claimant regardless of the workspaces' order", () => {
     const workspaces = [claiming(9, 7), claiming(3, 7), claiming(5, 7)];
-    expect(findSessionWorkspaces(7, workspaces)).toEqual([9, 3, 5]);
+    expect(sorted(findSessionWorkspaces(7, workspaces))).toEqual([3, 5, 9]);
   });
 
   it("matches a timeline panel's sessionIds array too, not just a plain sessionId", () => {

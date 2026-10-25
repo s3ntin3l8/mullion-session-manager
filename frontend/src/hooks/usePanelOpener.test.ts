@@ -282,6 +282,30 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(triggerPanelHighlight).not.toHaveBeenCalled();
   });
 
+  // The single claimant can BE the active workspace — the session's panel
+  // lives in this workspace's saved layout, but no live panel exists for it
+  // yet (the layout was restored without it). That is the
+  // `onlyClaim !== activeWorkspaceId` false path with a UNIQUE claimant: the
+  // answer is unambiguous, but switching to where the user already is would
+  // be a no-op that opens nothing. The session opens here.
+  it("opens locally when the only claimant is the active workspace itself", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({
+      dockviewApi: api,
+      workspaces: [
+        makeWorkspace({ id: 1, layout: { sessionId: 1 } as Record<string, unknown> }),
+        makeWorkspace({ id: 2, layout: null }),
+      ],
+      activeWorkspaceId: 1,
+    });
+
+    result.current.onOpenSession(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "session-1" }));
+    expect(setActiveWorkspaceId).not.toHaveBeenCalled();
+    expect(triggerPanelHighlight).not.toHaveBeenCalled();
+  });
+
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenSession(SESSION)).not.toThrow();
