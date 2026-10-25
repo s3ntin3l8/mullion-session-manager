@@ -203,25 +203,45 @@ function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEven
 const STUB_HEADER_ROW_HEIGHT = 34;
 const STUB_EVENT_ROW_HEIGHT = 60;
 
-// The virtual list's scroll container and row wrappers need a non-zero
-// `offsetHeight` in jsdom (which never lays out CSS, so every element
-// reports 0 by default) — @tanstack/react-virtual reads `offsetHeight`
-// directly (see node_modules/@tanstack/virtual-core) both for the scroll
-// container's own visible height and for each row's measured size. Without
-// this, the container's computed viewport height is 0 and getVirtualItems()
-// never returns anything, so every "renders a row" assertion would fail for
-// a reason that has nothing to do with this component's own logic. The
-// scroll container is distinguished by its class; every other measured
-// element is a row (header or event).
+// The virtual list's scroll container and row wrappers need non-zero
+// dimensions in jsdom (which never lays out CSS, so every element reports 0
+// by default). @tanstack/virtual-core reads two DIFFERENT properties for the
+// two things it measures (see node_modules/@tanstack/virtual-core):
+//
+//   - the scroll container's own visible height (the viewport): `getRect()`
+//     reads `clientWidth`/`clientHeight`. That changed in virtual-core 3.19.6
+//     — upstream TanStack/virtual#1326 ("measure the visible scroll
+//     viewport"), which stopped borders and scrollbars from inflating the
+//     viewport and so obscuring end-aligned items. It is a deliberate
+//     correctness fix, not a regression, and 3.19.7 does not revert it.
+//   - each row's measured size: `measureElement()` still reads
+//     `offsetHeight` when the ResizeObserver hands it no `borderBoxSize`
+//     (which it never does here — the observer below is a no-op stub).
+//
+// Without this, the container's computed viewport height is 0 and
+// getVirtualItems() never returns anything, so every "renders a row"
+// assertion would fail for a reason that has nothing to do with this
+// component's own logic. The scroll container is distinguished by its class;
+// every other measured element is a row (header or event).
 function stubVirtualizerLayout() {
+  const stubHeight = function (this: HTMLElement) {
+    if (this.classList.contains("notif-feed-scroll")) return 400;
+    return this.querySelector(".notif-group-header")
+      ? STUB_HEADER_ROW_HEIGHT
+      : STUB_EVENT_ROW_HEIGHT;
+  };
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     configurable: true,
-    get(this: HTMLElement) {
-      if (this.classList.contains("notif-feed-scroll")) return 400;
-      return this.querySelector(".notif-group-header")
-        ? STUB_HEADER_ROW_HEIGHT
-        : STUB_EVENT_ROW_HEIGHT;
-    },
+    get: stubHeight,
+  });
+  // The viewport (see the comment above) — same per-element heights.
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get: stubHeight,
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => 400,
   });
   vi.stubGlobal(
     "ResizeObserver",

@@ -170,19 +170,42 @@ function createDataTransfer(): DataTransfer {
   } as DataTransfer;
 }
 
-// jsdom never lays out CSS, so every element reports offsetHeight === 0 by
-// default — @tanstack/react-virtual reads it directly for both the scroll
-// container's own viewport height and each row's measured size (see
-// NotificationBell.test.tsx's own stubVirtualizerLayout, which this
-// mirrors: only the tests that push the session count above
+// jsdom never lays out CSS, so every element reports 0 for every dimension
+// by default — @tanstack/virtual-core reads two DIFFERENT properties for the
+// two things it measures (see node_modules/@tanstack/virtual-core):
+//
+//   - the scroll container's own visible height (the viewport): `getRect()`
+//     reads `clientWidth`/`clientHeight`. That changed in virtual-core 3.19.6
+//     — upstream TanStack/virtual#1326 ("measure the visible scroll
+//     viewport"), which stopped borders and scrollbars from inflating the
+//     viewport and so obscuring end-aligned items. It is a deliberate
+//     correctness fix, not a regression, and 3.19.7 does not revert it.
+//   - each row's measured size: `measureElement()` still reads
+//     `offsetHeight` when the ResizeObserver hands it no `borderBoxSize`
+//     (which it never does here — the observer below is a no-op stub).
+//
+// Without this, the container's computed viewport height is 0 and
+// getVirtualItems() never returns anything, so every "renders a row"
+// assertion would fail for a reason that has nothing to do with this
+// component's own logic. Only the tests that push the session count above
 // VIRTUALIZE_SESSION_THRESHOLD and so actually mount
-// VirtualizedProjectTree need this).
+// VirtualizedProjectTree need this.
 function stubVirtualizerLayout() {
+  const stubHeight = function (this: HTMLElement) {
+    return this.classList.contains("sidebar-wrapper") ? 600 : 50;
+  };
   Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
     configurable: true,
-    get(this: HTMLElement) {
-      return this.classList.contains("sidebar-wrapper") ? 600 : 50;
-    },
+    get: stubHeight,
+  });
+  // The viewport (see the comment above) — same per-element heights.
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get: stubHeight,
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get: () => 400,
   });
   vi.stubGlobal(
     "ResizeObserver",
