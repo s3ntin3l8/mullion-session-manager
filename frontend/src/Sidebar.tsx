@@ -93,7 +93,7 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 // rendering strategy out from under the user mid-keystroke.
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
-interface SidebarProps {
+export interface SidebarProps {
   // Phone navigator only: render just one of the sidebar's two areas (the
   // full-screen navigator shows Projects and Devices as separate tabs).
   // Unset — desktop and tablet — renders the whole sidebar exactly as before.
@@ -343,6 +343,29 @@ export function Sidebar({
     [projects, filterActive, filteredSessionsByProject],
   );
 
+  // Issue #1889 — the Projects section header's caption. It used to be the
+  // bare word "sessions", which read as a label with no number (or a number
+  // that never got filled in); it is now the count of the sessions the
+  // section holds, with its unit, so it reads as the total of the
+  // per-project numbers directly beneath it.
+  //
+  // It sums the SAME quantity the per-project numbers show — a project's own
+  // session count, which is its "base" list (the sessions the sidebar would
+  // list for it, ignoring the search box and the chips; ProjectHeader reads
+  // exactly that list, via ProjectSection's `allSessions` prop and the
+  // virtualized path's own `sessions: base`). Summing over `visibleProjects`
+  // rather than over every project keeps that promise while a filter is
+  // active: a project the filter matched nothing in is not listed at all, so
+  // its sessions are not counted either.
+  const sectionSessionCount = useMemo(
+    () =>
+      visibleProjects.reduce(
+        (sum, project) => sum + (baseSessionsByProject.get(project.id)?.length ?? 0),
+        0,
+      ),
+    [visibleProjects, baseSessionsByProject],
+  );
+
   // U3 — the virtualized path's own re-flatten trigger for collapse
   // toggles. Both rendering paths read/write the SAME persisted
   // `projectCollapsedState` object (declared next to ProjectSection) as
@@ -459,7 +482,23 @@ export function Sidebar({
         <>
           <div className="sidebar-section-header">
             <h3 className="sidebar-section-title">Projects</h3>
-            <span className="project-session-count">sessions</span>
+            {/* Issue #1889 — this caption was the bare word "sessions":
+                a label with no number, or a number that never got filled
+                in. It is the count now, with its unit, so it reads as the
+                total of the per-project numbers below it.
+
+                It renders only once there is something to count, the same
+                declutter rule the per-project badge follows ("a project
+                with no sessions at all doesn't need a '0' sitting in its
+                header"). */}
+            {sectionSessionCount > 0 && (
+              <span className="sidebar-section-count">
+                <span className="project-session-count">{sectionSessionCount}</span>{" "}
+                <span className="sidebar-section-count-unit">
+                  {sectionSessionCount === 1 ? "session" : "sessions"}
+                </span>
+              </span>
+            )}
             <HierarchyToggle />
             <button
               className="toolbar-icon-btn"

@@ -232,6 +232,29 @@
      the header row gains a gap above and below the title. */
   margin: 0;
 }
+/* The section caption: the count of what the section holds, then its unit
+   (issue #1889 — this caption used to be the bare word "sessions", a label
+   with no number).
+
+   The number wears the sidebar's mono count face, like every other count
+   here (`.project-session-count`, `.mobile-session-count`); the unit word
+   wears the UI face, because a word in a mono face reads as an identifier
+   rather than as a caption.
+
+   The space between the number and the word is a text node, not the `gap`
+   alone: a screen reader reads the caption's text, and "2sessions" is not
+   a number and a word. CSS ignores a whitespace-only text node between
+   flex items, so the `gap` still sets the visual distance. */
+.sidebar-section-count {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sidebar-section-count-unit {
+  font-size: 10.5px;
+  color: var(--dim);
+}
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
    on `.sidebar-section-header`, same "own modifier class, not the shared
    base" posture as `.source-control-header` (empty-states.css) — Devices'
