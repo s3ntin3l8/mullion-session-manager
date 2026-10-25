@@ -112,19 +112,20 @@ export class ReviewConflictError extends Error {
 }
 
 /**
- * The commit has already been reviewed (issue #1749).
+ * The content has already been reviewed (issue #1749).
  *
- * The review's range is empty: the bot's last landed review is on this very
- * commit, so there is nothing new to review. Dispatching a run for an empty
- * range is how the same diff got reviewed twice — the key would be
- * `<head>..<head>`, a key the previous round never used, so it looked like
- * a fresh request.
+ * The review's range is empty: the commit the reviewer last demonstrably
+ * reviewed has the head's content (it is the head, or has its tree), so there is
+ * nothing new to review. Dispatching a run for an empty range is how the same
+ * diff got reviewed twice — the key would be `<head>..<head>`, a key the
+ * previous round never used, so it looked like a fresh request.
  */
 export class ReviewAlreadyLandedError extends Error {
-  constructor(readonly headSha: string) {
+  /** `reviewedSha` is the reviewed commit — the head itself, or one with its tree. */
+  constructor(readonly reviewedSha: string) {
     super(
-      `A review of this commit already landed (at ${headSha.slice(0, 7)}) — there is nothing new to review. ` +
-        `Push a new commit to ask for another round, or dismiss that review first`,
+      `A review of this content already landed (at ${reviewedSha.slice(0, 7)}) — there is nothing new to review. ` +
+        `Push a change to ask for another round, or dismiss that review first`,
     );
     this.name = "ReviewAlreadyLandedError";
   }

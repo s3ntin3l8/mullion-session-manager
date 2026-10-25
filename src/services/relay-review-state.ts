@@ -38,6 +38,14 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
 }
 
 /**
+ * How long after a marker was closed a review still counts as its run's. The
+ * marker is closed from a different clock than GitHub stamps the review with
+ * (the workflow's runner, or this server), so a few seconds of skew must not
+ * un-pair a genuine review. The shared workflow uses the same slack.
+ */
+const MARKER_PAIRING_SLACK_MS = 60_000;
+
+/**
  * The commit the last review round demonstrably covered ("R") — the base of
  * the next round's delta, and the commit whose content decides "nothing new to
  * review". The shared workflow computes the same value (`hermes-review.yml`,
@@ -51,8 +59,9 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
  * "Hermes review" check run sits on the commit it reviewed. So R is:
  *
  *  1. the commit of the newest ledger marker that ended SUCCESS and is PAIRED
- *     with a landed review by the reviewer submitted at or after the run
- *     started (a run can complete without posting a review, and dismissing the
+ *     with a landed review by the reviewer submitted WHILE THE RUN RAN, i.e.
+ *     between the marker's start and its close (a run can complete without
+ *     posting a review, a later review is another run's, and dismissing the
  *     review retracts the pairing); else
  *  2. the last landed review's `commit_id`, but only while that commit is not
  *     newer than the review — a newer one was re-pointed, so nothing is known
@@ -87,7 +96,16 @@ export async function resolveReviewedCommit(input: {
     try {
       const submitted = landed.flatMap((r) => (r.submittedAt ? [Date.parse(r.submittedAt)] : []));
       const paired = (await input.markers())
-        .filter((m) => submitted.some((at) => at >= Date.parse(m.startedAt)))
+        .filter((m) => {
+          // A review is the run's own when it was submitted while the run ran
+          // (s3ntin3l8/.github#133). With a lower bound only, ANY later review
+          // paired every older success marker, so a run that posted nothing
+          // could be picked as the base by an unrelated review — a base that is
+          // too NEW, which skips code nobody reviewed.
+          const from = Date.parse(m.startedAt);
+          const to = Date.parse(m.completedAt) + MARKER_PAIRING_SLACK_MS;
+          return submitted.some((at) => at >= from && at <= to);
+        })
         .sort((a, b) => a.id - b.id)
         .at(-1);
       if (paired) return paired.oid;
@@ -121,7 +139,9 @@ export async function findLandedReview(
   app: FastifyInstance,
   token: string,
   t: { owner: string; repo: string; prNumber: number },
-  record: { dispatchedAt: number; headSha: string } | null,
+  // Only the dispatch time is used: the review is matched by when it was
+  // submitted, not by the commit_id GitHub re-points (s3ntin3l8/.github#129).
+  record: { dispatchedAt: number } | null,
 ): Promise<LandedReview> {
   if (!record) return { checked: false };
   const { dispatchedAt } = record;

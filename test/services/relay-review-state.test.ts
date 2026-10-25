@@ -258,17 +258,79 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
   it("takes the newest marker that a landed review was submitted after", async () => {
     // Deliberately not in id order: the newest is decided by id, not by position.
     const markers = async () => [
-      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z" },
-      { oid: "silent", id: 3, startedAt: "2026-01-03T00:00:00Z" },
-      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z" },
+      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
+      {
+        oid: "silent",
+        id: 3,
+        startedAt: "2026-01-03T00:00:00Z",
+        completedAt: "2026-01-09T00:00:00Z",
+      },
+      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
     ];
     expect(await resolve([review()], { markers })).toBe("new");
+  });
+
+  it("does not pair an older silent marker with a LATER review from another run (#133)", async () => {
+    // Marker A's run posted the review at 10:20. Marker B (newer) ran 11:00-11:30
+    // and posted nothing. A later review at 13:00 comes from a run whose marker
+    // was never written. With a lower bound only, that review paired B and the
+    // base was B — a base that is too new, which skips code nobody reviewed.
+    const markers = async () => [
+      {
+        oid: "reviewed",
+        id: 1,
+        startedAt: "2026-01-01T10:00:00Z",
+        completedAt: "2026-01-01T10:30:00Z",
+      },
+      {
+        oid: "silent",
+        id: 2,
+        startedAt: "2026-01-01T11:00:00Z",
+        completedAt: "2026-01-01T11:30:00Z",
+      },
+    ];
+    const reviews = [
+      review({ submittedAt: "2026-01-01T10:20:00Z" }),
+      review({ submittedAt: "2026-01-01T13:00:00Z" }),
+    ];
+    expect(await resolve(reviews, { markers })).toBe("reviewed");
+  });
+
+  it("allows for clock skew between the marker's close and the review", async () => {
+    // The marker is closed from the workflow's runner or this server, the review
+    // is stamped by GitHub: a few seconds of skew must not un-pair a genuine one.
+    const markers = async () => [
+      {
+        oid: "reviewed",
+        id: 1,
+        startedAt: "2026-01-01T10:00:00Z",
+        completedAt: "2026-01-01T10:30:00Z",
+      },
+    ];
+    expect(await resolve([review({ submittedAt: "2026-01-01T10:30:30Z" })], { markers })).toBe(
+      "reviewed",
+    );
+    // Past the slack it is another run's review: no pairing, and with a commit_id
+    // newer than the review nothing is known, so the whole diff.
+    expect(
+      await resolve([review({ submittedAt: "2026-01-01T10:32:00Z" })], {
+        markers,
+        committedAt: async () => "2026-01-02T00:00:00Z",
+      }),
+    ).toBe("");
   });
 
   it("does not pair a marker with a dismissed review (the escape hatch)", async () => {
     // Dismissing the review retracts the pairing: the marker alone is not a
     // review, so rule 1 is empty and, with no landed review left, so is rule 2.
-    const markers = async () => [{ oid: "reviewed", id: 1, startedAt: "2026-01-01T11:00:00Z" }];
+    const markers = async () => [
+      {
+        oid: "reviewed",
+        id: 1,
+        startedAt: "2026-01-01T11:00:00Z",
+        completedAt: "2026-01-09T00:00:00Z",
+      },
+    ];
     expect(await resolve([review({ state: "DISMISSED" })], { markers })).toBe("");
   });
 
