@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Real-browser verification of the five runtime checks the UI/UX audit
- * (docs/ui-ux-audit.md) owed.
+ * (docs/audit/2026-10-frontend-ui-ux.md) owed.
  *
  * The audit was static — no browser was ever running — so five things it
  * could not settle by reading code were left open in its "Runtime

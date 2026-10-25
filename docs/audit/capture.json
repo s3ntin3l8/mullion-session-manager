@@ -1,0 +1,17 @@
+{
+  "baseUrl": "http://127.0.0.1:3957",
+  "start": "make demo",
+  "startTimeoutSec": 180,
+  "routes": ["/"],
+  "viewports": {
+    "phone": {
+      "width": 390,
+      "height": 844
+    },
+    "tablet": {
+      "width": 820,
+      "height": 1180
+    }
+  },
+  "readyOutput": "Mullion demo is up"
+}

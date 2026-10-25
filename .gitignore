@@ -25,3 +25,8 @@ ui-verify-report.json
 
 # macOS Finder noise — never part of the tree.
 .DS_Store
+
+# Audit captures are regenerable from an isolated demo instance (see docs/audit/README.md)
+# and are not worth permanent history weight. The report is the durable artifact; it never
+# links into this folder.
+docs/audit/assets/

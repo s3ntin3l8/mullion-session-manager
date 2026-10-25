@@ -6,7 +6,7 @@ import type { DashboardState, Toast, ToastsSlice } from "../types.js";
 // `console.error`, an unhandled promise rejection, or — worst of all — a
 // `catch` that set the same state a successful load would have set, so
 // "loading" and "failed" were indistinguishable (see the audit's findings
-// 13-15 and 28-31 in docs/ui-ux-audit.md).
+// 13-15 and 28-31 in docs/audit/2026-10-frontend-ui-ux.md).
 //
 // This slice is the one place a failure becomes visible. It deliberately
 // holds STATE AND ACTIONS ONLY — no timers. The auto-dismiss timing lives
