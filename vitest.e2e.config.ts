@@ -24,6 +24,9 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: ["./test/setup.ts"],
+    // Real chromium and real agent CLIs live under the real HOME; see the
+    // throwaway-HOME block in test/setup.ts.
+    env: { MULLION_TEST_REAL_HOME: "1" },
     // Same checkout-config tripwire as vitest.config.ts (issues #1602, #1649):
     // these real-process tests drive git against real directories too.
     globalSetup: ["./test/global-setup.ts"],
