@@ -612,18 +612,22 @@ visible, and the UI that says which host a session is on — and says
 done: a Mac can be the primary of a mixed fleet, and a macOS primary's local
 sessions run under the same darwin scope backend an agent's do.
 
-**Delivery is not done, though.** A Mac is a _supported_ host long before it
-is a _pleasant_ one to deploy to, and the two gaps that follow from 8.4–8.6
-are tracked above: the release tarball carried no `deploy/`, so installing
-Mullion needed a `git clone` besides the published release (#1864, and a
-`mullion-install.sh` bootstrap that removes the clone), and the published
-artifact has never been through the install-and-update round trip on real
-hardware (#1868). The artifact _shape_ question — a DMG, a `.pkg`, or a
-`.app` — is deliberately deferred to the tray app (#1866) and the
-system-wide-deployment decision (#1867), because both are consequences of
-those two features rather than prerequisites for them: until there is an
-`.app`, a DMG has nothing to deliver, and a `.pkg` would silently re-home a
-user-level deployment model into a root-owned one.
+**Delivery took a while to catch up with support, though.** A Mac was a
+_supported_ host from 8.4 onwards, but installing one still needed a `git
+clone` beside the published release, and the published artifact had never been
+through the install-and-update round trip. Both are behind us now: the release
+tarball ships `deploy/`, so `mullion-install.sh` installs a Mac from a
+published release with no clone at all (#1864, shipped in v0.3.45), and a
+published-artifact install plus update round trip was validated on real
+hardware (#1868 — the item still open there is an agent enrolling against a
+_remote_ primary, which needs a second host).
+
+The artifact _shape_ question is now settled on both sides: the `.pkg` is
+**declined** (#1867 — Mullion runs on a user-logged-in system, so a
+system-wide, root-owned deployment would re-home a user-level model into a
+root-owned one, updater privileges included), and the only shape left open is
+DMG vs `.app`, which belongs to the tray app (#1866) — until there is an
+`.app`, a DMG has nothing to deliver.
 
 ### Design Notes
 
