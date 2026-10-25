@@ -196,6 +196,20 @@ test cannot read the stylesheet's text — a `?raw` import resolves to an empty
 string. This repo's own precedent for "assert something about a source file's
 contents" is a `scripts/check-*.mjs` script wired into `npm run lint`.
 
+The guard's own matcher is pinned by `test/scripts/check-token-contrast.test.ts`,
+which drives the real script against fixture trees. That is not ceremony: the
+first version of the matcher recognised only `#fff` and `white`, so `#ffffff`
+and `#FFF` — the same colour, written differently — slipped past it while the
+stylesheets happened to use `#fff`. A guard that only catches the spelling in
+use today is not a guard. The suite now pins every spelling of white it must
+catch (3-, 4-, 6- and 8-digit hex, the keyword, `rgb()`/`rgba()`) and the
+near-misses it must not (`#ffff00`, `#f8f8f8`, `rgb(254, 255, 255)`).
+
+The guard reads the stylesheets only. A colour written inline in a TSX
+`style={{ ... }}` object is out of its reach — nothing in this repo writes
+one today, and the script says so rather than implying coverage it does not
+have.
+
 ---
 
 ## Minor findings

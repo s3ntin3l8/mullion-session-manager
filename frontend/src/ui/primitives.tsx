@@ -8,30 +8,8 @@
 // `settings-*` class-name prefix below is kept as historical: renaming 130
 // `.settings-*` rules in styles.css for a file move is pure
 // visual-regression risk for zero functional gain.
-import { createContext, isValidElement, useContext, useId, useRef } from "react";
+import { createContext, useContext, useId, useRef } from "react";
 import type { ReactNode } from "react";
-
-/**
- * The readable text of a Row's label.
- *
- * A Row's label is a ReactNode, and most of them are plain strings, but a
- * handful are JSX (the "Ctrl + R" key chips in InputSection, and the
- * `label={label}` pass-throughs in ModelPicker / RunwaySection /
- * ReviewRelaySection / ServerDefaultNumberRow, whose `label` is itself a
- * string prop). Walking the node gives the same text a screen reader would
- * read, without asking every caller to keep a string and a JSX version of
- * the same label in sync.
- */
-function labelText(node: ReactNode): string {
-  if (node === null || node === undefined || typeof node === "boolean") return "";
-  if (typeof node === "string" || typeof node === "number") return String(node);
-  if (Array.isArray(node)) return node.map(labelText).join("");
-  if (isValidElement(node)) {
-    const props = node.props as { children?: ReactNode };
-    return labelText(props.children);
-  }
-  return "";
-}
 
 /**
  * What a control inside a Row needs in order to name itself.
@@ -51,6 +29,13 @@ function labelText(node: ReactNode): string {
  * `<div role="radiogroup">`, for which `for` would be invalid HTML.
  * `aria-labelledby` references the same visible text and is valid for every
  * control type.
+ *
+ * `aria-labelledby` rather than a copied-in `aria-label` on purpose: the
+ * browser computes the name from what is actually RENDERED, so a label
+ * whose text comes from a child component's own render (rather than from a
+ * literal prop) is still named correctly. Deriving the text in JS and
+ * copying it into `aria-label` would have to re-implement that walk, and
+ * it can only ever be an approximation of the rendered result.
  */
 type RowLabelContextValue = {
   labelId: string;
@@ -99,13 +84,11 @@ export function Row({
 }) {
   const labelId = useId();
   const explicit = ariaLabel?.trim() ? ariaLabel : undefined;
-  // The accessible name is the visible label's text, unless the caller
-  // overrode it. Computing it here (rather than relying on
-  // `aria-labelledby` alone) keeps the name stable even if the visible
-  // label is later restyled or moved, and lets a control with an
-  // icon-only label still fall back to `aria-labelledby`.
-  const derived = labelText(label).trim();
-  const ctx: RowLabelContextValue = { labelId, name: explicit ?? (derived || undefined) };
+  // The context carries ONLY the explicit override. The visible label is
+  // named through `aria-labelledby` pointing at `labelId`, so the name the
+  // control gets is the text the browser actually renders — not a copy of
+  // it computed here.
+  const ctx: RowLabelContextValue = { labelId, name: explicit };
   return (
     <div className={`settings-row${align === "start" ? " align-start" : ""}`}>
       <div className="settings-row-text">

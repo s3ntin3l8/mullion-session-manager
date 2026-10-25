@@ -117,7 +117,10 @@ describe("migrated dialogs — no hand-rolled shells left", () => {
     }) as Record<string, string>;
 
     for (const file of MIGRATED_MODAL_FILES) {
-      const src = sources[`../${file.replace("../", "")}`];
+      // The glob's keys are already relative to this file's directory
+      // ("../CreateProjectModal.tsx"), which is exactly what
+      // MIGRATED_MODAL_FILES holds — so the lookup is the key itself.
+      const src = sources[file];
       expect(src, `${file} should exist`).toBeDefined();
       expect(src, `${file} should compose the shared Modal`).toMatch(/<Modal\b/);
       expect(src, `${file} should not hand-roll a backdrop`).not.toMatch(
@@ -142,7 +145,7 @@ describe("migrated dialogs — no hand-rolled shells left", () => {
 
     const offenders: string[] = [];
     for (const file of MIGRATED_MODAL_FILES) {
-      const src = sources[`../${file.replace("../", "")}`];
+      const src = sources[file];
       if (/role="dialog"/.test(src)) offenders.push(file);
     }
     expect(offenders).toEqual([]);

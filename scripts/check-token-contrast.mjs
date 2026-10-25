@@ -33,6 +33,8 @@
 //      is not a fill-role token. This is what stops check 1's fix from
 //      quietly regressing: someone adds `background: var(--accent-solid)`
 //      next to `color: #fff` and the fill-role rule is violated again.
+//      It reads the stylesheets only — a colour written inline in a TSX
+//      `style={{ ... }}` object is out of its reach.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -218,12 +220,24 @@ for (const [themeName, theme] of [
 // Role drift: white text on a token that is not a fill-role token. The
 // fill-role values are the darker ones; the text-role ones are tuned for
 // legibility AS text and are much lighter, so white on them is unreadable.
+//
+// Every spelling of "white" a stylesheet can use has to be caught here —
+// the guard is only as good as its matcher. `#fff` alone is not enough:
+// `#ffffff`, `#FFF`, `#ffffffff` and `rgb(255, 255, 255)` are all the
+// same colour and all have to be caught.
+//
+// SCOPE: this reads the stylesheets only. It cannot see a colour written
+// inline in a TSX `style={{ ... }}` object — nothing in this repo writes
+// one today, and the check says so rather than pretending otherwise.
+const WHITE_TEXT_RE =
+  /color\s*:\s*(?:#f{3,8}\b|white\b|rgba?\(\s*255(?:\s*,\s*|\s+)255(?:\s*,\s*|\s+)255\b)/i;
+
 for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
   const css = readFileSync(path.join(STYLES_DIR, file), "utf8");
   for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selector = rule[1].replace(/\s+/g, " ").trim();
     const body = rule[2];
-    if (!/color\s*:\s*(#fff|white)\b/.test(body)) continue;
+    if (!WHITE_TEXT_RE.test(body)) continue;
     for (const match of body.matchAll(/background(?:-color)?\s*:\s*var\(--([\w-]+)\)/g)) {
       const token = match[1];
       if (FILL_ROLE_TOKENS.includes(token)) continue;
