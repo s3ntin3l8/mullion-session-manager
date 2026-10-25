@@ -180,9 +180,13 @@ so it is deliberately narrow:
 ## Developer worktrees
 
 `services/dev-worktrees.ts`. Every project on this host keeps its own
-developer worktrees: `.wt/<slug>` (this repo's convention, see `AGENTS.md`) and
-`.claude/worktrees/agent-*`, which Claude Code's isolated sub-agents leave
-behind. Each is a full checkout, usually with its own `node_modules`, a few
+developer worktrees: `.wt/<slug>` (this repo's convention, see `AGENTS.md`),
+`.worktrees/<slug>` (what agents pick in projects whose conventions name no
+directory), and `.claude/worktrees/agent-*`, which Claude Code's isolated
+sub-agents leave behind. When a session's conventions say `.wt/`, Mullion's
+Claude Code adapter registers a `WorktreeCreate`/`WorktreeRemove` hook
+(`src/hooks/worktree-hook.mjs`) so those sub-agent worktrees are created under
+`.wt/<name>` on a `worktree-<name>` branch instead. Each is a full checkout, usually with its own `node_modules`, a few
 hundred MB apiece, and nothing removes one once its PR is merged. Aggressive
 cleanup removes the ones whose work is already elsewhere. `.mullion-worktrees/`
 is not touched: Task Master owns those.
@@ -208,6 +212,9 @@ A worktree is only offered when **all** of these hold:
     limit, offline), which is simply asked again next time.
   - **`detached-merged`**: a detached `HEAD` whose commit is already in the
     default branch, so nothing names those commits that would be lost.
+  - **`in-default`**: a `worktree-*` branch (the name the Claude Code worktree
+    hook gives its branches) whose tip is already in the default branch, so
+    nothing was committed on it. Ordinary branches never get this rule.
 
 Removal goes through the same path as the Git panel's "remove worktree": a
 clean-status check, repeated right before each removal (still clean, same
@@ -224,6 +231,6 @@ never holds up the rest of the page. Aggressive cleanup asks the server to
 clean up whenever it can, even when the preview is empty, because the first
 thing it does is fetch each project that has developer worktrees.
 
-Known limits: a worktree outside `.wt/` and `.claude/worktrees/` is never
+Known limits: a worktree outside `.wt/`, `.worktrees/` and `.claude/worktrees/` is never
 considered, and a repo whose default branch can't be determined (no `origin`)
 gets neither `merged` nor `detached-merged`.

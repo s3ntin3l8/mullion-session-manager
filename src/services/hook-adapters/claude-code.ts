@@ -3,6 +3,7 @@ import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import {
   resolveMcpServerPath,
+  resolveWorktreeHookPath,
   shellQuote,
   buildModelFlag,
   validateCliModel,
@@ -135,6 +136,19 @@ function hookEntry(
   };
 }
 
+function worktreeHookEntry(execPath: string, scriptPath: string, mode: "create" | "remove") {
+  return {
+    hooks: [
+      {
+        type: "command" as const,
+        command: `${JSON.stringify(execPath)} ${JSON.stringify(scriptPath)} ${mode}`,
+        // git fetch + worktree add on a large repo.
+        timeout: 120,
+      },
+    ],
+  };
+}
+
 /** Exported for tests. Builds the Claude Code `--settings` JSON contents —
  * pure, no I/O — see the file header for why PermissionRequest (the
  * permission-approval channel, issue #264) is registered unconditionally
@@ -147,9 +161,21 @@ function hookEntry(
 export function buildClaudeHookSettings(
   forwarderPath: string,
   execPath: string = process.execPath,
+  worktreeHookPath?: string,
 ) {
   return {
     hooks: {
+      // Claude Code's own worktrees (subagent isolation, EnterWorktree,
+      // --worktree) default to `.claude/worktrees/` and only a create hook can
+      // move them. Registered just for sessions whose conventions say `.wt/`.
+      // Unlike the removed PreToolUse/Bash gate (#178) it fires once per
+      // worktree created, not on every Bash call.
+      ...(worktreeHookPath
+        ? {
+            WorktreeCreate: [worktreeHookEntry(execPath, worktreeHookPath, "create")],
+            WorktreeRemove: [worktreeHookEntry(execPath, worktreeHookPath, "remove")],
+          }
+        : {}),
       Notification: [hookEntry(execPath, forwarderPath, "Notification")],
       Stop: [hookEntry(execPath, forwarderPath, "Stop")],
       // Issue #271 — no `matcher`, so this fires on every source
@@ -396,7 +422,11 @@ export function buildClaudeMcpConfig(
 
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
-  const settings = buildClaudeHookSettings(ctx.forwarderPath, process.execPath);
+  const settings = buildClaudeHookSettings(
+    ctx.forwarderPath,
+    process.execPath,
+    ctx.worktreesInDotWt ? resolveWorktreeHookPath() : undefined,
+  );
   const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
   const mcpConfig = buildClaudeMcpConfig(
     resolveMcpServerPath(),

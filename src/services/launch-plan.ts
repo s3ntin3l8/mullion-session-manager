@@ -26,6 +26,7 @@ import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { writeSessionBriefing } from "./project-briefing.js";
 import { writeSessionWorkflowConventions } from "./workflow-conventions.js";
+import { conventionsUseWtDirectory } from "./mullion-scaffold.js";
 import { sessionTmpDirPath } from "./session-files-cleanup.js";
 import {
   applyHookAdapters,
@@ -458,6 +459,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     controlSocketPath: session.controlSocketPath,
     forwarderPath,
     injectAgentGuide: session.injectAgentGuide,
+    worktreesInDotWt: conventionsUseWtDirectory(session.workflowConventionsText),
     injectProjectBriefing: session.injectProjectBriefing,
     injectMullionBundle: session.injectMullionBundle,
     authEnabled: session.authEnabled,

@@ -193,9 +193,9 @@ export interface DevWorktreeCandidate {
   /** Path under the worktree root, e.g. `fix-thing`. */
   slug: string;
   branch: string | null;
-  /** `wt` is a `.wt/` developer worktree; `claude-agent` one under `.claude/worktrees/`. */
+  /** `wt` is a `.wt/` (or `.worktrees/`) developer worktree; `claude-agent` one under `.claude/worktrees/`. */
   kind: "wt" | "claude-agent";
-  reason: "gone" | "merged" | "detached-merged";
+  reason: "gone" | "merged" | "detached-merged" | "in-default";
   /** e.g. `#1234` for `merged`. */
   detail?: string;
   bytes: number;
@@ -2144,6 +2144,7 @@ export interface AppSettings {
     // reads this to pre-fill and to decide whether to open on the question
     // flow or a review step.
     workflowConventionAnswers: Record<string, string>;
+    workflowConventionsAppliedText?: string;
     // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
     // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
     // per parent").

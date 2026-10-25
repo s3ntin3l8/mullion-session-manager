@@ -129,6 +129,17 @@ describe("buildClaudeHookSettings", () => {
     expect(settings.hooks.PostToolUse).toHaveLength(4);
   });
 
+  it("registers the Worktree hooks only when given a script path", () => {
+    expect(Object.keys(settings.hooks)).not.toContain("WorktreeCreate");
+    const withWt = buildClaudeHookSettings("/f.mjs", "/abs/node", "/abs/worktree-hook.mjs");
+    expect(withWt.hooks.WorktreeCreate?.[0].hooks[0].command).toBe(
+      '"/abs/node" "/abs/worktree-hook.mjs" create',
+    );
+    expect(withWt.hooks.WorktreeRemove?.[0].hooks[0].command).toBe(
+      '"/abs/node" "/abs/worktree-hook.mjs" remove',
+    );
+  });
+
   it("defaults the node binary to process.execPath when not overridden", () => {
     const defaultSettings = buildClaudeHookSettings("/abs/path/forwarder.mjs");
     expect(defaultSettings.hooks.Stop[0].hooks[0].command).toContain(
