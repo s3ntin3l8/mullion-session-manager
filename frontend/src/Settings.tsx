@@ -3,8 +3,8 @@ import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { ChevronLeftIcon, CloseIcon, SearchIcon } from "./ui/icons.js";
 import {
-  SEARCH_INDEX,
   SECTIONS,
+  filterSettingsSections,
   phoneSections,
   resolveSettingsSection,
   type SettingsSection,
@@ -93,13 +93,7 @@ export function Settings({
 
   const visibleSections = useMemo(() => {
     const base = phone ? phoneSections() : SECTIONS;
-    const q = query.trim().toLowerCase();
-    if (!q) return base;
-    return base.filter(
-      (s) =>
-        s.title.toLowerCase().includes(q) ||
-        SEARCH_INDEX.some((entry) => entry.section === s.id && entry.text.includes(q)),
-    );
+    return filterSettingsSections(base, query);
   }, [query, phone]);
 
   const selectSection = (id: SettingsSection) => {

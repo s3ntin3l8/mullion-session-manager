@@ -76,14 +76,14 @@ inventing new ones.
 
 ## Findings
 
-Forty-eight findings: 30 fixed and 18 deferred.
+Forty-eight findings: 32 fixed and 16 deferred.
 
 | Severity  | Findings | Fixed  | Deferred |
 | --------- | -------- | ------ | -------- |
 | Blocker   | 3        | 3      | 0        |
-| Major     | 21       | 20     | 1        |
-| Minor     | 24       | 7      | 17       |
-| **Total** | **48**   | **30** | **18**   |
+| Major     | 21       | 21     | 0        |
+| Minor     | 24       | 8      | 16       |
+| **Total** | **48**   | **32** | **16**   |
 
 The defects are ordered by severity, not by screen. The recurring theme is
 that most of them are **divergences from patterns the codebase had already
@@ -95,8 +95,8 @@ sites. The fixes are therefore mostly consolidation rather than invention.
 The table lists the findings that were fixed, with the pull request that fixed each:
 #1895 fixed 12 (the accessibility and contrast pass), #1897 fixed 11 (failures surfaced
 instead of swallowed), #1898 fixed 4 (guards on destructive actions), #1923 fixed 1, #1926
-fixed 1 and #1927 fixed 1 (the first three of the series that closes the deferred
-backlog, one finding per pull request). The deferred ones are in the
+fixed 1, #1927 fixed 1 and #1930 fixed 2 (the series that closes the deferred backlog,
+one pull request at a time). The deferred ones are in the
 [Deferred backlog](#deferred-backlog), under the same numbers.
 
 | #   | Severity | PR    | Finding                                                                                                                                             | Where                                                                                                                                                                                           | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -121,6 +121,7 @@ backlog, one finding per pull request). The deferred ones are in the
 | 18  | Major    | #1898 | "Add host" could be submitted twice with Enter — no re-entry guard                                                                                  | `CreateHostModal.tsx:41-61`                                                                                                                                                                     | The submit is guarded against re-entry, the same shape `CreateProjectModal` already had                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 19  | Major    | #1895 | `Segmented` conveyed its selection by CSS class alone — no `aria-pressed`/`aria-checked`, no group name                                             | `ui/primitives.tsx:99-112`                                                                                                                                                                      | `role="radiogroup"` + `role="radio"` + `aria-checked`, with arrow-key/Home/End selection and a roving tab stop                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | 20  | Major    | #1895 | `TerminalToasts` had no live region — copy and upload feedback was silent to assistive technology                                                   | `terminal-pane/TerminalToasts.tsx`                                                                                                                                                              | A permanent `role="status"` region, with the failure variants raised to `role="alert"`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 21  | Major    | #1930 | The command palette was hidden on the phone tier, and the navigator had no Commands tab (`styles/mobile.css:31-33`; `PhoneNavigator.tsx:17`)        | `styles/mobile.css:33-64`; `Toolbar.tsx:176-201`; `scripts/check-phone-palette.mjs`                                                                                                             | The palette's toolbar button is back on the phone tier, icon-only and named — the phone's toolbar has the room for it, while a fifth navigator tab would not fit the tab row. It is one of the phone's own `.toolbar-icon-btn`s, so its size and its 44px touch-target floor come from the tier's convention rather than from a copy of it, and a check script fails the lint if any stylesheet hides the button again. In Task view — which has no palette on purpose — the phone omits the button rather than rendering it disabled, because touch never shows the `title` that would explain it                                                                                                                                                                 |
 | 22  | Major    | #1927 | The Dock is hidden on every coarse-pointer tier, but the command palette still offers the Dock configuration commands (`styles/tablet.css:113-120`) | `lib/dockAvailability.ts:28-56`; `lib/useDockUnavailableReason.ts:16-21`; `paletteCommands.ts:147-166`; `CommandPalette.tsx:110-121`; `settings/sections/DockSection.tsx:13-23`; `Dock.tsx:201` | The palette Dock command and the Settings Dock section now say why, on exactly the devices where the Dock is hidden — and the Dock is hidden by **two** rules, not one: `styles/tablet.css`'s `(pointer: coarse)` block and `styles/mobile.css`'s phone-tier block. One shared predicate (`lib/dockAvailability.ts`) answers both, and the palette, the Settings section, and `Dock.tsx`'s own mount gate all read it, so a phone-tier window with a fine pointer — hidden by the second rule alone — is no longer reported as available. The reason rides in the row's own availability slot rather than the ellipsized subtitle, and the command is explained, not withdrawn: it edits a persistent `.crs/dock.json` that applies wherever the Dock **is** shown |
 | 23  | Major    | #1926 | The phone tier's cross-workspace session swap has no visible signal and no way back                                                                 | `lib/mobileSessionPicker.ts:88-109`; `MobileSessionSwitcher.tsx:357-388`                                                                                                                        | Every row of the phone's session picker names the workspace its session lives in — plain text when that is the workspace the user is looking at, a button naming the other one when it is not — and that button switches to that workspace, so the swap is visible before it happens and reversible after it                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | 24  | Major    | #1923 | `findSessionWorkspace` returns the first match, so "which workspace is this session in?" has an arbitrary answer                                    | `panelUtils.ts:102-108`; `hooks/usePanelOpener.ts:261-268`                                                                                                                                      | `findSessionWorkspaces` returns **every** workspace that claims the session, and the one caller switches workspace only when the answer is unique and is not the workspace the user is already in — otherwise it opens the session where the user is, rather than picking a workspace by the server's row order                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -131,6 +132,7 @@ backlog, one finding per pull request). The deferred ones are in the
 | 30  | Minor    | #1897 | `BrowserPanel`'s favorites failure is console-only, and renders as "no favorites"                                                                   | `BrowserPanel.tsx` favourites fetch                                                                                                                                                             | The failure is reported through the app-wide toast                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 31  | Minor    | #1897 | `SidebarDevices` shows device errors only in a `title` tooltip                                                                                      | `SidebarDevices` error path                                                                                                                                                                     | The error is inline in the failing row, not only in a `title` tooltip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 32  | Minor    | #1898 | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one                                            | `ui/ConfirmButton.tsx`                                                                                                                                                                          | The arm window counts down in the button and in its title                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 38  | Minor    | #1930 | The phone Settings list has no search, while the desktop rail does (`styles/mobile.css`, `Settings.tsx` nav)                                        | `PhoneNavigator.tsx:78-109`; `settings/settingsSections.tsx:216-228`                                                                                                                            | The phone's list filters by section name, description and control text through the same `filterSettingsSections` the desktop rail uses, so the two agree on what a query finds — and the desktop rail now matches descriptions too, which it did not before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### Blocker detail
 
@@ -355,6 +357,60 @@ says the same thing in its header comment. The script imports the real, typed
 predicate from the frontend — which is why that module is pure (no React, no store)
 and why the hook that reads the store lives beside it in
 `frontend/src/lib/useDockUnavailableReason.ts`.
+
+### The phone tier's navigation (findings 21 and 38)
+
+The two halves of finding 21 need two different guards, because they are two different
+kinds of defect.
+
+**The palette's reachability (finding 21) is a CSS fact**, so it needs a CSS guard: the
+button was in the DOM the whole time — only `styles/mobile.css` hid it — so no unit
+test could have said it was reachable again. `scripts/check-phone-palette.mjs` (wired into
+`npm run lint`, so it runs in CI) scans every stylesheet for a rule that hides
+`.run-cmd-btn` — the button itself, not its descendants — and fails if it finds one; it
+also fails if the phone tier stops trimming the button to its icon. It is a script rather
+than a vitest file because vitest stubs CSS imports (`css: false` in
+`frontend/vitest.config.ts`), so a test cannot read a stylesheet's text — the `?raw`
+import resolves to an empty string, and `import.meta.glob(..., { as: "raw" })` resolves
+to one too. This repo's own precedent for "assert something about a source file's
+contents" is a `scripts/check-*` node script wired into `npm run lint`, and
+`check-token-contrast.mjs` records the same reasoning in its header comment.
+
+The guard's vocabulary of "hidden" is the Dock guard's
+(`scripts/check-dock-availability.ts`): out of the flow, invisible, or transparent —
+`display: none`, `visibility: hidden`, `opacity: 0`, `content-visibility: hidden` — with
+`!important` counted, since the rule this guard exists to catch was literally
+`.run-cmd-btn { display: none !important }`. It resolves a selector's SUBJECT the way a
+browser does, so `:where(.run-cmd-btn)` and `.toolbar-actions>.run-cmd-btn` are caught
+alongside `.run-cmd-btn`, and the button's DESCENDANTS are not mistaken for the button.
+The phone tier's own blocks are read as a cascade — all of them, in source order, last
+rule wins — so a later block that shows the label again is caught too.
+
+`frontend/src/Toolbar.test.tsx` is the other half of it — the JS half: that on the phone
+the button is one of the phone's own icon buttons, that it is named (the visible label
+that names it on desktop is hidden there), that it opens the palette, and that the phone
+OMITS it in Task view rather than rendering it disabled: the Task view has no palette on
+purpose (issue #730), and a disabled control explains itself only through a `title`, which
+touch never shows.
+
+The phone toolbar's width is not a CSS-text fact, so it was measured instead. At 320px —
+the narrowest phone worth supporting, with touch emulation so `(pointer: coarse)` matches
+and the buttons are 44px rather than 30px — the list view's action group takes 112px (the
+palette's 44px button, the 8px gap, the bell's 44px, and the group's 16px of padding) and
+the session switcher keeps 148px of the 320px screen. In Task view the palette's button is
+not rendered at all, so the group holds only the bell: 60px, and the switcher keeps
+200px. `scrollWidth - clientWidth` on the group is 0 in both views: nothing is clipped.
+The actions group does not shrink (`flex-shrink: 0` on the phone tier), so the
+notification bell can never be the thing that gets clipped — the switcher beside it is
+the only thing that gives way, and it truncates its title.
+
+**The Settings filter (finding 38) is a unit-test guard**: the defect was that the
+phone's list had no filter at all, which is a matter of what the list renders.
+`frontend/src/settings/settingsSections.test.ts` pins what the shared
+`filterSettingsSections` matches — a section's name, its description, and the control
+text its search index holds — and `frontend/src/PhoneNavigator.test.tsx` pins that the
+phone's list uses it: that it filters, that the group headings of the sections it
+removed go away with them, and that it says so when nothing matches.
 
 ---
 
@@ -593,26 +649,24 @@ implying more:
 
 ## Deferred backlog
 
-| #   | Severity | Finding                                                                                                                                      | Issue                                                                     |
-| --- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 21  | Major    | The command palette was hidden on the phone tier, and the navigator had no Commands tab (`styles/mobile.css:31-33`; `PhoneNavigator.tsx:17`) | [#1880](https://github.com/s3ntin3l8/mullion-session-manager/issues/1880) |
-| 26  | Minor    | Two collapsible headers are `<div onClick>` with no keyboard path (`SourceControlSection.tsx:277`, `Sidebar.tsx:2139`)                       | [#1893](https://github.com/s3ntin3l8/mullion-session-manager/issues/1893) |
-| 33  | Minor    | "host" names two things: a remote agent, and a local Android device (`HostsSection.tsx:280` vs `DevicesSection.tsx`)                         | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |
-| 34  | Minor    | "Workspace" names two things: a saved layout, and a Settings section group (`WorkspaceSwitcher.tsx:266` vs `settingsSections.tsx:141-167`)   | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |
-| 35  | Minor    | The sidebar's project tree is not workspace-scoped, while the Dock's is (`Sidebar.tsx`, project tree)                                        | [#1877](https://github.com/s3ntin3l8/mullion-session-manager/issues/1877) |
-| 36  | Minor    | The palette's group labels do not describe their contents; "Navigate" holds one row (`CommandPalette.tsx`, group definitions)                | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
-| 37  | Minor    | Palette coverage is not uniform — no Devices, Hosts, Settings, Timeline or new-workspace command (`CommandPalette.tsx`, command list)        | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
-| 38  | Minor    | The phone Settings list has no search, while the desktop rail does (`styles/mobile.css`, `Settings.tsx` nav)                                 | [#1880](https://github.com/s3ntin3l8/mullion-session-manager/issues/1880) |
-| 39  | Minor    | An ended session's status label composites to 1.54:1–1.70:1 (ended-session status styling)                                                   | [#1886](https://github.com/s3ntin3l8/mullion-session-manager/issues/1886) |
-| 40  | Minor    | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                   | [#1890](https://github.com/s3ntin3l8/mullion-session-manager/issues/1890) |
-| 41  | Minor    | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:593`)                                      | [#1894](https://github.com/s3ntin3l8/mullion-session-manager/issues/1894) |
-| 42  | Minor    | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:444`)                                  | [#1889](https://github.com/s3ntin3l8/mullion-session-manager/issues/1889) |
-| 43  | Minor    | A palette action that does not move focus deliberately leaves focus on `<body>` (`CommandPalette.tsx:292`)                                   | [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884) |
-| 44  | Minor    | There is no skeleton primitive — twenty-plus panels render the bare word "Loading…" (no `skeleton` anywhere in `frontend/src/styles`)        | [#1885](https://github.com/s3ntin3l8/mullion-session-manager/issues/1885) |
-| 45  | Minor    | The global keyboard shortcuts are discoverable nowhere in the UI (`hooks/useGlobalShortcuts.ts`, not user-facing)                            | [#1887](https://github.com/s3ntin3l8/mullion-session-manager/issues/1887) |
-| 46  | Minor    | The type scale is px-only, so the OS text-size preference has no effect at all (no `rem` in the type scale in `frontend/src/styles`)         | [#1888](https://github.com/s3ntin3l8/mullion-session-manager/issues/1888) |
-| 47  | Minor    | A blocked task is visible only through the board's own "Blocked only" toggle (`UnifiedBoard.tsx:172-186`)                                    | [#1891](https://github.com/s3ntin3l8/mullion-session-manager/issues/1891) |
-| 48  | Minor    | A host's derived status has exactly one consumer: Settings → Hosts (`hostStatus.ts`)                                                         | [#1892](https://github.com/s3ntin3l8/mullion-session-manager/issues/1892) |
+| #   | Severity | Finding                                                                                                                                    | Issue                                                                     |
+| --- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| 26  | Minor    | Two collapsible headers are `<div onClick>` with no keyboard path (`SourceControlSection.tsx:277`, `Sidebar.tsx:2139`)                     | [#1893](https://github.com/s3ntin3l8/mullion-session-manager/issues/1893) |
+| 33  | Minor    | "host" names two things: a remote agent, and a local Android device (`HostsSection.tsx:280` vs `DevicesSection.tsx`)                       | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |
+| 34  | Minor    | "Workspace" names two things: a saved layout, and a Settings section group (`WorkspaceSwitcher.tsx:266` vs `settingsSections.tsx:141-167`) | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |
+| 35  | Minor    | The sidebar's project tree is not workspace-scoped, while the Dock's is (`Sidebar.tsx`, project tree)                                      | [#1877](https://github.com/s3ntin3l8/mullion-session-manager/issues/1877) |
+| 36  | Minor    | The palette's group labels do not describe their contents; "Navigate" holds one row (`CommandPalette.tsx`, group definitions)              | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
+| 37  | Minor    | Palette coverage is not uniform — no Devices, Hosts, Settings, Timeline or new-workspace command (`CommandPalette.tsx`, command list)      | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
+| 39  | Minor    | An ended session's status label composites to 1.54:1–1.70:1 (ended-session status styling)                                                 | [#1886](https://github.com/s3ntin3l8/mullion-session-manager/issues/1886) |
+| 40  | Minor    | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                 | [#1890](https://github.com/s3ntin3l8/mullion-session-manager/issues/1890) |
+| 41  | Minor    | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:593`)                                    | [#1894](https://github.com/s3ntin3l8/mullion-session-manager/issues/1894) |
+| 42  | Minor    | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:444`)                                | [#1889](https://github.com/s3ntin3l8/mullion-session-manager/issues/1889) |
+| 43  | Minor    | A palette action that does not move focus deliberately leaves focus on `<body>` (`CommandPalette.tsx:292`)                                 | [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884) |
+| 44  | Minor    | There is no skeleton primitive — twenty-plus panels render the bare word "Loading…" (no `skeleton` anywhere in `frontend/src/styles`)      | [#1885](https://github.com/s3ntin3l8/mullion-session-manager/issues/1885) |
+| 45  | Minor    | The global keyboard shortcuts are discoverable nowhere in the UI (`hooks/useGlobalShortcuts.ts`, not user-facing)                          | [#1887](https://github.com/s3ntin3l8/mullion-session-manager/issues/1887) |
+| 46  | Minor    | The type scale is px-only, so the OS text-size preference has no effect at all (no `rem` in the type scale in `frontend/src/styles`)       | [#1888](https://github.com/s3ntin3l8/mullion-session-manager/issues/1888) |
+| 47  | Minor    | A blocked task is visible only through the board's own "Blocked only" toggle (`UnifiedBoard.tsx:172-186`)                                  | [#1891](https://github.com/s3ntin3l8/mullion-session-manager/issues/1891) |
+| 48  | Minor    | A host's derived status has exactly one consumer: Settings → Hosts (`hostStatus.ts`)                                                       | [#1892](https://github.com/s3ntin3l8/mullion-session-manager/issues/1892) |
 
 One more finding came out of the runtime verification: the inactive workspace row's drag
 handle paints at 1.88:1 (dark) / 1.74:1 (light) at rest, under the 3:1 WCAG 1.4.11 asks of a

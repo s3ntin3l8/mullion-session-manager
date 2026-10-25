@@ -167,6 +167,68 @@ describe("Toolbar — phone session switcher slot and app menu", () => {
 });
 
 describe("Toolbar — phone tier", () => {
+  // Issue #1880 — the command palette was hidden on the phone tier by a CSS
+  // rule (mobile.css's `.run-cmd-btn { display: none !important }`), so the
+  // phone had no route to the palette at all: ⌘K is the desktop's power path
+  // and a phone has no keyboard. The button is back, icon-only.
+  //
+  // The CSS half of that is not testable here — vitest stubs CSS imports, so
+  // a test cannot read a stylesheet's text. `scripts/check-phone-palette.mjs`
+  // (wired into `npm run lint`) is that guard: it fails if any stylesheet
+  // hides the button again, or if the phone stops trimming it to its icon.
+  // What is testable here is the JS half: the button is there, it is one of
+  // the phone's own icon buttons, it is named, and it opens the palette.
+  it("keeps the command palette reachable on the phone", async () => {
+    const onOpenLauncher = vi.fn();
+    const { container } = render(<Toolbar {...NOOP_PROPS} onOpenLauncher={onOpenLauncher} phone />);
+    const button = container.querySelector(".run-cmd-btn")!;
+    expect(button).not.toBeNull();
+    expect(button).toHaveClass("toolbar-icon-btn");
+
+    await userEvent.click(button);
+    expect(onOpenLauncher).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the phone's icon-only palette button", () => {
+    // The phone hides the "Run command…" label and the ⌘K chip (mobile.css),
+    // so the visible text that names the button on desktop is not there to
+    // name it here — the aria-label is.
+    const { container } = render(<Toolbar {...NOOP_PROPS} phone />);
+    const button = container.querySelector(".run-cmd-btn")!;
+    expect(button).toHaveAttribute("aria-label", "Command palette");
+    expect(screen.getByRole("button", { name: "Command palette" })).toBe(button);
+  });
+
+  it("omits the phone's palette button in Task view instead of disabling it", () => {
+    // The Task view has no palette on purpose (issue #730). The desktop
+    // keeps a disabled button, because a mouse user gets the reason from its
+    // tooltip; touch never shows a `title`, so on the phone a disabled
+    // button would be a dead icon with no explanation. No button is better
+    // than a button that cannot be pressed.
+    viewMode = "kanban";
+    const { container } = render(<Toolbar {...NOOP_PROPS} phone />);
+    expect(container.querySelector(".run-cmd-btn")).toBeNull();
+    expect(screen.queryByTitle("Command palette (unavailable in Task view)")).toBeNull();
+  });
+
+  it("keeps the desktop's palette button in Task view, disabled", () => {
+    // The desktop's contrast case: the button stays, disabled, with the
+    // reason in its tooltip (which a mouse user can read).
+    viewMode = "kanban";
+    render(<Toolbar {...NOOP_PROPS} />);
+    expect(screen.getByTitle("Command palette (unavailable in Task view)")).toBeDisabled();
+  });
+
+  it("leaves the desktop's palette button named by its visible label", () => {
+    // The desktop keeps the visible "Run command…" text as the accessible
+    // name: an aria-label there would override the visible label, which
+    // WCAG 2.5.3 (Label in Name) does not want.
+    const { container } = render(<Toolbar {...NOOP_PROPS} />);
+    const button = container.querySelector(".run-cmd-btn")!;
+    expect(button).not.toHaveAttribute("aria-label");
+    expect(button.textContent).toContain("Run command…");
+  });
+
   it("puts the bell at the right edge and drops the ⋯ menu", () => {
     const { container } = render(<Toolbar {...NOOP_PROPS} phone />);
     const bell = screen.getByTestId("bell");
