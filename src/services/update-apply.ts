@@ -278,6 +278,23 @@ async function launchOneShotUpdateJob(
     );
   }
 
+  // The bootout alone is not enough: `launchctl bootout` returns BEFORE
+  // launchd has finished unloading the label, and `bootstrap` refuses a
+  // label that is still registered — so bootstrapping it back immediately
+  // races launchd's own teardown. On real hardware that race failed about
+  // half the time, and the losing side left the host with NO job loaded
+  // (issue #1924). Wait for the unload to actually complete.
+  const gone = await waitForLaunchdLabelGone(`${domain}/${label}`, {
+    cwd: mullionHome,
+    deadline,
+    app,
+  });
+  if (!gone.ok) {
+    const message = `the launchd update job's label (${label}) did not unload in time — not starting the update: ${gone.message}`;
+    app.log.error({ label, plistPath, message }, "failed to launch the launchd update job");
+    return { ok: false, message };
+  }
+
   // launchctl's exit status is the answer: a refusal must not be reported
   // to the caller as a started update. Its output is captured so launchd's
   // own error text ("Bootstrap failed: 5: Input/output error") reaches both
@@ -317,6 +334,36 @@ const LAUNCHCTL_TIMEOUT_MS = 10_000;
 const LAUNCHCTL_MIN_BUDGET_MS = 1_000;
 
 /**
+ * How often the label probe re-checks while waiting for a label to
+ * unload. The unload itself is sub-second; this is a safety margin on
+ * the poll, not an estimate of the unload.
+ */
+const LAUNCHCTL_LABEL_POLL_MS = 100;
+
+/**
+ * The smallest budget worth handing to the label PROBE.
+ *
+ * The floor above (LAUNCHCTL_MIN_BUDGET_MS) exists because a `bootstrap`
+ * killed at spawn could still register the job — the register-then-report-
+ * 500 hazard. A `print` registers nothing, so killing one at spawn is
+ * harmless, and it can therefore run on a much smaller budget: the probe
+ * is what decides whether the unload finished, so it must still be able
+ * to run near the end of the wait.
+ */
+const LAUNCHCTL_PROBE_MIN_BUDGET_MS = 50;
+
+/** A short pause, used only between label probes. */
+function sleep(ms: number): Promise<void> {
+  // NOT unref'd: this is a delay the caller is AWAITING, so it must keep
+  // the event loop alive for its duration — unlike runLaunchctl's watchdog
+  // timer below, which only guards a child that is itself holding the loop
+  // open.
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
  * Runs a launchctl subcommand and reports its exit status.
  *
  * The child's output is PIPED, not inherited: launchd's own error text
@@ -327,14 +374,23 @@ const LAUNCHCTL_MIN_BUDGET_MS = 1_000;
  * `deadline` is an absolute timestamp shared by the whole launch sequence,
  * so the request that starts an update waits for at most ONE deadline in
  * total, not one per call.
+ *
+ * The failure branch carries `exitCode` when launchctl ACTUALLY RAN and
+ * exited non-zero, and leaves it undefined when it never ran (a timeout, or
+ * the budget being spent before the spawn). A caller that has to tell those
+ * two apart — the label probe below does, because "launchctl says the label
+ * is gone" and "launchctl never answered" mean different things — reads
+ * `exitCode`; a caller that only wants to know whether the call worked
+ * reads `ok`.
  */
 function runLaunchctl(
   args: string[],
-  options: { cwd: string; deadline: number; app: FastifyInstance },
-): Promise<{ ok: true } | { ok: false; message: string }> {
+  options: { cwd: string; deadline: number; app: FastifyInstance; minBudgetMs?: number },
+): Promise<{ ok: true } | { ok: false; message: string; exitCode?: number }> {
   return new Promise((resolve) => {
     const remaining = Math.max(0, options.deadline - Date.now());
-    if (remaining < LAUNCHCTL_MIN_BUDGET_MS) {
+    const minBudgetMs = options.minBudgetMs ?? LAUNCHCTL_MIN_BUDGET_MS;
+    if (remaining < minBudgetMs) {
       // The budget for the WHOLE launch is already spent. Do NOT spawn
       // launchctl at all: killing it at spawn could still let it register
       // the job, which would leave the caller with a 500 for an update that
@@ -355,7 +411,9 @@ function runLaunchctl(
     });
     let output = "";
     let settled = false;
-    const finish = (result: { ok: true } | { ok: false; message: string }): void => {
+    const finish = (
+      result: { ok: true } | { ok: false; message: string; exitCode?: number },
+    ): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -385,11 +443,82 @@ function runLaunchctl(
     child.on("close", (code) => {
       const text = output.trim();
       if (text) options.app.log.debug({ args, output: text }, "launchctl output");
-      finish(
-        code === 0 ? { ok: true } : { ok: false, message: `exit ${code}: ${text || "no output"}` },
-      );
+      // `code` is null when the child was killed by a signal rather than
+      // exiting on its own — that is a non-zero outcome, but with no exit
+      // STATUS to report, so `exitCode` stays undefined (the probe below
+      // reads that as "launchctl never gave an answer").
+      if (code === 0) {
+        finish({ ok: true });
+        return;
+      }
+      finish({
+        ok: false,
+        message: `exit ${code ?? "signal"}: ${text || "no output"}`,
+        ...(typeof code === "number" ? { exitCode: code } : {}),
+      });
     });
   });
+}
+
+/**
+ * Waits for a launchd label to actually be unregistered.
+ *
+ * `launchctl bootout` returns BEFORE launchd has finished unloading the
+ * label, and `launchctl bootstrap` refuses a label that is still registered
+ * ("Bootstrap failed: 5: Input/output error") — so booting a label out and
+ * immediately bootstrapping it back races launchd's own teardown. Measured
+ * on real hardware, the immediate re-bootstrap failed about half the time,
+ * and the losing side left the host with NO job loaded at all (issue
+ * #1924). This waits for the unload to actually complete.
+ *
+ * The probe is `launchctl print DOMAIN/LABEL`, whose exit status is the
+ * answer: 0 while the label is registered, non-zero once it is not ("Could
+ * not find service"). Only the exit STATUS is read, never the output —
+ * launchd's own documentation says `print`'s output "is NOT API in any
+ * sense at all" and may change between releases.
+ *
+ * The wait is bounded by the SHARED deadline (the same one the bootout and
+ * the bootstrap draw on), less the floor the bootstrap itself needs — so
+ * waiting for the unload can never starve the bootstrap that follows it.
+ * A probe that cannot answer (a timeout, or a budget already spent) is
+ * treated as "not confirmed gone" and the loop keeps going until its own
+ * budget runs out; a probe that RAN and exited non-zero is the real answer.
+ */
+async function waitForLaunchdLabelGone(
+  target: string,
+  options: { cwd: string; deadline: number; app: FastifyInstance },
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  // The bootstrap that follows needs the floor, so the wait may only use
+  // what is left above it.
+  const waitUntil = options.deadline - LAUNCHCTL_MIN_BUDGET_MS;
+  if (Date.now() >= waitUntil) {
+    return {
+      ok: false,
+      message:
+        `the launchctl deadline was already exhausted before the label ${target} ` +
+        `could be confirmed unloaded (only ${options.deadline - Date.now()}ms of the ` +
+        `${LAUNCHCTL_TIMEOUT_MS}ms budget was left)`,
+    };
+  }
+  while (Date.now() < waitUntil) {
+    const probe = await runLaunchctl(["print", target], {
+      cwd: options.cwd,
+      deadline: waitUntil,
+      app: options.app,
+      minBudgetMs: LAUNCHCTL_PROBE_MIN_BUDGET_MS,
+    });
+    // exit 0 → still registered; a non-zero exit → launchctl ran and says it
+    // is gone. `exitCode` is undefined when launchctl never ran at all, so
+    // that case is NOT taken as an answer.
+    if (!probe.ok && probe.exitCode !== undefined) {
+      return { ok: true };
+    }
+    await sleep(LAUNCHCTL_LABEL_POLL_MS);
+  }
+  return {
+    ok: false,
+    message: `the launchd label ${target} was still registered when the wait ran out`,
+  };
 }
 
 /**

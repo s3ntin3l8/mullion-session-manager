@@ -24,6 +24,52 @@ launchd_gui_domain() {
   echo "gui/$(id -u)"
 }
 
+# --- launchd label unloading --------------------------------------------------
+
+# launchd_wait_label_gone DOMAIN/LABEL [TIMEOUT_TENTHS]
+#
+# `launchctl bootout` returns BEFORE launchd has finished unloading the label,
+# and `launchctl bootstrap` refuses a label that is still registered ("Bootstrap
+# failed: 5: Input/output error"). So a caller that boots a label out and
+# immediately bootstraps it back is racing launchd's own teardown: sometimes
+# the bootstrap is refused, and the host is left with the job NOT loaded at all
+# (issue #1924).
+#
+# Poll until the label is really gone. The probe is `launchctl print
+# DOMAIN/LABEL`, whose exit status is the answer: 0 while the label is
+# registered, non-zero once it is not ("Could not find service"). Only the exit
+# STATUS is used, never the output — launchd's own documentation says `print`'s
+# output "is NOT API in any sense at all" and may change between releases.
+#
+# A probe that FAILS counts as "gone", not "still loaded": on a host without
+# launchctl the probe can never succeed, and treating that as "still loaded"
+# would burn the whole budget on every run. It does not need to tell the two
+# apart — both mean "not loaded" — and the bootstrap that follows surfaces any
+# real problem.
+#
+# TIMEOUT_TENTHS bounds the wait in tenths of a second (the default, 50, is
+# five seconds — far above the sub-second unload this was measured against,
+# and far below anything an operator would notice). The budget is the CALLER's
+# to pass, so a caller that shares a deadline with a following command can
+# pass a smaller one.
+#
+# Returns 0 once the label is gone, non-zero if it is still registered when
+# the budget runs out: the caller must NOT bootstrap in that case, because the
+# bootstrap would fail with exactly the error this wait exists to prevent.
+launchd_wait_label_gone() {
+  local target="$1"
+  local tenths="${2:-50}"
+  local waited=0
+  while [ "$waited" -lt "$tenths" ]; do
+    if ! launchctl print "$target" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
 # --- timeout ----------------------------------------------------------------
 
 # run_with_timeout SECONDS COMMAND...
