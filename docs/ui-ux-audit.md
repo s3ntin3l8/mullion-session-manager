@@ -98,17 +98,26 @@ Recomputed over the call sites: **32** `Toggle`, **28** `Dropdown`, **8**
 `Segmented`, **3** `Slider` and **17** `NumberField` usages had no
 accessible name.
 
-**Fix.** `Row` now generates a stable id, renders its label with that id,
-and publishes the label's text through a React context. The controls read
-the context and apply it as their accessible name. An explicit `ariaLabel`
-prop still wins at every level.
+**Fix.** `Row` now generates a stable id, renders its label with that id, and
+publishes it through a React context. The controls point `aria-labelledby` at
+that id, so the browser computes the accessible name from the label as it is
+actually rendered. An explicit `ariaLabel` prop still wins at every level.
 
-`aria-labelledby` was considered and rejected for the visible-label
-association: the control lives in a sibling subtree (`.settings-row-control`)
-rather than inside the label element, and not every control is labelable —
-`Segmented` renders a `<div role="radiogroup">`, for which `<label for>` would
-be invalid HTML. `aria-label` with the label's own text satisfies the same
-requirement (and WCAG 2.5.3, "Label in Name") for every control type.
+`aria-labelledby` rather than a copied-in `aria-label` on purpose. The first
+cut of this fix derived the label's text in JS and handed it down as an
+`aria-label` — which works for a plain string label, but only ever
+approximates what is rendered: a label whose text comes from a child
+component's own render (rather than from a literal prop) walked to the empty
+string and named the control nothing at all. Letting the browser resolve the
+reference makes that case correct by construction.
+
+A `<label for>` was rejected, but for a different reason than
+`aria-labelledby`: the control lives in a sibling subtree
+(`.settings-row-control`) rather than inside the label element, so `for`
+could only work by way of a generated id, and not every control is labelable
+— `Segmented` renders a `<div role="radiogroup">`, for which `<label for>`
+would be invalid HTML. `aria-labelledby` references the same visible text and
+is valid for every control type.
 
 The five key-conflict rows in `InputSection.tsx` whose visible label is a
 keyboard chip rather than the setting's name now pass an explicit
