@@ -12,7 +12,7 @@
 // (`ui/CustomSelect.tsx`, the palette's target chip), "dialog"
 // (`ui/Modal.tsx`, `ui/BottomSheet.tsx`, `MobileSessionSwitcher.tsx`,
 // `unified-board/TasksToolbar.tsx`). This script keeps it that way: it
-// fails if `aria-haspopup="true"` appears anywhere in the frontend.
+// fails if `aria-haspopup="true"` appears anywhere in `frontend/src`.
 //
 // It lives here rather than in a vitest file for one concrete reason: this
 // guard asserts a property of the WHOLE frontend source tree, in one pass,
