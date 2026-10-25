@@ -743,6 +743,12 @@ const CHECKS = [
             theme: themeName,
             scope: scopeName,
             error: "no .cmux-root in the DOM",
+            // A dead scope still has to count as a dead scope: without these
+            // the totals below become NaN, the sample floor cannot see it,
+            // and an unresolvable foreground in another scope gets
+            // misdiagnosed as a missing guard.
+            total: 0,
+            unresolvedForeground: 0,
             samples: [],
             guards: [],
           };
@@ -759,6 +765,8 @@ const CHECKS = [
             theme: themeName,
             scope: scopeName,
             error: marked.error,
+            total: 0,
+            unresolvedForeground: 0,
             samples: [],
             guards: [],
           };

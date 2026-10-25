@@ -80,6 +80,13 @@ describe("color-math: parseColor", () => {
     expect(parseColor("#8a8a94")).toEqual({ r: 138, g: 138, b: 148, a: 1 });
     expect(parseColor("#fff")).toEqual({ r: 255, g: 255, b: 255, a: 1 });
     expect(parseColor("#ffffff80")).toEqual({ r: 255, g: 255, b: 255, a: 128 / 255 });
+    // The 4-digit form is #RGBA, so #fff8 is white at 0x88 alpha.
+    expect(parseColor("#fff8")).toEqual({ r: 255, g: 255, b: 255, a: 136 / 255 });
+  });
+
+  it("parses percentage channels and a percentage alpha", () => {
+    expect(parseColor("rgb(100%, 0%, 0%)")).toEqual({ r: 255, g: 0, b: 0, a: 1 });
+    expect(parseColor("rgba(255, 0, 0, 50%)")).toEqual({ r: 255, g: 0, b: 0, a: 0.5 });
   });
 
   it("returns null for anything that is not a colour", () => {

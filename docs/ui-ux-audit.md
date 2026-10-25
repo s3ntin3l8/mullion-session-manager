@@ -363,8 +363,9 @@ Measuring the painted result instead — compositing every translucent layer
 over its ancestors, then re-measuring each hoverable ancestor while it is
 genuinely hovered — found **two** defects the token-level figures missed.
 Both rows below quote the **dark theme**, which is the worse of the two for
-the chips; the drag handle's "was" is worse still in the light theme, at
-1.00:1:
+the chips; the drag handle's "was" is worse still in the light theme —
+**1.00:1** at the handle's 0.4 opacity (1.09:1 at full opacity), against
+1.15:1 in the dark:
 
 | Where                                  | Was                         | Now                          | Why                                                                                                                                                                                                     |
 | -------------------------------------- | --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
