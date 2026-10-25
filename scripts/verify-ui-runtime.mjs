@@ -1060,7 +1060,11 @@ const CHECKS = [
 
       // A running Dock session bound to the control by its command
       // (dockHelpers.ts's runningSessionFor matches on the command).
-      await demo.api("/api/sessions", {
+      //
+      // It is deleted again in the `finally` below: the demo's teardown stops
+      // systemd scopes, which macOS does not have, so a session this check
+      // spawns would outlive the run and every re-run would leak another one.
+      const created = await demo.api("/api/sessions", {
         method: "POST",
         body: JSON.stringify({
           projectId: project.id,
@@ -1071,95 +1075,107 @@ const CHECKS = [
         }),
       });
 
-      const page = await browser.newPage({ viewport: DESKTOP });
-      await openApp(page, demo, { waitForData: true });
-
-      // Put the project into the Dock's own rail.
-      const addProject = page.locator('[aria-label="Add project"]').first();
-      await addProject.waitFor({ state: "visible", timeout: 15_000 });
-      await addProject.click();
-      const option = page.getByRole("option", { name: project.name, exact: true }).first();
-      await option.waitFor({ state: "visible", timeout: 10_000 });
-      await option.click();
-      await page.waitForTimeout(2000);
-
-      const toggle = page.locator(
-        `[aria-label^="${DOCK_CONTROL.title} — click to stop log streaming"]`,
-      );
-      const toggleVisible = await toggle.count();
-      if (!toggleVisible) {
-        const dockText = await page
-          .locator(".cmux-root")
-          .innerText()
-          .then((t) => t.slice(0, 600))
-          .catch(() => "(unreadable)");
-        await page.close();
-        return {
-          status: "fail",
-          detail:
-            "the Dock control row never appeared (the control is not shown as running) — " +
-            "the kill path could not be exercised",
-          evidence: { project: { id: project.id, cwd: project.cwd }, dockText },
-        };
+      try {
+        return await runDockKillCheck({ browser, demo, project });
+      } finally {
+        // The empty body matters: `demo.api` sends a JSON content-type, and
+        // Fastify rejects a JSON request with no body at all.
+        await demo
+          .api(`/api/sessions/${created.id}`, { method: "DELETE", body: "{}" })
+          .catch(() => {});
       }
-
-      // Make the kill fail at the network boundary: the React component, the
-      // store, the click handler and the status widget stay real.
-      await page.route("**/api/sessions/*", async (route) => {
-        if (route.request().method() !== "DELETE") return route.continue();
-        await route.fulfill({
-          status: 500,
-          contentType: "application/json",
-          body: JSON.stringify({ error: "stubbed kill failure" }),
-        });
-      });
-
-      await toggle.first().click();
-
-      const status = page.locator(".dock-monitor-check-status");
-      const appeared = await status
-        .first()
-        .waitFor({ state: "visible", timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-      const appearedText = appeared ? ((await status.first().textContent()) ?? "").trim() : "";
-      await page.waitForTimeout(2000);
-      const visibleAfter2s = await status
-        .first()
-        .isVisible()
-        .catch(() => false);
-      await page.waitForTimeout(3500);
-      const visibleAfter5_5s = await status
-        .first()
-        .isVisible()
-        .catch(() => false);
-
-      await page.close();
-
-      const ok =
-        appeared && /Failed to kill/.test(appearedText) && visibleAfter2s && !visibleAfter5_5s;
-      return {
-        status: ok ? "pass" : "fail",
-        detail: ok
-          ? `the failure was reported as "${appearedText}" and cleared itself after ~4s`
-          : `appeared=${appeared} (${appearedText || "no status"}), visible after 2s=${visibleAfter2s}, ` +
-            `visible after 5.5s=${visibleAfter5_5s}`,
-        evidence: {
-          control: DOCK_CONTROL,
-          project: { id: project.id, cwd: project.cwd },
-          appeared,
-          appearedText,
-          visibleAfter2s,
-          visibleAfter5_5s,
-          note:
-            "The DELETE is stubbed to fail at the network boundary on purpose: this verifies " +
-            "the UI contract (the failure is surfaced and the transient auto-clears), not the " +
-            "backend's kill semantics — and it keeps the check runnable without a Docker daemon.",
-        },
-      };
     },
   },
 ];
+
+/** The C5 check proper — the Dock row's failed kill has to surface. */
+async function runDockKillCheck({ browser, demo, project }) {
+  const page = await browser.newPage({ viewport: DESKTOP });
+  await openApp(page, demo, { waitForData: true });
+
+  // Put the project into the Dock's own rail.
+  const addProject = page.locator('[aria-label="Add project"]').first();
+  await addProject.waitFor({ state: "visible", timeout: 15_000 });
+  await addProject.click();
+  const option = page.getByRole("option", { name: project.name, exact: true }).first();
+  await option.waitFor({ state: "visible", timeout: 10_000 });
+  await option.click();
+  await page.waitForTimeout(2000);
+
+  const toggle = page.locator(
+    `[aria-label^="${DOCK_CONTROL.title} — click to stop log streaming"]`,
+  );
+  const toggleVisible = await toggle.count();
+  if (!toggleVisible) {
+    const dockText = await page
+      .locator(".cmux-root")
+      .innerText()
+      .then((t) => t.slice(0, 600))
+      .catch(() => "(unreadable)");
+    await page.close();
+    return {
+      status: "fail",
+      detail:
+        "the Dock control row never appeared (the control is not shown as running) — " +
+        "the kill path could not be exercised",
+      evidence: { project: { id: project.id, cwd: project.cwd }, dockText },
+    };
+  }
+
+  // Make the kill fail at the network boundary: the React component, the
+  // store, the click handler and the status widget stay real.
+  await page.route("**/api/sessions/*", async (route) => {
+    if (route.request().method() !== "DELETE") return route.continue();
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "stubbed kill failure" }),
+    });
+  });
+
+  await toggle.first().click();
+
+  const status = page.locator(".dock-monitor-check-status");
+  const appeared = await status
+    .first()
+    .waitFor({ state: "visible", timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  const appearedText = appeared ? ((await status.first().textContent()) ?? "").trim() : "";
+  await page.waitForTimeout(2000);
+  const visibleAfter2s = await status
+    .first()
+    .isVisible()
+    .catch(() => false);
+  await page.waitForTimeout(3500);
+  const visibleAfter5_5s = await status
+    .first()
+    .isVisible()
+    .catch(() => false);
+
+  await page.close();
+
+  const ok = appeared && /Failed to kill/.test(appearedText) && visibleAfter2s && !visibleAfter5_5s;
+  return {
+    status: ok ? "pass" : "fail",
+    detail: ok
+      ? `the failure was reported as "${appearedText}" and cleared itself after ~4s`
+      : `appeared=${appeared} (${appearedText || "no status"}), visible after 2s=${visibleAfter2s}, ` +
+        `visible after 5.5s=${visibleAfter5_5s}`,
+    evidence: {
+      control: DOCK_CONTROL,
+      project: { id: project.id, cwd: project.cwd },
+      appeared,
+      appearedText,
+      visibleAfter2s,
+      visibleAfter5_5s,
+      note:
+        "The DELETE is stubbed to fail at the network boundary on purpose: this verifies " +
+        "the UI contract (the failure is surfaced and the transient auto-clears), not the " +
+        "backend's kill semantics — and it keeps the check runnable without a Docker daemon.",
+    },
+  };
+}
 
 function formatLine(result) {
   const status = result.status.toUpperCase().padEnd(4);
