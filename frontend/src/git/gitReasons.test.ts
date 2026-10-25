@@ -46,6 +46,13 @@ describe("pullReasonMessage copy", () => {
     expect(pullReasonMessage(undefined, undefined)).toMatch(/failed/i);
   });
 
+  // The shared renderer's default branch is the forward-compatibility path
+  // for the branch and worktree refusals too: a reason this build has never
+  // heard of must not throw, and must not claim the action succeeded.
+  it("says something sensible for a refusal reason it has never heard of", () => {
+    expect(reasonMessage("a-reason-from-the-future", undefined)).toMatch(/failed/i);
+  });
+
   // The one reason the pull and the branch/worktree refusals share is
   // rendered by reasonMessage — one copy of that copy, on purpose.
   it("shares the not-a-repo copy with the branch and worktree refusals", () => {
