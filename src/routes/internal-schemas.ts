@@ -237,6 +237,48 @@ export const terminateSchema = {
   params: SESSION_ID_PARAMS_SCHEMA,
 };
 
+// Issue #1951 — `sessions.prompt` / `sessions.wait_for_output` for a child on
+// this host, proxied by the primary. The text bound is a character count (the
+// primary has already enforced MAX_PROMPT_BYTES in bytes, which is never
+// smaller); the route re-checks the bytes itself.
+export interface PromptBody {
+  text: string;
+  submit: boolean;
+}
+export const promptSchema = {
+  params: SESSION_ID_PARAMS_SCHEMA,
+  body: {
+    type: "object",
+    required: ["text", "submit"],
+    additionalProperties: false,
+    properties: {
+      text: { type: "string", minLength: 1, maxLength: 32_768 },
+      submit: { type: "boolean" },
+    },
+  },
+} as const;
+
+export interface WaitOutputBody {
+  match: string;
+  regex: boolean;
+  timeoutMs: number;
+  afterOffset?: number;
+}
+export const waitOutputSchema = {
+  params: SESSION_ID_PARAMS_SCHEMA,
+  body: {
+    type: "object",
+    required: ["match", "regex", "timeoutMs"],
+    additionalProperties: false,
+    properties: {
+      match: { type: "string", minLength: 1, maxLength: 256 },
+      regex: { type: "boolean" },
+      timeoutMs: { type: "integer", minimum: 1 },
+      afterOffset: { type: "integer", minimum: 0 },
+    },
+  },
+} as const;
+
 export interface ReviewGateBody {
   decision: "approved" | "denied";
   reason?: string;

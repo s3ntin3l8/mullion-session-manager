@@ -101,6 +101,8 @@ import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
+import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
+import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -159,6 +161,10 @@ import {
   liveStatusSchema,
   livenessSchema,
   terminateSchema,
+  promptSchema,
+  waitOutputSchema,
+  type PromptBody,
+  type WaitOutputBody,
   reviewGateSchema,
   gitWorktreeCreateSchema,
   gitWorktreeRemoveSchema,
@@ -2381,6 +2387,73 @@ export async function internalRoutes(app: FastifyInstance) {
     async (request) => {
       const ok = app.pty.acknowledgeAttention(request.params.id);
       return { ok };
+    },
+  );
+
+  // Issue #1951 — the agent-side half of `sessions.prompt` for a child
+  // whose PTY lives on THIS host. The primary has already decided typing is
+  // wise (the derived status is not blocked/gone) and enforced the size and
+  // sanitization rules; this only runs the delivery against the local
+  // PtyManager (services/session-prompt.ts, the same code a local child
+  // uses). A refusal is HTTP 422 carrying `{status, error}` — the status the
+  // primary should surface — because RemoteHostClient.request() discards the
+  // body of a 5xx, and the real answer ("not running", "no prompt framing
+  // for that agent", "backpressure") must survive the hop.
+  app.post<{ Params: { id: string }; Body: PromptBody }>(
+    "/internal/sessions/:id/prompt",
+    { ...INTERNAL_RATE_LIMIT, schema: promptSchema },
+    async (request, reply) => {
+      const delivery = await deliverPrompt(app, request.params.id, {
+        text: request.body.text,
+        submit: request.body.submit,
+        notRunning: "the session is not running on its host",
+      });
+      if (!delivery.ok) {
+        reply.code(422);
+        return { status: delivery.status, error: delivery.error };
+      }
+      return { outputOffset: delivery.outputOffset };
+    },
+  );
+
+  // Issue #1951 — the agent-side half of `sessions.wait_for_output`: ONE
+  // bounded wait against the local PTY. The primary loops over these
+  // (SessionBackend.waitOutput), so this caps a single call and gives up its
+  // PTY subscription as soon as the request goes away — an agent never holds
+  // a listener for an hour on behalf of a primary that has stopped caring.
+  app.post<{ Params: { id: string }; Body: WaitOutputBody }>(
+    "/internal/sessions/:id/wait-output",
+    { ...INTERNAL_RATE_LIMIT, schema: waitOutputSchema },
+    async (request, reply) => {
+      const matcher = compileOutputMatcher(request.body.match, request.body.regex);
+      if (!matcher.ok) {
+        reply.code(422);
+        return { status: 400, error: matcher.error };
+      }
+      const session = app.pty.get(request.params.id);
+      if (!session || !session.isAlive) return { notRunning: true };
+      const controller = new AbortController();
+      const onClose = () => controller.abort();
+      request.raw.once("close", onClose);
+      try {
+        const result = await waitForOutput(
+          matcher,
+          Math.min(request.body.timeoutMs, REMOTE_WAIT_CHUNK_MS),
+          {
+            signal: controller.signal,
+            onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
+            ...(request.body.afterOffset !== undefined
+              ? { seed: session.getOutputSince(request.body.afterOffset) }
+              : {}),
+            alive: () => session.isAlive,
+          },
+        );
+        // The requester hung up: nobody to answer.
+        if ("aborted" in result) return reply.code(499).send();
+        return { ...result, outputOffset: session.outputOffset };
+      } finally {
+        request.raw.off("close", onClose);
+      }
     },
   );
 

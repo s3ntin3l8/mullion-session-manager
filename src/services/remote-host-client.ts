@@ -93,6 +93,13 @@ export class HostUnreachableError extends Error {
  * (e.g. never treat a 4xx as grounds to skip reconciling a host — the host
  * is fine). Existing callers that just want "did this succeed" keep
  * working unchanged since this is still a thrown Error either way. */
+/** What an agent's `/internal/sessions/:id/wait-output` answers (issue #1951). */
+export type RemoteWaitOutputResult =
+  | { matched: true; text: string; line: string; outputOffset: number }
+  | { matched: false; timedOut: true; outputOffset: number }
+  | { matched: false; gone: true; outputOffset: number }
+  | { notRunning: true };
+
 export class HostRequestError extends Error {
   constructor(
     hostId: string,
@@ -237,6 +244,19 @@ const GIT_REPAIR_REQUEST_TIMEOUT_MS = 180_000;
 // dev-server proxy, an unrelated "preview" — dock-preview worktrees are a
 // different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
+
+// Issue #1951 — `sessions.prompt` against a child on this host. The agent
+// types the body, waits the adapter's submit delay (~150 ms), re-checks, then
+// presses Enter, all under a per-session lock — so a queued prompt can wait
+// behind another one. Its OWN constant: a timeout AFTER the body was typed
+// leaves text sitting in the child's input box while the primary reports the
+// host as unreachable, and the call is not idempotent (a retry would type it
+// twice). Generous so that only a genuinely wedged agent trips it.
+const SESSION_PROMPT_REQUEST_TIMEOUT_MS = 30_000;
+// Issue #1951 — slack added to a remote output wait's own timeout so the
+// request outlives the agent's wait by the network round trip, never the
+// other way round.
+const WAIT_OUTPUT_REQUEST_SLACK_MS = 10_000;
 
 // Issue #1101 — deliberately its OWN constant, NOT a reuse of
 // GIT_PUSH_REQUEST_TIMEOUT_MS or any other neighbor above: every existing
@@ -1433,6 +1453,51 @@ export class RemoteHostClient {
       { method: "POST" },
     );
     return result.ok;
+  }
+
+  /**
+   * Issue #1951 — types a prompt into session `id`'s agent on this host
+   * (`sessions.prompt` for a remote child). The agent answers a refusal
+   * (blocked, not running, no framing for that agent, backpressure) as HTTP
+   * 422 carrying `{status, error}` — a 4xx, because `request()` discards the
+   * body of a 5xx — and a 404 means an agent build predating the route.
+   */
+  resolvePrompt(
+    id: string,
+    body: { text: string; submit: boolean },
+  ): Promise<{ outputOffset: number }> {
+    return this.request(
+      `/internal/sessions/${encodeURIComponent(id)}/prompt`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      SESSION_PROMPT_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /**
+   * Issue #1951 — one bounded output wait on session `id` on this host
+   * (`sessions.wait_for_output` for a remote child). `body.timeoutMs` is the
+   * wait's own length (the agent caps it); the request is given that plus
+   * slack. The result mirrors services/output-wait.ts's, plus the PTY's
+   * `outputOffset` so the caller can resume where this one stopped, or
+   * `{ notRunning: true }` when the agent has no live PTY for the id.
+   */
+  resolveWaitOutput(
+    id: string,
+    body: { match: string; regex: boolean; timeoutMs: number; afterOffset?: number },
+  ): Promise<RemoteWaitOutputResult> {
+    return this.request(
+      `/internal/sessions/${encodeURIComponent(id)}/wait-output`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+      body.timeoutMs + WAIT_OUTPUT_REQUEST_SLACK_MS,
+    );
   }
 
   /**

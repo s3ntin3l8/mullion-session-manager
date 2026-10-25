@@ -27,6 +27,8 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
     resolveReviewGate: vi.fn().mockResolvedValue(false),
     acknowledgeAttention: vi.fn().mockResolvedValue(false),
+    prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+    waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
     createWorktree: vi.fn().mockResolvedValue(null),
     checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
     removeWorktree: vi.fn().mockResolvedValue(false),
@@ -493,6 +495,8 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/tmp/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: deriveWorktreePathForTask(cwd, task),
@@ -872,6 +876,8 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -928,6 +934,8 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -987,6 +995,8 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -1046,6 +1056,8 @@ describe("claimTask", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue({
         created: true,
         path: "/remote/project/.mullion-worktrees/mullion-task-x",
@@ -1239,6 +1251,8 @@ describe("retryTask (#483)", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue(null),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       resumeTaskWorktree: vi.fn().mockResolvedValue({
@@ -1301,6 +1315,8 @@ describe("retryTask (#483)", () => {
       uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
       resolveReviewGate: vi.fn().mockResolvedValue(false),
       acknowledgeAttention: vi.fn().mockResolvedValue(true),
+      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
       createWorktree: vi.fn().mockResolvedValue(null),
       checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
       // Simulates an agent build old enough that

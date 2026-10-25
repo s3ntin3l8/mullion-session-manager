@@ -23,7 +23,7 @@ import { reclaimSocketPath } from "../services/unix-socket.js";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
-import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
+import { compileOutputMatcher } from "../services/output-wait.js";
 import {
   parseWaitTimeout,
   parseWaitUntil,
@@ -34,7 +34,10 @@ import {
   CONTROL_SOCKET_VIA_HEADER,
   CONTROL_SOCKET_VIA_TOKEN,
 } from "../services/internal-request.js";
-import { getAdapterPromptFraming } from "../services/hook-adapters/index.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { resolveBackend } from "../services/session-backend.js";
+import { deliverPrompt } from "../services/session-prompt.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
@@ -425,11 +428,29 @@ function ownAndChildSessionFilter(
   };
 }
 
-/** 409 text for ops that need the live PTY when it is not on this host — a
- * remote-host child looks exactly like a dead local one from here (#1627). */
-const NOT_LOCAL_MESSAGE =
-  "the session is not running on this host (if it is a remote-host session, " +
-  "prompting and output-waiting it are not supported yet — #1627)";
+/** 409 text for ops that need the child's live PTY when its host has none
+ * for it: the session exited, or was never started there. (A child on ANOTHER
+ * host is routed to that host — see childHostId — it is not this case.) */
+const NOT_LOCAL_MESSAGE = "the session is not running (it has no live process on its host)";
+
+/** 400 for `sessions.prompt` + `wait` aimed at a child on another host: the
+ * "has a new turn started" guard reads the child's event counter, which only
+ * its own host has. `wait_for_output` with the reply's `outputOffset` has no
+ * such race by design, so point at that instead (issue #1951). */
+const REMOTE_PROMPT_WAIT_MESSAGE =
+  "'wait' is not supported for a session on another host — send the prompt without it, " +
+  "then use sessions.wait_for_output with the reply's outputOffset as afterOffset";
+
+/** The host a session runs on: its own (`sessions.hostId`), else its project's.
+ * "local" for an id with no row, so a stray id keeps today's local behaviour. */
+function childHostId(app: FastifyInstance, id: string): string {
+  const row = app.db
+    .select({ projectId: sessions.projectId, hostId: sessions.hostId })
+    .from(sessions)
+    .where(eq(sessions.id, Number(id)))
+    .get();
+  return row ? resolveSessionHostId(app, row) : LOCAL_HOST_ID;
+}
 
 /**
  * Like resolveTargetSessionId, but a session-scoped connection may ALSO name
@@ -857,25 +878,6 @@ async function runWait(
   }
 }
 
-const promptLocks = new WeakMap<object, Promise<void>>();
-
-/** Serializes `fn` per key (a Session): FIFO, and a throwing `fn` still releases. */
-async function withPromptLock<T>(key: object, fn: () => Promise<T>): Promise<T> {
-  const previous = promptLocks.get(key) ?? Promise.resolve();
-  let release!: () => void;
-  const mine = new Promise<void>((resolve) => (release = resolve));
-  promptLocks.set(
-    key,
-    previous.then(() => mine),
-  );
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
-}
-
 /** A 409 reply if typing into this session now would be wrong — it is
  * `blocked` on a dialog (typing would answer it) or gone — else null. Re-reads
  * the derived status, so it is accurate at the moment it runs. */
@@ -1043,11 +1045,6 @@ export const OPS: Record<string, OpSpec> = {
         reply(bad(400, "'afterOffset' must be a non-negative integer"));
         return;
       }
-      const session = app.pty.get(target.id);
-      if (!session || !session.isAlive) {
-        reply(bad(409, NOT_LOCAL_MESSAGE));
-        return;
-      }
       if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
         reply(bad(429, "too many pending waits on this connection"));
         return;
@@ -1059,21 +1056,35 @@ export const OPS: Record<string, OpSpec> = {
       try {
         const callerActive = () =>
           conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
-        const result = await waitForOutput(matcher, timeout.timeoutMs, {
-          signal: controller.signal,
-          onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
-          // A cursor from before a restart can be AHEAD of the counter; treat
-          // that as "no gap output" rather than an error (like afterSeq).
-          ...(afterOffset !== undefined ? { seed: session.getOutputSince(afterOffset) } : {}),
-          // The caller must stay active for the whole wait, same as sessions.wait.
-          alive: () => session.isAlive && callerActive(),
-        });
-        if ("aborted" in result) return;
-        if ("gone" in result && !callerActive()) {
+        // The wait runs on the child's own host (issue #1951): the PTY lives
+        // there. A local child is one in-process wait; a remote one is a loop
+        // of bounded waits (SessionBackend.waitOutput).
+        const outcome = await resolveBackend(app, childHostId(app, target.id)).waitOutput(
+          target.id,
+          {
+            match: body?.match as string,
+            regex: body?.regex === true,
+            timeoutMs: timeout.timeoutMs,
+            ...(afterOffset !== undefined ? { afterOffset } : {}),
+            signal: controller.signal,
+            // The caller must stay active for the whole wait, same as sessions.wait.
+            alive: callerActive,
+          },
+        );
+        if ("aborted" in outcome) return;
+        if ("notRunning" in outcome) {
+          reply(bad(409, NOT_LOCAL_MESSAGE));
+          return;
+        }
+        if ("failed" in outcome) {
+          reply(bad(outcome.status, outcome.error));
+          return;
+        }
+        if ("gone" in outcome && !callerActive()) {
           reply(bad(403, "this session is no longer active"));
           return;
         }
-        reply({ ok: true, status: 200, result: { ...result, outputOffset: session.outputOffset } });
+        reply({ ok: true, status: 200, result: outcome });
       } finally {
         conn.activeWaits -= 1;
         conn.socket.off("close", onClose);
@@ -1155,70 +1166,69 @@ export const OPS: Record<string, OpSpec> = {
       }
 
       const id = target.id;
-      const initial = app.pty.get(id);
-      if (!initial || !initial.isAlive) {
-        // Also what a remote-host session looks like from here (its PTY lives
-        // on another host's PtyManager) — prompting those is not supported
-        // yet (#1627).
-        reply(bad(409, NOT_LOCAL_MESSAGE));
+      const hostId = childHostId(app, id);
+      if (hostId !== LOCAL_HOST_ID) {
+        // Issue #1951 — a child on another host: its PTY is there, so the
+        // delivery runs there (SessionBackend.prompt). What the primary can
+        // still decide itself is whether typing is wise at all — the derived
+        // status reaches remote hosts through GET /api/sessions/:id.
+        if (waitOpts !== null) {
+          reply(bad(400, REMOTE_PROMPT_WAIT_MESSAGE));
+          return;
+        }
+        const refusal = await refuseIfBlockedOrGone(app, id);
+        if (refusal) {
+          reply(refusal);
+          return;
+        }
+        const outcome = await resolveBackend(app, hostId).prompt(id, {
+          text,
+          submit: shouldSubmit,
+        });
+        reply(
+          outcome.ok
+            ? {
+                ok: true,
+                status: 200,
+                result: {
+                  delivered: true,
+                  submitted: shouldSubmit,
+                  outputOffset: outcome.outputOffset,
+                },
+              }
+            : bad(outcome.status, outcome.error),
+        );
         return;
       }
 
-      // One prompt at a time per session: two concurrent prompts would
-      // interleave (body A, body B, Enter A, Enter B) into one merged prompt
-      // and a stray empty submit.
-      let outputOffset = 0;
-      const delivery = await withPromptLock(
-        initial,
-        async (): Promise<ReplyPayload | { afterSeq: number }> => {
-          const session = app.pty.get(id);
-          if (session !== initial || !session.isAlive) {
-            return bad(409, NOT_LOCAL_MESSAGE);
-          }
-          const refusal = await refuseIfBlockedOrGone(app, id, { refuseBusy: waitOpts !== null });
-          if (refusal) return refusal;
-          const framing = getAdapterPromptFraming(session.command, text, {
-            bracketedPaste: session.bracketedPaste,
-          });
-          if (framing === null) {
-            return bad(501, "prompt delivery is not supported for this session's agent");
-          }
-          // Captured BEFORE writing, so a following wait_for_output can cover
-          // everything the child printed in response (the prompt -> wait gap).
-          outputOffset = session.outputOffset;
-          if (!session.writeAgentInput(framing.body)) {
-            return bad(503, "the prompt was not delivered (write backpressure or no live process)");
-          }
-          if (shouldSubmit) {
-            await new Promise((resolve) => setTimeout(resolve, framing.submitDelayMs));
-            if (app.pty.get(id) !== session || !session.isAlive) {
-              return bad(409, "the session exited before the prompt could be submitted");
-            }
-            // A dialog can appear during the gap; Enter would then ANSWER it.
-            // The text is already typed and cannot be taken back, so say so.
-            const lateRefusal = await refuseIfBlockedOrGone(app, id, {
-              note: " — the text was typed but NOT submitted and may still be in its input box",
-            });
-            if (lateRefusal) return lateRefusal;
-            if (!session.writeAgentInput(framing.submit)) {
-              return bad(
-                503,
-                "the prompt was typed but could not be submitted (it may still be in the input box)",
-              );
-            }
-            session.beginAgentTurn();
-          }
-          // Armed AFTER beginAgentTurn(): its own agent_prompt event must not
-          // count as "the child started a turn" — only a later, real event
-          // (the agent's turn_start / progress hook) may satisfy the guard.
-          return { afterSeq: session.eventSeqHead };
+      // One prompt at a time per session, and the typing itself, live in
+      // services/session-prompt.ts so a remote child's host runs the SAME
+      // code. The two checks are this op's derived-status gate: asked before
+      // anything is typed, and again before Enter.
+      const delivery = await deliverPrompt(app, id, {
+        text,
+        submit: shouldSubmit,
+        notRunning: NOT_LOCAL_MESSAGE,
+        check: async (stage) => {
+          const refusal = await refuseIfBlockedOrGone(
+            app,
+            id,
+            stage === "before"
+              ? { refuseBusy: waitOpts !== null }
+              : {
+                  note: " — the text was typed but NOT submitted and may still be in its input box",
+                },
+          );
+          return refusal && !refusal.ok
+            ? { status: refusal.status ?? 500, error: refusal.error ?? "refused" }
+            : null;
         },
-      );
-      if ("ok" in delivery) {
-        reply(delivery);
+      });
+      if (!delivery.ok) {
+        reply(bad(delivery.status, delivery.error));
         return;
       }
-      const { afterSeq } = delivery;
+      const { afterSeq, outputOffset } = delivery;
 
       const delivered = { delivered: true, submitted: shouldSubmit, outputOffset };
       if (waitOpts === null) {
