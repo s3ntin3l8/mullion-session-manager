@@ -1050,9 +1050,11 @@ request itself — a branch that was just pushed almost never has its required
 checks green yet. `main`'s branch protection does **not** require the branch
 to be up to date (`strict` is off, #1907), so a green branch that is merely
 behind `main` merges as it is; GitHub reports `mergeable_state: "behind"` only
-under a `strict` rule, which makes the `behind` row below dormant. Approving instead sets `tasks.mergeRequestedAt` (the
-durable _intent_), and a reconciler sweep (`processMergeRequests`,
-task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
+under a `strict` rule, which makes the `behind` row below dormant.
+Approving instead sets
+`tasks.mergeRequestedAt` (the durable _intent_), and a reconciler sweep
+(`processMergeRequests`, task-reconciler.ts) lands the merge asynchronously,
+once GitHub allows it:
 
 | PR state (`mergeable_state`)     | Sweep action                                                                                                                      |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
