@@ -79,9 +79,28 @@ describe("worktree-hook", () => {
     expect(createWorktree({ cwd: repo, name: "kept" })).toBe(path.join(repo, ".wt", "kept-2"));
 
     fs.mkdirSync(path.join(repo, ".wt", "squat"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".wt", "squat", "marker.txt"), "keep");
     const dest = createWorktree({ cwd: repo, name: "squat" });
     expect(dest).toBe(path.join(repo, ".wt", "squat-2"));
     expect(git(dest, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("worktree-squat-2");
+    expect(fs.readFileSync(path.join(repo, ".wt", "squat", "marker.txt"), "utf8")).toBe("keep");
+  });
+
+  it("reuses an empty squat directory and will not share a busy or foreign tree", () => {
+    const empty = path.join(repo, ".wt", "empty-squat");
+    fs.mkdirSync(empty, { recursive: true });
+    const reused = createWorktree({ cwd: repo, name: "empty-squat" });
+    expect(reused).toBe(empty);
+    expect(git(reused, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("worktree-empty-squat");
+
+    fs.writeFileSync(path.join(reused, "busy.txt"), "x");
+    const other = createWorktree({ cwd: repo, name: "empty-squat" });
+    expect(other).toBe(path.join(repo, ".wt", "empty-squat-2"));
+    expect(fs.existsSync(path.join(reused, "busy.txt"))).toBe(true);
+
+    git(other, ["checkout", "-b", "not-ours"]);
+    const third = createWorktree({ cwd: repo, name: "empty-squat" });
+    expect(third).toBe(path.join(repo, ".wt", "empty-squat-3"));
   });
 
   it("does not copy a symlinked .worktreeinclude entry", () => {

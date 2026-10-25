@@ -118,6 +118,26 @@ function branchExists(root, branch) {
   }
 }
 
+function headBranch(dir) {
+  try {
+    return git(dir, ["rev-parse", "--abbrev-ref", "HEAD"], { quiet: true });
+  } catch {
+    return "";
+  }
+}
+
+/** A registered worktree is reusable only when it is the name this hook
+ * created (`worktree-<slug>`) and idle (clean). Anything else is another
+ * checkout sharing the directory — two subagents must not edit one tree. */
+function canReuseWorktree(dest, branch) {
+  if (headBranch(dest) !== branch) return false;
+  try {
+    return git(dest, ["status", "--porcelain"], { quiet: true }) === "";
+  } catch {
+    return false;
+  }
+}
+
 export function createWorktree({ cwd, name }) {
   const root = mainCheckoutRoot(cwd);
   const base = slugify(name);
@@ -128,17 +148,37 @@ export function createWorktree({ cwd, name }) {
   for (let n = 1; n <= 50; n++) {
     const slug = n === 1 ? base : `${base}-${n}`;
     const dest = path.join(root, WT_DIR, slug);
+    const branch = `worktree-${slug}`;
     if (fs.existsSync(dest)) {
-      if (isRegisteredWorktree(root, dest)) return dest;
-      continue;
+      if (isRegisteredWorktree(root, dest)) {
+        if (canReuseWorktree(dest, branch)) return dest;
+      } else {
+        let entries = null;
+        try {
+          entries = fs.readdirSync(dest);
+        } catch {
+          entries = null;
+        }
+        if (entries && entries.length === 0) {
+          // An empty squat permanently consumed the name: cleanup only walks
+          // registered worktrees. Remove it and use the slot.
+          fs.rmdirSync(dest);
+        } else {
+          process.stderr.write(
+            `worktree-hook: ${dest} is not a worktree; leaving it and picking another name\n`,
+          );
+          continue;
+        }
+      }
+      if (fs.existsSync(dest)) continue;
     }
-    if (branchExists(root, `worktree-${slug}`)) continue;
+    if (branchExists(root, branch)) continue;
     try {
       git(root, ["fetch", "origin"], { quiet: true });
     } catch {
       // Offline or no origin: branch from whatever we have.
     }
-    git(root, ["worktree", "add", dest, "-b", `worktree-${slug}`, defaultBaseRef(root)]);
+    git(root, ["worktree", "add", dest, "-b", branch, defaultBaseRef(root)]);
     copyWorktreeInclude(root, dest);
     return dest;
   }
