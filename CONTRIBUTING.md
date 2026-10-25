@@ -164,12 +164,15 @@ changelog.
 
 `main` requires a PR (no direct pushes, no admin bypass) — and these status
 checks: `test-node / lint-and-test`, `test-node / test-merge`,
-`test-frontend / lint-and-test`, `test-frontend / test-merge`, and CodeQL's
+`test-frontend / lint-and-test`, `test-frontend / test-merge`,
+`dependency-review / dependency-review`, and CodeQL's
 `analyze / Analyze (javascript-typescript)` — plus every review conversation
-resolved. Each of those status checks (lint, typecheck, test, format-check)
-maps directly to what the check runs, so a clean local run should mean a
-clean CI run. An open review thread blocks the merge even when every check
-is green; `node scripts/review-threads.mjs list <pr>` lists them (see
+resolved. Each of those status checks except `dependency-review` and CodeQL (lint,
+typecheck, test, format-check) maps directly to what the check runs, so a clean
+local run should mean a clean CI run; `dependency-review` depends on the
+dependency graph and CodeQL on its own analysis, not on anything you can run
+locally. An open review thread blocks the merge even when every check is green;
+`node scripts/review-threads.mjs list <pr>` lists them (see
 "Addressing review feedback" below).
 
 Both workspaces shard their test run, so the real tests (and the
