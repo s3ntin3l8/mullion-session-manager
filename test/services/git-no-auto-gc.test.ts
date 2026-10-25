@@ -25,10 +25,19 @@ const FILE_COUNT = 300;
 
 let root: string;
 
+// The commit identity comes from the environment, never from `git config
+// user.*` — a fixture that writes a config can escape its temp repo and
+// author a commit in the real checkout (test/git-env-guard.test.ts).
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
-    env: gitEnv(),
+    env: {
+      ...gitEnv(),
+      GIT_AUTHOR_NAME: "Test",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "Test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -56,8 +65,6 @@ function makeClone(name: string): string {
       env: gitEnv(),
     });
     execFileSync("git", ["init", "-q", "-b", "main", work], { env: gitEnv() });
-    git(work, "config", "user.email", "test@example.com");
-    git(work, "config", "user.name", "Test");
     fs.writeFileSync(path.join(work, "a.txt"), "one\n");
     git(work, "add", "a.txt");
     git(work, "commit", "-q", "-m", "one");
@@ -66,21 +73,22 @@ function makeClone(name: string): string {
   }
 
   execFileSync("git", ["clone", "-q", remote, clone], { env: gitEnv() });
-  git(clone, "config", "user.email", "test@example.com");
-  git(clone, "config", "user.name", "Test");
   // Foreground, so the assertion cannot race a detached gc.
   git(clone, "config", "gc.autoDetach", "false");
 
-  // Commit the files while the threshold is HIGH, so their objects stay LOOSE
-  // (and reachable — an unreachable loose object is not worth packing).
-  git(clone, "config", "gc.auto", "1000000");
+  // Commit the files with gc.auto OFF, so git does not spawn its automatic
+  // gc at all and their objects stay LOOSE (and reachable — an unreachable
+  // loose object is not worth packing). gc.auto=0 is the documented way to
+  // stop that, and it holds on every git version — unlike a high threshold,
+  // whose own packing thresholds differ between versions.
+  git(clone, "config", "gc.auto", "0");
   fs.mkdirSync(path.join(clone, "many"));
   for (let i = 1; i <= FILE_COUNT; i++) {
     fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
   }
   git(clone, "add", "-A");
   git(clone, "commit", "-q", "-m", "many");
-  // Now low, so the NEXT fetch's auto-gc has work to do.
+  // Now let the auto-gc run again, so the NEXT fetch's has work to do.
   git(clone, "config", "gc.auto", "1");
   fs.rmSync(path.join(clone, ".git", "gc.log"), { force: true });
 
@@ -98,7 +106,10 @@ describe("GIT_NO_AUTO_GC (issue #1851)", () => {
   it("a plain fetch lets the auto-gc pack the loose objects (positive control)", () => {
     const clone = makeClone("control");
     const before = looseCount(clone);
-    expect(before).toBeGreaterThan(0);
+    expect(
+      before,
+      "the fixture should have left loose objects for the auto-gc to pack — if this is 0, the host's git packed them at commit time",
+    ).toBeGreaterThan(0);
 
     git(clone, "fetch", "origin");
 
@@ -111,7 +122,10 @@ describe("GIT_NO_AUTO_GC (issue #1851)", () => {
     const clone = makeClone("guarded");
     const before = looseCount(clone);
     const packsBefore = packCount(clone);
-    expect(before).toBeGreaterThan(0);
+    expect(
+      before,
+      "the fixture should have left loose objects for the auto-gc to pack — if this is 0, the host's git packed them at commit time",
+    ).toBeGreaterThan(0);
 
     git(clone, ...GIT_NO_AUTO_GC, "fetch", "origin");
 
@@ -124,7 +138,10 @@ describe("GIT_NO_AUTO_GC (issue #1851)", () => {
     const clone = makeClone("env");
     const before = looseCount(clone);
     const packsBefore = packCount(clone);
-    expect(before).toBeGreaterThan(0);
+    expect(
+      before,
+      "the fixture should have left loose objects for the auto-gc to pack — if this is 0, the host's git packed them at commit time",
+    ).toBeGreaterThan(0);
 
     execFileSync("git", ["-C", clone, "fetch", "origin"], {
       encoding: "utf8",
