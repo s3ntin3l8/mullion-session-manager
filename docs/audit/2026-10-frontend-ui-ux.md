@@ -4,11 +4,11 @@
 accessibility, interaction-feedback and information-architecture defects. The backend
 (`src/`) and the CLI were not audited.
 
-**Status.** Every blocker is fixed, and so are 21 of the 21 major and 9 of the 24 minor
-findings, in eight pull requests: #1895 (accessibility and contrast), #1897 (surfacing
+**Status.** Every blocker is fixed, and so are 21 of the 21 major and 10 of the 24 minor
+findings, in nine pull requests: #1895 (accessibility and contrast), #1897 (surfacing
 failures instead of swallowing them), #1898 (guards on destructive actions), #1923,
-#1926, #1927, #1930 and #1933 (the series that closes the deferred backlog one
-finding per pull request). The other 15 findings are deferred and tracked as issues;
+#1926, #1927, #1930, #1933 and #1934 (the series that closes the deferred backlog one
+finding per pull request). The other 14 findings are deferred and tracked as issues;
 see [Deferred backlog](#deferred-backlog).
 
 ---
@@ -76,14 +76,14 @@ inventing new ones.
 
 ## Findings
 
-Forty-eight findings: 33 fixed and 15 deferred.
+Forty-eight findings: 34 fixed and 14 deferred.
 
 | Severity  | Findings | Fixed  | Deferred |
 | --------- | -------- | ------ | -------- |
 | Blocker   | 3        | 3      | 0        |
 | Major     | 21       | 21     | 0        |
-| Minor     | 24       | 9      | 15       |
-| **Total** | **48**   | **33** | **15**   |
+| Minor     | 24       | 10     | 14       |
+| **Total** | **48**   | **34** | **14**   |
 
 The defects are ordered by severity, not by screen. The recurring theme is
 that most of them are **divergences from patterns the codebase had already
@@ -95,9 +95,9 @@ sites. The fixes are therefore mostly consolidation rather than invention.
 The table lists the findings that were fixed, with the pull request that fixed each:
 #1895 fixed 12 (the accessibility and contrast pass), #1897 fixed 11 (failures surfaced
 instead of swallowed), #1898 fixed 4 (guards on destructive actions), #1923 fixed 1, #1926
-fixed 1, #1927 fixed 1, #1930 fixed 2 and #1933 fixed 1 (the series that closes the
-deferred backlog, one pull request at a time). The deferred ones are in the
-[Deferred backlog](#deferred-backlog), under the same numbers.
+fixed 1, #1927 fixed 1, #1930 fixed 2, #1933 fixed 1 and #1934 fixed 1 (the series that
+closes the deferred backlog, one pull request at a time). The deferred ones are in
+the [Deferred backlog](#deferred-backlog), under the same numbers.
 
 | #   | Severity | PR    | Finding                                                                                                                                             | Where                                                                                                                                                                                           | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -133,6 +133,7 @@ deferred backlog, one pull request at a time). The deferred ones are in the
 | 31  | Minor    | #1897 | `SidebarDevices` shows device errors only in a `title` tooltip                                                                                      | `SidebarDevices` error path                                                                                                                                                                     | The error is inline in the failing row, not only in a `title` tooltip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 32  | Minor    | #1898 | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one                                            | `ui/ConfirmButton.tsx`                                                                                                                                                                          | The arm window counts down in the button and in its title                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 38  | Minor    | #1930 | The phone Settings list has no search, while the desktop rail does (`styles/mobile.css`, `Settings.tsx` nav)                                        | `PhoneNavigator.tsx:78-109`; `settings/settingsSections.tsx:216-228`                                                                                                                            | The phone's list filters by section name, description and control text through the same `filterSettingsSections` the desktop rail uses, so the two agree on what a query finds — and the desktop rail now matches descriptions too, which it did not before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 41  | Minor    | #1934 | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:593`)                                             | `NotificationBell.tsx:587-604`; `scripts/check-aria-haspopup.mjs`                                                                                                                               | The bell's trigger declares `aria-haspopup="dialog"` — the generic `"true"` maps to `menu` in the ARIA spec, while what the trigger opens is the notifications panel (`role="dialog"` on the desktop, a `ui/BottomSheet.tsx` on the phone). `aria-expanded` still tracks the panel's open state. A lint-time guard fails if `aria-haspopup="true"` appears anywhere in the frontend again, in either quoting style                                                                                                                                                                                                                                                                                                                                                 |
 | 42  | Minor    | #1933 | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:462`)                                         | `Sidebar.tsx:360-369`; `Sidebar.tsx:490-502`; `styles/sidebar.css:236-256`                                                                                                                      | The header states the count of the sessions the section holds, with its unit ("24 sessions") — the sum of the per-project numbers directly beneath it, counted over the projects the section is actually listing. The number wears the sidebar's mono count face; the unit word wears the UI face. It renders only once there is something to count, so a section with no sessions has no caption at all                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Blocker detail
@@ -444,6 +445,34 @@ alone: a screen reader reads the caption's text, and "2sessions" is not a
 number and a word. CSS ignores a whitespace-only text node between flex items,
 so the `gap` still sets the visual distance.
 
+### What a trigger opens (finding 41)
+
+**The token itself is a unit-test guard**: `frontend/src/NotificationBell.test.tsx`
+pins that the bell's trigger declares `aria-haspopup="dialog"` and not the generic
+`"true"`, that `aria-expanded` tracks the panel's open state across open and close,
+and that the phone's bottom sheet is named the same way.
+
+**The convention is a script guard**, because the convention is app-wide.
+`aria-haspopup="true"` is "this opens something", and the ARIA spec maps it to
+`menu` — so a trigger that carries it is _wrongly_ announced as a menu, whatever it
+actually opens. Every other trigger in this app already names what it opens:
+`menu` (`ui/KebabMenu.tsx`, `PaneActionsMenu.tsx`), `listbox` (`ui/CustomSelect.tsx`,
+the palette's target chip), `dialog` (`ui/Modal.tsx`, `ui/BottomSheet.tsx`,
+`MobileSessionSwitcher.tsx`, `unified-board/TasksToolbar.tsx`).
+
+`scripts/check-aria-haspopup.mjs` (wired into `npm run lint`) keeps it that way: it
+fails if `aria-haspopup="true"` appears anywhere in the frontend, in either quoting
+style and with the optional JSX expression wrapper (`aria-haspopup="true"`,
+`aria-haspopup={'true'}`, `aria-haspopup={"true"}`). It strips comments first, so
+this repo's own comments quoting the attribute cannot stand in for it.
+
+It is a **script** rather than a vitest file, and not for style: the frontend's test
+tree has no node types (the frontend tsconfig does not include them), so a test
+cannot read the source tree's files at all. This repo's own precedent for "assert
+something about the source tree's contents" is a `scripts/check-*` node script wired
+into `npm run lint`, and `check-token-contrast.mjs` and `check-phone-palette.mjs` say
+the same thing in their header comments.
+
 ---
 
 ## Evidence
@@ -691,7 +720,6 @@ implying more:
 | 37  | Minor    | Palette coverage is not uniform — no Devices, Hosts, Settings, Timeline or new-workspace command (`CommandPalette.tsx`, command list)      | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
 | 39  | Minor    | An ended session's status label composites to 1.54:1–1.70:1 (ended-session status styling)                                                 | [#1886](https://github.com/s3ntin3l8/mullion-session-manager/issues/1886) |
 | 40  | Minor    | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                 | [#1890](https://github.com/s3ntin3l8/mullion-session-manager/issues/1890) |
-| 41  | Minor    | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:593`)                                    | [#1894](https://github.com/s3ntin3l8/mullion-session-manager/issues/1894) |
 | 43  | Minor    | A palette action that does not move focus deliberately leaves focus on `<body>` (`CommandPalette.tsx:292`)                                 | [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884) |
 | 44  | Minor    | There is no skeleton primitive — twenty-plus panels render the bare word "Loading…" (no `skeleton` anywhere in `frontend/src/styles`)      | [#1885](https://github.com/s3ntin3l8/mullion-session-manager/issues/1885) |
 | 45  | Minor    | The global keyboard shortcuts are discoverable nowhere in the UI (`hooks/useGlobalShortcuts.ts`, not user-facing)                          | [#1887](https://github.com/s3ntin3l8/mullion-session-manager/issues/1887) |
