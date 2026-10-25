@@ -26,6 +26,8 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     projectName: "mullion",
     favoriteUrls: [],
     open,
+    // The Dock can be shown unless the test says otherwise.
+    dockAvailable: true,
     ...over,
   };
   return { context, open };
@@ -165,5 +167,31 @@ describe("searchPaletteCommands", () => {
   it("does not match on subtitles", () => {
     // "CLAUDE.md" appears only in Agent Rules' subtitle.
     expect(ids("claude")).toEqual([]);
+  });
+});
+
+// Issue #1881 — the Dock is hidden on coarse-pointer tiers (tablet.css's
+// `(pointer: coarse)` block), but the palette still offered its Dock command
+// with no word about it: a tablet user ran a command that configures a panel
+// they cannot see, and got no explanation.
+describe("the Dock command's wording (issue #1881)", () => {
+  const dock = (dockAvailable: boolean) =>
+    buildPaletteCommands(ctx({ dockAvailable }).context).find((c) => c.id === "dock-config")!;
+
+  it("describes the Dock plainly where the Dock can be shown", () => {
+    expect(dock(true).subtitle).toBe("Edit this project's dock monitors");
+  });
+
+  it("says why the Dock is unavailable where it cannot be shown", () => {
+    const subtitle = dock(false).subtitle;
+    expect(subtitle).toContain("dock monitors");
+    expect(subtitle).toMatch(/hidden on touch-only devices/i);
+  });
+
+  it("keeps the command, and its keywords, on both sides", () => {
+    // The command edits the project's `.crs/dock.json`, which applies
+    // wherever the Dock IS shown — so it is not withdrawn, only explained.
+    expect(dock(false).id).toBe("dock-config");
+    expect(dock(false).keywords).toContain("dock");
   });
 });

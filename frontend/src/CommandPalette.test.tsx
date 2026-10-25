@@ -2510,6 +2510,42 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText("Dock")).toBeNull();
   });
 
+  // Issue #1881 — the Dock is hidden on touch-only devices (tablet.css's
+  // `(pointer: coarse)` block), but the palette's Dock command said nothing
+  // about it: a tablet user ran a command that configures a panel they cannot
+  // see, and got no explanation.
+  describe("the Dock command under a coarse pointer (issue #1881)", () => {
+    const coarsePointer = () =>
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+
+    it("says the Dock is hidden where it cannot be shown", async () => {
+      coarsePointer();
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      expect(screen.getByText("Dock")).toBeTruthy();
+      expect(screen.getByText(/the Dock is hidden on touch-only devices/i)).toBeInTheDocument();
+    });
+
+    it("says nothing about the Dock where it can be shown", async () => {
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      expect(screen.getByText("Edit this project's dock monitors")).toBeTruthy();
+      expect(screen.queryByText(/the Dock is hidden on touch-only devices/i)).toBeNull();
+    });
+  });
+
   it("navigates the sub-list with arrows and Enter", async () => {
     const o = openers();
     const user = userEvent.setup();

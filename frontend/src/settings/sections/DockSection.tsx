@@ -1,11 +1,24 @@
 import { useDashboardStore } from "../../store/index.js";
 import { Row, Segmented, Toggle } from "../../ui/primitives.js";
+import { useCoarsePointer } from "../../lib/layoutTier.js";
 
 export function DockSection() {
   const { settings, updateSettings } = useDashboardStore();
   const d = settings.dock;
+  // The Dock is hidden by tablet.css's `(pointer: coarse)` block, and that
+  // media query is the only thing that decides it — so the section says the
+  // same thing the palette's Dock command says, on exactly the devices where
+  // the Dock cannot be shown (issue #1881).
+  const dockAvailable = !useCoarsePointer();
   return (
     <>
+      {!dockAvailable && (
+        <div className="settings-footer-note">
+          The Dock is hidden on touch-only devices, so the Docker settings below have nowhere to
+          show until you use a mouse or trackpad. They still apply, and the preview settings above
+          work either way.
+        </div>
+      )}
       <Row
         label="Refresh worktree on agent commits"
         desc={

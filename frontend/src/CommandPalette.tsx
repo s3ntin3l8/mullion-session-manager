@@ -360,6 +360,11 @@ export function CommandPalette({
       effectiveProjectId !== null
         ? (projectUrls[effectiveProjectId] ?? []).filter((u) => u.favorite)
         : [],
+    // The Dock is hidden by tablet.css's `(pointer: coarse)` block — the same
+    // media query, and no other, that decides it. A coarse primary pointer is
+    // exactly what `useCoarsePointer` reports, so the command's own wording
+    // and the CSS that hides the Dock never disagree (issue #1881).
+    dockAvailable: !isCoarsePointer,
     open: {
       github: onOpenGitHub,
       git: onOpenGit,

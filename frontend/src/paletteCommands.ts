@@ -59,6 +59,11 @@ export interface PaletteCommandContext {
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];
   open: PaletteCommandOpeners;
+  // Whether the Dock can be shown at all on this device. The Dock is hidden
+  // by tablet.css's `(pointer: coarse)` block — the same condition, and no
+  // other, that decides it — so the command says so rather than pretending
+  // the Dock is there (issue #1881).
+  dockAvailable: boolean;
 }
 
 export function buildPaletteCommands({
@@ -66,6 +71,7 @@ export function buildPaletteCommands({
   projectName,
   favoriteUrls,
   open,
+  dockAvailable,
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
@@ -134,7 +140,14 @@ export function buildPaletteCommands({
       {
         id: "dock-config",
         title: "Dock",
-        subtitle: "Edit this project's dock monitors",
+        // The Dock is hidden on touch-only devices (tablet.css's
+        // `(pointer: coarse)` block). The command still works — it edits the
+        // project's `.crs/dock.json`, which applies whenever the Dock is
+        // shown — but a user who cannot see the Dock deserves to be told why,
+        // here, where they decide to run it (issue #1881).
+        subtitle: dockAvailable
+          ? "Edit this project's dock monitors"
+          : "Edit this project's dock monitors — the Dock is hidden on touch-only devices",
         icon: DockIcon,
         keywords: ["dock", "monitors"],
         placement: "project",

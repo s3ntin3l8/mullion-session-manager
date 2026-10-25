@@ -136,4 +136,28 @@ describe("Settings -> Dock", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(useDashboardStore.getState().settings.dock.autoAttachDockerLogs).toBe(true);
   });
+
+  // Issue #1881 — the Dock is hidden on touch-only devices (tablet.css's
+  // `(pointer: coarse)` block, which is also what Dock.tsx itself checks),
+  // but this section offered its Dock settings with no word about it. The
+  // palette's Dock command says the same thing.
+  it("says why the Dock is unavailable under a coarse pointer", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText(/The Dock is hidden on touch-only devices/)).toBeInTheDocument();
+  });
+
+  it("says nothing about the Dock where the Dock can be shown", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText("Refresh worktree on agent commits")).toBeInTheDocument();
+    expect(screen.queryByText(/The Dock is hidden on touch-only devices/)).toBeNull();
+  });
 });
