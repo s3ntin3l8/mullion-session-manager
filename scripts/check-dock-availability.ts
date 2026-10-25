@@ -158,9 +158,18 @@ function dockQualifiers(selector: string): string[] {
     .map((part) => part.replace(/\.dock(::?[a-z-]+(\([^)]*\))?)?\s*$/, "").trim());
 }
 
+// The ways a rule can take the Dock away, all of them checked because all of
+// them leave the palette promising a Dock nobody can see:
+//
+//   display: none          — the rule this repo already uses, twice
+//   visibility: hidden     — how the closed drawer is hidden elsewhere
+//   opacity: 0             — invisible, but still laid out and still mounted
+//   content-visibility: hidden — same
+//
 // The `!important` is part of the pattern on purpose: the rules this script
 // guards against are literally `display: none !important`.
-const HIDES = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
+const HIDES =
+  /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0|content-visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
 
 interface HidingRule {
   file: string;
@@ -171,6 +180,11 @@ interface HidingRule {
 
 /**
  * Every rule in every stylesheet that hides the Dock.
+ *
+ * "Hides" means any of the four ways a rule can take the Dock away —
+ * `display: none`, `visibility: hidden`, `opacity: 0`,
+ * `content-visibility: hidden` — because all of them leave the palette
+ * promising a Dock nobody can see.
  *
  * `unknown` marks a hiding rule whose condition the predicate does not know
  * — that is the case where the CSS hides the Dock somewhere the app's
