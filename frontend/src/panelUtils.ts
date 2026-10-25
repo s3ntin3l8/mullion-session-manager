@@ -437,9 +437,13 @@ export function panelSessionId(panel: IDockviewPanel): number | undefined {
  * active workspace. There is no workspace↔project row in the database
  * (Dock.tsx's header); a project is in the workspace when one of its
  * sessions is open in the live dockview layout. App.tsx's
- * `workspaceProjectIds` memo is this function, and both the Dock and the
- * sidebar read that one array, so the two trees cannot grow a second
- * definition of "in this workspace".
+ * `workspaceProjectIds` memo is this function. The Dock and the sidebar
+ * both start from that one array. A manually pinned project (the Dock's
+ * "+ Add project" list) is unioned on afterwards by `dockColumnProjectIds`
+ * (dockHelpers.ts), which is the membership both trees actually render —
+ * folding the pins into this walk would hide the distinction the Dock's
+ * remove button depends on (a pin-only column versus one that is also
+ * tiled).
  *
  * Walks every panel, not only tiled ones: a project whose only open
  * session is a floating peek still belongs here (the same reason App.tsx

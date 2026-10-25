@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
@@ -17,6 +17,8 @@ import type {
   Task,
 } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
+import { STORAGE_KEYS } from "./lib/persistedState.js";
+import { writeDockManualProjectIds } from "./dock/dockHelpers.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
 // covers the sidebar's new search/chip filter, persisted project collapse
@@ -146,6 +148,7 @@ const NOOP_PROPS = {
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
   onOpenDevice: vi.fn(),
+  onOpenGlobalLauncher: vi.fn(),
   showSourceControl: false,
 };
 
@@ -1417,10 +1420,12 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
   });
 });
 
-// Issue #1877 — the sidebar's project tree follows the Dock: only the
-// projects whose sessions are open in the active workspace, in that same
-// order. A session that already has a terminal pane is marked, and
-// activating it is still onOpenSession (which focuses that pane).
+// Issue #1877 — the sidebar's project tree follows the Dock: the projects
+// whose sessions are open in the active workspace, in that same order, plus
+// any project pinned with the Dock's "+ Add project". A session that
+// already has a terminal pane is marked, and activating it is still
+// onOpenSession (which focuses that pane). null scope means "not knowable
+// yet" (or the phone tier): the full list, never the empty-workspace copy.
 describe("sidebar workspace scope (issue #1877)", () => {
   it("lists only the projects in the workspace, in the Dock's order", () => {
     projects = [
@@ -1445,11 +1450,58 @@ describe("sidebar workspace scope (issue #1877)", () => {
     expect(screen.queryByLabelText("Filter sessions")).toBeNull();
   });
 
+  // App passes null until sessionsLoaded && the restored workspace match.
+  // `sessions` is still [] in that window; an empty scope array would paint
+  // the empty-workspace copy for a workspace that isn't empty, it just
+  // hasn't loaded. null is unscoped.
+  it("does not render the empty-workspace copy when sessions have not loaded and the scope is still null", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    sessions = [];
+    renderSidebar({ workspaceProjectIds: null });
+
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.getByText("beta")).toBeInTheDocument();
+  });
+
   it("still shows Welcome when there are no projects at all, even if a workspace scope is passed", () => {
     projects = [];
     renderSidebar({ workspaceProjectIds: [] });
     expect(screen.getByText("Welcome to Mullion")).toBeInTheDocument();
     expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+  });
+
+  it("lists a project that is only pinned to the Dock, with nothing tiled", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    localStorage.setItem(STORAGE_KEYS.dockManualProjects, "[2]");
+    renderSidebar({ workspaceProjectIds: [] });
+
+    expect(screen.getByText("beta")).toBeInTheDocument();
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+  });
+
+  it("keeps a pinned project listed after the Dock writes the pin", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    renderSidebar({ workspaceProjectIds: [1] });
+    expect(screen.queryByText("beta")).toBeNull();
+
+    act(() => {
+      writeDockManualProjectIds([2]);
+    });
+
+    const names = [...document.querySelectorAll(".project-row-name")].map((el) => el.textContent);
+    expect(names).toEqual(["alpha", "beta"]);
+  });
+
+  it("opens the global launcher from the empty workspace, the toolbar's own opener", async () => {
+    projects = [makeProject({ id: 1, name: "alpha" })];
+    const onOpenGlobalLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ workspaceProjectIds: [], onOpenGlobalLauncher });
+
+    await user.click(screen.getByRole("button", { name: "Launch a session" }));
+    expect(onOpenGlobalLauncher).toHaveBeenCalledTimes(1);
   });
 
   it("marks a session whose terminal pane is already open, in words and in the accessible name", () => {

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   dockerSessionIdentity,
+  dockColumnProjectIds,
+  dockManualProjectIdsFromStorage,
   dockRowKey,
   runningSessionFor,
   composeProjectForControl,
@@ -623,5 +625,39 @@ describe("dockLogPaneComfortHeightPx", () => {
       // 1.6x, not drift as font size changes.
       expect(comfort).toBeGreaterThan(floor);
     }
+  });
+});
+
+// Issue #1877 — the Dock's column list and the sidebar's project tree both
+// call these. A second copy of the union is how a pin stayed in the Dock
+// and vanished from the sidebar.
+describe("dockColumnProjectIds", () => {
+  const projects = [{ id: 1 }, { id: 2 }, { id: 3 }];
+
+  it("keeps workspace order, then appends a pin that is not already tiled", () => {
+    expect(dockColumnProjectIds([3, 1], [2], projects)).toEqual([3, 1, 2]);
+  });
+
+  it("does not list a pin twice when that project is also tiled", () => {
+    expect(dockColumnProjectIds([1, 2], [2], projects)).toEqual([1, 2]);
+  });
+
+  it("drops a pin whose project no longer exists", () => {
+    expect(dockColumnProjectIds([1], [99, 2], projects)).toEqual([1, 2]);
+  });
+
+  it("is empty when nothing is tiled and nothing is pinned", () => {
+    expect(dockColumnProjectIds([], [], projects)).toEqual([]);
+  });
+});
+
+describe("dockManualProjectIdsFromStorage", () => {
+  it("keeps numbers and drops everything else", () => {
+    expect(dockManualProjectIdsFromStorage([1, "2", null, 3])).toEqual([1, 3]);
+  });
+
+  it("collapses a non-array to an empty list", () => {
+    expect(dockManualProjectIdsFromStorage({ 1: true })).toEqual([]);
+    expect(dockManualProjectIdsFromStorage(null)).toEqual([]);
   });
 });

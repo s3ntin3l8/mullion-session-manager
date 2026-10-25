@@ -13,9 +13,12 @@ import {
 } from "./lib/persistedState.js";
 import {
   clamp,
+  dockColumnProjectIds,
   dockLogPaneComfortHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
+  readDockManualProjectIds,
+  writeDockManualProjectIds,
 } from "./dock/dockHelpers.js";
 import { DockProjectGroup } from "./dock/DockProjectGroup.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
@@ -214,10 +217,7 @@ export function Dock({
     const n = readNumber(STORAGE_KEYS.dockHeight, NaN);
     return Number.isFinite(n) && n > 0 ? clamp(n, DOCK_MIN_HEIGHT, Infinity) : DEFAULT_DOCK_HEIGHT;
   });
-  const [manualIds, setManualIds] = useState<number[]>(() => {
-    const raw = readJSON<unknown>(STORAGE_KEYS.dockManualProjects, []);
-    return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
-  });
+  const [manualIds, setManualIds] = useState<number[]>(() => readDockManualProjectIds());
   // Dock master-detail rework — the rail width (`.dock-rail`, dock.css),
   // dragged via `.dock-rail-divider`. One shared value (persisted,
   // `crs.dockRailWidth`) rather than per-project: a user who widens the
@@ -297,13 +297,12 @@ export function Dock({
   // Workspace-derived projects first (in their existing order), then any
   // manually-pinned project not already in that set — dropping ids for
   // projects that no longer exist (e.g. deleted since the id was pinned).
-  const columnIds = useMemo(() => {
-    const ids = [...workspaceProjectIds];
-    for (const id of manualIds) {
-      if (!ids.includes(id)) ids.push(id);
-    }
-    return ids.filter((id) => projects.some((p) => p.id === id));
-  }, [workspaceProjectIds, manualIds, projects]);
+  // dockColumnProjectIds is that rule; the sidebar calls the same helper,
+  // so a pin cannot stay in this rail and vanish from the project tree.
+  const columnIds = useMemo(
+    () => dockColumnProjectIds(workspaceProjectIds, manualIds, projects),
+    [workspaceProjectIds, manualIds, projects],
+  );
 
   // Pure derivation, never written back — see `activeProjectIdRaw`'s own
   // doc comment above for why a project temporarily dropping out of
@@ -316,7 +315,10 @@ export function Dock({
 
   const persistManual = (next: number[]) => {
     setManualIds(next);
-    writeJSON(STORAGE_KEYS.dockManualProjects, next);
+    // Same writer the sidebar subscribes to — a raw writeJSON here would
+    // update this rail and leave the project tree on the previous set
+    // until some unrelated re-render happened to re-read storage.
+    writeDockManualProjectIds(next);
   };
   const addColumn = (id: number) => {
     if (!manualIds.includes(id)) persistManual([...manualIds, id]);

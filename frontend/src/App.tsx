@@ -1405,8 +1405,11 @@ export function App() {
   // possible without a schema change.
   //
   // The walk itself lives in workspaceProjectIdsFromPanels so the sidebar
-  // can scope its project tree to the SAME ids this memo hands the Dock
-  // (issue #1877) — not a second copy of the loop.
+  // can start from the SAME ids this memo hands the Dock (issue #1877) —
+  // not a second copy of the loop. Manual "+ Add project" pins are NOT
+  // folded in here: the Dock still has to tell a pin-only column from a
+  // tiled one (its remove button). The sidebar unions those pins itself,
+  // through the same dockColumnProjectIds helper the Dock's columns use.
   //
   // Hermes review, PR #727 — deliberately walks ALL panels, not
   // `mobilePanels` (which is tiled-only). `<Dock>` below renders on desktop
@@ -1503,13 +1506,40 @@ export function App() {
       showSourceControl={isMobile}
       phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       // Issue #1877 — phone has no workspaces, so it keeps the full project
-      // list. Desktop and tablet scope to the same ids the Dock receives.
-      workspaceProjectIds={isMobile ? null : workspaceProjectIds}
+      // list. Desktop and tablet scope to the ids the Dock receives, but
+      // only once that set is knowable. `sessions` starts as `[]` and the
+      // layout restores without waiting for GET /api/sessions (see the
+      // auto-open-child effect above), so the memo resolves every panel
+      // against an empty list and comes back `[]` on a cold start — and
+      // forever if that fetch errors, because `sessionsLoaded` flips only
+      // on success. Passing `[]` paints "Nothing tiled in this workspace"
+      // when the workspace isn't empty, it just hasn't loaded. `null` is
+      // unscoped: the sidebar shows every project and does not claim the
+      // workspace is empty. Same gates the deep-link and push effects
+      // already use, including `activeWorkspaceId !== null` — `null ===
+      // null` is not a restored workspace.
+      workspaceProjectIds={
+        isMobile ||
+        !(
+          dockviewApi &&
+          sessionsLoaded &&
+          activeWorkspaceId !== null &&
+          // The restore effect writes this ref, then bumps panelsVersion —
+          // that setState is what re-renders, so this read sees the
+          // workspace that was just restored. The other gates read the same
+          // ref from effects; there is no state copy of it to subscribe to.
+          // eslint-disable-next-line react-hooks/refs -- ref is the restore record; panelsVersion re-renders after it is written
+          restoredWorkspaceIdRef.current === activeWorkspaceId
+        )
+          ? null
+          : workspaceProjectIds
+      }
       openSessionIds={isMobile ? null : openSessionIds}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
       onOpenProjectLauncher={openProjectLauncher}
+      onOpenGlobalLauncher={openGlobalLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
       onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}
