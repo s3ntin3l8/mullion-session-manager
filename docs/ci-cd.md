@@ -221,8 +221,8 @@ Required status checks for merge:
 `dependency-review` is safe to require: `dependency-review.yml` runs on
 every pull request to `main` with no paths filter, finishes in seconds, and
 its job-level `if:` only skips it on a private repository, which this one is
-not. It is a pull-request-only check, so it does not re-run on the push to
-`main` — a merge that changes no dependency has nothing for it to say.
+not. Its trigger is `pull_request` only, so it never runs on `main` at all:
+it gates the PR, and nothing re-checks the dependency change after the merge.
 
 Both workspaces shard their test run, so **both** `test-merge` contexts are
 required — see the "Test sharding" note above for why dropping one is not

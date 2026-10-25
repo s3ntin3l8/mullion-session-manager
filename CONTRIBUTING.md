@@ -164,7 +164,8 @@ changelog.
 
 `main` requires a PR (no direct pushes, no admin bypass) — and these status
 checks: `test-node / lint-and-test`, `test-node / test-merge`,
-`test-frontend / lint-and-test`, `test-frontend / test-merge`, and CodeQL's
+`test-frontend / lint-and-test`, `test-frontend / test-merge`,
+`dependency-review / dependency-review`, and CodeQL's
 `analyze / Analyze (javascript-typescript)` — plus every review conversation
 resolved. Each of those status checks (lint, typecheck, test, format-check)
 maps directly to what the check runs, so a clean local run should mean a
