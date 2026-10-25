@@ -713,11 +713,17 @@ The token sweep sees elements painted in `--dim`, `--muted` or `--fg`. Both
 fixes deliberately moved their targets **off** `--dim`: the chips to `--fg`,
 the active row's handle to plain white. So once fixed, they leave the token
 sample set entirely. A full revert is still caught (the colour goes back to
-`--dim`), but a **partial** revert is not: dropping only the `opacity: 1`
-from the active row's drag handle leaves a white icon at 40 % over the
-emerald fill — 2.10:1 in the dark theme, 2.29:1 in the light one, both under
-the 3:1 WCAG 1.4.11 asks of a graphical object — and nothing in the token
-sweep would ever look at it.
+`--dim`). A **partial** revert of the handle's opacity used to be caught too:
+dropping only the `opacity: 1` left a white icon at the old resting 40 % over
+the emerald fill — 2.10:1 (dark) / 2.29:1 (light), under the 3:1 WCAG 1.4.11
+asks of a graphical object. That stopped being true when
+[#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908)
+raised the inactive handle's rest to `opacity: 0.75`. White at 75 % over the
+same fill clears 3:1 (**3.74:1** dark / **4.28:1** light), so this browser
+check now reports a pass for that drop. The lint guard
+(`scripts/check-token-contrast.mjs`) pins `opacity: 1` on
+`.workspace-item.active .ws-drag-handle`, which is what still catches it —
+and that guard runs in CI, which this browser check does not.
 
 So three targets are asserted **by name**, against a stated minimum, in every
 theme, and judged on the state they are **actually painted in** with no
@@ -729,9 +735,9 @@ allowance for a de-emphasis that lifts on hover:
 | `.kbd`                                   | text                        | 4.5:1   |
 | `.kbd-btn`                               | text                        | 4.5:1   |
 
-Both reverts are verified to fail the check: dropping `opacity: 1` reports
-the handle at 2.10:1 (dark) / 2.29:1 (light), and putting `--dim` back on the
-chips reports them at 3.92:1 — caught by the guards _and_ by the token sweep.
+Putting `--dim` back on the chips reports them at 3.92:1 — caught by the
+guards _and_ by the token sweep. Dropping the active handle's `opacity: 1`
+is no longer a failure of this 3:1 check; it fails the lint pin instead.
 
 ##### How a faded element is judged
 

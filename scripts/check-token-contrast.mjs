@@ -283,6 +283,11 @@ for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
 // `@media` block — would not be seen here;
 // `scripts/verify-ui-runtime.mjs` measures the real thing in a browser, and
 // says as much in its own report.
+//
+// Paint is `color`, or — when the object is a filled mark rather than an
+// icon — `background-color` / a solid `background`. A dot painted only with
+// `background: var(--dim)` is the same kind of object; reporting "declares
+// no colour" for it would be the check refusing to see the pixel.
 const FADED_GRAPHICS = [
   {
     file: "sidebar.css",
@@ -291,6 +296,27 @@ const FADED_GRAPHICS = [
     surface: "sidebar",
     minRatio: 3,
     what: "the workspace row's drag handle at rest",
+  },
+  {
+    file: "sidebar.css",
+    selector: ".project-git-dot",
+    liftSelector: ".project-git-dot.clean",
+    surface: "sidebar",
+    minRatio: 3,
+    what: "the project row's quiet git dot at rest",
+  },
+];
+
+// Rules that must declare `opacity: 1` themselves. Inheriting a faded
+// ancestor is not a contrast failure once that ancestor clears 3:1: white
+// at the drag handle's resting 0.75 over `--accent-fill` is 3.74:1 (dark) /
+// 4.28:1 (light), so `scripts/verify-ui-runtime.mjs`'s 3:1 guard would not
+// catch dropping the declaration. This pin is what still catches it.
+const FULL_STRENGTH_PINS = [
+  {
+    file: "sidebar.css",
+    selector: ".workspace-item.active .ws-drag-handle",
+    what: "the active workspace row's drag handle",
   },
 ];
 
@@ -360,6 +386,40 @@ function resolvePainted(value, theme) {
   return null;
 }
 
+/** Drop a trailing `!important` so `0.75 !important` is still a number. */
+function bareValue(raw) {
+  return String(raw)
+    .replace(/!important\s*$/i, "")
+    .trim();
+}
+
+/**
+ * The opacity a rule paints, or 1 when it declares none.
+ *
+ * `opacity: 0.75 !important` is 0.75. A value this cannot read (a calc, a
+ * custom property) is reported rather than treated as opaque.
+ */
+function readOpacity(declarations) {
+  if (!declarations.has("opacity"))
+    return { present: false, opacity: 1, raw: null, readable: true };
+  const raw = declarations.get("opacity");
+  const opacity = Number(bareValue(raw));
+  return { present: true, opacity, raw, readable: Number.isFinite(opacity) };
+}
+
+/**
+ * What the object paints: its text colour, or — for a filled mark — its
+ * solid background. A shorthand `background` that is not a single colour
+ * (a gradient, a `color-mix`) does not resolve, and the caller says so.
+ */
+function paintedDeclaration(declarations) {
+  for (const property of ["color", "background-color", "background"]) {
+    if (!declarations.has(property)) continue;
+    return { property, value: bareValue(declarations.get(property)) };
+  }
+  return null;
+}
+
 for (const faded of FADED_GRAPHICS) {
   const file = path.join(STYLES_DIR, faded.file);
   let css;
@@ -384,40 +444,46 @@ for (const faded of FADED_GRAPHICS) {
   // strength at rest, and must still come to full strength when the user
   // engages with it. A handle that is dim at rest AND dim when hovered is a
   // permanent fade, which is the state the browser harness judges hardest.
-  const opacity = resting.has("opacity") ? Number(resting.get("opacity")) : 1;
-  if (!Number.isFinite(opacity)) {
+  //
+  // Raising the rest all the way to 1 is the MORE accessible state, and it
+  // is not a WCAG failure. The check still refuses it, because the quiet
+  // rest is a deliberate presentation state, not a contrast requirement.
+  const { opacity, raw: opacityRaw, readable } = readOpacity(resting);
+  if (!readable) {
     failures.push(
       `${faded.file}: "${faded.selector}" has an opacity this check cannot read ` +
-        `(${resting.get("opacity")})`,
+        `(${opacityRaw})`,
     );
     continue;
   }
   if (opacity >= 1) {
     failures.push(
       `${faded.file}: "${faded.selector}" (${faded.what}) must stay de-emphasised at rest ` +
-        `(an opacity below 1) — it is at ${opacity}`,
+        `(an opacity below 1). Full strength is the more accessible state, and this is ` +
+        `not a WCAG failure — it is the deliberate de-emphasis the design wants kept. ` +
+        `It is at ${opacity}`,
     );
   }
 
   const lift = declarationsFor(rules, faded.liftSelector);
-  const liftOpacity = lift.has("opacity") ? Number(lift.get("opacity")) : null;
+  const liftOpacity = readOpacity(lift);
   if (!lift.size) {
     failures.push(
       `${faded.file}: "${faded.liftSelector}" is gone, so "${faded.selector}" ` +
         `(${faded.what}) never lifts — the de-emphasis has to lift when the user engages with it`,
     );
-  } else if (liftOpacity !== 1) {
+  } else if (!liftOpacity.readable || liftOpacity.opacity !== 1) {
     failures.push(
       `${faded.file}: "${faded.liftSelector}" must lift "${faded.selector}" to full strength ` +
         `(opacity: 1) — it is at ${lift.get("opacity")}`,
     );
   }
 
-  const painted = resting.get("color");
+  const painted = paintedDeclaration(resting);
   if (!painted) {
     failures.push(
-      `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour — ` +
-        `nothing paints it any more`,
+      `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour and no solid ` +
+        `background — nothing paints it any more`,
     );
     continue;
   }
@@ -427,11 +493,12 @@ for (const faded of FADED_GRAPHICS) {
     ["light", light],
   ]) {
     const surface = theme[faded.surface];
-    const color = resolvePainted(painted, theme);
+    const color = resolvePainted(painted.value, theme);
     if (!color || !surface) {
       failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} on ` +
-          `--${faded.surface}, which cannot be resolved in the ${themeName} theme`,
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} ` +
+          `(${painted.property}) on --${faded.surface}, which cannot be resolved in the ` +
+          `${themeName} theme`,
       );
       continue;
     }
@@ -442,7 +509,7 @@ for (const faded of FADED_GRAPHICS) {
     });
     if (!rendered.resolved || rendered.ratio === null) {
       failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} at ` +
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} at ` +
           `opacity ${opacity} on --${faded.surface} (${surface}) in the ${themeName} theme, ` +
           `which cannot be measured`,
       );
@@ -450,12 +517,39 @@ for (const faded of FADED_GRAPHICS) {
     }
     if (rendered.ratio < faded.minRatio) {
       failures.push(
-        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} at ` +
-          `opacity ${opacity} on --${faded.surface} (${surface}) — ${rendered.ratio.toFixed(2)}:1 ` +
-          `in the ${themeName} theme, below the ${faded.minRatio}:1 WCAG 1.4.11 asks of a ` +
-          `graphical object`,
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.property} ` +
+          `${painted.value} at opacity ${opacity} on --${faded.surface} (${surface}) — ` +
+          `${rendered.ratio.toFixed(2)}:1 in the ${themeName} theme, below the ` +
+          `${faded.minRatio}:1 WCAG 1.4.11 asks of a graphical object`,
       );
     }
+  }
+}
+
+for (const pin of FULL_STRENGTH_PINS) {
+  const file = path.join(STYLES_DIR, pin.file);
+  let css;
+  try {
+    css = readFileSync(file, "utf8");
+  } catch {
+    failures.push(
+      `${pin.file}: cannot be read, so "${pin.selector}" (${pin.what}) cannot be pinned`,
+    );
+    continue;
+  }
+  const declared = declarationsFor(rulesIn(css), pin.selector);
+  const { present, opacity, readable } = readOpacity(declared);
+  if (!declared.size) {
+    failures.push(
+      `${pin.file}: "${pin.selector}" (${pin.what}) is gone — nothing pins it at full strength`,
+    );
+  } else if (!readable || !present || opacity !== 1) {
+    failures.push(
+      `${pin.file}: "${pin.selector}" (${pin.what}) must declare opacity: 1 itself. ` +
+        `Inheriting the resting fade still clears 3:1 — white at 0.75 over --accent-fill ` +
+        `is 3.74:1 (dark) / 4.28:1 (light) — so the runtime check would not catch dropping it. ` +
+        `It is at ${present ? declared.get("opacity") : "unset"}`,
+    );
   }
 }
 
@@ -464,9 +558,10 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  ${failure}`);
   console.error(
     "\nWCAG 2.x thresholds: 4.5:1 for text (1.4.3), 3:1 for UI components and\n" +
-      "focus indicators (1.4.11). Fix the token values in\n" +
-      "frontend/src/styles/tokens.css, or use a fill-role token for a\n" +
-      "white-on-fill background.",
+      "focus indicators (1.4.11). A faded graphical object that fails is an\n" +
+      "opacity or a paint colour in the stylesheet named above. A token that\n" +
+      "fails is a value in frontend/src/styles/tokens.css, and white text on a\n" +
+      "flat surface wants a fill-role token instead.",
   );
   process.exit(1);
 }

@@ -199,14 +199,63 @@ describe("check-token-contrast.mjs", () => {
   });
 
   it("fails when the handle stops being de-emphasised at rest", async () => {
-    // Full strength at rest is legible, so it is not a contrast failure —
-    // but it is the loss of a deliberate presentation state, and the guard
-    // says so rather than letting it happen quietly.
+    // Full strength at rest is the more accessible state, so it is not a
+    // WCAG failure — but it is the loss of a deliberate presentation state,
+    // and the guard says so rather than letting it happen quietly.
     writeSidebar((css) =>
       css.replace(/(\.ws-drag-handle \{[^}]*?)opacity: 0\.75;/, "$1opacity: 1;"),
     );
     const result = await run();
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("must stay de-emphasised at rest");
+    expect(result.stderr).toContain("not a WCAG failure");
+  });
+
+  it("reads an opacity written with !important", async () => {
+    // `Number("0.75 !important")` is NaN. The guard has to strip the flag
+    // and judge the number, or a legal declaration reports "cannot read".
+    writeSidebar((css) =>
+      css.replace(/(\.ws-drag-handle \{[^}]*?)opacity: 0\.75;/, "$1opacity: 0.75 !important;"),
+    );
+    const result = await run();
+    expect(result.code).toBe(0);
+  });
+
+  it("still fails a faded !important opacity that misses 3:1", async () => {
+    writeSidebar((css) =>
+      css.replace(/(\.ws-drag-handle \{[^}]*?)opacity: 0\.75;/, "$1opacity: 0.4 !important;"),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("below the 3:1 WCAG 1.4.11");
+    expect(result.stderr).not.toContain("cannot read");
+  });
+
+  it("measures a filled mark by its background, not only its color", async () => {
+    // `.project-git-dot` paints `background: var(--dim)` and declares no
+    // `color`. At the old 0.4 that composite is 1.88:1 / 1.74:1, and a
+    // check that only reads `color` would say the dot declares nothing.
+    writeSidebar((css) =>
+      css.replace(/(\.project-git-dot \{[^}]*?)opacity: 0\.75;/, "$1opacity: 0.4;"),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".project-git-dot");
+    expect(result.stderr).toContain("background");
+    expect(result.stderr).toContain("in the dark theme");
+    expect(result.stderr).toContain("in the light theme");
+  });
+
+  it("fails when the active row's handle stops declaring full strength", async () => {
+    // White at the resting 0.75 over --accent-fill still clears 3:1
+    // (3.74:1 dark / 4.28:1 light), so the runtime check would not catch
+    // dropping this declaration. The lint pin has to.
+    writeSidebar((css) =>
+      css.replace(/(\.workspace-item\.active \.ws-drag-handle \{[^}]*?)\s*opacity: 1;/, "$1"),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".workspace-item.active .ws-drag-handle");
+    expect(result.stderr).toContain("must declare opacity: 1");
   });
 });

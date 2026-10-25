@@ -633,16 +633,20 @@
 /* The ACTIVE workspace row is a FILL surface, not a flat one: it paints
    `var(--accent-fill)` under white text (see `.workspace-item.active` above).
    The text-role `--dim` token cannot be used inside it — `--dim` on the
-   accent fill is 1.57:1 (1.15:1 once the handle's 0.4 opacity is applied),
-   so the handle was effectively invisible on the very row the user had
-   selected. The row's own `color: #fff`, the kebab trigger's
+   accent fill is 1.57:1 (1.15:1 at the 0.4 opacity this handle used to
+   carry), so the handle was effectively invisible on the very row the user
+   had selected. The row's own `color: #fff`, the kebab trigger's
    `.workspace-item.active .kebab-trigger-btn` rule (terminal.css) and the
    `.danger` action's override above all already follow this white-on-fill
    rule; the drag handle and the actions wrapper were the two that did not.
 
-   The handle is also dropped to full opacity here: at the base row's 0.4 it
-   would be white at 40% over the emerald fill (2.10:1), still short of the
-   3:1 WCAG 1.4.11 asks of a graphical object. */
+   The handle is pinned at full opacity here. Inheriting the resting 0.75
+   would still clear 3:1 — white at 75% over the emerald fill is 3.74:1
+   (dark) / 4.28:1 (light) — so the runtime check would not catch dropping
+   this declaration. (It used to: at the old resting 0.4 the same drop was
+   white at 40%, 2.10:1 / 2.29:1.) The selected row's grip is meant to stay
+   at full strength, and `scripts/check-token-contrast.mjs` pins
+   `opacity: 1` on this rule so that pin cannot quietly disappear. */
 .workspace-item.active .ws-drag-handle {
   color: #fff;
   opacity: 1;
@@ -753,16 +757,18 @@
 /* Per-project git dirty badge (issue #76) — a small colored dot next to the
    project name, same "dot" language as .github-panel-ci-dot's good/bad/
    pending. `none` (not a repo, not fetched yet, or an unreachable remote
-   host) is deliberately subtle — var(--dim) at low opacity — so it reads as
-   "nothing to report" rather than competing with the clean/dirty/conflict
-   states for attention. */
+   host) is deliberately quieter than the clean/dirty/conflict states — but
+   it is still a graphical object, so WCAG 1.4.11 asks 3:1 of the composite
+   it paints. `var(--dim)` at 0.4 over `--sidebar` was 1.88:1 (dark) /
+   1.74:1 (light); 0.75 clears both (3.52:1 / 3.16:1) and stays secondary
+   to the states that set `opacity: 1`. */
 .project-git-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   flex-shrink: 0;
   background: var(--dim);
-  opacity: 0.4;
+  opacity: 0.75;
 }
 .project-git-dot.clean {
   background: var(--g);

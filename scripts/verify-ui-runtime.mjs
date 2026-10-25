@@ -102,10 +102,14 @@ const round2 = (n) =>
  * The two fixes this series shipped deliberately moved their targets OFF
  * `--dim` — the keycap chips to `--fg`, the active row's drag handle to
  * plain white — so once fixed they leave the token sample set entirely. A
- * full revert is caught (the colour goes back to `--dim`), but a PARTIAL
- * revert is not: dropping only the `opacity: 1` from the active row's drag
- * handle leaves a white icon at 40% over the emerald fill, 2.10:1, and
- * nothing in the token sweep would ever look at it.
+ * full revert is caught (the colour goes back to `--dim`). A partial revert
+ * of the handle's opacity used to be caught too: dropping only `opacity: 1`
+ * left a white icon at the old resting 40% over the emerald fill, 2.10:1
+ * (dark) / 2.29:1 (light). That is no longer true. The inactive handle now
+ * rests at 0.75 (#1908), and white at 75% over the same fill clears 3:1
+ * (3.74:1 dark / 4.28:1 light), so this check would report a pass. The lint
+ * guard in `scripts/check-token-contrast.mjs` pins `opacity: 1` on the
+ * active rule, which is what still catches that drop — this check cannot.
  *
  * So these targets are asserted by name, against a stated minimum, in every
  * theme — and they are judged on the state they are ACTUALLY painted in, with
