@@ -1032,7 +1032,8 @@ export const OPS: Record<string, OpSpec> = {
   // `afterOffset` (a `sessions.prompt` reply's `outputOffset`: output printed
   // since then still counts, so there is no prompt -> wait race; omitted means
   // only output from now on). Matches against the last 16 KiB of ANSI-stripped
-  // output. Local sessions only (409 otherwise, like sessions.prompt, #1627).
+  // output. A child on another host is waited on THERE, in bounded chunks
+  // (SessionBackend.waitOutput, #1951); 409 only when it has no live process.
   // Resolves `{matched, text, line}`, `{timedOut:true}` or `{gone:true}`.
   // A raw OpSpec like sessions.wait, so it does its own pinning FIRST.
   "sessions.wait_for_output": {
