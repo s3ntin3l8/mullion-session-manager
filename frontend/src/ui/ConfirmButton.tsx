@@ -148,6 +148,20 @@ export function ConfirmButton({
         // but the reported, empirically-verified bug is the mouse gesture,
         // so that's what this guards.
         if (!allowDoubleClickConfirm && armed && e.detail > 1) return;
+        // The window is enforced HERE as well as in the countdown,
+        // because the countdown only runs while the tab is letting timers
+        // fire. A backgrounded tab has its timers throttled to roughly
+        // one firing a minute, so the interval that would have disarmed an
+        // expired button may not have run yet — and the button still
+        // LOOKS armed, showing a stale "6s". Clicking it in that state
+        // must not confirm: the six-second promise is over, and
+        // confirming it anyway would make the countdown a lie. The click
+        // disarms instead, so the user sees the window close and starts
+        // over.
+        if (armed && (deadlineRef.current === null || Date.now() >= deadlineRef.current)) {
+          disarm();
+          return;
+        }
         if (armed) {
           disarm();
           onConfirm();

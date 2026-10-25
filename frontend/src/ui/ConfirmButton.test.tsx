@@ -296,4 +296,39 @@ describe("ConfirmButton arm countdown (audit finding 32)", () => {
     expect(screen.queryByText("6s")).toBeNull();
     expect(screen.getByText("Remove")).toBeInTheDocument();
   });
+
+  // The window is enforced at CONFIRM time as well as in the countdown.
+  // The countdown only runs while the tab is letting timers fire, so in a
+  // backgrounded tab the interval that would have disarmed an expired
+  // button may not have run yet — and the button still LOOKS armed, with a
+  // stale "6s" on it. Clicking it must not confirm: the six-second
+  // promise is over, and confirming anyway would make the countdown a lie.
+  it("does not confirm when the window has expired but the timer has not fired", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmButton onConfirm={onConfirm} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByRole("button").click();
+    });
+    expect(screen.getByText("6s")).toBeInTheDocument();
+
+    // The clock jumps a minute while the tab is throttled. The interval
+    // does NOT fire, so the button still LOOKS armed.
+    act(() => {
+      vi.setSystemTime(Date.now() + 60_000);
+    });
+    expect(screen.getByText("6s")).toBeInTheDocument();
+
+    // The click must not confirm.
+    act(() => {
+      screen.getByRole("button").click();
+    });
+    expect(onConfirm).not.toHaveBeenCalled();
+    // And the button says so — it is back to its unarmed label.
+    expect(screen.queryByText("6s")).toBeNull();
+  });
 });
