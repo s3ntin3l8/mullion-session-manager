@@ -14,13 +14,19 @@
 // `unified-board/TasksToolbar.tsx`). This script keeps it that way: it
 // fails if `aria-haspopup="true"` appears anywhere in the frontend.
 //
-// It lives here rather than in a vitest file for one concrete reason: the
-// frontend's test tree has no node types (the frontend tsconfig does not
-// include them), so a test cannot read the source tree's files at all. This
-// repo's own precedent for "assert something about the source tree's
-// contents" is a `scripts/check-*` node script wired into `npm run lint`
-// (see check-token-contrast.mjs and check-phone-palette.mjs, whose header
-// comments say the same thing).
+// It lives here rather than in a vitest file for one concrete reason: this
+// guard asserts a property of the WHOLE frontend source tree, in one pass,
+// and the repo's precedent for a whole-tree source assertion is the
+// `scripts/check-*` family wired into `npm run lint` — `check-case-collision`
+// and `check-security-antipatterns` walk the tree the same way.
+//
+// A frontend test CAN read source text — `import.meta.glob(..., { query:
+// "?raw" })` is how `src/ui/primitives.a11y.test.tsx`,
+// `src/ui/Modal.migration.test.tsx` and `src/pwaSplashScreens.test.ts` do
+// it, and the reason `node:fs` is not used there is that the frontend's
+// tsconfig deliberately omits Node's global types. Those tests all scan a
+// subtree or a single directory; this one is about every file in
+// `frontend/src`, so it is a lint-time tree walk.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,10 +53,14 @@ function collectSourceFiles(dir, fileList = []) {
   return fileList;
 }
 
-// The attribute with the generic value, in either quoting style and with
-// the optional JSX expression wrapper: `aria-haspopup="true"`,
-// `aria-haspopup={'true'}`, `aria-haspopup={"true"}`.
-const GENERIC = /aria-haspopup\s*=\s*(?:\{)?['"]true['"]/;
+// The attribute with the generic value, in every spelling React accepts:
+// `aria-haspopup="true"`, `aria-haspopup={'true'}`, `aria-haspopup={"true"}`
+// and `aria-haspopup={true}` (React renders a boolean aria-* value as the
+// string "true"). The value may sit on its own line — the braces are a JSX
+// expression container, so `aria-haspopup={` and `"true"` can be split by a
+// newline — and the lookahead keeps `aria-haspopup="trueish"` (not a token
+// ARIA knows) out of the net.
+const GENERIC = /aria-haspopup\s*=\s*\{?\s*(?:['"]true['"]|true(?=\s*\}))\s*\}?/g;
 
 // A comment is prose, not an attribute — and this repo's own comments quote
 // the attribute they are talking about, so reading comments would fail on
@@ -65,10 +75,14 @@ const offenders = [];
 for (const file of collectSourceFiles(SRC)) {
   const content = stripComments(readFileSync(file, "utf8"));
   const lines = content.split("\n");
-  lines.forEach((line, i) => {
-    if (!GENERIC.test(line)) return;
-    offenders.push(`${path.relative(ROOT, file)}:${i + 1}: ${line.trim()}`);
-  });
+  GENERIC.lastIndex = 0;
+  let match;
+  while ((match = GENERIC.exec(content)) !== null) {
+    const lineNumber = content.slice(0, match.index).split("\n").length;
+    offenders.push(
+      `${path.relative(ROOT, file)}:${lineNumber}: ${(lines[lineNumber - 1] ?? "").trim()}`,
+    );
+  }
 }
 
 if (offenders.length > 0) {
@@ -80,4 +94,4 @@ if (offenders.length > 0) {
   );
 }
 
-console.log("OK — every aria-haspopup names what its trigger opens.");
+console.log("OK — every aria-haspopup in frontend/src names what its trigger opens.");

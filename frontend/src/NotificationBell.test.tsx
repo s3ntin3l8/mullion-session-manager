@@ -678,11 +678,18 @@ describe("NotificationBell — the trigger's popup semantics (issue #1894)", () 
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("names the dialog it opens on the phone too, where the panel is a bottom sheet", () => {
+  it("opens a dialog on the phone too, where the panel is a bottom sheet", async () => {
     // The phone renders the same trigger and the same `sheet` panel — a
-    // `ui/BottomSheet.tsx`, which is itself `role="dialog"`.
+    // `ui/BottomSheet.tsx`, which is itself `role="dialog"`. That is what
+    // the trigger's token describes, so it is what the test pins.
+    const user = userEvent.setup();
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} sheet />);
-    expect(trigger()).toHaveAttribute("aria-haspopup", "dialog");
+
+    await user.click(trigger());
+
+    const sheet = await screen.findByRole("dialog");
+    expect(sheet).toHaveAttribute("aria-modal", "true");
+    expect(sheet).toHaveAttribute("aria-label", "Notifications");
   });
 });
 
