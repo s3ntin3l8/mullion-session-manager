@@ -1,0 +1,1415 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mullion — Git &amp; GitHub sidebar overhaul: mockup (#1965)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      /* ───────── Tokens ─────────
+   Base values are copied verbatim from frontend/src/styles/tokens.css.
+   Everything marked NEW is proposed by B1 (#1971). */
+      .t-dark {
+        --sidebar: #161617;
+        --sidebar-2: #1b1b1d;
+        --pane-hd: #242426;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --r: #e5575a;
+        --b: #5c9bf5;
+        --c: #43c1c1;
+        --y: #d7b06a;
+        --p: #b884db;
+        --o: #e0965a;
+        --accent-solid: #0e9f6e;
+        --ring: #12b981;
+        /* NEW: stronger separation (was --border #2c2c30 / --border-soft #232326, ~1.1:1) */
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --surface: #1e1e21; /* NEW: card/row surface, visibly above --sidebar */
+        --surface-hover: #26262a; /* NEW */
+        --accent: #34d399; /* NEW: defined (was referenced but undefined) */
+        --lane-1: #5c9bf5;
+        --lane-2: #5ec27a;
+        --lane-3: #d7b06a;
+        --lane-4: #e66fb0;
+        --lane-5: #43c1c1;
+        --lane-6: #b884db;
+        --lane-more: #6a6a74;
+        color-scheme: dark;
+      }
+      .t-light {
+        --sidebar: #f4f4f2;
+        --sidebar-2: #efefec;
+        --pane-hd: #e9e9e6;
+        --chrome: #eeeeec;
+        --fg: #171717;
+        --muted: #5a5a5a;
+        --dim: #666666;
+        --g: #1a7f37;
+        --r: #cf222e;
+        --b: #0969da;
+        --c: #0e7490;
+        --y: #9a6700;
+        --p: #8250df;
+        --o: #bc5215;
+        --accent-solid: #0b6e4b;
+        --ring: #0b6e4b;
+        --border: #c9c9c4;
+        --border-soft: #dcdcd8;
+        --surface: #ffffff;
+        --surface-hover: #f0f0ed;
+        --accent: #0b6e4b;
+        --lane-1: #0969da;
+        --lane-2: #1a7f37;
+        --lane-3: #9a6700;
+        --lane-4: #bf3989;
+        --lane-5: #0e7490;
+        --lane-6: #8250df;
+        --lane-more: #9a9a9a;
+        color-scheme: light;
+      }
+      /* NEW semantic status tokens: one vocabulary (success/danger/warn/info/merged/neutral). */
+      .t-dark,
+      .t-light {
+        --status-success-fg: var(--g);
+        --status-danger-fg: var(--r);
+        --status-warn-fg: var(--y);
+        --status-info-fg: var(--b);
+        --status-merged-fg: var(--p);
+        --status-neutral-fg: var(--muted);
+      }
+      .t-dark {
+        --tint: 16%;
+        --tint-border: 42%;
+      }
+      .t-light {
+        --tint: 11%;
+        --tint-border: 38%;
+      }
+      .t-dark,
+      .t-light {
+        --status-success-bg: color-mix(in srgb, var(--g) var(--tint), var(--sidebar));
+        --status-danger-bg: color-mix(in srgb, var(--r) var(--tint), var(--sidebar));
+        --status-warn-bg: color-mix(in srgb, var(--y) var(--tint), var(--sidebar));
+        --status-info-bg: color-mix(in srgb, var(--b) var(--tint), var(--sidebar));
+        --status-merged-bg: color-mix(in srgb, var(--p) var(--tint), var(--sidebar));
+        --status-neutral-bg: color-mix(in srgb, var(--fg) 8%, var(--sidebar));
+        --status-success-border: color-mix(in srgb, var(--g) var(--tint-border), var(--sidebar));
+        --status-danger-border: color-mix(in srgb, var(--r) var(--tint-border), var(--sidebar));
+        --status-warn-border: color-mix(in srgb, var(--y) var(--tint-border), var(--sidebar));
+        --status-info-border: color-mix(in srgb, var(--b) var(--tint-border), var(--sidebar));
+        --status-merged-border: color-mix(in srgb, var(--p) var(--tint-border), var(--sidebar));
+        --status-neutral-border: var(--border);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          13px/1.45 -apple-system,
+          "Inter",
+          system-ui,
+          sans-serif;
+        background: #0c0c0d;
+        color: #ddd;
+      }
+      code,
+      .mono {
+        font-family: ui-monospace, "JetBrains Mono", Menlo, monospace;
+      }
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      .lede {
+        color: #9b9ba5;
+        margin: 0 0 16px;
+        max-width: 900px;
+      }
+      .nav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 0 0 18px;
+        position: sticky;
+        top: 0;
+        background: #0c0c0d;
+        padding: 8px 0;
+        z-index: 5;
+      }
+      .nav button {
+        background: #1c1c1f;
+        color: #ddd;
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 5px 10px;
+        cursor: pointer;
+        font: inherit;
+      }
+      .nav button[aria-pressed="true"] {
+        background: #0e9f6e;
+        border-color: #12b981;
+        color: #fff;
+      }
+      .note {
+        background: #17171a;
+        border: 1px solid #2f2f35;
+        border-radius: 8px;
+        padding: 10px 14px;
+        margin: 0 0 18px;
+        color: #bbb;
+        max-width: 1000px;
+      }
+      .note b {
+        color: #fff;
+      }
+      .note ul {
+        margin: 6px 0 0 18px;
+        padding: 0;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 28px;
+        align-items: flex-start;
+      }
+      .col h3 {
+        margin: 0 0 6px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8a8a94;
+      }
+
+      /* ───────── Sidebar frame ───────── */
+      .frame {
+        background: var(--sidebar);
+        color: var(--fg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        height: 760px;
+        display: flex;
+        flex-direction: column;
+        font-size: 12.5px;
+      }
+      .w260 {
+        width: 260px;
+      }
+      .w340 {
+        width: 340px;
+      }
+      .scroll {
+        overflow-y: auto;
+        flex: 1;
+        padding-bottom: 12px;
+      }
+      svg.i {
+        width: 14px;
+        height: 14px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        flex: none;
+      }
+
+      /* ───────── Kit: ViewHeader / DetailHeader ───────── */
+      .vh {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 9px 10px;
+        background: var(--pane-hd);
+        border-bottom: 1px solid var(--border);
+        min-height: 42px;
+      }
+      .vh .title {
+        font-weight: 650;
+        font-size: 13px;
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .vh .sub {
+        display: block;
+        font-weight: 400;
+        font-size: 11px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .vh .actions {
+        display: flex;
+        gap: 2px;
+        align-items: center;
+      }
+      .ibtn {
+        width: 26px;
+        height: 26px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 6px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        position: relative;
+      }
+      .ibtn:hover {
+        background: var(--surface-hover);
+        color: var(--fg);
+        border-color: var(--border);
+      }
+      .ibtn.ext {
+        color: var(--fg);
+      } /* open-on-GitHub: always the right-most icon */
+      .ibtn .dot {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--g);
+        border: 1.5px solid var(--pane-hd);
+      }
+      .ibtn .dot.warn {
+        background: var(--y);
+      }
+      .sep {
+        width: 1px;
+        height: 16px;
+        background: var(--border);
+        margin: 0 3px;
+      }
+
+      /* ───────── Kit: SidebarSection ───────── */
+      .sec {
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .sec-h {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+      .sec-h .chev {
+        color: var(--muted);
+      }
+      .sec-h .name {
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg);
+      }
+      .count {
+        font-size: 11px;
+        font-weight: 600;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--status-neutral-bg);
+        border: 1px solid var(--status-neutral-border);
+        color: var(--fg);
+      }
+      .sec-h .sp {
+        flex: 1;
+      }
+      .link {
+        background: none;
+        border: none;
+        color: var(--accent);
+        cursor: pointer;
+        font: inherit;
+        font-size: 11.5px;
+        padding: 2px 4px;
+        border-radius: 4px;
+      }
+      .link:hover {
+        background: var(--surface-hover);
+      }
+      .group-h {
+        white-space: nowrap;
+        padding: 6px 10px 3px;
+        font-size: 11px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .group-h b {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .group-h .sp {
+        flex: 1;
+      }
+
+      /* ───────── Kit: SidebarRow ───────── */
+      .row {
+        display: flex;
+        gap: 8px;
+        padding: 6px 10px;
+        align-items: flex-start;
+        border-radius: 0;
+        position: relative;
+        cursor: pointer;
+      }
+      .row:hover,
+      .row.sel {
+        background: var(--surface-hover);
+      }
+      .row.sel::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 4px;
+        bottom: 4px;
+        width: 2px;
+        background: var(--accent);
+        border-radius: 2px;
+      }
+      .row .lead {
+        width: 16px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .row .body {
+        min-width: 0;
+        flex: 1;
+      }
+      .row .t {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        min-width: 0;
+      }
+      .row .t .name {
+        font-weight: 560;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        min-width: 0;
+      }
+      .row .meta {
+        color: var(--muted);
+        font-size: 11.5px;
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 1px;
+      }
+      .row .meta > * {
+        margin-right: 4px;
+      }
+      .row .trail {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        flex: none;
+      }
+      .row .hover-actions {
+        display: none;
+        gap: 2px;
+      }
+      .row:hover .hover-actions,
+      .row:focus-within .hover-actions {
+        display: flex;
+      }
+      @media (hover: none) {
+        .row .hover-actions {
+          display: flex;
+        }
+      }
+      .dotc {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        display: inline-block;
+        flex: none;
+      }
+      .tone-success {
+        color: var(--status-success-fg);
+      }
+      .tone-danger {
+        color: var(--status-danger-fg);
+      }
+      .tone-warn {
+        color: var(--status-warn-fg);
+      }
+      .tone-info {
+        color: var(--status-info-fg);
+      }
+      .tone-merged {
+        color: var(--status-merged-fg);
+      }
+      .tone-neutral {
+        color: var(--status-neutral-fg);
+      }
+      .dotc.success {
+        background: var(--status-success-fg);
+      }
+      .dotc.danger {
+        background: var(--status-danger-fg);
+      }
+      .dotc.warn {
+        background: var(--status-warn-fg);
+      }
+      .dotc.info {
+        background: var(--status-info-fg);
+      }
+      .dotc.merged {
+        background: var(--status-merged-fg);
+      }
+      .dotc.neutral {
+        background: var(--status-neutral-fg);
+      }
+
+      /* ───────── Kit: StatusChip ───────── */
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 18px;
+        padding: 0 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 560;
+        border: 1px solid;
+        white-space: nowrap;
+        line-height: 1;
+      }
+      .chip.success {
+        color: var(--status-success-fg);
+        background: var(--status-success-bg);
+        border-color: var(--status-success-border);
+      }
+      .chip.danger {
+        color: var(--status-danger-fg);
+        background: var(--status-danger-bg);
+        border-color: var(--status-danger-border);
+      }
+      .chip.warn {
+        color: var(--status-warn-fg);
+        background: var(--status-warn-bg);
+        border-color: var(--status-warn-border);
+      }
+      .chip.info {
+        color: var(--status-info-fg);
+        background: var(--status-info-bg);
+        border-color: var(--status-info-border);
+      }
+      .chip.merged {
+        color: var(--status-merged-fg);
+        background: var(--status-merged-bg);
+        border-color: var(--status-merged-border);
+      }
+      .chip.neutral {
+        color: var(--status-neutral-fg);
+        background: var(--status-neutral-bg);
+        border-color: var(--status-neutral-border);
+      }
+      .chip.mono {
+        font-family: ui-monospace, Menlo, monospace;
+        font-weight: 500;
+      }
+      .ahead {
+        color: var(--g);
+        font-variant-numeric: tabular-nums;
+      }
+      .behind {
+        color: var(--r);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ───────── Kit: Button ───────── */
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 26px;
+        padding: 0 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 12px;
+        font-weight: 560;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: var(--surface-hover);
+      }
+      .btn.primary {
+        background: var(--accent-solid);
+        border-color: var(--ring);
+        color: #fff;
+      }
+      .btn.danger {
+        color: var(--status-danger-fg);
+        border-color: var(--status-danger-border);
+        background: var(--status-danger-bg);
+      }
+      .btn.ghost {
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+      }
+      .btn.block {
+        width: 100%;
+        justify-content: center;
+      }
+      .btn-row {
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        flex-wrap: wrap;
+      }
+      .search {
+        margin: 8px 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0 8px;
+        height: 28px;
+        color: var(--muted);
+      }
+      .search span {
+        flex: 1;
+      }
+
+      /* ───────── Kit: StatusTriad ───────── */
+      .triad {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        margin-top: 5px;
+      }
+      .triad .chip {
+        cursor: pointer;
+        height: 20px;
+      }
+      .triad .chip.open {
+        outline: 1.5px solid var(--accent);
+        outline-offset: 1px;
+      }
+      .drill {
+        margin: 6px 0 2px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--sidebar-2);
+        overflow: hidden;
+      }
+      .drill .dh {
+        padding: 5px 8px;
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .drill .dr {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+      .drill .dr .n {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .drill .grp {
+        padding: 4px 8px 1px;
+        font-size: 11px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      /* ───────── Cards / detail ───────── */
+      .card {
+        margin: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface);
+      }
+      .card .ch {
+        padding: 6px 10px;
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .card .cb {
+        padding: 8px 10px;
+      }
+      .kv {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 3px 10px;
+        font-size: 12px;
+      }
+      .kv dt {
+        color: var(--muted);
+      }
+      .kv dd {
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .statusrow {
+        display: flex;
+        gap: 8px;
+        padding: 7px 10px;
+        border-top: 1px solid var(--border-soft);
+        align-items: flex-start;
+      }
+      .statusrow:first-child {
+        border-top: none;
+      }
+      .statusrow .l {
+        width: 16px;
+        display: grid;
+        place-items: center;
+        padding-top: 1px;
+      }
+      .statusrow .b {
+        flex: 1;
+        min-width: 0;
+      }
+      .statusrow .b b {
+        display: block;
+      }
+      .statusrow .b span {
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      .sticky-actions {
+        padding: 8px 10px;
+        border-top: 1px solid var(--border);
+        background: var(--pane-hd);
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .prose {
+        padding: 4px 10px 8px;
+        color: var(--fg);
+      }
+      .prose p {
+        margin: 4px 0;
+      }
+      .prose .fade {
+        color: var(--muted);
+      }
+      .comment {
+        margin: 6px 10px;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+      }
+      .comment .h {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        padding: 5px 8px;
+        background: var(--sidebar-2);
+        border-radius: 8px 8px 0 0;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .comment .h b {
+        color: var(--fg);
+      }
+      .comment .c {
+        padding: 6px 8px;
+      }
+      .callout {
+        margin: 8px 10px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid;
+        font-size: 12px;
+      }
+      .callout.warn {
+        background: var(--status-warn-bg);
+        border-color: var(--status-warn-border);
+      }
+      .callout.info {
+        background: var(--status-info-bg);
+        border-color: var(--status-info-border);
+      }
+
+      /* ───────── History graph ───────── */
+      .gl {
+        display: flex;
+        gap: 6px;
+        padding: 0 10px 0 6px;
+        height: 28px;
+        align-items: center;
+        cursor: pointer;
+      }
+      .gl:hover {
+        background: var(--surface-hover);
+      }
+      .gl svg.g {
+        height: 28px;
+        flex: none;
+      }
+      .gl .subj {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .gl .when {
+        color: var(--muted);
+        font-size: 11px;
+        flex: none;
+      }
+      .gl .refs {
+        display: flex;
+        gap: 3px;
+        flex: 0 1 auto;
+        min-width: 0;
+        max-width: 42%;
+        overflow: hidden;
+      }
+      .gl .subj {
+        flex: 1 1 60%;
+      }
+      .gl .refs .chip:not(.pr) {
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+      .gl .refs .chip.pr {
+        flex: none;
+      }
+      .gl .refs .chip {
+        height: 16px;
+        font-size: 10.5px;
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .expanded {
+        margin: 0 10px 6px 28px;
+        padding: 6px 8px;
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        background: var(--sidebar-2);
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .scope {
+        display: flex;
+        gap: 6px;
+        padding: 8px 10px;
+        align-items: center;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .select {
+        flex: 1;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        height: 26px;
+        padding: 0 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+      .prune-item {
+        display: flex;
+        gap: 8px;
+        padding: 5px 10px;
+        align-items: flex-start;
+      }
+      .prune-item input {
+        margin-top: 2px;
+        accent-color: var(--accent-solid);
+      }
+      .why {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      /* ───────── Kit sheet ───────── */
+      .sw {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin: 6px 0 12px;
+      }
+      .sw div {
+        width: 74px;
+        font-size: 10px;
+        text-align: center;
+      }
+      .sw i {
+        display: block;
+        height: 28px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        margin-bottom: 2px;
+      }
+      .sheet {
+        padding: 10px;
+      }
+      .sheet h4 {
+        margin: 10px 0 4px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      .annot {
+        max-width: 340px;
+        color: #9b9ba5;
+        font-size: 12px;
+      }
+      .annot li {
+        margin: 3px 0;
+      }
+      .annot b {
+        color: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <h1>Git &amp; GitHub sidebar overhaul — design mockup</h1>
+      <p class="lede">
+        Approval gate for Track B of epic <b>#1965</b> (B1–B6). Static HTML; all colours derive from
+        the real <code>tokens.css</code> values plus the NEW tokens B1 introduces. Every view
+        renders in <b>dark + light</b> at <b>260px + 340px</b>. Data mirrors the shapes that broke
+        today: 42 branches (squash-merged, worktree-held, task-held), a 20+ lane graph, PR #1946
+        (e2e failing + COMMENTED bot review), and a ready-to-merge PR.
+      </p>
+      <div class="nav" id="nav"></div>
+      <div class="note" id="note"></div>
+      <div class="grid" id="stage"></div>
+    </div>
+
+    <script>
+      /* ───────── helpers ───────── */
+      const ic = {
+        git: '<path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/>',
+        gh: '<path d="M15 22v-4a4.800 4.800 0 0 0-1-3.500c3 0 6-2 6-5.500.080-1.250-.270-2.480-1-3.500.280-1.150.280-2.350 0-3.500 0 0-1 0-3 1.500-2.640-.500-5.360-.500-8 0C6 2 5 2 5 2c-.300 1.150-.300 2.350 0 3.500A5.400 5.400 0 0 0 4 9c0 3.500 3 5.500 6 5.500-.390.490-.680 1.050-.850 1.650-.170.600-.220 1.230-.150 1.850v4"/><path d="M9 18c-4.510 2-5-2-7-2"/>',
+        ext: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
+        back: '<path d="M15 18l-6-6 6-6"/>',
+        chevd: '<path d="M6 9l6 6 6-6"/>',
+        chevr: '<path d="M9 6l6 6-6 6"/>',
+        fetch: '<path d="M21 12a9 9 0 1 1-3-6.700M21 4v5h-5"/>',
+        pull: '<path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14"/>',
+        health:
+          '<path d="M12 21s-7-4.400-9.500-9A5.500 5.500 0 0 1 12 6a5.500 5.500 0 0 1 9.500 6c-2.500 4.600-9.500 9-9.500 9z"/>',
+        hist: '<path d="M3 12a9 9 0 1 0 3-6.700M3 4v5h5M12 7v5l3 2"/>',
+        trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+        search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.300-4.300"/>',
+        branch:
+          '<path d="M6 3v12M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9c0 6-12 3-12 6"/>',
+        pr: '<circle cx="6" cy="6" r="2.500"/><circle cx="6" cy="18" r="2.500"/><circle cx="18" cy="18" r="2.500"/><path d="M6 8.500v7M18 15.500V9a2 2 0 0 0-2-2h-3m0 0l2-2m-2 2l2 2"/>',
+        issue: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="1" fill="currentColor"/>',
+        issueDone: '<circle cx="12" cy="12" r="9"/><path d="M8 12.500l3 3 5-6"/>',
+        check: '<path d="M5 12.500l4.500 4.500L19 7"/>',
+        x: '<path d="M6 6l12 12M18 6L6 18"/>',
+        clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        msg: '<path d="M21 12a8 8 0 0 1-11.700 7L4 20l1.200-4.700A8 8 0 1 1 21 12z"/>',
+        thread: '<path d="M4 5h16v10H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
+        merge:
+          '<circle cx="6" cy="6" r="2.500"/><circle cx="6" cy="18" r="2.500"/><circle cx="18" cy="12" r="2.500"/><path d="M6 8.500v7M8.500 6c6 0 7 2 7 4"/>',
+        popout:
+          '<path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5"/>',
+        play: '<path d="M7 5l12 7-12 7z"/>',
+        file: '<path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5"/>',
+        more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+        tree: '<path d="M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7"/>',
+        sess: '<path d="M4 5h16v11H4zM8 20h8"/>',
+        filter: '<path d="M4 5h16l-6 8v6l-4-2v-4z"/>',
+        lock: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+      };
+      const I = (n, s) =>
+        `<svg class="i" viewBox="0 0 24 24"${s ? ` style="width:${s}px;height:${s}px"` : ""}>${ic[n]}</svg>`;
+      const chip = (tone, txt, o = {}) =>
+        `<span class="chip ${tone}${o.mono ? " mono" : ""}"${o.title ? ` title="${o.title}"` : ""}>${o.icon ? I(o.icon, 11) : ""}${txt}</span>`;
+      const ibtn = (n, label, extra = "") =>
+        `<span class="ibtn ${extra}" title="${label}" aria-label="${label}">${I(n)}</span>`;
+      const ViewHeader = (title, sub, actions, ext) =>
+        `<div class="vh"><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext || "Open on GitHub", "ext")}</div></div>`;
+      const DetailHeader = (title, sub, actions, ext) =>
+        `<div class="vh"><span class="ibtn" aria-label="Back">${I("back")}</span><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext, "ext")}</div></div>`;
+      const Sec = (name, count, body, o = {}) =>
+        `<div class="sec"><div class="sec-h"><span class="chev">${I(o.closed ? "chevr" : "chevd", 12)}</span><span class="name">${name}</span>${count != null ? `<span class="count">${count}</span>` : ""}<span class="sp"></span>${o.action || ""}</div>${o.closed ? "" : body}</div>`;
+      const Row = (lead, name, meta, trail, o = {}) =>
+        `<div class="row${o.sel ? " sel" : ""}"><span class="lead">${lead}</span><div class="body"><div class="t"><span class="name">${name}</span></div>${meta ? `<div class="meta">${meta}</div>` : ""}${o.extra || ""}</div><div class="trail">${o.hover ? `<span class="hover-actions">${o.hover}</span>` : ""}${trail || ""}</div></div>`;
+      const dot = (t) => `<span class="dotc ${t}"></span>`;
+      const tone = (t, n, s) => `<span class="tone-${t}">${I(n, s)}</span>`;
+
+      /* ───────── views ───────── */
+      const V = {};
+
+      V.source = (w) => {
+        const branches = [
+          [
+            "sel",
+            "feat/1877-sidebar-workspace-scope",
+            "current",
+            [chip("info", "current")],
+            "↑2",
+            "12m",
+          ],
+        ];
+        return `${ViewHeader("Source Control", `<span class="mono">main</span> · <span class="ahead">↑0</span> <span class="behind">↓3</span> · 2 changed`, ibtn("fetch", "Fetch") + ibtn("pull", "Pull (ff-only)") + `<span class="ibtn" title="Clone health: OK" aria-label="Clone health">${I("health")}<i class="dot"></i></span>`, "Open repository on GitHub")}
+  <div class="scroll">
+  ${Sec(
+    "Changes",
+    2,
+    `
+     ${Row(tone("warn", "file"), "frontend/src/ui/ConfirmButton.tsx", `<span class="ahead">+12</span> <span class="behind">−4</span>`, chip("warn", "M"))}
+     ${Row(tone("success", "file"), "docs/design/…/mockup.html", `<span class="ahead">+640</span>`, chip("success", "A"))}`,
+  )}
+  ${Sec(
+    "Branches",
+    42,
+    `
+    <div class="search">${I("search", 13)}<span>Filter branches…</span><span class="mono" style="flex:none;color:var(--dim)">/</span></div>
+    <div class="group-h"><b>Current</b></div>
+    ${Row(tone("info", "branch"), "feat/1877-sidebar-workspace-scope", `<span class="ahead">↑2</span> <span class="behind">↓0</span> · 12m ago`, chip("info", "current"), { sel: true })}
+    <div class="group-h"><b>With open PR</b><span class="count">3</span></div>
+    ${Row(tone("danger", "branch"), "fix-bundle-sync-recovery", `<span class="ahead">↑1</span> · 46m ago`, chip("danger", "#1946 · CI failing", { mono: false }), { hover: ibtn("hist", "View in History") + ibtn("trash", "Delete") })}
+    ${Row(tone("success", "branch"), "child-target-host", `<span class="ahead">↑3</span> · 22m ago`, chip("success", "#1960 · Ready"), { hover: ibtn("hist", "View in History") + ibtn("trash", "Delete") })}
+    ${Row(tone("warn", "branch"), "files-icons-refresh", `<span class="ahead">↑1</span> · 9m ago`, chip("warn", "#1961 · Review"), { hover: ibtn("hist", "View in History") + ibtn("trash", "Delete") })}
+    <div class="group-h"><b>Prunable</b><span class="count">17</span><span class="sp"></span><button class="link">Prune…</button></div>
+    ${Row(tone("merged", "merge"), "files-transfer", `<span class="behind">↓343</span> · 4h ago`, chip("merged", "squash-merged", { title: "PR #1941 merged — upstream gone" }), { hover: ibtn("hist", "View in History") + ibtn("trash", "Delete") })}
+    ${Row(tone("merged", "merge"), "fix-session-restore-race", `<span class="behind">↓86</span> · 2d ago`, chip("merged", "merged"), { hover: ibtn("hist", "View in History") + ibtn("trash", "Delete") })}
+    ${Row(tone("neutral", "merge"), "feat-attention-ack-reset", `4w ago`, chip("neutral", "upstream gone"))}
+    <div class="group-h"><b>Other</b><span class="count">21</span></div>
+    ${Row(tone("neutral", "branch"), "docs/agy-plan-autoapprove", `4w ago`, "")}
+    ${Row(tone("neutral", "branch"), "feat/dock-pin-secondary", `6w ago`, chip("warn", '<span style="display:inline-flex">' + I("lock", 10) + "</span>worktree"))}
+    ${Row(tone("neutral", "branch"), "chore/license-canonical", `2d ago`, chip("info", "task #482"))}`,
+  )}
+  ${Sec("Worktrees", 3, "", { closed: true })}
+  </div>`;
+      };
+
+      V.branch =
+        () => `${DetailHeader("fix-bundle-sync-recovery", "Branch · ↑1 ↓0 vs origin · ↑1 ↓4 vs main", ibtn("hist", "View in History"), "Open branch on GitHub")}
+  <div class="scroll">
+  <div class="card"><div class="ch">Status</div>
+    <div class="statusrow"><span class="l tone-danger">${I("x", 14)}</span><div class="b"><b>Checks</b><span>1 failing · 14 passing · 4 skipped</span></div></div>
+    <div class="statusrow"><span class="l tone-info">${I("msg", 14)}</span><div class="b"><b>Reviews</b><span>Commented by hermes-bot</span></div></div>
+    <div class="statusrow"><span class="l tone-warn">${I("clock", 14)}</span><div class="b"><b>Merge</b><span>Blocked: CI failing</span></div></div>
+    <div style="padding:6px 10px"><button class="btn block">${I("pr", 13)} Open PR #1946</button></div>
+  </div>
+  <div class="card"><div class="ch">Details</div><div class="cb"><dl class="kv">
+    <dt>Upstream</dt><dd class="mono">origin/fix-bundle-sync-recovery</dd>
+    <dt>vs main</dt><dd><span class="ahead">↑1</span> <span class="behind">↓4</span> · not merged</dd>
+    <dt>Worktree</dt><dd class="mono">.wt/fix-bundle-sync…</dd>
+    <dt>Task</dt><dd>— none —</dd>
+    <dt>Last commit</dt><dd>46m ago · bjoern</dd></dl></div></div>
+  ${Sec("Sessions", 1, Row(tone("success", "sess"), "fix bundle sync", "claude · running", ""))}
+  ${Sec("Commits only on this branch", 1, `<div class="gl"><svg class="g" width="16" viewBox="0 0 16 28"><line x1="8" y1="0" x2="8" y2="28" stroke="var(--lane-1)" stroke-width="2"/><circle cx="8" cy="14" r="4" fill="var(--lane-1)"/></svg><span class="subj">fix(bundle): recover from interrupted sync</span><span class="when">46m</span></div>`)}
+  </div>
+  <div class="sticky-actions"><button class="btn primary">${I("play", 12)} Open session here</button><button class="btn">${I("hist", 12)} History</button><button class="btn danger">${I("trash", 12)} Delete…</button></div>`;
+
+      V.prune =
+        () => `${DetailHeader("Prune merged branches", "Local only · remote branches are never touched", "", "Open repository on GitHub")}
+  <div class="scroll">
+  <div class="callout info">17 local branches are merged into <b class="mono">main</b>. Squash-merged ones are detected via merged PRs and <span class="mono">upstream gone</span> — no Force needed.</div>
+  <div class="group-h"><b>Will delete</b><span class="count">5 of 17 shown</span><span class="sp"></span><button class="link">Select none</button></div>
+  ${[
+    ["files-transfer", "PR #1941 merged (squash)", "merged"],
+    ["fix-session-restore-race", "PR #1902 merged · upstream gone", "merged"],
+    ["feat-attention-ack-reset", "upstream gone", "neutral"],
+    ["feat-re-review-action", "ancestor of main", "success"],
+    ["feat-browser-clipboard", "PR #1844 merged (squash)", "merged"],
+  ]
+    .map(
+      ([n, w, t]) =>
+        `<label class="prune-item"><input type="checkbox" checked/><div><div class="mono" style="font-weight:560">${n}</div><div class="why">${chip(t, w.split(" ")[0] === "PR" ? "squash" : w.startsWith("ancestor") ? "ancestor" : "gone", {})} ${w}</div></div></label>`,
+    )
+    .join("")}
+  <div class="group-h" style="margin-top:8px"><b>Skipped — protected</b><span class="count">3</span></div>
+  <div class="prune-item"><span style="width:13px"></span><div><div class="mono">feat/dock-pin-secondary</div><div class="why">${chip("warn", "worktree")} checked out in .wt/dock-pin-secondary</div></div></div>
+  <div class="prune-item"><span style="width:13px"></span><div><div class="mono">chore/license-canonical</div><div class="why">${chip("info", "task")} claimed by task #482</div></div></div>
+  <div class="prune-item"><span style="width:13px"></span><div><div class="mono">feat/1877-sidebar-workspace-scope</div><div class="why">${chip("neutral", "current")} current branch</div></div></div>
+  </div>
+  <div class="sticky-actions"><button class="btn danger">${I("trash", 12)} Delete 17 branches</button><button class="btn ghost">Cancel</button></div>`;
+
+      /* graph: lanes beyond 6 fold into a dimmed overflow lane */
+      function graphRow(lane, active, overflow, merge) {
+        const cols = 7,
+          G = 9,
+          W = cols * G + 6,
+          cy = 14;
+        const x = (l) => 7 + Math.min(l, 6) * G;
+        const col = (l) => (l >= 6 ? "var(--lane-more)" : `var(--lane-${l + 1})`);
+        const lines = active
+          .map(
+            (l) =>
+              `<line x1="${x(l)}" y1="0" x2="${x(l)}" y2="28" stroke="${col(l)}" stroke-width="${l >= 6 ? 1.5 : 2}" ${l >= 6 ? 'stroke-dasharray="2 2"' : ""}/>`,
+          )
+          .join("");
+        const m =
+          merge != null
+            ? `<path d="M${x(merge)} 0 C ${x(merge)} 10, ${x(lane)} 8, ${x(lane)} ${cy}" stroke="${col(merge)}" stroke-width="2" fill="none"/>`
+            : "";
+        return `<svg class="g" width="${W}" viewBox="0 0 ${W} 28">${lines}${m}<circle cx="${x(lane)}" cy="${cy}" r="4" fill="${col(lane)}" stroke="var(--sidebar)" stroke-width="1.5"/>${overflow ? `<text x="${x(6) - 3}" y="9" font-size="8" fill="var(--muted)">+9</text>` : ""}</svg>`;
+      }
+      V.history = (w) => {
+        const rows = [
+          [
+            0,
+            [0, 1, 2, 3],
+            false,
+            null,
+            "fix(bundle): recover from interrupted sync",
+            [
+              ["success", "fix-bundle-sync-recovery ✓", "synced"],
+              ["danger", "#1946"],
+            ],
+            "14m",
+          ],
+          [
+            1,
+            [0, 1, 2, 3, 4],
+            false,
+            null,
+            "feat(palette): launcher for session actions",
+            [["success", "feat/1879-palette-launcher"]],
+            "29m",
+          ],
+          [
+            2,
+            [0, 1, 2, 3, 4, 5],
+            false,
+            null,
+            "feat(hosts): targeted spawn on child host",
+            [
+              ["success", "child-target-host"],
+              ["success", "#1960"],
+            ],
+            "21m",
+          ],
+          [
+            3,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            true,
+            null,
+            "fix(sidebar): scope lists to the workspace",
+            [["info", "feat/1877-sidebar-workspace-scope"]],
+            "29m",
+          ],
+          [
+            4,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            true,
+            null,
+            "test(build): typecheck the test tree",
+            [],
+            "1h",
+          ],
+          [
+            0,
+            [0, 1, 2, 3, 4, 5, 6, 7, 8],
+            true,
+            3,
+            "Merge pull request #1917 from tests-typecheck",
+            [
+              ["neutral", "main"],
+              ["merged", "#1917"],
+            ],
+            "2h",
+          ],
+          [
+            0,
+            [0, 4, 5],
+            false,
+            null,
+            "feat(git-panel): offer the clone repair, as a confirmed action (#1906)",
+            [["info", "HEAD → main"]],
+            "3h",
+          ],
+          [
+            0,
+            [0],
+            false,
+            null,
+            "feat(hosts): say WHY a session is on the host it is on (#1852)",
+            [["warn", "v0.42.1"]],
+            "5h",
+          ],
+        ];
+        const body = rows
+          .map(([lane, active, ov, mg, s, refs, when], i) => {
+            const r = refs
+              .slice(0, 2)
+              .map(([t, n]) => chip(t, n, { mono: true }))
+              .join("");
+            return `<div class="gl">${graphRow(lane, active, ov, mg)}<span class="subj">${s}</span><span class="refs">${
+              w === 260
+                ? refs.length
+                  ? chip(refs[0][0], String(refs.length), {
+                      title: refs.map((x) => x[1]).join(", "),
+                    })
+                  : ""
+                : refs
+                    .slice(0, 1)
+                    .map(([t, n]) => chip(t, n, { mono: true }))
+                    .join("") + (refs.length > 1 ? chip("neutral", "+" + (refs.length - 1)) : "")
+            }</span><span class="when">${when}</span></div>${i === 2 ? `<div class="expanded"><span class="mono">dd825f6</span> · bjoern · 21m ago<br>origin/child-target-host, child-target-host <span class="chip merged">#1960</span><br><button class="link" style="padding-left:0">3 files changed ▾</button></div>` : ""}`;
+          })
+          .join("");
+        return `${ViewHeader("History", "feat/1877-sidebar-workspace-scope", ibtn("filter", "Filter"), "Open commits on GitHub")}
+  <div class="scope"><div class="select"><span>Current branch</span>${I("chevd", 12)}</div><span class="chip neutral">worktree: all</span></div>
+  <div class="scroll">${body}<div style="padding:8px 10px"><button class="btn block">Load more</button></div></div>`;
+      };
+
+      const triad = (ci, rv, mg, open) =>
+        `<div class="triad">${chip(ci[0], ci[1], { icon: ci[2] })}${chip(rv[0], rv[1], { icon: rv[2] })}${chip(mg[0], mg[1], { icon: mg[2] })}</div>`;
+      const triadOpen = (ci, rv, mg, which) =>
+        `<div class="triad">${[
+          ["ci", ci],
+          ["rv", rv],
+          ["mg", mg],
+        ]
+          .map(
+            ([k, v]) =>
+              `<span class="chip ${v[0]}${k === which ? " open" : ""}" style="cursor:pointer">${I(v[2], 11)}${v[1]}</span>`,
+          )
+          .join("")}</div>`;
+      V.prs = (w) => {
+        const failCI = ["danger", "✗1 ✓14", "x"],
+          cmtRv = ["info", "Commented", "msg"],
+          blockMg = ["warn", "Blocked", "clock"];
+        const okCI = ["success", "✓18", "check"],
+          okRv = ["success", "Approved", "check"],
+          okMg = ["success", "Ready", "merge"];
+        const reqRv = ["warn", "Review requested", "clock"],
+          runCI = ["warn", "Running 6/9", "clock"],
+          pendMg = ["neutral", "Waiting", "clock"];
+        const drill = `<div class="drill"><div class="dh">Checks</div>
+    <div class="dr tone-danger">${I("x", 12)}<span class="n" style="color:var(--fg)">CI/CD · test-e2e</span><button class="link">log</button></div>
+    <div class="grp">Passed (14)</div><div class="dr tone-success">${I("check", 12)}<span class="n" style="color:var(--fg)">CI/CD · 13 jobs</span><span class="why">expand</span></div>
+    <div class="dr tone-success">${I("check", 12)}<span class="n" style="color:var(--fg)">CodeQL · 2 jobs</span></div>
+    <div class="dr tone-neutral">${I("clock", 12)}<span class="n">4 skipped</span></div>
+    <div class="grp">Other checks</div><div class="dr tone-success">${I("check", 12)}<span class="n" style="color:var(--fg)">codecov/patch</span></div></div>`;
+        return `${ViewHeader("Pull requests", "mullion-session-manager · 4 open", ibtn("popout", "Pop out to dock panel") + ibtn("fetch", "Refresh"), "Open repository on GitHub")}
+  <div class="scroll">
+  ${Sec(
+    "Pull requests",
+    4,
+    `
+    ${Row(tone("danger", "pr"), "fix(bundle): recover from interrupted sync", `<span class="mono">#1946</span> · fix-bundle-sync-recovery → main · bjoern`, `<span class="tone-info" title="2 unresolved threads">${I("thread", 13)}2</span>`, { extra: triadOpen(failCI, cmtRv, blockMg, "ci") + drill })}
+    ${Row(tone("success", "pr"), "feat(hosts): targeted spawn on child host", `<span class="mono">#1960</span> · child-target-host → main · bjoern`, "", { extra: triad(okCI, okRv, okMg) })}
+    ${Row(tone("warn", "pr"), "chore(files): icon refresh", `<span class="mono">#1961</span> · files-icons-refresh → main · bjoern`, "", { extra: triad(runCI, reqRv, pendMg) })}
+    ${Row(tone("neutral", "pr"), "docs: draft — palette launcher", `<span class="mono">#1962</span> · feat/1879 → main · <span class="chip neutral">Draft</span>`, "", { extra: triad(["neutral", "No CI", "clock"], ["neutral", "No reviews", "clock"], ["neutral", "Draft", "clock"]) })}`,
+  )}
+  ${Sec("Release", 1, `${Row(tone("merged", "merge"), "Release v0.43.0", `<span class="mono">#1955</span> · release-please`, "", { extra: `<div class="btn-row" style="padding:5px 0 0"><button class="btn">${I("play", 11)} Run</button><button class="btn">${I("merge", 11)} Merge</button></div>` })}`)}
+  ${Sec("Default branch CI", null, `${Row(tone("success", "check"), "CI/CD · main", "passing · 3h ago", "")}`, { closed: true })}
+  </div>`;
+      };
+
+      V.pr =
+        () => `${DetailHeader("#1946 · fix(bundle): recover from interrupted sync", "main ← fix-bundle-sync-recovery", ibtn("fetch", "Refresh"), "Open PR #1946 on GitHub")}
+  <div class="scroll">
+  <div class="card"><div class="ch">Status</div>
+    <div class="statusrow"><span class="l tone-danger">${I("x", 14)}</span><div class="b"><b>Checks · 1 failing</b><span>✓14 passed · ✗1 failed · 4 skipped</span></div>${I("chevr", 12)}</div>
+    <div class="statusrow"><span class="l tone-info">${I("msg", 14)}</span><div class="b"><b>Reviews · Commented</b><span>hermes-bot commented · 2 unresolved threads</span></div>${I("chevr", 12)}</div>
+    <div class="statusrow"><span class="l tone-warn">${I("clock", 14)}</span><div class="b"><b>Merge · Blocked</b><span>CI failing — test-e2e</span></div></div>
+  </div>
+  <div class="drill" style="margin:0 10px 8px"><div class="dh">Reviews</div>
+    <div class="dr">${tone("info", "msg", 12)}<span class="n">hermes-bot</span>${chip("info", "Commented")}</div>
+    <div class="dr">${tone("neutral", "clock", 12)}<span class="n">relay · Review posted on abc1234</span>${chip("neutral", "relay")}</div>
+    <div class="dr">${tone("warn", "clock", 12)}<span class="n">bjoern</span>${chip("warn", "Requested")}</div></div>
+  <div class="prose"><p>Recovers the bundle sync after an interrupted transfer. Part of <a style="color:var(--accent)">#1951</a>…</p><p class="fade"><button class="link" style="padding:0">Read more</button></p></div>
+  ${Sec("Changes", null, `<div class="prose"><span class="ahead">+831</span> <span class="behind">−22</span> · 16 files · 1 commit</div>`)}
+  ${Sec(
+    "Conversation",
+    3,
+    `
+    <div class="comment"><div class="h">${I("msg", 12)}<b>hermes-bot</b> reviewed · 12m</div><div class="c">Looks right overall. One nit on the retry backoff…</div></div>
+    <div class="comment"><div class="h">${I("thread", 12)}<b>2 unresolved</b> on src/services/bundle-sync.ts</div></div>`,
+    { action: `<button class="link">Hand off to session</button>` },
+  )}
+  </div>
+  <div class="sticky-actions"><button class="btn primary" disabled style="opacity:.45">${I("merge", 12)} Squash and merge</button><button class="btn">Request re-review</button><button class="btn">${I("play", 12)} Hand off</button></div>`;
+
+      const issueRow = (st, title, num, who, age, labels, c, extra) =>
+        Row(
+          tone(st === "done" ? "merged" : "success", st === "done" ? "issueDone" : "issue"),
+          title,
+          `<span class="mono">#${num}</span> · ${who} · ${age}`,
+          c
+            ? `<span class="tone-neutral" style="display:flex;gap:2px;align-items:center">${I("msg", 12)}${c}</span>`
+            : "",
+          { extra: `<div class="triad" style="margin-top:4px">${labels}${extra || ""}</div>` },
+        );
+      const lbl = (c, t) =>
+        `<span class="chip" style="color:${c};border-color:color-mix(in srgb,${c} 40%,var(--sidebar));background:color-mix(in srgb,${c} 13%,var(--sidebar))">${t}</span>`;
+      V.issues =
+        () => `${ViewHeader("Issues", "mullion-session-manager · 61 open", ibtn("fetch", "Refresh"), "Open repository on GitHub")}
+  <div class="search">${I("search", 13)}<span>Search issues…</span></div>
+  <div class="btn-row" style="padding-top:0"><span class="chip neutral">Sort: Updated ▾</span><span class="chip neutral">Unassigned</span><span class="chip info">label: bug ×</span></div>
+  <div class="scroll">
+  ${issueRow("open", "Git/GitHub sidebar overhaul (epic)", 1965, "bjoern", "1h", lbl("var(--g)", "enhancement") + lbl("var(--b)", "frontend"), 11)}
+  ${issueRow("open", "fix: 40x10 server minimum terminal grid shrinks font on landscape phones", 1388, "ansible", "3w", lbl("var(--r)", "bug"), 4, chip("info", "Task Master"))}
+  ${issueRow("open", "feat(github): cached client data layer with prefetch (A5)", 1970, "bjoern", "1h", lbl("var(--g)", "enhancement") + lbl("var(--b)", "frontend"), 0)}
+  ${issueRow("done", "chore: bump dockview", 1830, "bjoern", "2d", lbl("var(--muted)", "dependencies"), 2)}
+  <div style="padding:8px 10px"><button class="btn block">Load more</button></div></div>`;
+
+      V.issue =
+        () => `${DetailHeader("#1388 · 40x10 server minimum grid shrinks the font on landscape phones", "Open · bjoern · 3w ago", "", "Open issue #1388 on GitHub")}
+  <div class="scroll">
+  <div class="btn-row"><button class="btn primary">${I("play", 12)} Start session</button><button class="btn">Queue for Task Master</button></div>
+  <div class="triad" style="padding:0 10px">${lbl("var(--r)", "bug")}${chip("info", "Task Master")}</div>
+  <div class="prose"><p>With the soft keyboard open on a landscape phone the server clamps the PTY to 40×10, so xterm scales the font down until it is unreadable…</p></div>
+  ${Sec(
+    "Comments",
+    4,
+    `
+    <div class="comment"><div class="h"><b>ansible</b> · 2w</div><div class="c">Reproduced on Pixel 8, Chrome 141.</div></div>
+    <div class="comment"><div class="h"><b>bjoern</b> · 2w</div><div class="c">Likely the <span class="mono">minCols</span> clamp in pty-manager.</div></div>`,
+  )}
+  </div>`;
+
+      V.kit = () => {
+        const sw = (names) =>
+          `<div class="sw">${names.map((n) => `<div><i style="background:var(--${n})"></i>${n.replace("status-", "").replace("-bg", " bg").replace("-fg", " fg").replace("-border", " bd")}</div>`).join("")}</div>`;
+        return `<div class="vh"><div class="title">B1 · Kit sheet</div></div><div class="scroll sheet">
+  <h4>StatusChip — one tone vocabulary</h4>
+  <div class="triad">${chip("success", "success")}${chip("danger", "danger")}${chip("warn", "warn")}${chip("info", "info")}${chip("merged", "merged")}${chip("neutral", "neutral")}</div>
+  <h4>Status tokens (fg · bg · border)</h4>
+  ${sw(["status-success-fg", "status-success-bg", "status-success-border", "status-danger-fg", "status-danger-bg", "status-danger-border", "status-warn-fg", "status-warn-bg", "status-warn-border", "status-info-fg", "status-info-bg", "status-info-border", "status-merged-fg", "status-merged-bg", "status-merged-border"])}
+  <h4>Surface &amp; border (was ~1.1:1)</h4>
+  ${sw(["sidebar", "surface", "surface-hover", "pane-hd", "border", "border-soft", "accent"])}
+  <h4>Lanes</h4>${sw(["lane-1", "lane-2", "lane-3", "lane-4", "lane-5", "lane-6", "lane-more"])}
+  <h4>Button</h4><div class="btn-row" style="padding:0"><button class="btn primary">Primary</button><button class="btn">Secondary</button><button class="btn danger">Danger</button><button class="btn ghost">Ghost</button></div>
+  <h4>IconButton (right cluster; open-on-GitHub always last)</h4><div class="vh" style="border:1px solid var(--border);border-radius:8px"><div class="title">Any view</div><div class="actions">${ibtn("fetch", "Contextual")}${ibtn("pull", "Contextual")}<span class="sep"></span>${ibtn("gh", "Open on GitHub", "ext")}</div></div>
+  <h4>SidebarRow anatomy</h4>${Row(tone("success", "pr"), "leading glyph · title", "meta line · secondary info", chip("success", "trailing chip"), { hover: ibtn("trash", "hover action") })}
+  </div>`;
+      };
+
+      /* ───────── page ───────── */
+      const VIEWS = [
+        [
+          "source",
+          "Source Control (B2)",
+          "Replaces today’s Changes/Branches/Worktrees/History stack. Branches are <b>grouped</b> (Current · With open PR · Merged — can prune · Other); squash-merged branches are recognised. Hover a row for <i>View in History</i> / <i>Delete</i>. The open-on-GitHub icon is always the right-most header icon.",
+          [260, 340],
+        ],
+        [
+          "branch",
+          "Branch detail (B2)",
+          "Drilldown from a branch row. Surfaces the same <b>CI · Review · Merge</b> triad as the PR list, plus unique commits, worktree and task claim. Header icon opens <i>the branch</i> on GitHub.",
+          [340],
+        ],
+        [
+          "prune",
+          "Prune preview (B2/A3)",
+          "Local-only. Every candidate shows <b>why</b> it is considered merged; protected branches (current, worktree, task-claimed, default) are listed with the reason and cannot be selected.",
+          [340],
+        ],
+        [
+          "history",
+          "History (B3)",
+          'Own rail view. One line per commit, graph capped at <b>6 lanes</b> (extra lanes fold into a dimmed “+9” lane), subject always visible. The subject always gets ≥60% of the row; refs are secondary — 340px shows the first ref + “+N”, 260px a ref count (full list in the expanded row). <span class="mono">origin/x</span> and <span class="mono">x</span> collapse into one chip with ✓ when in sync. Default scope: current branch.',
+          [260, 340],
+        ],
+        [
+          "prs",
+          "Pull requests (B4)",
+          "Every PR row carries the <b>status triad</b> — CI · Review · Merge — up front. Click a chip to drill down inline (#1946 shows Checks open: failing first, passed grouped, “Other checks” incl. non-Actions). The comment icon is now a <b>thread</b> icon (unresolved review threads) so it no longer collides with issue comment counts. The “pop-out” icon replaces the misleading external-link glyph.",
+          [260, 340],
+        ],
+        [
+          "pr",
+          "PR detail (B4)",
+          "Header carries the PR’s own <b>open-on-GitHub</b> icon (missing today). STATUS leads (Checks · Reviews · Merge), each expandable; the relay review is folded into Reviews; bot COMMENTED reviews count. Primary actions pinned at the bottom.",
+          [260, 340],
+        ],
+        [
+          "issues",
+          "Issues (B5)",
+          'Same row grammar as PRs: state glyph, title, <span class="mono">#n · author · age</span>, labels as chips, comment count. Filters in one compact bar. Filter/page state survives drill-in and back.',
+          [260, 340],
+        ],
+        [
+          "issue",
+          "Issue detail (B5)",
+          "Same DetailHeader as the PR; the bare “Open on GitHub” link is replaced by the standard top-right icon.",
+          [340],
+        ],
+        [
+          "kit",
+          "Kit sheet (B1)",
+          "The primitives and tokens every view above is built from: <code>ViewHeader</code>, <code>DetailHeader</code>, <code>SidebarSection</code>, <code>SidebarRow</code>, <code>StatusChip</code>, <code>StatusTriad</code>, <code>IconButton</code>, <code>Button</code>. New tokens: <code>--status-*</code>, <code>--surface*</code>, stronger <code>--border</code>, defined <code>--accent</code>, <code>--lane-*</code>.",
+          [340],
+        ],
+      ];
+      let cur = "source";
+      const nav = document.getElementById("nav"),
+        stage = document.getElementById("stage"),
+        note = document.getElementById("note");
+      function render() {
+        nav.innerHTML = VIEWS.map(
+          ([k, l]) => `<button data-k="${k}" aria-pressed="${k === cur}">${l}</button>`,
+        ).join("");
+        const [, label, desc, widths] = VIEWS.find(([k]) => k === cur);
+        note.innerHTML = `<b>${label}</b> — ${desc}`;
+        stage.innerHTML = ["dark", "light"]
+          .map((th) =>
+            widths
+              .map(
+                (w) =>
+                  `<div class="col"><h3>${th} · ${w}px</h3><div class="frame w${w} t-${th}">${V[cur](w)}</div></div>`,
+              )
+              .join(""),
+          )
+          .join("");
+      }
+      nav.addEventListener("click", (e) => {
+        const b = e.target.closest("button");
+        if (b) {
+          cur = b.dataset.k;
+          location.hash = cur;
+          render();
+        }
+      });
+      if (location.hash.slice(1) && V[location.hash.slice(1)]) cur = location.hash.slice(1);
+      render();
+    </script>
+  </body>
+</html>
