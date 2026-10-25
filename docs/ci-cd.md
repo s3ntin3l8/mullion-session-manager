@@ -239,40 +239,39 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
-### A PR that falls behind `main` cannot merge (`strict: true`)
+### PRs are not required to be up to date with `main` (`strict: false`)
 
-`required_status_checks.strict` is **on**, and stays on (#1907). It means a
-PR's head branch must contain `main`'s current tip, with the required checks
-green **on that head SHA**. `pull_request` workflows fire on
-`opened`/`synchronize`/`reopened`, not when the base advances, so a PR that
-is merely _behind_ keeps its green checks but stops being mergeable. The
-merge endpoint then refuses with
-`405 {"message":"5 of 5 required status checks are expected."}` — which names
-neither the cause nor the remedy. (Dependabot only rebases a PR it detects a
-change for, e.g. one in _conflict_; a PR that is only behind is left alone.)
+`required_status_checks.strict` is **off** (#1907). A PR does not have to
+contain `main`'s current tip to merge, so it does not need a rebase — and a
+rebase is what re-triggers the pull-request workflows. With `strict` on, every
+push to `main` bounced every open PR through another full CI cycle (~10 min),
+and a PR that merely fell behind was refused with the unhelpful
+`405 {"message":"5 of 5 required status checks are expected."}`: its checks
+were green, but on a head that no longer contained `main`'s tip.
 
-**Remedy:** push to the branch, then wait for a fresh CI cycle (~10 min):
+The merge queue is the native fix and is **not available here**: it is only
+offered on organization-owned repositories, and this one is owned by a user
+account. The same choice was made for runway.
 
-```bash
-gh pr update-branch <pr>        # or "Update branch" in the UI; @dependabot rebase for its PRs
-```
+What the up-to-date rule was standing in for is covered later, in two layers:
 
-Why it is not "fixed" further:
+- **The required checks run again on the push to `main`** — `ci-cd.yml` and
+  `codeql.yml` both have a `push` trigger, and `cancel-in-progress` is
+  restricted to `pull_request`, so every merge gets a recorded verdict. The
+  difference from `strict` is _when_ (after the merge, not before) and _who_
+  (whoever picks up a red `main`, not the author whose PR was bounced).
+- **Releases are cut separately.** release-please opens a release PR
+  against current `main`, and that PR needs the maintainer's approval to run
+  its workflows (see "By design, not a gap"), so a broken `main` does not
+  ship.
 
-- **Don't relax `strict`.** It is what guarantees the tree that lands is one
-  CI verified. #1871 was behind a `main` commit that rewrote
-  `scripts/check-patch-coverage.mjs` itself; with strict off that interaction
-  would have landed unverified.
-- **A scheduled "re-run stale PR CI" job does not help.** A re-run leaves the
-  head SHA unchanged, so the PR is still _behind_ and still unmergeable. And
-  an update pushed with `GITHUB_TOKEN` does not trigger workflows, leaving the
-  new head with no checks at all. The push must come from a user/App token.
-- **No merge queue.** The repository is owned by a user account, and merge
-  queues are only available on organization-owned repositories.
-- Task Master's merge sweep already handles this: on `mergeable_state:
-"behind"` it calls `updatePullRequestBranch` and retries on the next tick
-  (`src/services/task-reconciler.ts`). Only manual, agent and Dependabot
-  merges need the remedy above.
+The cost to know about: a broken `main` turns every open PR's CI red, so **if
+CI is red on something your diff doesn't touch, check `main`'s latest push
+run before "fixing" it.** If `strict` is ever turned back on, a behind PR is
+refreshed with `gh pr update-branch <pr>` (a push made with `GITHUB_TOKEN`
+triggers no workflows, so it must be a user/App token), and Task Master's
+merge sweep already does this on `mergeable_state: "behind"`
+(`src/services/task-reconciler.ts`).
 
 **Issue #1360 — this same lookup is a silent no-op for Task Master's own
 CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
