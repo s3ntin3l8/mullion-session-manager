@@ -136,6 +136,58 @@
   flex: 1;
 }
 
+/* Issue #1891 — blocked tasks are otherwise only on the board, behind the
+   "Blocked only" toggle. The word "blocked" is the signal; the colour is
+   extra. Sits with the Tasks entry, outside the board itself. */
+.sidebar-blocked-tasks {
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+  padding: 4px 0 6px;
+}
+.sidebar-blocked-tasks-heading {
+  margin: 0;
+  padding: 4px 12px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.sidebar-blocked-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-blocked-task:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.sidebar-blocked-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-blocked-task-state {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--y);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+
 /* Device lifecycle controls (Start/Stop on the sidebar's own device rows).
    `.device-row-actions` is `.workspace-item-actions` (styles/sidebar.css)
    transplanted next to the row class it actually decorates: same 22x22

@@ -894,6 +894,7 @@ export function App() {
     onOpenSkills,
     onOpenBrowser,
     onOpenTasks,
+    onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
     onOpenDevice,
@@ -1500,6 +1501,7 @@ export function App() {
       onOpenProjectLauncher={openProjectLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
       onOpenTasks={onOpenTasks}
+      onOpenTask={onOpenTask}
       onOpenGit={onOpenGit}
       onOpenProjectSetup={onOpenProjectSetup}
       onOpenDevice={onOpenDevice}
