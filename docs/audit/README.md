@@ -7,9 +7,20 @@ evidence is local. Structure, naming and rules: the `audit` skill
 ## This repo
 
 - **Scope token:** `frontend` (the React UI in `frontend/`).
-- **Capture:** `node <audit skill>/scripts/capture.mjs <slug>` from the repo root, which
-  starts an isolated demo (`make demo`) and reads [`capture.json`](capture.json).
-  Captures go to `docs/audit/assets/<slug>/`, which is gitignored.
+- **Capture:** from the repo root, with a checkout of
+  [`ai-agent-skills`](https://github.com/s3ntin3l8/ai-agent-skills) (the `audit` plugin):
+
+  ```bash
+  node <path to ai-agent-skills>/plugins/audit/skills/audit/scripts/capture.mjs <slug>
+  ```
+
+  It starts an isolated demo (`make demo`) and reads `docs/audit/capture.<slug>.json` if
+  present, else [`capture.json`](capture.json), the repo's usual config. An audit whose routes
+  or ports differ adds its own `capture.<slug>.json` instead of editing the shared one.
+  Captures go to `docs/audit/assets/<slug>/`, which is gitignored. Record the
+  `ai-agent-skills` commit you ran in the report's Evidence section, so the capture can be
+  reproduced after the script changes.
+
 - **Capture limit:** the app is one workspace URL, so the script captures its landing
   state (the seeded shell), not views that need clicking through. For populated views use
   `make screenshots`, which drives the seeded sessions, or extend the capture script
