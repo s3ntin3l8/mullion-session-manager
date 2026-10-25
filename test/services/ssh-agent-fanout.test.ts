@@ -530,15 +530,12 @@ describe("pickBridge", () => {
       // The cast is the POINT of the test, not a shortcut around it: a
       // double that supplied 0 by default would silently delete the
       // coverage this test exists to give.
-      app.connectedBridges.set(
-        "bridge-no-priority",
-        {
-          socket: {} as unknown as ConnectedBridge["socket"],
-          mux: {} as unknown as ConnectedBridge["mux"],
-          connectedAt: 1,
-          lastPongAt: now,
-        } as unknown as ConnectedBridge,
-      );
+      app.connectedBridges.set("bridge-no-priority", {
+        socket: {} as unknown as ConnectedBridge["socket"],
+        mux: {} as unknown as ConnectedBridge["mux"],
+        connectedAt: 1,
+        lastPongAt: now,
+      } as unknown as ConnectedBridge);
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-no-priority");
