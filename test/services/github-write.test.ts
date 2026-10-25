@@ -11,6 +11,8 @@ import {
   findMergedPullRequestByHead,
   getPullRequestByNumber,
   listPullRequestReviews,
+  listReviewMarkers,
+  getCommitInfo,
   MAX_REVIEW_BODY_CHARS,
   listIssueComments,
   MAX_ISSUE_COMMENT_CHARS,
@@ -213,6 +215,99 @@ describe("github-write service", () => {
         }),
       }),
     );
+  });
+
+  describe("listReviewMarkers (s3ntin3l8/.github#129)", () => {
+    const run = (over: Record<string, unknown> = {}) => ({
+      databaseId: 10,
+      name: "Hermes review",
+      conclusion: "SUCCESS",
+      startedAt: "2026-01-01T12:00:00Z",
+      ...over,
+    });
+    const answer = (commits: Array<{ oid: string; runs: unknown[] }>) =>
+      jsonResponse(200, {
+        data: {
+          repository: {
+            pullRequest: {
+              commits: {
+                nodes: commits.map((c) => ({
+                  commit: {
+                    oid: c.oid,
+                    checkSuites: { nodes: [{ checkRuns: { nodes: c.runs } }] },
+                  },
+                })),
+              },
+            },
+          },
+        },
+      });
+
+    it("returns the finished markers with the commit each sits on", async () => {
+      fetchMock.mockResolvedValueOnce(
+        answer([
+          { oid: "aaa", runs: [run({ databaseId: 10 })] },
+          { oid: "bbb", runs: [run({ databaseId: 20, startedAt: "2026-01-02T00:00:00Z" })] },
+        ]),
+      );
+      expect(await listReviewMarkers("tok", "owner", "repo", 9, "Hermes review")).toEqual([
+        { oid: "aaa", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+        { oid: "bbb", id: 20, startedAt: "2026-01-02T00:00:00Z" },
+      ]);
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+      expect(body.variables).toEqual({
+        owner: "owner",
+        repo: "repo",
+        number: 9,
+        name: "Hermes review",
+      });
+    });
+
+    it("drops runs that reviewed nothing, other checks, and unusable rows", async () => {
+      fetchMock.mockResolvedValueOnce(
+        answer([
+          {
+            oid: "aaa",
+            runs: [
+              run({ conclusion: "CANCELLED" }),
+              run({ conclusion: null }),
+              run({ name: "CI" }),
+              run({ startedAt: null }),
+              run({ databaseId: null }),
+            ],
+          },
+        ]),
+      );
+      expect(await listReviewMarkers("tok", "owner", "repo", 9, "Hermes review")).toEqual([]);
+    });
+
+    it("is empty for a PR GitHub does not return", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: { repository: null } }));
+      expect(await listReviewMarkers("tok", "owner", "repo", 9, "Hermes review")).toEqual([]);
+    });
+  });
+
+  describe("getCommitInfo", () => {
+    it("returns the commit's tree and committer date", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          commit: { tree: { sha: "treeabc" }, committer: { date: "2026-01-01T00:00:00Z" } },
+        }),
+      );
+      expect(await getCommitInfo("tok", "owner", "repo", "abc123")).toEqual({
+        treeSha: "treeabc",
+        committedAt: "2026-01-01T00:00:00Z",
+      });
+      expect(fetchMock.mock.calls[0][0]).toContain("/commits/abc123");
+    });
+
+    it("tolerates a commit with no committer", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { commit: {} }));
+      expect(await getCommitInfo("tok", "owner", "repo", "abc123")).toEqual({
+        treeSha: "",
+        committedAt: "",
+      });
+    });
   });
 
   describe("listPullRequestReviews", () => {

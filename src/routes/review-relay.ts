@@ -12,10 +12,12 @@ import { getStoredSettings } from "../services/settings.js";
 import {
   completeReviewMarkerCheckRun,
   findPullRequestByHead,
+  getCommitInfo,
   getIssueState,
   getPullRequestByNumber,
   listIssueComments,
   listPullRequestReviews,
+  listReviewMarkers,
 } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github-fetch.js";
 import {
@@ -28,6 +30,7 @@ import {
   ReviewCooldownError,
   ReviewInFlightError,
   ReviewSessionRefusedError,
+  REVIEW_MARKER_NAME,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   assertReviewerConfigured,
@@ -661,6 +664,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           repo,
           prNumber,
           getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+          target.markerReadToken ?? target.token,
         );
         const run = await requestHermesReview(app, {
           owner,
@@ -668,6 +672,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           prNumber,
           headSha,
           resolveBase: reader.base,
+          sameContent: reader.sameContent,
           sessionId,
           // Two tokens for the in-flight marker (#1790): any token that can
           // read check runs finds the session the previous round ran in, but
@@ -876,6 +881,7 @@ import {
   findLandedReview,
   isReviewerLogin,
   LANDED_REVIEW_STATES,
+  resolveReviewedCommit,
 } from "../services/relay-review-state.js";
 export { getRelayReviewState, pruneLandedMemo } from "../services/relay-review-state.js";
 export type { RelayReviewState } from "../shared/types.js";
@@ -996,27 +1002,47 @@ export function reviewReader(
    * Empty = any bot's review counts.
    */
   reviewerBotLogin = "",
+  /**
+   * A token that can read check runs (the ledger markers). Without one the
+   * base falls back to the reviews' own `commit_id`, which GitHub re-points
+   * when the branch is rewritten and is therefore only trusted while it
+   * provably predates the review.
+   */
+  ledgerToken?: string,
 ): {
   reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
   base: () => Promise<string>;
+  sameContent: (baseSha: string, headSha: string) => Promise<boolean>;
+  committedAt: (sha: string) => Promise<string>;
 } {
   let cached: Awaited<ReturnType<typeof listPullRequestReviews>> | undefined;
   const reviews = async () => {
     cached ??= await listPullRequestReviews(token, owner, repo, prNumber);
     return cached;
   };
+  const infos = new Map<string, ReturnType<typeof getCommitInfo>>();
+  const commitInfo = (sha: string) => {
+    let info = infos.get(sha);
+    if (!info) {
+      info = getCommitInfo(ledgerToken ?? token, owner, repo, sha);
+      infos.set(sha, info);
+    }
+    return info;
+  };
   return {
     reviews,
     /**
      * The commit the previous review round covered — the base of this round's
-     * delta.
+     * delta (`resolveReviewedCommit`: the ledger first, the reviews'
+     * `commit_id` only while it provably predates the review).
      *
-     * It is the most recent LANDED review by the reviewer bot itself (a
-     * DISMISSED review was retracted, so it did not land). The shared workflow
-     * computes the same value for the same PR, and both put it in the
-     * idempotency key: a request for a range that is already being reviewed
-     * therefore names the same range on both paths, and cannot dispatch it
-     * twice.
+     * Only the reviewer's OWN reviews count. Another bot's review
+     * (claude[bot], Copilot, a Task Master reviewer) landing on the head must
+     * neither make this request a no-op nor become the base of the next
+     * round — that round would then skip everything the reviewer itself has
+     * not looked at yet. The shared workflow applies the same rule (its
+     * `mention-trigger` input plus "[bot]"), and the two must agree or their
+     * idempotency keys diverge and the same range can be dispatched twice.
      *
      * A failure to read the reviews is not fatal: the round simply reviews
      * the whole diff (an empty base), which is what the first round does
@@ -1024,25 +1050,35 @@ export function reviewReader(
      */
     base: async () => {
       try {
-        const landed = (await reviews()).filter(
-          (r) =>
-            r.authorIsBot &&
-            // Only the reviewer's OWN reviews count. Another bot's review
-            // (claude[bot], Copilot, a Task Master reviewer) landing on the
-            // head must neither make this request a no-op nor become the base
-            // of the next round — that round would then skip everything the
-            // reviewer itself has not looked at yet. The shared workflow
-            // applies the same rule (its `mention-trigger` input plus
-            // "[bot]"), and the two must agree or their idempotency keys
-            // diverge and the same range can be dispatched twice.
-            isReviewerLogin(r.author, reviewerBotLogin) &&
-            // A landed review, not merely a non-dismissed one: a PENDING
-            // (draft) review never landed, and using it as the base would
-            // skip part of the diff.
-            LANDED_REVIEW_STATES.has(r.state) &&
-            r.commitId !== "",
-        );
-        return landed.at(-1)?.commitId ?? "";
+        return await resolveReviewedCommit({
+          reviews: await reviews(),
+          reviewerBotLogin,
+          markers: ledgerToken
+            ? () => listReviewMarkers(ledgerToken, owner, repo, prNumber, REVIEW_MARKER_NAME)
+            : undefined,
+          committedAt: async (sha) => (await commitInfo(sha)).committedAt,
+        });
+      } catch {
+        return "";
+      }
+    },
+    /**
+     * Is the head's content what the reviewed commit had? Same commit, or the
+     * same tree (a rebase or a recreated branch that changed nothing). An
+     * unreadable tree is not "the same". The workflow skips on the same test.
+     */
+    sameContent: async (baseSha, headSha) => {
+      if (baseSha === headSha) return true;
+      try {
+        const [a, b] = await Promise.all([commitInfo(baseSha), commitInfo(headSha)]);
+        return a.treeSha !== "" && a.treeSha === b.treeSha;
+      } catch {
+        return false;
+      }
+    },
+    committedAt: async (sha) => {
+      try {
+        return (await commitInfo(sha)).committedAt;
       } catch {
         return "";
       }
@@ -1070,14 +1106,25 @@ export function reviewReader(
  */
 async function existingBotReviewWarning(
   t: Omit<ReviewTarget, "foreign">,
-  reader: { reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>> },
+  reader: {
+    reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
+    committedAt: (sha: string) => Promise<string>;
+  },
 ): Promise<{ warning?: string }> {
   try {
+    // GitHub re-points an approval's commit_id at the PR's current head when
+    // the branch is rewritten (s3ntin3l8/.github#129), so "pinned to this
+    // commit" only means "reviewed this commit" while the commit already
+    // existed when the review was submitted.
+    const headCommittedAt = Date.parse(await reader.committedAt(t.headSha));
     const existing = (await reader.reviews())
       .filter(
         (r) =>
           r.authorIsBot &&
           r.commitId === t.headSha &&
+          (Number.isNaN(headCommittedAt) ||
+            !r.submittedAt ||
+            headCommittedAt <= Date.parse(r.submittedAt)) &&
           // A DISMISSED review was retracted — it did not land, so warning
           // about it would assert the opposite of what happened.
           LANDED_REVIEW_STATES.has(r.state),

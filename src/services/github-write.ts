@@ -889,6 +889,122 @@ export async function listCommitCheckRuns(
 }
 
 /**
+ * A finished "Hermes review" ledger marker on one of a PR's commits.
+ *
+ * The marker sits on the commit the run reviewed and does NOT follow the PR's
+ * head, which makes it the one reliable record of what a review covered:
+ * `pulls/{n}/reviews[].commit_id` is re-pointed at the current head when the
+ * branch tip is rewritten (a force-push, "Update branch" — s3ntin3l8/.github#129).
+ */
+export interface ReviewMarker {
+  /** The commit the run reviewed. */
+  oid: string;
+  /** The check run's id: the highest is the newest dispatch. */
+  id: number;
+  /** When the run started — ISO-8601 UTC. */
+  startedAt: string;
+}
+
+/** How many of a PR's newest commits are searched for markers. */
+const MARKER_COMMIT_WINDOW = 50;
+
+/**
+ * The finished (`SUCCESS`) ledger markers on a PR's last commits. A run that
+ * was stopped or failed reviewed nothing, so it is not returned. The shared
+ * workflow reads the same markers with the same window and the same filter
+ * (`hermes-review.yml`, "Resolve review scope") — the two must agree, since
+ * the delta base they derive goes into one idempotency key.
+ */
+export async function listReviewMarkers(
+  token: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  markerName: string,
+): Promise<ReviewMarker[]> {
+  const data = await githubGraphQL<{
+    repository: {
+      pullRequest: {
+        commits: {
+          nodes: Array<{
+            commit: {
+              oid: string;
+              checkSuites: {
+                nodes: Array<{
+                  checkRuns: {
+                    nodes: Array<{
+                      databaseId: number | null;
+                      name: string;
+                      conclusion: string | null;
+                      startedAt: string | null;
+                    }>;
+                  };
+                }>;
+              };
+            };
+          }>;
+        };
+      } | null;
+    } | null;
+  }>(
+    token,
+    `query($owner: String!, $repo: String!, $number: Int!, $name: String!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          commits(last: ${MARKER_COMMIT_WINDOW}) {
+            nodes { commit { oid checkSuites(first: 100) { nodes {
+              checkRuns(first: 20, filterBy: { checkName: $name }) {
+                nodes { databaseId name conclusion startedAt }
+              }
+            } } } }
+          }
+        }
+      }
+    }`,
+    { owner, repo, number: prNumber, name: markerName },
+  );
+  const out: ReviewMarker[] = [];
+  for (const node of data.repository?.pullRequest?.commits.nodes ?? []) {
+    for (const suite of node.commit.checkSuites.nodes) {
+      for (const run of suite.checkRuns.nodes) {
+        if (
+          run.name === markerName &&
+          run.conclusion === "SUCCESS" &&
+          run.databaseId !== null &&
+          run.startedAt
+        ) {
+          out.push({ oid: node.commit.oid, id: run.databaseId, startedAt: run.startedAt });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+export interface CommitInfo {
+  /** The commit's tree: two commits with one tree hold identical content. */
+  treeSha: string;
+  /** When the commit was committed — ISO-8601 UTC; "" when unknown. */
+  committedAt: string;
+}
+
+/** A commit's tree and committer date. */
+export async function getCommitInfo(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<CommitInfo> {
+  const data = await githubRequest<{
+    commit?: { tree?: { sha?: string }; committer?: { date?: string | null } | null };
+  }>(token, owner, repo, "GET", `/commits/${encodeURIComponent(sha)}`);
+  return {
+    treeSha: data.commit?.tree?.sha ?? "",
+    committedAt: data.commit?.committer?.date ?? "",
+  };
+}
+
+/**
  * Writes the in-flight marker: a check run on the reviewed head whose
  * external_id is the Hermes run id, and whose summary records the session the
  * round runs in (so the next round — from either entry point — can continue

@@ -346,6 +346,36 @@ describe("hermes review relay", () => {
       expect(calls("/v1/runs")).toHaveLength(0);
     });
 
+    it("refuses a head whose content is the reviewed commit's, though the SHA differs", async () => {
+      // A rebase or a recreated branch that changed nothing: same tree, new
+      // SHA. The reviewed commit is read from the ledger (s3ntin3l8/.github#129),
+      // so it is not the head even though nothing changed.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await expect(
+        requestHermesReview(app, {
+          ...PR,
+          resolveBase: async () => "reviewed-sha",
+          sameContent: async (base, head) => base === "reviewed-sha" && head === PR.headSha,
+        }),
+      ).rejects.toBeInstanceOf(ReviewAlreadyLandedError);
+      expect(calls("/v1/runs")).toHaveLength(0);
+    });
+
+    it("dispatches when the head's content differs from the reviewed commit's", async () => {
+      // "Update branch" merged code nobody reviewed into the head: the range
+      // is the reviewed commit..head, under the shared idempotency key.
+      applySettingsPatch(app, { reviewRelay: { cooldownMinutes: 0 } });
+      await requestHermesReview(app, {
+        ...PR,
+        resolveBase: async () => "reviewed-sha",
+        sameContent: async () => false,
+      });
+      const [, init] = calls("/v1/runs")[0];
+      expect((init as RequestInit).headers).toMatchObject({
+        "Idempotency-Key": `hermes-review:acme/widgets#7@reviewed-sha..${PR.headSha}`,
+      });
+    });
+
     it("words the in-flight refusal for an issue triage", async () => {
       applySettingsPatch(app, {
         reviewRelay: { triagePromptRepo: "acme/.github", triagePromptPath: "triage.md" },

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { RelayReviewState } from "../shared/types.js";
 import type { PROrWithChecks } from "./github.js";
 import { listPullRequestReviews } from "./github-write.js";
+import type { PullRequestReviewSummary, ReviewMarker } from "./github-write.js";
 import { getReviewRunForPr } from "./hermes-review.js";
 import { getStoredSettings } from "./settings.js";
 
@@ -36,12 +37,76 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
   return reviewerBotLogin === "" || author.toLowerCase() === reviewerBotLogin.toLowerCase();
 }
 
+/**
+ * The commit the last review round demonstrably covered ("R") — the base of
+ * the next round's delta, and the commit whose content decides "nothing new to
+ * review". The shared workflow computes the same value (`hermes-review.yml`,
+ * "Resolve review scope"); both put it in one idempotency key, so the two
+ * must agree.
+ *
+ * It is NOT read from `reviews[].commit_id` alone (s3ntin3l8/.github#129):
+ * GitHub re-points an approval's `commit_id` at the PR's current head when the
+ * branch tip is rewritten (a force-push, "Update branch"), so that field stops
+ * recording what was reviewed. The record that stays put is the ledger — the
+ * "Hermes review" check run sits on the commit it reviewed. So R is:
+ *
+ *  1. the commit of the newest ledger marker that ended SUCCESS and is PAIRED
+ *     with a landed review by the reviewer submitted at or after the run
+ *     started (a run can complete without posting a review, and dismissing the
+ *     review retracts the pairing); else
+ *  2. the last landed review's `commit_id`, but only while that commit is not
+ *     newer than the review — a newer one was re-pointed, so nothing is known
+ *     about what was covered and the round reviews the whole diff ("").
+ *
+ * A failure to read the ledger or a commit is not fatal: it degrades to the
+ * next rule, and ultimately to a full review.
+ */
+export async function resolveReviewedCommit(input: {
+  reviews: PullRequestReviewSummary[];
+  reviewerBotLogin: string;
+  /** The finished ledger markers; omit when there is no token to read them. */
+  markers?: () => Promise<ReviewMarker[]>;
+  /** A commit's committer date (ISO-8601), or "" when unknown. */
+  committedAt: (sha: string) => Promise<string>;
+}): Promise<string> {
+  const landed = input.reviews.filter(
+    (r) =>
+      r.authorIsBot &&
+      isReviewerLogin(r.author, input.reviewerBotLogin) &&
+      // A landed review, not merely a non-dismissed one: a PENDING (draft)
+      // review never landed.
+      LANDED_REVIEW_STATES.has(r.state),
+  );
+  if (input.markers) {
+    try {
+      const submitted = landed.flatMap((r) => (r.submittedAt ? [Date.parse(r.submittedAt)] : []));
+      const paired = (await input.markers())
+        .filter((m) => submitted.some((at) => at >= Date.parse(m.startedAt)))
+        .sort((a, b) => a.id - b.id)
+        .at(-1);
+      if (paired) return paired.oid;
+    } catch {
+      // No ledger answer: fall through to the commit_id rule.
+    }
+  }
+  const last = landed.at(-1);
+  if (!last || last.commitId === "" || !last.submittedAt) return "";
+  try {
+    const committed = Date.parse(await input.committedAt(last.commitId));
+    if (!Number.isNaN(committed) && committed <= Date.parse(last.submittedAt)) {
+      return last.commitId;
+    }
+  } catch {
+    // An unreadable commit is not a trusted one.
+  }
+  return "";
+}
+
 // Best effort: the newest review by the reviewer's own bot account
 // (`reviewRelay.reviewerBotLogin`; empty = any bot, the same rule as
-// `reviewReader().base`) submitted after the run was dispatched and pinned to
-// the commit it was dispatched for. Another bot's review (claude[bot],
-// Copilot, ...) is not the relay's review and must not show as "posted". A
-// GitHub failure must not hide the Hermes status.
+// `reviewReader().base`) submitted after the run was dispatched. Another bot's
+// review (claude[bot], Copilot, ...) is not the relay's review and must not
+// show as "posted". A GitHub failure must not hide the Hermes status.
 export async function findLandedReview(
   app: FastifyInstance,
   token: string,
@@ -49,7 +114,7 @@ export async function findLandedReview(
   record: { dispatchedAt: number; headSha: string } | null,
 ): Promise<LandedReview> {
   if (!record) return { checked: false };
-  const { dispatchedAt, headSha } = record;
+  const { dispatchedAt } = record;
   const { reviewerBotLogin } = getStoredSettings(app.db).reviewRelay;
   try {
     const reviews = await listPullRequestReviews(token, t.owner, t.repo, t.prNumber);
@@ -58,7 +123,11 @@ export async function findLandedReview(
         (r) =>
           r.authorIsBot &&
           isReviewerLogin(r.author, reviewerBotLogin) &&
-          r.commitId === headSha &&
+          // Not pinned to `commitId === headSha`: GitHub re-points an approval's
+          // commit_id at the PR's current head when the branch is rewritten, so
+          // that field no longer says which head the review was for
+          // (s3ntin3l8/.github#129). The review came from this run when it was
+          // submitted after the run was dispatched (below).
           // The same "landed" definition the duplicate-review warning uses
           // (LANDED_REVIEW_STATES) — a DISMISSED review was retracted, so
           // it did not land, and "posted: <author> DISMISSED" would say
@@ -75,8 +144,9 @@ export async function findLandedReview(
         (r) =>
           r.authorIsBot &&
           !isReviewerLogin(r.author, reviewerBotLogin) &&
-          r.commitId === headSha &&
-          LANDED_REVIEW_STATES.has(r.state),
+          LANDED_REVIEW_STATES.has(r.state) &&
+          r.submittedAt &&
+          Date.parse(r.submittedAt) >= dispatchedAt - 60_000,
       );
       if (ignored.length > 0) {
         app.log.warn(

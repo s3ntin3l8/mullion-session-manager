@@ -2381,20 +2381,23 @@ export async function projectsRoute(app: FastifyInstance) {
         // second click replayed that run instead of reviewing anything (and
         // once the agent's own round had used the same key, the two bodies
         // differed and Hermes answered a conflict).
+        const markerTokens = await resolveMarkerTokens(app, ctx.repoRef, ctx.token);
         const reader = reviewReader(
           ctx.token,
           ctx.repoRef.owner,
           ctx.repoRef.repo,
           number,
           getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
+          // The ledger markers are check runs: any token that can read them.
+          markerTokens.markerReadToken ?? ctx.token,
         );
-        const markerTokens = await resolveMarkerTokens(app, ctx.repoRef, ctx.token);
         const run = await requestHermesReview(app, {
           owner: ctx.repoRef.owner,
           repo: ctx.repoRef.repo,
           prNumber: number,
           headSha: detail.headSha,
           resolveBase: reader.base,
+          sameContent: reader.sameContent,
           // The in-flight marker is a check run: it needs a GitHub App token
           // with `checks: write` (no user-token fallback, #1790). Reading the
           // remembered session works with any token.
