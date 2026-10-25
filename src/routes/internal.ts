@@ -2418,13 +2418,21 @@ export async function internalRoutes(app: FastifyInstance) {
 
   // Issue #1951 — the agent-side half of `sessions.wait_for_output`: ONE
   // bounded wait against the local PTY. The primary loops over these
-  // (SessionBackend.waitOutput), so this caps a single call and gives up its
+  // (SessionBackend.waitOutput), so this bounds a single call and gives up its
   // PTY subscription as soon as the request goes away — an agent never holds
   // a listener for an hour on behalf of a primary that has stopped caring.
   app.post<{ Params: { id: string }; Body: WaitOutputBody }>(
     "/internal/sessions/:id/wait-output",
     { ...INTERNAL_RATE_LIMIT, schema: waitOutputSchema },
     async (request, reply) => {
+      // An explicit upper bound on the wait, rejected rather than clamped: the
+      // primary never asks for more than one chunk (SessionBackend.waitOutput
+      // loops), so a longer request is not a legitimate caller, and a timer
+      // length taken from a request body must be visibly bounded.
+      if (request.body.timeoutMs > REMOTE_WAIT_CHUNK_MS) {
+        reply.code(422);
+        return { status: 400, error: `'timeoutMs' exceeds ${REMOTE_WAIT_CHUNK_MS}` };
+      }
       const matcher = compileOutputMatcher(request.body.match, request.body.regex);
       if (!matcher.ok) {
         reply.code(422);
@@ -2436,18 +2444,14 @@ export async function internalRoutes(app: FastifyInstance) {
       const onClose = () => controller.abort();
       request.raw.once("close", onClose);
       try {
-        const result = await waitForOutput(
-          matcher,
-          Math.min(request.body.timeoutMs, REMOTE_WAIT_CHUNK_MS),
-          {
-            signal: controller.signal,
-            onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
-            ...(request.body.afterOffset !== undefined
-              ? { seed: session.getOutputSince(request.body.afterOffset) }
-              : {}),
-            alive: () => session.isAlive,
-          },
-        );
+        const result = await waitForOutput(matcher, request.body.timeoutMs, {
+          signal: controller.signal,
+          onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
+          ...(request.body.afterOffset !== undefined
+            ? { seed: session.getOutputSince(request.body.afterOffset) }
+            : {}),
+          alive: () => session.isAlive,
+        });
         // The requester hung up: nobody to answer.
         if ("aborted" in result) return reply.code(499).send();
         return { ...result, outputOffset: session.outputOffset };

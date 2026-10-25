@@ -4726,16 +4726,25 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
-    it("caps one call at the remote chunk length, however long a wait was asked for", async () => {
+    it("rejects a wait longer than one remote chunk, rather than holding a subscription that long", async () => {
       const app = await buildApp();
       await spawn(app, "9216");
+      const res = await post(app, "9216", { match: "never", regex: false, timeoutMs: 60_001 });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({ status: 400, error: expect.stringMatching(/timeoutMs/) });
+      await app.close();
+    });
+
+    it("accepts a wait of exactly one remote chunk", async () => {
+      const app = await buildApp();
+      await spawn(app, "9218");
       const outputWait = await import("../../src/services/output-wait.js");
       const waitSpy = vi
         .spyOn(outputWait, "waitForOutput")
         .mockResolvedValue({ matched: false, timedOut: true });
       try {
-        const res = await post(app, "9216", { match: "never", regex: false, timeoutMs: 3_600_000 });
-        expect(res.json()).toMatchObject({ matched: false, timedOut: true });
+        const res = await post(app, "9218", { match: "never", regex: false, timeoutMs: 60_000 });
+        expect(res.statusCode).toBe(200);
         expect(waitSpy.mock.calls[0][1]).toBe(60_000);
       } finally {
         waitSpy.mockRestore();
