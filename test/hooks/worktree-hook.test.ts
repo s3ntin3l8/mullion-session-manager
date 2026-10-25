@@ -3,27 +3,23 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gitEnv } from "../../src/services/git-env.js";
 import { createWorktree, removeWorktree, slugify } from "../../src/hooks/worktree-hook.mjs";
 
-// Scrubbed env: never let a hook-supplied GIT_DIR point these at the real checkout.
+// gitEnv() so a hook-supplied GIT_DIR can never point these at the real checkout.
 function git(cwd: string, args: string[]): string {
-  const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith("GIT_")) delete env[key];
-  return execFileSync("git", args, { cwd, encoding: "utf8", env }).trim();
+  return execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() }).trim();
 }
 
 let tmp: string;
 let repo: string;
 
 beforeEach(() => {
-  for (const key of Object.keys(process.env)) if (key.startsWith("GIT_")) delete process.env[key];
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wt-hook-")));
   const origin = path.join(tmp, "origin.git");
   repo = path.join(tmp, "repo");
   git(tmp, ["init", "--bare", "-b", "main", origin]);
   git(tmp, ["clone", origin, repo]);
-  git(repo, ["config", "user.email", "t@example.com"]);
-  git(repo, ["config", "user.name", "t"]);
   fs.writeFileSync(path.join(repo, "a.txt"), "a");
   fs.writeFileSync(path.join(repo, ".gitignore"), ".env\n.wt/\n");
   git(repo, ["add", "."]);

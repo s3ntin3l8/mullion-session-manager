@@ -174,10 +174,15 @@ describe("git child processes scrub the ambient git environment", () => {
   });
 
   // The override lives in three places — the TypeScript source of truth, the
-  // plain-JS twin the scripts use, and the CLI's own copy (it is copied into
+  // plain-JS twin the scripts use, and the CLI's and the worktree hook's own copies (they are copied into
   // dist/ verbatim and cannot import the TypeScript module). They must agree.
   it("defines GIT_NO_AUTO_GC identically everywhere it appears", () => {
-    const sources = ["src/services/git-env.ts", "scripts/git-env.mjs", "src/cli/core.mjs"];
+    const sources = [
+      "src/services/git-env.ts",
+      "scripts/git-env.mjs",
+      "src/cli/core.mjs",
+      "src/hooks/worktree-hook.mjs",
+    ];
     const values = sources.map((file) => {
       const code = readFileSync(path.join(ROOT, file), "utf8");
       const match = /GIT_NO_AUTO_GC\s*=\s*\[([^\]]*)\]/.exec(code);

@@ -18,10 +18,36 @@ import path from "node:path";
 
 const WT_DIR = ".wt";
 
+// Standalone copies of git-env.ts's GIT_NO_AUTO_GC and gitEnv(): this file is
+// copied into dist/hooks verbatim and cannot import the TypeScript module.
+// test/git-env-guard.test.ts checks GIT_NO_AUTO_GC against the others.
+const GIT_NO_AUTO_GC = ["-c", "gc.auto=0"];
+const GIT_ENV_KEYS_TO_STRIP = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_COMMON_DIR",
+  "GIT_PREFIX",
+  "GIT_CONFIG",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_COUNT",
+];
+
+function gitEnv() {
+  const env = { ...process.env };
+  for (const key of GIT_ENV_KEYS_TO_STRIP) delete env[key];
+  env.LC_ALL = "C";
+  return env;
+}
+
 function git(cwd, args, { quiet = false } = {}) {
-  return execFileSync("git", args, {
+  return execFileSync("git", [...GIT_NO_AUTO_GC, ...args], {
     cwd,
     encoding: "utf8",
+    env: gitEnv(),
     stdio: ["ignore", "pipe", quiet ? "ignore" : "inherit"],
   }).trim();
 }
