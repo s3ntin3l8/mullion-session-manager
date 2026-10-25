@@ -551,23 +551,23 @@ _independently of the click's stopped propagation_ — the mouse path stops the
 click, but nothing stops the key event. Without the guard, activating a
 control inside a header with the keyboard would also collapse the section.
 
-One detail the tests would not catch on their own, and the reason the
-"Discover projects" header is **not** simply `role="button"` on the header
-row: `role="button"` makes its descendants presentational (ARIA 1.2), so a
-`<select>` nested inside the button would lose its combobox role and stop
-being exposed as a control at all. The host picker used to be a perfectly
-good combobox there. The toggle is therefore an **inner** element, with the
-picker as its **sibling** inside the header row — so the picker stays a
-combobox, and the header stays a button. The test pins this: the picker
-must not be inside the element carrying `role="button"`.
-
 Two details the tests would not catch on their own. The body renders only
 when the header is expanded, so `aria-controls` may name an id that is
-absent while the header is collapsed — that is the house pattern, the four
-siblings behave the same way, and the tests pin it rather than papering over
-it. And the Source Control body carries its id only in its non-embedded
-form: the embedded form has no header above it, so it leaves the id off
-rather than claim a target nothing points at.
+absent while the header is collapsed — that is the house pattern, the
+sibling disclosure sites behave the same way, and the tests pin it rather
+than papering over it. And the Source Control body carries its id only in
+its non-embedded form: the embedded form has no header above it, so it
+leaves the id off rather than claim a target nothing points at.
+
+And the reason the "Discover projects" header is **not** simply
+`role="button"` on the header row: `role="button"` makes its descendants
+presentational (ARIA 1.2), so a `<select>` nested inside the button would
+lose its combobox role and stop being exposed as a control at all. The host
+picker used to be a perfectly good combobox there. The toggle is therefore
+an **inner** element, with the picker as its **sibling** inside the header
+row — so the picker stays a combobox, and the header stays a button. The
+test pins this: the picker must not be inside the element carrying
+`role="button"`.
 
 ---
 
