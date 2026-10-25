@@ -292,6 +292,12 @@
 .cmd-row-availability.available .cmd-row-availability-dot {
   background: var(--g);
 }
+/* The command's effect cannot be seen on this device (issue #1881) — the
+   Dock on a touch-only or phone-tier device. The dot stays hollow (the
+   filled green one means "available") and the label is muted. */
+.cmd-row-availability.unavailable {
+  color: var(--dim);
+}
 .cmd-row-availability-dot {
   width: 6px;
   height: 6px;

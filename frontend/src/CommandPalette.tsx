@@ -21,6 +21,7 @@ import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { useDockUnavailableReason } from "./lib/useDockUnavailableReason.js";
 import { ModelSelect } from "./settings/ModelPicker.js";
 import {
   commandHasModelFlag,
@@ -106,6 +107,18 @@ function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }
         </span>
         <span className="cmd-row-subtitle">{command.subtitle}</span>
       </span>
+      {command.availability && (
+        // The command's effect cannot be seen on this device (issue #1881).
+        // The label sits beside the title, where there is room for it; the
+        // full reason is for assistive technology and the tooltip, because
+        // the subtitle next to it is ellipsized and would cut a reason off
+        // mid-word.
+        <span className="cmd-row-availability unavailable" title={command.availability.reason}>
+          <span className="cmd-row-availability-dot" />
+          {command.availability.label}
+          <span className="visually-hidden"> — {command.availability.reason}</span>
+        </span>
+      )}
       {command.drillIn && <span className="kbd">›</span>}
       {selected && !command.drillIn && <span className="kbd">↵</span>}
     </button>
@@ -360,6 +373,11 @@ export function CommandPalette({
       effectiveProjectId !== null
         ? (projectUrls[effectiveProjectId] ?? []).filter((u) => u.favorite)
         : [],
+    // The Dock is hidden by tablet.css's `(pointer: coarse)` block AND by
+    // mobile.css's phone-tier block — so the shared predicate asks about
+    // both, and a phone-tier window with a fine pointer is not a case where
+    // the Dock is available (issue #1881).
+    dockUnavailable: useDockUnavailableReason(),
     open: {
       github: onOpenGitHub,
       git: onOpenGit,

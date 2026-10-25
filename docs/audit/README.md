@@ -30,6 +30,6 @@ evidence is local. Structure, naming and rules: the `audit` skill
 
 ## Index
 
-| Audit                                                  | Scope                                                                         | Outcome                                                                                                        |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| [2026-10-frontend-ui-ux.md](2026-10-frontend-ui-ux.md) | Frontend UI/UX: accessibility, interaction feedback, information architecture | 48 findings: 3 blockers, 19 major and 7 minor fixed (#1895, #1897, #1898, #1923, #1926); 19 deferred as issues |
+| Audit                                                  | Scope                                                                         | Outcome                                                                                                               |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [2026-10-frontend-ui-ux.md](2026-10-frontend-ui-ux.md) | Frontend UI/UX: accessibility, interaction feedback, information architecture | 48 findings: 3 blockers, 20 major and 7 minor fixed (#1895, #1897, #1898, #1923, #1926, #1927); 18 deferred as issues |

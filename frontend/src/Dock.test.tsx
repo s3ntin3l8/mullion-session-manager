@@ -172,6 +172,24 @@ describe("Dock", () => {
       expect(document.querySelectorAll(".dock-group")).toHaveLength(0);
       expect(screen.queryByText("mullion")).not.toBeInTheDocument();
     });
+
+    // Issue #1881 — the Dock is hidden by mobile.css's phone-tier rule as
+    // well, and a phone-tier window with a FINE pointer (a narrow window,
+    // or `settings.layoutMode: "phone"`) is hidden by that rule alone. The
+    // gate that keeps an invisible Dock from mounting its monitors has to
+    // cover it too, or the phone tier mounts exactly the DockProjectGroups
+    // the coarse-pointer gate exists to suppress.
+    it("does not mount any DockProjectGroup on the phone layout, even though the outer element still renders", async () => {
+      useDashboardStore.setState({
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "phone" },
+      });
+      useDashboardStore.setState({ projects: [PROJECT, PROJECT_2], sessions: [] });
+      render(<Dock workspaceProjectIds={[1, 2]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      expect(document.querySelector(".dock")).toBeInTheDocument();
+      expect(document.querySelectorAll(".dock-group")).toHaveLength(0);
+      expect(screen.queryByText("mullion")).not.toBeInTheDocument();
+    });
   });
 
   describe("collapse", () => {

@@ -2510,6 +2510,93 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText("Dock")).toBeNull();
   });
 
+  // Issue #1881 — the Dock is hidden by TWO rules: tablet.css's
+  // `(pointer: coarse)` block and mobile.css's phone-tier block. The
+  // palette's Dock command said nothing about either, so a user ran a
+  // command that configures a panel they cannot see, and got no
+  // explanation.
+  describe("the Dock command's availability (issue #1881)", () => {
+    const coarsePointer = () =>
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+
+    // A phone-tier window with a FINE pointer — a narrow window, or
+    // `settings.layoutMode: "phone"` — is hidden by mobile.css's own
+    // phone-tier rule. A predicate that only asked about the pointer would
+    // call the Dock available here.
+    const phoneTier = () =>
+      useDashboardStore.setState({
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "phone" },
+      });
+
+    afterEach(() => {
+      useDashboardStore.setState({
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+    });
+
+    it("says the Dock is hidden under a coarse pointer", async () => {
+      coarsePointer();
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      const label = screen.getByText("Not shown here");
+      expect(label).toHaveClass("cmd-row-availability", "unavailable");
+      expect(label).toHaveAttribute(
+        "title",
+        "the Dock is hidden while touch is the primary pointer",
+      );
+      expect(
+        screen.getByText(/the Dock is hidden while touch is the primary pointer/i),
+      ).toBeInTheDocument();
+    });
+
+    it("says the Dock is hidden on the phone layout", async () => {
+      phoneTier();
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      expect(screen.getByText("Not shown here")).toHaveAttribute(
+        "title",
+        "the Dock is hidden on the phone layout",
+      );
+      expect(screen.getByText(/the Dock is hidden on the phone layout/i)).toBeInTheDocument();
+    });
+
+    // The reason rides in the row's own availability slot, not the
+    // subtitle: the subtitle is ellipsized, and a reason does not survive
+    // being cut off mid-word.
+    it("keeps the subtitle short even when the Dock is unavailable", async () => {
+      coarsePointer();
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      expect(screen.getByText("Edit this project's dock monitors")).toBeTruthy();
+    });
+
+    it("says nothing about the Dock where it can be shown", async () => {
+      const user = userEvent.setup();
+      renderPalette(openers());
+      await user.click(await screen.findByText("Project: mullion"));
+
+      expect(screen.getByText("Edit this project's dock monitors")).toBeTruthy();
+      expect(screen.queryByText("Not shown here")).toBeNull();
+      expect(
+        screen.queryByText(/the Dock is hidden (on the phone layout|while touch)/i),
+      ).toBeNull();
+    });
+  });
+
   it("navigates the sub-list with arrows and Enter", async () => {
     const o = openers();
     const user = userEvent.setup();

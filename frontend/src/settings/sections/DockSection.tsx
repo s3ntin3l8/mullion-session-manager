@@ -1,11 +1,26 @@
 import { useDashboardStore } from "../../store/index.js";
 import { Row, Segmented, Toggle } from "../../ui/primitives.js";
+import { DOCK_UNAVAILABLE } from "../../lib/dockAvailability.js";
+import { useDockUnavailableReason } from "../../lib/useDockUnavailableReason.js";
 
 export function DockSection() {
   const { settings, updateSettings } = useDashboardStore();
   const d = settings.dock;
+  // The Dock is hidden by tablet.css's `(pointer: coarse)` block AND by
+  // mobile.css's phone-tier block, so this asks the shared predicate rather
+  // than testing the pointer alone (issue #1881). The palette's Dock command
+  // says the same thing, from the same source.
+  const unavailable = useDockUnavailableReason();
+  const reason = unavailable ? DOCK_UNAVAILABLE[unavailable].text : null;
   return (
     <>
+      {reason && (
+        <div className="settings-footer-note">
+          {reason.charAt(0).toUpperCase() + reason.slice(1)}, so its Docker services and log panes
+          have nowhere to show. These settings still apply — the preview worktree and dev-server
+          ones work either way.
+        </div>
+      )}
       <Row
         label="Refresh worktree on agent commits"
         desc={

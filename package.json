@@ -23,7 +23,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run -c vitest.e2e.config.ts",
     "test:all": "concurrently -n backend,frontend -c blue,green \"npm:test\" \"npm --prefix frontend run test\"",
-    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:review-protocol-sync && npm run check:ssh-agent-filter-vectors && npm run check:security-antipatterns && npm run check:pre-push-hook-order && npm run check:case-collision && npm run check:token-contrast",
+    "lint": "eslint . && npm run check:env-docs && npm run check:scaffold-region-sync && npm run check:review-protocol-sync && npm run check:ssh-agent-filter-vectors && npm run check:security-antipatterns && npm run check:pre-push-hook-order && npm run check:case-collision && npm run check:token-contrast && npm run check:dock-availability",
     "lint:all": "concurrently -n backend,frontend -c blue,green \"npm:lint\" \"npm --prefix frontend run lint\"",
     "typecheck": "tsc --noEmit && npm run typecheck:test",
     "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
@@ -44,7 +44,8 @@
     "test:patch-coverage": "node scripts/check-patch-coverage.mjs",
     "check:scope-leaks": "tsx scripts/check-scope-leaks.ts",
     "check:case-collision": "node scripts/check-case-collision.mjs",
-    "check:token-contrast": "node scripts/check-token-contrast.mjs"
+    "check:token-contrast": "node scripts/check-token-contrast.mjs",
+    "check:dock-availability": "tsx scripts/check-dock-availability.ts"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.2",

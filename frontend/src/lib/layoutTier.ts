@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import type { LayoutMode, TabletPaneCap } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import type { LayoutTier } from "./layoutTierTypes.js";
+
+// Re-exported so the many `import type { LayoutTier } from "./lib/layoutTier.js"`
+// call sites keep working; the definition itself lives in layoutTierTypes.ts,
+// which has no imports, so a pure consumer can take the type without
+// dragging this module's React and store graph in behind it.
+export type { LayoutTier };
 
 // Single home for tier/breakpoint logic (previously three separate literal
 // copies of "(max-width: 699px)" — panels/registry.tsx, panelUtils.ts,
@@ -57,8 +64,6 @@ export function useCoarsePointer(): boolean {
   }, []);
   return coarse;
 }
-
-export type LayoutTier = "phone" | "tablet" | "desktop";
 
 // "Compact" = phone OR tablet: the tiers where the sidebar is a floating
 // overlay (not docked) and the phone-era navigation affordances (navigator,

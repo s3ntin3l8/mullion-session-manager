@@ -136,4 +136,53 @@ describe("Settings -> Dock", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     expect(useDashboardStore.getState().settings.dock.autoAttachDockerLogs).toBe(true);
   });
+
+  // Issue #1881 — the Dock is hidden by tablet.css's `(pointer: coarse)`
+  // block AND by mobile.css's phone-tier block, but this section offered its
+  // Dock settings with no word about either. The palette's Dock command
+  // says the same thing, from the same source.
+  it("says why the Dock is unavailable under a coarse pointer", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+
+    // The WHOLE note, not just its opening clause: the note promises the
+    // settings still apply, and that second clause is the one a reader
+    // needs to know before turning them off.
+    const note = await screen.findByText(/The Dock is hidden while touch is the primary pointer/);
+    expect(note).toHaveTextContent(
+      "The Dock is hidden while touch is the primary pointer, so its Docker services and " +
+        "log panes have nowhere to show. These settings still apply — the preview worktree " +
+        "and dev-server ones work either way.",
+    );
+  });
+
+  // A phone-tier window with a FINE pointer is hidden by mobile.css's own
+  // phone-tier rule, so the pointer alone is not the predicate.
+  it("says why the Dock is unavailable on the phone layout", async () => {
+    useDashboardStore.setState({
+      settings: { ...useDashboardStore.getState().settings, layoutMode: "phone" },
+    });
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+
+    const note = await screen.findByText(/The Dock is hidden on the phone layout/);
+    expect(note).toHaveTextContent(
+      "The Dock is hidden on the phone layout, so its Docker services and log panes have " +
+        "nowhere to show. These settings still apply — the preview worktree and dev-server " +
+        "ones work either way.",
+    );
+  });
+
+  it("says nothing about the Dock where the Dock can be shown", async () => {
+    render(<Settings onClose={vi.fn()} initialSection="dock" />);
+    expect(await screen.findByText("Refresh worktree on agent commits")).toBeInTheDocument();
+    expect(screen.queryByText(/The Dock is hidden/)).toBeNull();
+  });
 });
