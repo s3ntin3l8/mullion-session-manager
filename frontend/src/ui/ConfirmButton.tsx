@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import { CheckIcon } from "./icons.js";
 
@@ -7,6 +7,18 @@ import { CheckIcon } from "./icons.js";
 // against the app's own dark theme — an in-app "click again to confirm"
 // pattern avoids both. Auto-disarms after a few seconds so a stray second
 // click well after the fact can't fire it by surprise.
+//
+// The arm window is 6 seconds, and the button COUNTS IT DOWN while armed.
+// It used to disarm silently: the button changed appearance, gave no
+// indication of how long the window was, and simply reverted after six
+// seconds. A user who looked away came back to a button that had quietly
+// reset itself and had to start over. The pane-kill path and the kebab
+// menu both showed a "3s / 2s / 1s" countdown all along (see
+// PaneActionsMenu.tsx and KebabMenu.tsx), so this component was the
+// outlier — the countdown now lives here, so every caller gets it.
+const ARM_MS = 6000;
+const ARM_SECONDS = ARM_MS / 1000;
+
 export function ConfirmButton({
   onConfirm,
   title,
@@ -34,20 +46,58 @@ export function ConfirmButton({
   // When set, the armed state shows the check icon plus this text instead of
   // the bare icon, and the button reserves room for the wider of the two
   // labels so arming never changes its width (and so never shifts neighbours
-  // under the cursor — a second click meant for this button can't land on a
-  // sibling that slid into its place).
+  // under the cursor — a second click meant for this button can't land on
+  // a sibling that slid into its place).
   armedLabel?: ReactNode;
   // "neutral" keeps the arm-then-confirm flow without the destructive red
   // styling, for actions that are deliberate but not dangerous.
   variant?: "danger" | "neutral";
 }) {
   const [armed, setArmed] = useState(false);
+  // Ticks 6 -> 5 -> ... -> 1 rather than sitting static for the whole arm
+  // window — a countdown that doesn't move reads as stuck (the same
+  // reasoning as KebabMenu's and PaneActionsMenu's own countdowns).
+  const [secondsLeft, setSecondsLeft] = useState(ARM_SECONDS);
+  // Mirrors secondsLeft so the interval callback can branch on the current
+  // count without reaching into a setState updater — calling setArmed/
+  // clearInterval (side effects) from inside a setSecondsLeft updater
+  // function is impure and can warn under StrictMode.
+  const secondsRef = useRef(ARM_SECONDS);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    if (!armed) return;
-    const timer = setTimeout(() => setArmed(false), 6000);
-    return () => clearTimeout(timer);
-  }, [armed]);
+  const clearCountdown = () => {
+    if (intervalRef.current !== null) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
+  // The timer is cleared on unmount: an armed ConfirmButton that unmounts
+  // (the dialog it lives in closes) must not leave an interval running.
+  useEffect(() => clearCountdown, []);
+
+  const arm = () => {
+    setArmed(true);
+    secondsRef.current = ARM_SECONDS;
+    setSecondsLeft(ARM_SECONDS);
+    clearCountdown();
+    intervalRef.current = setInterval(() => {
+      secondsRef.current -= 1;
+      if (secondsRef.current <= 0) {
+        clearCountdown();
+        setSecondsLeft(ARM_SECONDS);
+        setArmed(false);
+      } else {
+        setSecondsLeft(secondsRef.current);
+      }
+    }, 1000);
+  };
+
+  const disarm = () => {
+    clearCountdown();
+    setSecondsLeft(ARM_SECONDS);
+    setArmed(false);
+  };
 
   return (
     <button
@@ -61,11 +111,14 @@ export function ConfirmButton({
       // caller-supplied warning (e.g. "N child sessions will keep running
       // independently") vanished at the exact moment — the second click —
       // it mattered most. Append the hint instead of discarding the context.
-      title={armed ? `${title} — click again to confirm` : title}
+      // The remaining seconds are in here too: a screen-reader user cannot
+      // see the countdown the button shows visually, and the title is what
+      // they get when they focus it.
+      title={armed ? `${title} — click again to confirm (${secondsLeft}s)` : title}
       onClick={(e: MouseEvent<HTMLButtonElement>) => {
         if (disabled) return;
         if (skipConfirm) {
-          setArmed(false);
+          disarm();
           onConfirm();
           return;
         }
@@ -88,24 +141,37 @@ export function ConfirmButton({
         // so that's what this guards.
         if (!allowDoubleClickConfirm && armed && e.detail > 1) return;
         if (armed) {
-          setArmed(false);
+          disarm();
           onConfirm();
         } else {
-          setArmed(true);
+          arm();
         }
       }}
     >
       {armedLabel ? (
         <>
+          {/* Both states live in one grid cell. The inactive one is
+              `visibility: hidden`, so it still reserves the button's width
+              — arming cannot shift a neighbouring button out from under
+              the cursor — but it contributes nothing to the accessible
+              name. */}
           <span className="confirm-btn-label" aria-hidden={armed || undefined} data-active={!armed}>
             {children}
           </span>
           <span className="confirm-btn-label" aria-hidden={!armed || undefined} data-active={armed}>
             <CheckIcon size={13} /> {armedLabel}
+            <span className="confirm-btn-countdown" aria-hidden="true">
+              {secondsLeft}s
+            </span>
           </span>
         </>
       ) : armed ? (
-        <CheckIcon size={13} />
+        <>
+          <CheckIcon size={13} />
+          <span className="confirm-btn-countdown" aria-hidden="true">
+            {secondsLeft}s
+          </span>
+        </>
       ) : (
         children
       )}

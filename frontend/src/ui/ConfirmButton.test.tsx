@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ConfirmButton } from "./ConfirmButton.js";
 
@@ -150,5 +150,111 @@ describe("ui/ConfirmButton", () => {
     expect(screen.getByText("Clean")).toBeInTheDocument();
     await user.click(button);
     expect(onConfirm).toHaveBeenCalledOnce();
+  });
+});
+
+// Audit finding 32 — ConfirmButton disarmed SILENTLY after six seconds.
+// The button changed appearance, gave no indication of how long the window
+// was, and simply reverted — so a user who looked away came back to a
+// button that had quietly reset itself. The pane-kill path and the kebab
+// menu both counted down all along; this component was the outlier.
+describe("ConfirmButton arm countdown (audit finding 32)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows the seconds remaining while armed", () => {
+    render(
+      <ConfirmButton onConfirm={vi.fn()} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+
+    expect(screen.getByText("6s")).toBeInTheDocument();
+  });
+
+  it("counts down while it stays armed", () => {
+    render(
+      <ConfirmButton onConfirm={vi.fn()} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+    expect(screen.getByText("6s")).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText("5s")).toBeInTheDocument();
+
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("3s")).toBeInTheDocument();
+  });
+
+  it("still disarms itself when the window runs out", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmButton onConfirm={onConfirm} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+    act(() => {
+      vi.advanceTimersByTime(6000);
+    });
+
+    // Disarmed — the countdown is gone, and the button is back to its
+    // un-armed label.
+    expect(screen.queryByText("6s")).toBeNull();
+    expect(screen.getByText("Remove")).toBeInTheDocument();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("puts the remaining seconds in the title, for anyone who cannot see them", () => {
+    render(
+      <ConfirmButton onConfirm={vi.fn()} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+
+    expect(screen.getByRole("button")).toHaveAttribute(
+      "title",
+      expect.stringContaining("click again to confirm (6s)"),
+    );
+  });
+
+  it("counts down alongside a caller-supplied armedLabel", () => {
+    render(
+      <ConfirmButton onConfirm={vi.fn()} title="Remove thing" armedLabel="Click again to remove">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+
+    expect(screen.getByText("Click again to remove")).toBeInTheDocument();
+    expect(screen.getByText("6s")).toBeInTheDocument();
   });
 });

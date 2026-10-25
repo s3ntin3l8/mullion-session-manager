@@ -12,6 +12,7 @@ import {
   StyledList,
   Toggle,
 } from "../../ui/primitives.js";
+import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { GitHubPollingSettings } from "../RuntimeSettings.js";
 import { ReviewRelaySection } from "./ReviewRelaySection.js";
@@ -27,6 +28,11 @@ import { RunwaySection } from "./RunwaySection.js";
 export function IntegrationsSection() {
   const [integration, setIntegration] = useState<GitHubIntegration | null>(null);
   const [loading, setLoading] = useState(true);
+  // Disconnecting revokes the stored credential on the server. Until this
+  // PR it was a single click with no confirmation and no pending state, so
+  // a mis-click revoked it and the button looked idle throughout (audit
+  // finding 17).
+  const [disconnecting, setDisconnecting] = useState(false);
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,12 +65,14 @@ export function IntegrationsSection() {
 
   const disconnect = () => {
     setError(null);
+    setDisconnecting(true);
     void api
       .disconnectGitHub()
       .then(() => api.getGitHubIntegration().then(setIntegration))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
-      });
+      })
+      .finally(() => setDisconnecting(false));
   };
 
   return (
@@ -88,7 +96,17 @@ export function IntegrationsSection() {
           }
           trailing={
             integration?.connected ? (
-              <SecondaryButton onClick={disconnect}>Disconnect</SecondaryButton>
+              // Two clicks, not one: this revokes the credential on the
+              // server, and there is no undo. The title says so, the same
+              // way the bridge revoke and the device delete do (see
+              // BridgesSection.tsx and DevicesSection.tsx).
+              <ConfirmButton
+                title="Disconnect this GitHub account. Issues, pull requests and CI status stop being shown until you connect again."
+                onConfirm={disconnect}
+                disabled={disconnecting}
+              >
+                Disconnect
+              </ConfirmButton>
             ) : undefined
           }
         />
@@ -255,6 +273,11 @@ function GitHubAppSection({
   const [error, setError] = useState<string | null>(null);
   const [rotating, setRotating] = useState(false);
   const [result, setResult] = useState<SetGitHubAppResult | null>(null);
+  // Clearing destroys the App ID and the private key on the server. It used
+  // to be a single click — no confirmation, no pending state — so a
+  // mis-click wiped a configuration that has to be re-entered by hand
+  // (audit finding 16).
+  const [clearing, setClearing] = useState(false);
 
   const formOpen = !githubApp?.configured || rotating;
 
@@ -304,11 +327,13 @@ function GitHubAppSection({
     setRotating(false);
     setAppId("");
     setPrivateKey("");
+    setClearing(true);
     void clearApp()
       .then(onChange)
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
-      });
+      })
+      .finally(() => setClearing(false));
   };
 
   return (
@@ -353,10 +378,19 @@ function GitHubAppSection({
           trailing={
             githubApp?.configured ? (
               <div style={{ display: "flex", gap: 8 }}>
-                <SecondaryButton onClick={startRotate} disabled={rotating}>
+                <SecondaryButton onClick={startRotate} disabled={rotating || clearing}>
                   Rotate key
                 </SecondaryButton>
-                <SecondaryButton onClick={clear}>Clear</SecondaryButton>
+                {/* Two clicks, not one: this destroys the App ID and the
+                    private key, and there is no undo — the form has to be
+                    filled in by hand again. */}
+                <ConfirmButton
+                  title="Clear the GitHub App configuration. The App ID and the private key are deleted from this install, and you have to enter them again."
+                  onConfirm={clear}
+                  disabled={clearing}
+                >
+                  Clear
+                </ConfirmButton>
               </div>
             ) : undefined
           }

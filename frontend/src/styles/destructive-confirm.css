@@ -389,3 +389,11 @@ button.confirm-btn-stable > .confirm-btn-label {
 button.confirm-btn-stable > .confirm-btn-label[data-active="false"] {
   visibility: hidden;
 }
+/* ConfirmButton's arm countdown — the "6s" that ticks down while the button
+   is armed. `tabular-nums` keeps the glyph width constant as the digit
+   changes, so the number does not reflow the button as it counts. */
+.confirm-btn-countdown {
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}

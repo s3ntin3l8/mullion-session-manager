@@ -220,7 +220,11 @@ describe("Settings -> Integrations", () => {
 
     expect(await screen.findByText("octocat")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    // Two clicks now: the first arms, the second confirms. The disconnect
+    // revokes the stored credential on the server and there is no undo, so
+    // it is a ConfirmButton now (audit finding 17).
+    await user.click(screen.getByRole("button", { name: /^Disconnect/ }));
+    await user.click(screen.getByRole("button", { name: /^Disconnect/ }));
 
     await waitFor(() => expect(screen.getByText("Not connected")).toBeInTheDocument());
     expect(fetchMock).toHaveBeenCalledWith(
@@ -331,7 +335,10 @@ describe("Settings -> Integrations", () => {
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
       expect(await within(section()).findByText("App #111")).toBeInTheDocument();
-      await user.click(within(section()).getByRole("button", { name: "Clear" }));
+      // Two clicks now: the first arms, the second confirms. Clearing
+      // destroys the App ID and the private key (audit finding 16).
+      await user.click(within(section()).getByRole("button", { name: /^Clear/ }));
+      await user.click(within(section()).getByRole("button", { name: /^Clear/ }));
 
       expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
@@ -445,7 +452,10 @@ describe("Settings -> Integrations", () => {
       await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
       expect(within(section()).getByPlaceholderText("123456")).toHaveValue("111");
 
-      await user.click(within(section()).getByRole("button", { name: "Clear" }));
+      // Two clicks now: the first arms, the second confirms. Clearing
+      // destroys the App ID and the private key (audit finding 16).
+      await user.click(within(section()).getByRole("button", { name: /^Clear/ }));
+      await user.click(within(section()).getByRole("button", { name: /^Clear/ }));
 
       expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
       // Not left open in "Rotate" mode with the stale appId — the only
@@ -506,7 +516,9 @@ describe("Settings -> Integrations", () => {
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
 
       expect(await within(reviewerSection()).findByText("App #222")).toBeInTheDocument();
-      await user.click(within(reviewerSection()).getByRole("button", { name: "Clear" }));
+      // Two clicks now: the first arms, the second confirms.
+      await user.click(within(reviewerSection()).getByRole("button", { name: /^Clear/ }));
+      await user.click(within(reviewerSection()).getByRole("button", { name: /^Clear/ }));
 
       expect(await within(reviewerSection()).findByText("Not configured")).toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
@@ -547,6 +559,94 @@ describe("Settings -> Integrations", () => {
         await within(reviewerSection()).findByText(/same App id as the primary/),
       ).toBeInTheDocument();
       expect(within(reviewerSection()).getByText("Not configured")).toBeInTheDocument();
+    });
+  });
+
+  // Audit findings 16 and 17 — the two irreversible actions in this section
+  // (revoking the GitHub credential, and destroying the GitHub App's ID and
+  // private key) were single clicks with no confirmation and no pending
+  // state, so a mis-click cost the user a credential or a configuration they
+  // had to re-enter by hand.
+  describe("irreversible actions are confirmed (audit findings 16 and 17)", () => {
+    it("does not disconnect on a single click", async () => {
+      integration = {
+        connected: true,
+        tokenType: "pat",
+        login: "octocat",
+        scopes: ["repo"],
+        connectedAt: "2026-01-01T00:00:00.000Z",
+        deviceFlowAvailable: false,
+        webhookEnabled: false,
+        webhookBaseUrl: "",
+        webhookRegisteredCount: 0,
+        githubApp: { ...NOT_CONFIGURED_APP },
+        reviewerApp: { ...NOT_CONFIGURED_APP },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      expect(await screen.findByText("octocat")).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: /^Disconnect/ }));
+
+      // The credential is still there.
+      expect(screen.getByText("octocat")).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/integrations/github",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("does not clear the GitHub App on a single click", async () => {
+      integration = {
+        ...DISCONNECTED,
+        githubApp: {
+          configured: true,
+          appId: "12345",
+          installationCount: 1,
+          keyFingerprint: "abc123",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      const section = () => screen.getByTestId("github-app-section");
+
+      // The section renders the configured App asynchronously — wait for
+      // it before reaching for the button.
+      expect(await within(section()).findByText(/App #12345/)).toBeInTheDocument();
+
+      await user.click(within(section()).getByRole("button", { name: /^Clear/ }));
+
+      // The App is still configured.
+      expect(within(section()).getByText(/App #12345/)).toBeInTheDocument();
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/integrations/github/app",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("arms the disconnect button, showing that a second click is needed", async () => {
+      integration = {
+        connected: true,
+        tokenType: "pat",
+        login: "octocat",
+        scopes: ["repo"],
+        connectedAt: "2026-01-01T00:00:00.000Z",
+        deviceFlowAvailable: false,
+        webhookEnabled: false,
+        webhookBaseUrl: "",
+        webhookRegisteredCount: 0,
+        githubApp: { ...NOT_CONFIGURED_APP },
+        reviewerApp: { ...NOT_CONFIGURED_APP },
+      };
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      await screen.findByText("octocat");
+
+      const button = screen.getByRole("button", { name: /^Disconnect/ });
+      expect(button).not.toHaveClass("armed");
+      await user.click(button);
+      expect(screen.getByRole("button", { name: /^Disconnect/ })).toHaveClass("armed");
     });
   });
 });
