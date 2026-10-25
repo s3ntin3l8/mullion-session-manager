@@ -5,11 +5,170 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// The TypeScript compiler API, loaded LAZILY and defensively.
+//
+// It is a devDependency of this repo, and this script ships inside the
+// release tarball (scripts/assemble-release-tarball.sh copies scripts/),
+// where devDependencies are NOT installed — a static `import` would make the
+// whole module fail to load there. So the parser is optional, and without
+// it the tool falls back to the line heuristic below.
+//
+// The degradation is in the SAFE direction: the heuristic counts a type
+// declaration's body as executable, so the reported percentage goes DOWN and
+// the gate gets stricter, never looser. Nothing in the release path or in CI
+// runs this script (CI uses Codecov's advisory `codecov/patch` status), so
+// the degraded path is a safety net, not a working configuration.
+const requireFromHere = createRequire(import.meta.url);
+let tsModule;
+let tsLoaded = false;
+function loadTypeScript() {
+  if (!tsLoaded) {
+    tsLoaded = true;
+    try {
+      tsModule = requireFromHere("typescript");
+    } catch {
+      tsModule = null;
+      // Visible on purpose. Without the parser the tool falls back to the
+      // line heuristic, which counts a type declaration's BODY as executable
+      // — the very defect #1899 fixes. An operator running this from the
+      // release tarball (where devDependencies are not installed) must not
+      // get a silently-degraded report and no sign that it happened.
+      console.warn(
+        "check-patch-coverage: the TypeScript parser is not available, so type and " +
+          "interface bodies are counted as executable lines (the pre-#1899 behaviour).",
+      );
+    }
+  }
+  return tsModule;
+}
+
+/** The script kind the TypeScript parser should use for a file name. */
+function scriptKindFor(ts, fileName) {
+  if (/\.(tsx|jsx)$/.test(fileName)) return ts.ScriptKind.TSX;
+  if (/\.(ts|mts|cts)$/.test(fileName)) return ts.ScriptKind.TS;
+  return ts.ScriptKind.JS;
+}
+
+/**
+ * The lines of a source file that hold no executable code.
+ *
+ * The fallback path exists to answer "does this changed file have executable
+ * lines at all?" for a file the coverage provider never loaded — which is
+ * every type-only module, because every import of one is `import type` and is
+ * erased. Guessing that from each line's own first characters (the original
+ * heuristic) counted the BODY of a multi-line type or interface declaration
+ * as executable code, and the continuation lines of a multi-line import with
+ * it: `src/shared/types.ts` reported "0/6 lines uncovered" for six lines of
+ * type declaration and not one executable statement.
+ *
+ * The TypeScript compiler already knows the answer exactly, and it is
+ * already a devDependency of this repo — so the extents come from the AST,
+ * not from a brace counter that a string literal or a regex literal could
+ * fool.
+ *
+ * Marked as non-executable: import declarations (any form — a multi-line
+ * `import { … } from "…"` has continuation lines the heuristic never saw),
+ * type alias declarations, interface declarations, and type-only export
+ * declarations.
+ */
+export function nonExecutableLines(source, fileName) {
+  const lines = new Set();
+  const ts = loadTypeScript();
+  if (!ts) return lines;
+
+  let sourceFile;
+  try {
+    sourceFile = ts.createSourceFile(
+      fileName || "unknown.ts",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKindFor(ts, fileName || ""),
+    );
+  } catch {
+    return lines;
+  }
+
+  const mark = (node) => {
+    const start = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+    const end = sourceFile.getLineAndCharacterOfPosition(node.getEnd()).line + 1;
+    for (let line = start; line <= end; line++) lines.add(line);
+  };
+
+  const visit = (node) => {
+    if (
+      ts.isImportDeclaration(node) ||
+      ts.isImportEqualsDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node) ||
+      ts.isInterfaceDeclaration(node)
+    ) {
+      mark(node);
+    } else if (ts.isExportDeclaration(node) && node.isTypeOnly) {
+      mark(node);
+    } else if ((ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) !== 0) {
+      // An AMBIENT declaration — `declare module "x" { … }`, `declare global
+      // { … }`, `declare const x: T` — has no runtime code at all. Its
+      // header line was the last shape the old heuristic counted as
+      // executable (src/plugins/db.ts's `declare module "fastify"`).
+      mark(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return lines;
+}
+
+/**
+ * Whether a line's OWN text says it holds no executable code.
+ *
+ * This is the original fallback heuristic, kept verbatim: the AST pass only
+ * ADDS to what is skipped, so a line this skips stays skipped.
+ */
+export function isNonExecutableLine(text) {
+  const trimmed = (text ?? "").trim();
+  return (
+    !trimmed ||
+    trimmed.startsWith("//") ||
+    trimmed.startsWith("/*") ||
+    trimmed.startsWith("*") ||
+    trimmed.startsWith("import ") ||
+    trimmed.startsWith("export type ") ||
+    trimmed.startsWith("export interface ") ||
+    trimmed.startsWith("type ") ||
+    trimmed.startsWith("interface ") ||
+    trimmed === "}" ||
+    trimmed === "};" ||
+    trimmed === "})" ||
+    trimmed === "});"
+  );
+}
+
+/**
+ * The changed lines of a file with NO coverage entry that count as executable
+ * (and therefore as uncovered — nothing was measured, so nothing was covered).
+ *
+ * Pure, so it can be tested with a source string instead of a file on disk.
+ */
+export function fallbackExecutableLines(source, fileName, changedLines) {
+  const fileLines = source.split("\n");
+  const declared = nonExecutableLines(source, fileName);
+  const executable = [];
+  for (const lineNo of changedLines) {
+    const lineText = fileLines[lineNo - 1];
+    if (lineText === undefined) continue;
+    if (declared.has(lineNo)) continue;
+    if (isNonExecutableLine(lineText)) continue;
+    executable.push(lineNo);
+  }
+  return executable;
+}
 
 export function resolveBaseRef(explicitRef) {
   const sanitize = (ref) => {
@@ -159,31 +318,14 @@ export function evaluatePatchCoverage(modifiedFiles, coverageData) {
 
     if (!fileCoverage || !fileCoverage.statementMap) {
       // File modified but has no coverage entry at all.
-      // Check for executable lines, skipping imports, types, interfaces, and comments
+      // Check for executable lines, skipping imports, types, interfaces, and
+      // comments — the type/interface extents come from the AST, so a
+      // multi-line declaration's BODY is skipped too, not just its first
+      // line.
       const absPath = path.join(root, relPath);
       if (existsSync(absPath)) {
-        const fileContent = readFileSync(absPath, "utf8").split("\n");
-        for (const lineNo of changedLines) {
-          const lineText = fileContent[lineNo - 1];
-          if (!lineText) continue;
-          const trimmed = lineText.trim();
-          if (
-            !trimmed ||
-            trimmed.startsWith("//") ||
-            trimmed.startsWith("/*") ||
-            trimmed.startsWith("*") ||
-            trimmed.startsWith("import ") ||
-            trimmed.startsWith("export type ") ||
-            trimmed.startsWith("export interface ") ||
-            trimmed.startsWith("type ") ||
-            trimmed.startsWith("interface ") ||
-            trimmed === "}" ||
-            trimmed === "};" ||
-            trimmed === "})" ||
-            trimmed === "});"
-          ) {
-            continue;
-          }
+        const fileContent = readFileSync(absPath, "utf8");
+        for (const lineNo of fallbackExecutableLines(fileContent, relPath, changedLines)) {
           uncoveredLines.add(lineNo);
         }
       }
