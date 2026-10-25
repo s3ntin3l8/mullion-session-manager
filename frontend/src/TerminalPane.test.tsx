@@ -15,6 +15,7 @@ import { MAX_TERMINAL_COLS, MAX_TERMINAL_ROWS } from "./lib/terminalGridSize.js"
 import { api, ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 import type { Session } from "./api/index.js";
+import { makeProject, makeSession as makeStoreSession } from "./test/fixtures.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -2115,6 +2116,92 @@ describe("TerminalPane image paste/upload (issue #68)", () => {
     fireEvent.drop(pane, { dataTransfer: { types: ["Files"], files: [text] } });
     await waitFor(() => expect(api.uploadSessionFile).toHaveBeenCalledWith(1, text, "notes.txt"));
     expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
+  });
+
+  describe("a file dragged from a file tree", () => {
+    const MIME = "application/x-mullion-file";
+    const payload = (over = {}) =>
+      JSON.stringify({
+        projectId: 7,
+        sessionId: null,
+        path: "src/a b.ts",
+        kind: "file",
+        rootCwd: "/work/app",
+        ...over,
+      });
+    const dt = (json: string) => ({
+      types: [MIME],
+      getData: (t: string) => (t === MIME ? json : ""),
+      files: [],
+      items: [],
+    });
+
+    it("types the path relative to the session's directory, backslash-escaped when it needs it", async () => {
+      stubFakeWebSocket(true);
+      const { container } = renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 7, cwd: "/work/app" })],
+        sessions: [makeStoreSession({ id: 1, projectId: 7, cwd: "/work/app/packages/ui" })],
+      });
+      const pane = container.firstElementChild as HTMLElement;
+      fireEvent.dragEnter(pane, { dataTransfer: dt(payload()) });
+      expect(screen.getByText("Drop to insert path")).toBeInTheDocument();
+      fireEvent.drop(pane, { dataTransfer: dt(payload()) });
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("../../src/a\\ b.ts ");
+      expect(screen.queryByText("Drop to insert path")).not.toBeInTheDocument();
+      expect(api.uploadSessionFile).not.toHaveBeenCalled(); // a reference, not an upload
+    });
+
+    it("resolves to the same file in a worktree session's own checkout", async () => {
+      stubFakeWebSocket(true);
+      const { container } = renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 7, cwd: "/work/app" })],
+        sessions: [
+          makeStoreSession({ id: 1, projectId: 7, cwd: "/work/app/.mullion-worktrees/feat" }),
+        ],
+      });
+      fireEvent.drop(container.firstElementChild as HTMLElement, {
+        dataTransfer: dt(payload({ path: "src/a.ts" })),
+      });
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("src/a.ts ");
+    });
+
+    it("types an absolute path for a file from another project", async () => {
+      stubFakeWebSocket(true);
+      const { container } = renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 8, cwd: "/work/other" })],
+        sessions: [makeStoreSession({ id: 1, projectId: 8, cwd: "/work/other" })],
+      });
+      fireEvent.drop(container.firstElementChild as HTMLElement, {
+        dataTransfer: dt(payload({ path: "src/a.ts" })),
+      });
+      expect(getLatestTermInstance().paste).toHaveBeenCalledWith("/work/app/src/a.ts ");
+    });
+
+    it("ignores a malformed payload and does nothing where input affordances are off", async () => {
+      stubFakeWebSocket(true);
+      const { container } = renderPane();
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      const pane = container.firstElementChild as HTMLElement;
+      fireEvent.drop(pane, { dataTransfer: dt("not json") });
+      expect(getLatestTermInstance().paste).not.toHaveBeenCalled();
+    });
+
+    it("is inert on a pane without input affordances (a dock monitor)", async () => {
+      stubFakeWebSocket(true);
+      const { container } = renderPane({ inputAffordances: false });
+      await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+      const pane = container.firstElementChild as HTMLElement;
+      fireEvent.dragEnter(pane, { dataTransfer: dt(payload()) });
+      expect(screen.queryByText("Drop to insert path")).not.toBeInTheDocument();
+      fireEvent.drop(pane, { dataTransfer: dt(payload()) });
+      expect(getLatestTermInstance().paste).not.toHaveBeenCalled();
+    });
   });
 
   it("uploads every file of a multi-file drop and pastes the paths together in drop order", async () => {

@@ -4,7 +4,11 @@ import type { ProjectDirEntry, ProjectFileContent, ProjectSearchListing } from "
 import { CodeEditor } from "./components/CodeEditor.js";
 import { NonTextFileView, type NonTextReason } from "./components/NonTextFileView.js";
 import { useTreeUploads } from "./hooks/useTreeUploads.js";
-import { useUploadDropTarget } from "./hooks/useUploadDropTarget.js";
+import { useTreeDropTarget } from "./hooks/useTreeDropTarget.js";
+import { useFileTreeMutations } from "./hooks/useFileTreeMutations.js";
+import { hasDirtyFileUnder, setFileDirty, useDirtyFilesVersion } from "./lib/dirtyFiles.js";
+import { emitFilePathGone } from "./lib/filePathEvents.js";
+import { endFileDrag, startFileDrag, type FileDragPayload } from "./lib/fileDrag.js";
 import { TreeUploadInputs } from "./ui/TreeUploadInputs.js";
 import { UploadStatus } from "./ui/UploadStatus.js";
 import {
@@ -82,6 +86,12 @@ function FileEditorBody({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { projectId, sessionId } = params;
+  useDirtyFilesVersion(); // re-render when any panel's file gains/loses unsaved edits
+  const rootCwd = useDashboardStore((st) =>
+    sessionId === undefined
+      ? st.projects.find((p) => p.id === projectId)?.cwd
+      : st.sessions.find((x) => x.id === sessionId)?.cwd,
+  );
   const editorOnly = params.mode === "editor";
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
@@ -132,6 +142,14 @@ function FileEditorBody({
     dirtyRef.current = dirty;
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
+  // Tell the other trees (the sidebar's) which file holds unsaved edits, so they
+  // refuse to rename/move/delete it out from under the draft.
+  const openPath = file?.path;
+  useEffect(() => {
+    if (!openPath) return;
+    setFileDirty(projectId, sessionId, openPath, dirty);
+    return () => setFileDirty(projectId, sessionId, openPath, false);
+  }, [projectId, sessionId, openPath, dirty]);
 
   const loadDir = useCallback(
     async (dirPath: string): Promise<boolean> => {
@@ -349,54 +367,101 @@ function FileEditorBody({
     setExpanded((prev) => new Set([...prev].filter((k) => !under(k))));
   }, []);
 
+  const expandedRef = useRef(expanded);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  });
+
+  // Folders whose contents changed: re-list the open ones, and drop the cached
+  // listing of a closed one so expanding it later doesn't show stale rows.
+  const relist = useCallback(
+    (changed: string[]) => {
+      for (const dirPath of changed) {
+        if (dirPath === "" || expandedRef.current.has(dirPath)) void loadDir(dirPath);
+        else
+          setDirs((prev) => {
+            const { [dirPath]: _gone, ...rest } = prev;
+            return rest;
+          });
+      }
+    },
+    [loadDir],
+  );
+  const mutations = useFileTreeMutations({ projectId, sessionId, onChanged: relist });
+
+  // `path` is no longer there (deleted, or renamed/moved away): other editor
+  // panels that were open on it close, and this one reopens the file if it
+  // followed the move.
+  const pathGone = useCallback(
+    (path: string) => {
+      forgetSubtree(path);
+      emitFilePathGone({ projectId, sessionId, path });
+    },
+    [projectId, sessionId, forgetSubtree],
+  );
+  // The open file (text or not) if it is `path` or lies under it.
+  const openFileUnder = useCallback(
+    (path: string): string | null => {
+      const open = file?.path ?? nonText?.path;
+      return open && (open === path || open.startsWith(`${path}/`)) ? open : null;
+    },
+    [file, nonText],
+  );
+
   const handleDelete = useCallback(
     async (entryPath: string) => {
       setTreeError(null);
-      try {
-        await api.deleteProjectPath(projectId, entryPath, sessionId);
-        forgetSubtree(entryPath);
-        await loadDir(parentDir(entryPath));
-        if (file?.path === entryPath || nonText?.path === entryPath) {
-          setFile(null);
-          setDraft("");
-          setNonText(null);
-          setFileNote(`${entryPath} was deleted.`);
-        }
-      } catch (err) {
-        setTreeError(errorMessage(err, "Failed to delete"));
+      const res = await mutations.remove(entryPath);
+      if (!res.ok) {
+        setTreeError(res.error);
+        return;
+      }
+      pathGone(entryPath);
+      if (file?.path === entryPath || nonText?.path === entryPath) {
+        setFile(null);
+        setDraft("");
+        setNonText(null);
+        setFileNote(`${entryPath} was deleted.`);
       }
     },
-    [projectId, sessionId, file, nonText, forgetSubtree, loadDir],
+    [mutations, pathGone, file, nonText],
   );
 
   const handleRename = useCallback(async () => {
     if (!renaming) return;
-    const name = renaming.value.trim();
     const from = renaming.path;
-    if (!name || name === from.split("/").pop()) {
-      setRenaming(null);
-      return;
-    }
-    if (name.includes("/")) {
-      setTreeError("Enter a name, not a path.");
-      return;
-    }
-    const to = joinPath(parentDir(from), name);
     setTreeError(null);
-    try {
-      await api.renameProjectPath(projectId, from, to, sessionId);
-      setRenaming(null);
-      forgetSubtree(from);
-      await loadDir(parentDir(from));
-      // The open file moved with it (itself, or a folder above it): reopen.
-      const open = file?.path ?? nonText?.path;
-      if (open && (open === from || open.startsWith(`${from}/`))) {
-        await openFile(to + open.slice(from.length));
-      }
-    } catch (err) {
-      setTreeError(errorMessage(err, "Failed to rename"));
+    const res = await mutations.rename(from, renaming.value);
+    if (!res.ok) {
+      // An empty/unchanged name just closes the editor; anything else keeps it open.
+      if (res.error) setTreeError(res.error);
+      else setRenaming(null);
+      return;
     }
-  }, [renaming, projectId, sessionId, file, nonText, forgetSubtree, loadDir, openFile]);
+    setRenaming(null);
+    pathGone(from);
+    // The open file moved with it (itself, or a folder above it): reopen.
+    const open = openFileUnder(from);
+    if (open) await openFile(res.to + open.slice(from.length));
+  }, [renaming, mutations, pathGone, openFile, openFileUnder]);
+
+  // A row dragged onto a folder (or the tree background, = the root) moves.
+  const moveInto = useCallback(
+    async (drag: FileDragPayload, toDir: string) => {
+      setTreeError(null);
+      const res = await mutations.move(drag.path, toDir);
+      if (!res.ok) {
+        setTreeError(res.error);
+        return;
+      }
+      pathGone(drag.path);
+      setExpanded((prev) => new Set(prev).add(toDir));
+      const open = openFileUnder(drag.path);
+      if (open) await openFile(res.to + open.slice(drag.path.length));
+      else void loadDir(toDir);
+    },
+    [mutations, pathGone, openFile, loadDir, openFileUnder],
+  );
 
   const expandDir = useCallback(
     (dirPath: string) => {
@@ -416,8 +481,19 @@ function FileEditorBody({
     onTruncated: () =>
       setTreeError("That folder is too large to upload in one go — some files were left out"),
   });
-  const { dropKey, dropProps } = useUploadDropTarget(tree.onUpload, tree.onTruncated);
-
+  const { dropKey, dropProps } = useTreeDropTarget({
+    onUpload: tree.onUpload,
+    onTruncated: tree.onTruncated,
+    move: {
+      tree: { projectId, sessionId: sessionId ?? null },
+      canMove: (drag) => !hasDirtyFileUnder(projectId, sessionId, drag.path),
+      onMove: (drag, toDir) => void moveInto(drag, toDir),
+    },
+    // A drag resting on a closed folder opens it so the target can be reached.
+    onHoverFolder: (dir) => {
+      if (!expandedRef.current.has(dir)) expandDir(dir);
+    },
+  });
   const renderDir = (dirPath: string, depth: number): ReactNode => {
     const dir = dirs[dirPath];
     if (!dir) return null;
@@ -431,10 +507,7 @@ function FileEditorBody({
           const indent = { paddingLeft: 6 + depth * 14 };
           // Renaming/deleting the open file (or a folder above it) while it
           // has unsaved edits would orphan the draft.
-          const affectsDirtyFile =
-            dirty &&
-            file !== null &&
-            (file.path === entryPath || file.path.startsWith(`${entryPath}/`));
+          const affectsDirtyFile = hasDirtyFileUnder(projectId, sessionId, entryPath);
           const isRenaming = renaming?.path === entryPath;
           const mainRow = isRenaming ? (
             <input
@@ -459,7 +532,6 @@ function FileEditorBody({
                 void toggleDir(entryPath);
               }}
               aria-expanded={expanded.has(entryPath)}
-              {...dropProps(entryPath)}
             >
               {expanded.has(entryPath) ? (
                 <ChevronDownIcon size={12} />
@@ -478,7 +550,6 @@ function FileEditorBody({
                 void openFile(entryPath);
               }}
               disabled={unopenable || (dirty && entryPath !== file?.path)}
-              {...dropProps(dirPath)}
               title={
                 unopenable
                   ? "Symlink to outside the project — can't be edited"
@@ -494,7 +565,24 @@ function FileEditorBody({
           );
           return (
             <div key={entryPath}>
-              <div className="file-editor-rowwrap">
+              <div
+                className="file-editor-rowwrap"
+                // The drag source is the row wrapper, not the button inside it:
+                // Firefox won't drag a <button>.
+                draggable={!isRenaming && !unopenable && rootCwd != null}
+                onDragStart={(e) =>
+                  rootCwd != null &&
+                  startFileDrag(e.dataTransfer, {
+                    projectId,
+                    sessionId: sessionId ?? null,
+                    path: entryPath,
+                    kind: isDir ? "dir" : "file",
+                    rootCwd,
+                  })
+                }
+                onDragEnd={endFileDrag}
+                {...(isDir ? dropProps(entryPath, { folder: true }) : dropProps(dirPath))}
+              >
                 {mainRow}
                 {!isRenaming && (
                   <span className="file-editor-row-actions">
@@ -585,7 +673,8 @@ function FileEditorBody({
       {!editorOnly && (
         <div
           className={`agent-rules-panel-list file-editor-tree cmux-scroll${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
-          {...dropProps(selectedDir, ROOT_DROP_KEY)}
+          // uploads go into the selected folder; a dragged row moves to the root
+          {...dropProps(selectedDir, { key: ROOT_DROP_KEY, moveDir: "" })}
         >
           <TreeUploadInputs
             fileRef={tree.fileInputRef}

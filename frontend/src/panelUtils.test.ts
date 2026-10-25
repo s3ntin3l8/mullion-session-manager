@@ -8,6 +8,9 @@ import {
   openTaskDetailPanel,
   openOrFocusProjectPanel,
   openFileEditorPanel,
+  openFileOnlyPanel,
+  closeFilePanelsUnder,
+  filePanelId,
   openExternalFilePanel,
   openProjectHubPanel,
   migrateLegacyProjectPanels,
@@ -2571,6 +2574,88 @@ describe("shouldShowCodexHookTrustBanner (issue #1189)", () => {
         currentVersion: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("filePanelId / openFileOnlyPanel / closeFilePanelsUnder", () => {
+  it("keeps one panel per file per checkout, and no file name can fake the session segment", () => {
+    expect(filePanelId(1, "src/a.ts")).toBe("file-1-src%2Fa.ts");
+    expect(filePanelId(1, "src/a.ts", 5)).toBe("file-1-@5-src%2Fa.ts");
+    // a project file literally named "@5-x" can't collide with session 5's "x"
+    expect(filePanelId(1, "@5-x")).not.toBe(filePanelId(1, "x", 5));
+    expect(filePanelId(1, "s5-x")).not.toBe(filePanelId(1, "x", 5));
+  });
+
+  it("opens an editor-only panel carrying the session root", () => {
+    const api = mockDockviewApi();
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "src/a.ts", 9);
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "file-1-@9-src%2Fa.ts",
+        component: "file-editor",
+        title: "a.ts — project-alpha",
+        params: expect.objectContaining({
+          projectId: 1,
+          path: "src/a.ts",
+          sessionId: 9,
+          mode: "editor",
+        }),
+      }),
+    );
+  });
+
+  it("focuses the existing panel for the same file and checkout instead of opening another", () => {
+    const api = mockDockviewApi();
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "a.ts");
+    const existing = api.getPanel("file-1-a.ts")!;
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "a.ts");
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    // the same path in a worktree is a different file: its own panel
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "a.ts", 9);
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("maximizes a re-focused panel on phone", () => {
+    const api = mockDockviewApi();
+    openFileOnlyPanel(api, 1, PROJECTS, PHONE_LAYOUT, "a.ts");
+    const existing = api.getPanel("file-1-a.ts")!;
+    openFileOnlyPanel(api, 1, PROJECTS, PHONE_LAYOUT, "a.ts");
+    expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
+  });
+
+  it("closes the panel for a path, and for everything under a folder, in that checkout only", () => {
+    const api = mockDockviewApi();
+    for (const [path, sid] of [
+      ["src/a.ts", undefined],
+      ["src/deep/b.ts", undefined],
+      ["src2/c.ts", undefined],
+      ["src/a.ts", 9],
+    ] as const) {
+      openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, path, sid);
+    }
+    openFileOnlyPanel(api, 2, PROJECTS, DESKTOP_LAYOUT, "src/a.ts");
+    closeFilePanelsUnder(api, 1, "src");
+    const closed = (id: string) =>
+      (api.getPanel(id)!.api.close as ReturnType<typeof vi.fn>).mock.calls.length > 0;
+    expect(closed("file-1-src%2Fa.ts")).toBe(true);
+    expect(closed("file-1-src%2Fdeep%2Fb.ts")).toBe(true);
+    expect(closed("file-1-src2%2Fc.ts")).toBe(false); // sibling with the same prefix
+    expect(closed("file-1-@9-src%2Fa.ts")).toBe(false); // the worktree's own copy
+    expect(closed("file-2-src%2Fa.ts")).toBe(false); // another project
+  });
+
+  it("closes exactly one file's panel, and a worktree's when given its session", () => {
+    const api = mockDockviewApi();
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "a.ts", 9);
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "a.ts");
+    closeFilePanelsUnder(api, 1, "a.ts", 9);
+    expect(
+      (api.getPanel("file-1-@9-a.ts")!.api.close as ReturnType<typeof vi.fn>).mock.calls,
+    ).toHaveLength(1);
+    expect(
+      (api.getPanel("file-1-a.ts")!.api.close as ReturnType<typeof vi.fn>).mock.calls,
+    ).toHaveLength(0);
   });
 });
 

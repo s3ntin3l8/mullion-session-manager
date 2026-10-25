@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
+import { useFollowedCheckoutSession } from "../hooks/useFollowedCheckoutSession.js";
 import { SidebarToolbarSlotContext } from "./sidebarToolbarSlot.js";
 import type { RightSidebarActions, RightSidebarView } from "./views.js";
 
@@ -27,6 +28,7 @@ export function RightSidebarPanel({
 }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
+  const checkoutSessionId = useFollowedCheckoutSession(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   return (
     <>
@@ -72,7 +74,7 @@ export function RightSidebarPanel({
           </div>
           <div className="right-sidebar-body cmux-scroll">
             <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
-              <View projectId={projectId} actions={actions} />
+              <View projectId={projectId} checkoutSessionId={checkoutSessionId} actions={actions} />
             </SidebarToolbarSlotContext.Provider>
           </div>
         </>

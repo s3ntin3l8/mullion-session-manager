@@ -958,17 +958,27 @@ export function openFileEditorPanel(
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
 }
 
+/** Stable id of an editor-only file panel. One per file per checkout: the same
+ * path in a session's worktree is a different file from the project's. The
+ * session segment starts with `@`, which encodeURIComponent never leaves bare,
+ * so no file name can be mistaken for it. */
+export function filePanelId(projectId: number, path: string, sessionId?: number): string {
+  return `file-${projectId}-${sessionId === undefined ? "" : `@${sessionId}-`}${encodeURIComponent(path)}`;
+}
+
 /** Opens `path` in an editor-only file panel (no file tree beside it) — one
  * panel per file, so opening the same file again just focuses it. Used by the
- * right sidebar's Files view, whose own tree already is the browser. */
+ * right sidebar's Files view, whose own tree already is the browser. With a
+ * `sessionId` the file is read and written in that session's checkout. */
 export function openFileOnlyPanel(
   api: DockviewApi,
   projectId: number,
   projects: { id: number; name: string | null }[],
   layout: LayoutContext,
   path: string,
+  sessionId?: number,
 ): void {
-  const panelId = `file-${projectId}-${encodeURIComponent(path)}`;
+  const panelId = filePanelId(projectId, path, sessionId);
   const existing = api.getPanel(panelId);
   if (existing) {
     existing.api.setActive();
@@ -981,10 +991,29 @@ export function openFileOnlyPanel(
     id: panelId,
     component: "file-editor",
     title: project ? `${base} — ${project.name}` : base,
-    params: { projectId, path, mode: "editor", rev: nextRev() },
+    params: { projectId, path, sessionId, mode: "editor", rev: nextRev() },
     ...positioningForTier(api, layout),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);
+}
+
+/** Closes the editor-only file panels for `path` (or anything under it, for a
+ * folder) in one checkout — the file was renamed, moved or deleted, so a panel
+ * still pointing at the old path would only fail on its next save. The caller
+ * has already refused the change while any of them held unsaved edits. */
+export function closeFilePanelsUnder(
+  api: DockviewApi,
+  projectId: number,
+  path: string,
+  sessionId?: number,
+): void {
+  const prefix = filePanelId(projectId, "", sessionId);
+  const exact = filePanelId(projectId, path, sessionId);
+  const under = `${filePanelId(projectId, path, sessionId)}${encodeURIComponent("/")}`;
+  for (const panel of [...api.panels]) {
+    if (!panel.id.startsWith(prefix)) continue;
+    if (panel.id === exact || panel.id.startsWith(under)) panel.api.close();
+  }
 }
 
 /** Opens a read-only viewer for a file OUTSIDE the project (an agent's plan
