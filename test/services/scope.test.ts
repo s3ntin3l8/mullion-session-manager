@@ -142,6 +142,10 @@ function backend(prefix?: string) {
   });
 }
 
+// The destructured import above shadows the class name with a plain const,
+// so the INSTANCE type has to be spelled out for the helper below.
+type SystemdScopeBackendInstance = InstanceType<typeof SystemdScopeBackend>;
+
 function spec(overrides: Record<string, unknown> = {}) {
   return {
     id: "1",
@@ -151,7 +155,7 @@ function spec(overrides: Record<string, unknown> = {}) {
     timeoutMs: 5_000,
     label: "master bootstrap",
     ...overrides,
-  } as Parameters<SystemdScopeBackend["start"]>[0];
+  } as Parameters<SystemdScopeBackendInstance["start"]>[0];
 }
 
 beforeEach(() => {

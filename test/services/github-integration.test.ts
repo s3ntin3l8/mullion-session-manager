@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import type * as GithubAppModule from "../../src/services/github-app.js";
 
 const mockGetInstallationToken = vi.hoisted(() => vi.fn());
 const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
@@ -12,7 +13,7 @@ const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
 // mock-erased `undefined`) while still swapping out the two functions this
 // suite drives directly.
 vi.mock("../../src/services/github-app.js", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<typeof GithubAppModule>();
   return {
     ...actual,
     getInstallationToken: mockGetInstallationToken,

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-ui verify-dockview-restore lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-ui verify-dockview-restore lint typecheck typecheck-test format format-check build clean wt check-scope-leaks git-safe git-doctor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -51,8 +51,39 @@ check-scope-leaks: ## Scan crs-session-* systemd scopes for leaks (issue #1137; 
 lint: ## Run linter (backend + frontend)
 	npm run lint:all
 
-typecheck: ## Run type checking (backend + frontend)
+typecheck: ## Run type checking (backend + frontend, incl. the test tree)
 	npm run typecheck:all
+
+# The backend's TEST tree, typechecked — issue #1860.
+#
+# tsconfig.test.json (the main tsconfig.json is untouched, so src/'s own
+# typecheck means exactly what it meant) covers test/**, which the main
+# config never did: it includes only src/**, and vitest strips types
+# without checking them. A dangling type reference in a test file
+# therefore failed SILENTLY.
+#
+# Three settings in it are load-bearing:
+#
+#   types: ["node", "vitest/globals"] — a `types` array REPLACES the
+#     default (every installed @types package), so @types/node has to be
+#     named or the sources lose it; and vitest.config.ts sets
+#     `globals: true`, so the tests use describe/it/afterEach without
+#     importing them.
+#
+#   allowJs (WITHOUT checkJs) — the .mjs modules are typed by INFERENCE
+#     from their own source, which is what turned 30 "could not find a
+#     declaration file" errors and many implicit-anys into errors that are
+#     HONEST. The .mjs sources themselves are not checked: making them
+#     type-clean is a different project.
+#
+#   NO "DOM" lib — the tests want the DOM's RequestInfo, but the DOM lib
+#     would ALSO change RequestInit, BodyInit and ReadableStream for
+#     src/ — and those files are CLEAN under the main config (which has no
+#     DOM lib), so adding it there breaks src/ rather than fixing the
+#     tests. The ONE type the tests are missing is declared in
+#     test/types/dom-shims.d.ts instead (the DOM's own definition).
+typecheck-test: ## Type check the backend's TEST tree alone (issue #1860)
+	npm run typecheck:test
 
 format: ## Format code with Prettier
 	npm run format

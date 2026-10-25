@@ -15,6 +15,11 @@ function ctx(model?: string): HookAdapterContext {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
     model,
   };
 }

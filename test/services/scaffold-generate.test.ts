@@ -558,7 +558,12 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
       .mockResolvedValue({ baseRef: "origin/main", sha: "deadbeef" });
     const turnSpy = vi
       .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
-      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo") });
+      // The remote agent's "ok" result carries `sandboxed` — the field the
+      // remote branch reads to report whether the turn ran sandboxed. The
+      // double omitted it (the production code tolerates a missing field
+      // with `?? false`), so it is stated explicitly here: the remote
+      // host's sandbox capability is not what this test is about.
+      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo"), sandboxed: false });
 
     // A path that genuinely doesn't exist on THIS machine — if
     // generateScaffoldContent's remote branch ever fell through to the

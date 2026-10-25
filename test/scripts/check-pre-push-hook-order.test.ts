@@ -23,7 +23,13 @@ repos:
 
 describe("check-pre-push-hook-order", () => {
   it("parses hook entries in file order", () => {
-    const entries = parseHookEntries(GOOD);
+    // The parser is plain JS, so TypeScript infers its `fields` as `{}` —
+    // it really stores `{ key: value }` string pairs, so state the shape
+    // the parser produces.
+    const entries = parseHookEntries(GOOD) as Array<{
+      id: string;
+      fields: Record<string, string>;
+    }>;
     expect(entries.map((e) => e.id)).toEqual(["npm-test", "npm-test-frontend", "patch-coverage"]);
     expect(entries[0].fields.entry).toBe("npm run test:coverage");
     expect(entries[2].fields["always_run"]).toBe("true");

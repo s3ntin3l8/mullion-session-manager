@@ -64,7 +64,7 @@ async function buildAndListen(env: Record<string, string>) {
   // hooks.sock path. A fresh scratch dir per call, ahead of the caller's own
   // env so an explicit override still wins, keeps every instance isolated
   // regardless of how many this file ends up building.
-  const withSessionsDir = {
+  const withSessionsDir: Record<string, string> = {
     SESSIONS_DIR: path.join(
       os.tmpdir(),
       `multi-host-preview-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,

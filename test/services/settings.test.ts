@@ -709,9 +709,14 @@ describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
     expect(mergeSettings({ tabletPaneCap: 3 }).tabletPaneCap).toBe(3);
     expect(mergeSettings({ tabletPaneCap: 2 }).tabletPaneCap).toBe(2);
 
+    // tabletPaneCap only accepts 2 or 3, so 4 and -1 are deliberately
+    // OUT OF RANGE: sanitizeSettings is the thing under test, and its job
+    // is to repair exactly these values back to 2.
+    // @ts-expect-error -- deliberately invalid tabletPaneCap for the sanitizer
     const dirty = { ...DEFAULT_SETTINGS, tabletPaneCap: 4 } as typeof DEFAULT_SETTINGS;
     expect(sanitizeSettings(dirty).tabletPaneCap).toBe(2);
 
+    // @ts-expect-error -- deliberately invalid tabletPaneCap for the sanitizer
     const negative = { ...DEFAULT_SETTINGS, tabletPaneCap: -1 } as typeof DEFAULT_SETTINGS;
     expect(sanitizeSettings(negative).tabletPaneCap).toBe(2);
   });

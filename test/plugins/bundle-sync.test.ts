@@ -17,7 +17,9 @@ import type * as SettingsModule from "../../src/services/settings.js";
 // instance with a hand-stubbed `app.db`/absent `app.db` (the two shapes
 // primary vs. agent role actually produce — see readInjectMullionBundle's
 // own comment on that fallback) — never the real thing.
-const runBundleSyncExclusiveMock = vi.fn(async () => ({ changed: true }));
+// The double keeps the real signature (`(enabled: boolean) => { changed:
+// boolean }`) so the call below type-checks against it.
+const runBundleSyncExclusiveMock = vi.fn(async (_enabled: boolean) => ({ changed: true }));
 vi.mock("../../src/services/bundle-sync.js", () => ({
   runBundleSyncExclusive: (enabled: boolean) => runBundleSyncExclusiveMock(enabled),
 }));

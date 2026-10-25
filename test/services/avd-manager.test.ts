@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, type Mock } from "vitest";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -76,10 +76,18 @@ function makeFakeChild(): FakeChild {
   return { kill: vi.fn(), exitCode: null, signalCode: null, stdin: { end: vi.fn() } };
 }
 
+/**
+ * The injected dependency AND the spy behind it: the assertions below read
+ * `execFileFn.mock.calls` to see the exact argv the fake was handed, which
+ * the bare `ExecFileFn` type does not expose.
+ */
+type ExecFileMock = ExecFileFn &
+  Mock<(file: string, args: string[], callback: unknown) => FakeChild>;
+
 function fakeExecFileResolving(
   child: FakeChild,
   result: { error?: Error; stdout?: string; stderr?: string } = {},
-): ExecFileFn {
+): ExecFileMock {
   return vi.fn((_file: string, _args: string[], callback: unknown) => {
     queueMicrotask(() =>
       (callback as (error: Error | null, stdout: string, stderr: string) => void)(
@@ -740,7 +748,10 @@ describe("parseSdkManagerList", () => {
       {
         packagePath: "system-images;android-33;default;x86_64",
         apiLevel: "33",
-        tag: "default",
+        // SystemImage's field is `tagDisplay` (the parsed `tag` lives on
+        // AvailableSystemImage) — the installed set is matched by
+        // packagePath, so the display name is only here for shape.
+        tagDisplay: "default",
         abi: "x86_64",
       },
     ];

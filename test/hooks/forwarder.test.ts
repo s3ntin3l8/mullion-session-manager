@@ -94,16 +94,19 @@ function collectLines(server: net.Server, count: number): Promise<string[]> {
  * the child's exit.
  */
 function writeStdinAndClose(child: ChildProcess, stdin: string): void {
+  // The forwarder is always spawned WITH a pipe for stdin, so the stream is
+  // there — Node's ChildProcess type just cannot promise it.
+  const childStdin = child.stdin!;
   // The LISTENER is what suppresses the unhandled EPIPE — not a write
   // callback. A write callback only receives the error as an argument; the
   // stream still emits its 'error' event, and that event is what is fatal
   // when nothing is listening for it.
-  child.stdin.on("error", () => {
+  childStdin.on("error", () => {
     // The child went away before reading stdin. Expected in the "nothing to
     // do" cases; the exit code is what the assertions are about.
   });
-  child.stdin.write(stdin);
-  child.stdin.end();
+  childStdin.write(stdin);
+  childStdin.end();
 }
 
 /** Runs the real forwarder.mjs as a child process with the given argv/env,

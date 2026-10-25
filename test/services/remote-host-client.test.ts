@@ -31,6 +31,11 @@ const {
   overrideDefaultRequestTimeoutForTests,
 } = await import("../../src/services/remote-host-client.js");
 
+// The destructuring above shadows the class names with plain consts, so the
+// INSTANCE types have to be spelled out for the `as` casts below.
+type UnreachableError = InstanceType<typeof HostUnreachableError>;
+type RequestError = InstanceType<typeof HostRequestError>;
+
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
     status,
@@ -1116,7 +1121,7 @@ describe("RemoteHostClient", () => {
     });
     const err = await imdsClient.discover().catch((e) => e);
     expect(err).toBeInstanceOf(HostUnreachableError);
-    expect((err as HostUnreachableError).ssrfBlocked).not.toBeNull();
+    expect((err as UnreachableError).ssrfBlocked).not.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -1128,7 +1133,7 @@ describe("RemoteHostClient", () => {
     expect(err).toBeInstanceOf(HostUnreachableError);
     // An ordinary failure must NOT be reported as a guard block, or the
     // distinction is worthless.
-    expect((err as HostUnreachableError).ssrfBlocked).toBeNull();
+    expect((err as UnreachableError).ssrfBlocked).toBeNull();
   });
 
   it("throws HostUnreachableError (not HostRequestError) on a 5xx response", async () => {
@@ -1143,7 +1148,7 @@ describe("RemoteHostClient", () => {
       .catch((e) => e);
     expect(err).toBeInstanceOf(HostRequestError);
     expect(err).not.toBeInstanceOf(HostUnreachableError);
-    expect((err as HostRequestError).statusCode).toBe(400);
+    expect((err as RequestError).statusCode).toBe(400);
   });
 
   it("returns undefined for a 204 response without attempting to parse a body", async () => {
@@ -1206,7 +1211,7 @@ describe("RemoteHostClient", () => {
       .acknowledgeAttention("1")
       .catch((e) => e);
     expect(err).toBeInstanceOf(HostRequestError);
-    expect((err as HostRequestError).statusCode).toBe(404);
+    expect((err as RequestError).statusCode).toBe(404);
   });
 
   it("bypasses fetch entirely for an empty ids array", async () => {

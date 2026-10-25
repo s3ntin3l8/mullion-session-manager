@@ -42,6 +42,11 @@ describe("agyAdapter.prepareLaunch (issue #253)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
   };
 
   it("returns only a managedInstall — no argv edit (absent a model), no ephemeral files/env", () => {
@@ -73,6 +78,11 @@ describe("mergeAgyHooks (issue #253)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
   });
 
   beforeEach(() => {
@@ -343,6 +353,11 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
   });
 
   beforeEach(() => {
@@ -477,6 +492,11 @@ describe("mergeAgyHooks SessionStart (issue #321)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
   });
 
   beforeEach(() => {
@@ -533,6 +553,11 @@ describe("agyAdapter.prepareLaunch — Mullion tooling bundle install (issue: ma
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
   });
 
   beforeEach(() => {

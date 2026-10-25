@@ -214,13 +214,17 @@ describe("event-history service", () => {
         .returning()
         .all();
 
-      // A kind string unique to this test (not reused by any other `it` in
-      // this file) — the `byKind` query below deliberately has no
-      // `sessionId` filter, so it queries the WHOLE table, which (per this
-      // file's shared-tmpDb, accumulate-across-tests posture, same as
+      // A kind unique to this test (not reused by any other `it` in this
+      // file) — the `byKind` query below deliberately has no `sessionId`
+      // filter, so it queries the WHOLE table, which (per this file's
+      // shared-tmpDb, accumulate-across-tests posture, same as
       // test/routes/settings.test.ts) may also hold rows other tests in
       // this file inserted.
-      const uniqueKind = "history_test_unique_kind_a";
+      //
+      // It has to be one of the kinds NotificationEvent declares (that is
+      // the closed set the app emits, and the type the insert helper
+      // takes) — so it is one this file does not otherwise use.
+      const uniqueKind = "plan_ready" as const;
       insertSessionEvents(app.db, [
         makeEvent({ sessionId: s1.id, seq: 1, kind: uniqueKind }),
         makeEvent({ sessionId: s1.id, seq: 2, kind: "status_change" }),

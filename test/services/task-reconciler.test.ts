@@ -395,6 +395,29 @@ const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 // overrides the one or two fields it cares about (activity /
 // lastTurnEndedAt / outstandingBackgroundTasks), matching the exact
 // precedence deriveSessionStatus documents (session-status.ts).
+/**
+ * The SessionBackend members these fakes never exercise, as inert mocks.
+ * SessionBackend has grown members over time, and a fake that is missing
+ * one no longer IS a SessionBackend — so the doubles carry the whole
+ * interface, and the members a test cares about are set on top.
+ */
+function inertBackendMembers() {
+  return {
+    listSessionProcesses: vi.fn().mockResolvedValue([]),
+    uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+    removeWorktree: vi.fn().mockResolvedValue(false),
+    syncWorktree: vi.fn().mockResolvedValue(false),
+    listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+    deleteBranch: vi.fn().mockResolvedValue({ deleted: false, reason: "not-a-repo" }),
+    removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+    pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
+    readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+    deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+    resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions-dir"),
+    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+  };
+}
+
 function fakeInfo(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     activity: "idle",
@@ -1316,7 +1339,7 @@ describe("reconcileTasks", () => {
       const [session] = app.db
         .select()
         .from(sessions)
-        .where(eq(sessions.id, row.reviewSessionId))
+        .where(eq(sessions.id, row.reviewSessionId!))
         .all();
       expect(session).toMatchObject({ name: `Task #${taskId} · review`, nameLocked: true });
 
@@ -1455,6 +1478,7 @@ describe("reconcileTasks", () => {
 
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const fakeBackend = {
+        ...inertBackendMembers(),
         spawn: vi.fn().mockResolvedValue({}),
         // Keyed by the real worker session id — task-reconciler.ts treats
         // an omitted key as "unknown, skip" (defaultDeriveStatusInfo never
@@ -1549,6 +1573,7 @@ describe("reconcileTasks", () => {
       let capturedInitialPrompt: string | undefined;
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const fakeBackend = {
+        ...inertBackendMembers(),
         spawn: vi.fn().mockImplementation((opts: { initialPrompt?: string }) => {
           capturedInitialPrompt = opts.initialPrompt;
           return Promise.resolve({});
@@ -1645,6 +1670,7 @@ describe("reconcileTasks", () => {
       let capturedInitialPrompt: string | undefined;
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const fakeBackend = {
+        ...inertBackendMembers(),
         spawn: vi.fn().mockImplementation((opts: { initialPrompt?: string }) => {
           capturedInitialPrompt = opts.initialPrompt;
           return Promise.resolve({});
@@ -2327,7 +2353,7 @@ describe("reconcileTasks", () => {
         const rebaseSession = app.db
           .select()
           .from(sessions)
-          .where(eq(sessions.id, row.sessionId))
+          .where(eq(sessions.id, row.sessionId!))
           .all()[0];
         expect(rebaseSession).toMatchObject({
           name: `Task #${taskId} · worker`,
@@ -3634,6 +3660,8 @@ describe("reconcileTasks", () => {
     async function createAutoApproveCandidate(
       app: Awaited<ReturnType<typeof buildApp>>,
       overrides: Partial<{
+        title: string;
+        prTitle: string | null;
         lastReviewVerdict: string | null;
         reviewFindingsIngestedSessionId: number | null;
         prNumber: number | null;
@@ -5621,6 +5649,7 @@ describe("reconcileTasks", () => {
       // rows are inserted directly via app.db rather than through the HTTP
       // API, and resolveBackend is stubbed rather than actually dialing out.
       return {
+        ...inertBackendMembers(),
         spawn: vi.fn().mockResolvedValue({}),
         liveStatus: vi.fn().mockResolvedValue({
           [String(workerSessionId)]: fakeInfo({ lastTurnEndedAt: Date.now() }),
@@ -8349,7 +8378,7 @@ describe("reconcileTasks", () => {
       const app = await buildApp();
       const { task, reviewSessionId } = await createStalledInconclusiveTask(app);
       const sessionsModule = await import("../../src/services/session-lifecycle.js");
-      const killSpy = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(undefined);
+      const killSpy = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(null);
 
       await reconcileTasks(app);
 

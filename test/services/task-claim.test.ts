@@ -7,7 +7,47 @@ import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
+import type { SessionBackend } from "../../src/services/session-backend.js";
 import { eq } from "drizzle-orm";
+
+// `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
+// remote backend has to satisfy all of it — a fake missing members would
+// fail at runtime with a TypeError that reads like a product bug rather
+// than a test-double gap. The members these tests never exercise are inert
+// stubs; the ones they do are passed in as overrides.
+function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend {
+  return {
+    spawn: vi.fn().mockResolvedValue({}),
+    liveStatus: vi.fn().mockResolvedValue({}),
+    liveness: vi.fn().mockResolvedValue({}),
+    terminate: vi.fn().mockResolvedValue(undefined),
+    getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    listSessionProcesses: vi.fn().mockResolvedValue([]),
+    uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+    uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
+    resolveReviewGate: vi.fn().mockResolvedValue(false),
+    acknowledgeAttention: vi.fn().mockResolvedValue(false),
+    createWorktree: vi.fn().mockResolvedValue(null),
+    checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+    removeWorktree: vi.fn().mockResolvedValue(false),
+    syncWorktree: vi.fn().mockResolvedValue(false),
+    resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+    listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+    stashSeed: vi.fn().mockResolvedValue(undefined),
+    resolvePendingPromote: vi.fn().mockResolvedValue(false),
+    removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+    pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+    clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    deleteBranch: vi.fn().mockResolvedValue({ deleted: false, reason: "no-such-branch" }),
+    removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-listed" }),
+    pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
+    readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+    deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+    resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
+    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+    ...overrides,
+  };
+}
 
 // Same fakes as test/routes/tasks.test.ts — claimTask spawns a real
 // session via createSessionRecord, faked so this file exercises the
@@ -335,7 +375,7 @@ describe("claimTask", () => {
 
     const row = getTask(app, task.id);
     const { sessions } = await import("../../src/db/schema.js");
-    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId)).all();
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId!)).all();
     expect(session).toMatchObject({ name: `Task #${task.id} · worker`, nameLocked: true });
 
     fs.rmSync(cwd, { recursive: true, force: true });
@@ -358,7 +398,7 @@ describe("claimTask", () => {
 
     const row = getTask(app, task.id);
     const { sessions } = await import("../../src/db/schema.js");
-    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId)).all();
+    const [session] = app.db.select().from(sessions).where(eq(sessions.id, row.sessionId!)).all();
     // The project's host — where the worker's worktree and its git
     // operations live, and where the spawn was routed.
     expect(session?.hostId).toBe("local");
@@ -432,7 +472,7 @@ describe("claimTask", () => {
       .all();
     const task = insertReadyTask(app, project.id, 168);
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       // Simulates an agent build too old to have `taskIdApplied` in its
       // POST /internal/sessions response — the field was added in PR
       // #966, so a build predating that PR simply never echoes it. The
@@ -466,7 +506,7 @@ describe("claimTask", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
     const warnSpy = vi.spyOn(app.log, "warn");
 
@@ -724,7 +764,8 @@ describe("claimTask", () => {
         branchName: branch,
       });
       expect(leftover).not.toBeNull();
-      fs.writeFileSync(path.join(leftover!.path, "dirty.txt"), "uncommitted from a stuck attempt");
+      if (!leftover?.path) throw new Error("test setup: failed to create worktree");
+      fs.writeFileSync(path.join(leftover.path, "dirty.txt"), "uncommitted from a stuck attempt");
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
@@ -737,7 +778,7 @@ describe("claimTask", () => {
       expect(row.status).toBe("claimed");
       expect(row.sessionId).toBeNull();
       // The dirty leftover is never destroyed — a human needs to resolve it.
-      expect(fs.existsSync(leftover!.path)).toBe(true);
+      expect(fs.existsSync(leftover.path)).toBe(true);
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -822,7 +863,7 @@ describe("claimTask", () => {
       .all();
     const task = insertReadyTask(app, project.id, 66);
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       liveness: vi.fn().mockResolvedValue({}),
@@ -844,7 +885,7 @@ describe("claimTask", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
     // #484 — claimTask's base-ref/SHA resolution goes through host-git.ts,
     // not SessionBackend; a real remote call would need a registered host
@@ -878,7 +919,7 @@ describe("claimTask", () => {
       .all();
     const task = insertReadyTask(app, project.id, 71);
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       liveness: vi.fn().mockResolvedValue({}),
@@ -900,7 +941,7 @@ describe("claimTask", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
     vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
       ok: true,
@@ -937,7 +978,7 @@ describe("claimTask", () => {
       .all();
     const task = insertReadyTask(app, project.id, 72);
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       liveness: vi.fn().mockResolvedValue({}),
@@ -959,7 +1000,7 @@ describe("claimTask", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
     vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
       ok: false,
@@ -992,7 +1033,7 @@ describe("claimTask", () => {
       .all();
     const task = insertReadyTask(app, project.id, 67);
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       // Simulates an agent build too old to have `initialPromptApplied` in
       // its POST /internal/sessions response at all — RemoteHostClient.spawn
       // parses whatever JSON the agent actually returned, which for an old
@@ -1018,7 +1059,7 @@ describe("claimTask", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
     vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
       ok: true,
@@ -1101,7 +1142,7 @@ describe("retryTask (#483)", () => {
     const branchName = deriveTaskBranchName(placeholder);
 
     const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
-    if (!created) throw new Error("test setup: failed to create worktree");
+    if (!created?.path) throw new Error("test setup: failed to create worktree");
     fs.writeFileSync(path.join(created.path, "work.txt"), "real committed work");
     git(created.path, ["add", "-A"]);
     git(created.path, ["commit", "-m", "agent did real work", "--no-verify"]);
@@ -1189,7 +1230,7 @@ describe("retryTask (#483)", () => {
       .returning()
       .all();
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       liveness: vi.fn().mockResolvedValue({}),
@@ -1210,7 +1251,7 @@ describe("retryTask (#483)", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
 
     const outcome = await retryTask(app, task.id);
@@ -1251,7 +1292,7 @@ describe("retryTask (#483)", () => {
       .returning()
       .all();
 
-    const fakeBackend = {
+    const fakeBackend = fakeSessionBackend({
       spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
       liveStatus: vi.fn().mockResolvedValue({}),
       liveness: vi.fn().mockResolvedValue({}),
@@ -1271,7 +1312,7 @@ describe("retryTask (#483)", () => {
       removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
       pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-    };
+    });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
 
     const outcome = await retryTask(app, task.id);

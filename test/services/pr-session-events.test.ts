@@ -18,6 +18,11 @@ const snap = (over: Partial<PrSnapshot> = {}): PrSnapshot => ({
   unresolvedThreads: 0,
   commentCount: 0,
   prPhase: "ci_pending",
+  // The review relay's two fields are part of the snapshot the production
+  // code compares. This double has no relay run, so both are null — which
+  // is what snapshotPr() produces for a PR without one.
+  relayState: null,
+  relayVerdict: null,
   ...over,
 });
 const meta = { number: 7, title: "Add x", url: "https://example.test/pull/7" };

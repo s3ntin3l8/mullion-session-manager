@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { runHook, THRESHOLD } from "../../scripts/check-patch-coverage-hook.mjs";
+import type { runPatchCoverageCheck } from "../../scripts/check-patch-coverage.mjs";
 
 describe("check-patch-coverage-hook", () => {
   it("skips (exit 0) when no base ref is available", () => {
@@ -35,10 +36,14 @@ describe("check-patch-coverage-hook", () => {
     let seen: { threshold?: number; baseRef?: string } = {};
     runHook({
       baseRef: "origin/main",
-      check: (options: { threshold: number; baseRef: string }) => {
+      // The check double takes the options runHook really passes it
+      // (`{ threshold, baseRef }`); the plain-JS runPatchCoverageCheck
+      // behind the hook types its own parameter as `{}`, so the double is
+      // cast back to that shape.
+      check: ((options: { threshold: number; baseRef: string }) => {
         seen = options;
         return { ok: true, overallPercent: 100 };
-      },
+      }) as typeof runPatchCoverageCheck,
     });
     expect(seen.threshold).toBe(THRESHOLD);
     expect(seen.baseRef).toBe("origin/main");

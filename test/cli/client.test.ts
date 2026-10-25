@@ -282,14 +282,18 @@ describe("MullionSocketClient", () => {
     });
 
     it("rejects every pending request when the connection closes", async () => {
-      let serverSocket: net.Socket | null = null;
+      // The accepted socket arrives in the server's connection callback, so
+      // it is read back through a holder — a plain `let` would be narrowed to
+      // `null` (and to `never` after the optional chain) at the use site,
+      // because TypeScript cannot see the assignment made in the callback.
+      const accepted: { socket: net.Socket | null } = { socket: null };
       await startServer((socket) => {
-        serverSocket = socket;
+        accepted.socket = socket;
       });
       const client = new MullionSocketClient({ socketPath, token: null });
       const pending = client.request("ping", {});
       await new Promise((resolve) => setTimeout(resolve, 20));
-      serverSocket?.destroy();
+      accepted.socket?.destroy();
       await expect(pending).rejects.toThrow(/connection closed/);
     });
   });

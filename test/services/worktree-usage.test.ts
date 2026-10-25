@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { ne } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
@@ -36,7 +37,9 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
   beforeEach(() => {
     app.db.delete(sessions).run();
     app.db.delete(projects).run();
-    app.db.delete(hosts).where("id != 'local'").run();
+    // `where` takes an SQL chunk, not a bare string — `ne()` builds the
+    // same `id != 'local'` predicate from the column itself.
+    app.db.delete(hosts).where(ne(hosts.id, "local")).run();
   });
 
   const worktreePath = "/tmp/mullion-worktree-usage-test";

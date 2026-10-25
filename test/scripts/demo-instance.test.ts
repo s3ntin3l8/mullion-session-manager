@@ -58,10 +58,24 @@ const demoDirs = () =>
   new Set(readdirSync("/tmp").filter((name) => name.startsWith("mullion-demo-")));
 
 /**
+ * `startDemo`'s options, as the module really accepts them.
+ *
+ * TypeScript's inference over the .mjs source DROPS `bins`: a destructured
+ * binding with no default in a JavaScript file gets no inferred type, so the
+ * parameter type comes out as the four defaulted flags only. The module
+ * really does take `bins` — it is the documented override hook every test
+ * below drives — so the shape is restated here.
+ */
+type DemoBins = ReturnType<typeof DemoModule.demoBins>;
+type DemoOptions = NonNullable<Parameters<typeof DemoModule.startDemo>[0]> & {
+  bins?: DemoBins;
+};
+
+/**
  * Starts a demo and reports its own scratch dir (from its log line), so the
  * assertions never look at another demo running on the same host.
  */
-function startCapturingDir(opts: Parameters<typeof DemoModule.startDemo>[0]) {
+function startCapturingDir(opts: DemoOptions) {
   let dir: string | undefined;
   const log = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     const m = /^\[demo\] scratch dir (\S+)/.exec(String(args[0]));
@@ -116,9 +130,14 @@ describe("preflight", () => {
 
   it("refuses before creating a scratch dir", async () => {
     const before = demoDirs();
-    await expect(
-      demo.startDemo({ quiet: true, bins: { tsx: process.execPath, vite: "/nonexistent/vite" } }),
-    ).rejects.toThrow(/npm --prefix frontend ci/);
+    // Passed through a variable (not an inline literal) so the `bins`
+    // override — which the .mjs's inferred type drops — is not rejected as
+    // an excess property.
+    const opts: DemoOptions = {
+      quiet: true,
+      bins: { tsx: process.execPath, vite: "/nonexistent/vite" },
+    };
+    await expect(demo.startDemo(opts)).rejects.toThrow(/npm --prefix frontend ci/);
     expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
   });
 });

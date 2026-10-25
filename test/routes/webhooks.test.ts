@@ -4,6 +4,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+// The `ws` WebSocket — the very type the broadcast channels take — NOT the
+// global (undici) WebSocket, which is a different shape.
+import type { WebSocket } from "@fastify/websocket";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { eq, and } from "drizzle-orm";
@@ -769,7 +772,7 @@ describe("webhook routes", () => {
       const githubWrite = await import("../../src/services/github-write.js");
       const getIssueStateSpy = vi
         .spyOn(githubWrite, "getIssueState")
-        .mockResolvedValue({ state: "closed", labels: [] });
+        .mockResolvedValue({ state: "closed", labels: [], isPullRequest: false });
 
       const [project] = app.db
         .insert(projects)

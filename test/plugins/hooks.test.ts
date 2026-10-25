@@ -240,7 +240,7 @@ describe("hooksPlugin (issue #172)", () => {
     expect(oversizedWarn).toBeDefined();
     // pino-style: warn({…}, "msg") — first arg is structured fields, second
     // is the message string.
-    const fields = oversizedWarn![0];
+    const fields = oversizedWarn![0] as { bytesReceived: number };
     expect(fields).toMatchObject({
       bytesReceived: expect.any(Number),
     });
@@ -1496,7 +1496,9 @@ describe("hooksPlugin (issue #172)", () => {
 
         class FakePage extends EventEmitter {
           currentUrl = "about:blank";
-          gotoSpy = vi.fn(async (url: string) => {
+          // The spy takes the same (url, opts) pair the real page.goto()
+          // does — goto() forwards both.
+          gotoSpy = vi.fn(async (url: string, _opts?: unknown) => {
             this.currentUrl = url;
           });
           url() {
@@ -1596,7 +1598,9 @@ describe("hooksPlugin (issue #172)", () => {
         class FakePage extends EventEmitter {
           currentUrl = "about:blank";
           fillSpy = vi.fn(async (_value: string) => {});
-          gotoSpy = vi.fn(async (url: string) => {
+          // The spy takes the same (url, opts) pair the real page.goto()
+          // does — goto() forwards both.
+          gotoSpy = vi.fn(async (url: string, _opts?: unknown) => {
             this.currentUrl = url;
           });
           url() {

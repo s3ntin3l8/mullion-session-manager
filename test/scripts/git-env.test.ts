@@ -4,7 +4,8 @@ import {
   GIT_ENV_KEYS_TO_STRIP,
   GIT_NO_AUTO_GC,
 } from "../../src/services/git-env.js";
-// @ts-expect-error -- plain-JS script module, no type declarations
+// The plain-JS script module — typed by inference (the test tsconfig's
+// allowJs), so no declaration file is needed for it any more.
 import * as scriptEnv from "../../scripts/git-env.mjs";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";

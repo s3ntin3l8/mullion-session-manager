@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import type { Mock } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
@@ -11,7 +12,10 @@ interface FakeChild extends EventEmitter {
   stdout: EventEmitter;
   exitCode: number | null;
   signalCode: string | null;
-  killSpy: ReturnType<typeof vi.fn>;
+  // The spy records the signal `kill` was called with, so it needs the
+  // real signature — `ReturnType<typeof vi.fn>` is the untyped `Mock`
+  // overload, which is not callable.
+  killSpy: Mock<(signal?: string) => void>;
   kill: (signal?: string) => void;
 }
 

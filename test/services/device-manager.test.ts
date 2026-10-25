@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 // never let a real one fire (AGENTS.md, issue #1137's mocking invariant).
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { EventEmitter } from "node:events";
-import { spawn as spawnChildProcess } from "node:child_process";
+import { spawn as spawnChildProcess, type SpawnOptions } from "node:child_process";
 import { AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
 import type * as ChildProcess from "node:child_process";
 
@@ -665,7 +665,7 @@ describe("DeviceManager", () => {
     vi.mocked(spawnChildProcess).mockImplementation(((
       file: string,
       args: readonly string[],
-      ...rest: unknown[]
+      options: SpawnOptions,
     ) => {
       if (file === "systemd-run" && spawnedChild === undefined) {
         const ee = createMockChild();
@@ -676,7 +676,7 @@ describe("DeviceManager", () => {
         // arrives afterwards, in the boot window.
         return ee as unknown as ChildProcess.ChildProcess;
       }
-      return baseImpl(file, args, ...(rest as []));
+      return baseImpl(file, args, options);
     }) as typeof spawnChildProcess);
 
     const manager = new DeviceManager(baseOpts());
@@ -728,7 +728,7 @@ describe("DeviceManager", () => {
       vi.mocked(spawnChildProcess).mockImplementation(((
         file: string,
         args: readonly string[],
-        ...rest: unknown[]
+        options: SpawnOptions,
       ) => {
         if (file === "systemd-run" && spawnedChild === undefined) {
           const ee = createMockChild();
@@ -740,7 +740,7 @@ describe("DeviceManager", () => {
           // bootstrap promise first, so the exit is post-settle by definition.
           return ee as unknown as ChildProcess.ChildProcess;
         }
-        return baseImpl(file, args, ...(rest as []));
+        return baseImpl(file, args, options);
       }) as typeof spawnChildProcess);
 
       const emitScopeExit = () => spawnedChild?.emit("exit", 1);
@@ -776,7 +776,7 @@ describe("DeviceManager", () => {
     vi.mocked(spawnChildProcess).mockImplementation(((
       file: string,
       args: readonly string[],
-      ...rest: unknown[]
+      options: SpawnOptions,
     ) => {
       if (file === "systemd-run" && spawnedChild === undefined) {
         const ee = createMockChild();
@@ -784,7 +784,7 @@ describe("DeviceManager", () => {
         listUnitsReply.push(`${args[4]}.scope loaded active running ${args[6]}`);
         return ee as unknown as ChildProcess.ChildProcess;
       }
-      return baseImpl(file, args, ...(rest as []));
+      return baseImpl(file, args, options);
     }) as typeof spawnChildProcess);
 
     const manager = new DeviceManager(baseOpts());
@@ -958,7 +958,7 @@ describe("DeviceManager", () => {
     vi.mocked(spawnChildProcess).mockImplementation(((
       file: string,
       args: readonly string[],
-      ...rest: unknown[]
+      options: SpawnOptions,
     ) => {
       if (file === "systemd-run" && spawnedChild === undefined) {
         const ee = createMockChild();
@@ -969,7 +969,7 @@ describe("DeviceManager", () => {
         // bootstrap promise; only AFTER that should the emulator "die".
         return ee as unknown as ChildProcess.ChildProcess;
       }
-      return baseImpl(file, args, ...(rest as []));
+      return baseImpl(file, args, options);
     }) as typeof spawnChildProcess);
 
     const manager = new DeviceManager(baseOpts());

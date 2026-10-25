@@ -6,6 +6,38 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { MullionClient } from "../../src/mcp/client.mjs";
 import { MullionSocketClient } from "../../src/cli/client.mjs";
 
+/**
+ * client.mjs is plain JS, so TypeScript infers every DESTRUCTURED option
+ * of its methods as REQUIRED — it cannot see that the code checks each one
+ * against `undefined` before putting it on the wire. These four methods
+ * take optional options, so the client is viewed through their honest
+ * shapes; the module itself has no types to fix.
+ */
+type ClientWithOptionalOptions = Omit<
+  MullionClient,
+  "waitForSession" | "promptSession" | "setProjectTooling" | "createDevice"
+> & {
+  waitForSession(opts: {
+    sessionId: string;
+    until?: string[];
+    timeoutMs?: number;
+    afterSeq?: number;
+  }): Promise<unknown>;
+  promptSession(opts: {
+    sessionId: string;
+    text: string;
+    submit?: boolean;
+    wait?: { until?: string[]; timeoutMs?: number };
+  }): Promise<unknown>;
+  setProjectTooling(opts: {
+    projectId: string;
+    briefing?: string;
+    skill?: string;
+    reviewerAgent?: string;
+  }): Promise<unknown>;
+  createDevice(opts: { avdName: string; projectId?: number; name?: string }): Promise<unknown>;
+};
+
 // Issue #271 — mirrors test/hooks/forwarder.test.ts's "real socket, real
 // client" posture for MullionClient.promoteRequest, the transport half of
 // the `mullion mcp` server's `promote_to_worktree` tool.
@@ -377,7 +409,9 @@ describe("MullionClient (issue #271)", () => {
             `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { timedOut: false } })}\n`,
           );
         });
-        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+        }) as ClientWithOptionalOptions;
         await client.waitForSession({ sessionId: "5", timeoutMs: 2_000 });
         await client.waitForSession({ sessionId: "5" });
         expect(seen).toEqual([17_000, 615_000]);
@@ -406,7 +440,9 @@ describe("MullionClient (issue #271)", () => {
             `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { delivered: true } })}\n`,
           );
         });
-        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+        }) as ClientWithOptionalOptions;
         await client.promptSession({ sessionId: "5", text: "go" });
         await client.promptSession({
           sessionId: "5",
@@ -435,7 +471,9 @@ describe("MullionClient (issue #271)", () => {
           `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { timedOut: false } })}\n`,
         );
       });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      const client = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+      }) as ClientWithOptionalOptions;
       await client.waitForSession({ sessionId: "5" });
       await client.waitForSession({
         sessionId: "5",
@@ -1104,7 +1142,9 @@ describe("MullionClient (issue #271)", () => {
         expect(msg.body).toEqual({ projectId: "3", briefing: "x" });
         socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200 })}\n`);
       });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      const client = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+      }) as ClientWithOptionalOptions;
       await client.setProjectTooling({ projectId: "3", briefing: "x" });
     });
 
@@ -1146,7 +1186,9 @@ describe("MullionClient (issue #271)", () => {
           })}\n`,
         );
       });
-      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      const client = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+      }) as ClientWithOptionalOptions;
       await expect(
         client.setProjectTooling({ projectId: "3", briefing: "x" }),
       ).rejects.toMatchObject({ status: 400, message: "validation failed" });
@@ -1184,7 +1226,9 @@ describe("MullionClient (issue #271)", () => {
             `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { id: 1 } })}\n`,
           );
         });
-        const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+        const client = new MullionClient({
+          MULLION_SOCKET_PATH: socketPath,
+        }) as ClientWithOptionalOptions;
         const result = await client.createDevice({ avdName: "dev35" });
         expect(result).toEqual({ id: 1 });
       });

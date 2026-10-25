@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { resolveTaskMaster } from "../../src/services/task-config.js";
+import { resolveTaskMaster, type TaskMasterEnvDefaults } from "../../src/services/task-config.js";
 import { DEFAULT_SETTINGS } from "../../src/services/settings.js";
 
-const ENV_DEFAULTS = {
+// The env defaults the resolver falls back to. rateLimitGraceMinutes is
+// part of TaskMasterEnvDefaults (env default 5, see plugins/env.ts) and
+// was missing here — without it the resolver inherited `undefined` for
+// that field instead of the real env default.
+const ENV_DEFAULTS: TaskMasterEnvDefaults = {
   enabled: false,
   maxConcurrent: 2,
   budgetMinutes: 120,
   progressCommentMinutes: 15,
+  rateLimitGraceMinutes: 5,
   skipPermissions: false,
 };
 
@@ -19,6 +24,7 @@ describe("resolveTaskMaster", () => {
       maxConcurrent: 2,
       budgetMinutes: 120,
       progressCommentMinutes: 15,
+      rateLimitGraceMinutes: 5,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
     });

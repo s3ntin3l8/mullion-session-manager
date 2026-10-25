@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import type { FastifyInstance } from "fastify";
 import { createMuxConnection, type MuxChannel } from "../../src/services/ssh-agent-mux.js";
+import type { ConnectedBridge } from "../../src/plugins/agent-bridge.js";
 import { SSH_AGENTC_SIGN_REQUEST } from "../../src/services/ssh-agent-filter.js";
 
 // Two complementary test styles, mirroring the two closest existing
@@ -77,6 +78,28 @@ function fakeHost(
     hasToken: true,
     createdAt: new Date(0),
     origin: "manual" as const,
+  };
+}
+
+// A tracked bridge, for the selection/gating tests.
+//
+// The bridge's `socket` and `mux` are OPAQUE to the module under test:
+// `pickBridge` reads only `connectedAt`, `lastPongAt` and `priority` (the
+// channel fan-out tests further down use real MuxConnections). The two
+// opaque members are therefore cast ONCE, here, with the reason — rather
+// than at every one of the twenty call sites, where a `WebSocket` double
+// would otherwise be missing thirty-nine members.
+function bridgeDouble(extra: Partial<ConnectedBridge> = {}): ConnectedBridge {
+  return {
+    socket: {} as unknown as ConnectedBridge["socket"],
+    mux: {} as unknown as ConnectedBridge["mux"],
+    connectedAt: 0,
+    // Both are REQUIRED members of the interface (not optional), so the
+    // double has to carry them: `priority` defaults to 0 (the value
+    // "unset" means), and `lastPongAt` to undefined ("no PONG yet").
+    priority: 0,
+    lastPongAt: undefined,
+    ...extra,
   };
 }
 
@@ -353,8 +376,8 @@ describe("pickBridge", () => {
     // connectedAt — Map iteration order alone (oldest-first) would pick
     // "bridge-new" wrongly if this module used `.values().next()` instead
     // of comparing connectedAt.
-    app.connectedBridges.set("bridge-new", { socket: {}, mux: {}, connectedAt: 1 });
-    app.connectedBridges.set("bridge-old", { socket: {}, mux: {}, connectedAt: 2 });
+    app.connectedBridges.set("bridge-new", bridgeDouble({ connectedAt: 1 }));
+    app.connectedBridges.set("bridge-old", bridgeDouble({ connectedAt: 2 }));
 
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-old");
@@ -374,15 +397,16 @@ describe("pickBridge", () => {
     // undefined / null. This simulates a brand-new bridge that hasn't
     // completed its first PING/PONG round trip yet (PING_INTERVAL_MS =
     // 15s), or any bridge that just connected within the last 15s.
-    app.connectedBridges.set("bridge-stale", { socket: {}, mux: {}, connectedAt: 100 });
+    app.connectedBridges.set("bridge-stale", bridgeDouble({ connectedAt: 100 }));
     // Recent PONG: bridge-saw-pong is the one we should pick, even
     // though it's NOT the most-recently-connected.
-    app.connectedBridges.set("bridge-saw-pong", {
-      socket: {},
-      mux: {},
-      connectedAt: 50, // older than bridge-stale
-      lastPongAt: now, // but answered a PONG just now
-    });
+    app.connectedBridges.set(
+      "bridge-saw-pong",
+      bridgeDouble({
+        connectedAt: 50, // older than bridge-stale
+        lastPongAt: now, // but answered a PONG just now
+      }),
+    );
 
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-saw-pong");
@@ -390,18 +414,20 @@ describe("pickBridge", () => {
 
   it("prefers the bridge with the MORE RECENT PONG between two bridges that both have PONG timestamps", () => {
     const app = fakeApp(0);
-    app.connectedBridges.set("bridge-older-pong", {
-      socket: {},
-      mux: {},
-      connectedAt: 100,
-      lastPongAt: now - 3_000,
-    });
-    app.connectedBridges.set("bridge-newer-pong", {
-      socket: {},
-      mux: {},
-      connectedAt: 100, // same connectedAt
-      lastPongAt: now - 1_000, // but PONG'd more recently
-    });
+    app.connectedBridges.set(
+      "bridge-older-pong",
+      bridgeDouble({
+        connectedAt: 100,
+        lastPongAt: now - 3_000,
+      }),
+    );
+    app.connectedBridges.set(
+      "bridge-newer-pong",
+      bridgeDouble({
+        connectedAt: 100, // same connectedAt
+        lastPongAt: now - 1_000, // but PONG'd more recently
+      }),
+    );
 
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-newer-pong");
@@ -413,18 +439,20 @@ describe("pickBridge", () => {
     // lastPongAt values are older than PONG_TIMEOUT_MS. The pre-#1051
     // behavior (most-recently connected wins) must still apply so the
     // call site is never blocked on a bridge that exists.
-    app.connectedBridges.set("bridge-stale-a", {
-      socket: {},
-      mux: {},
-      connectedAt: 1,
-      lastPongAt: now - 30_000, // well past the 10s window
-    });
-    app.connectedBridges.set("bridge-stale-b", {
-      socket: {},
-      mux: {},
-      connectedAt: 2,
-      lastPongAt: now - 20_000, // also stale
-    });
+    app.connectedBridges.set(
+      "bridge-stale-a",
+      bridgeDouble({
+        connectedAt: 1,
+        lastPongAt: now - 30_000, // well past the 10s window
+      }),
+    );
+    app.connectedBridges.set(
+      "bridge-stale-b",
+      bridgeDouble({
+        connectedAt: 2,
+        lastPongAt: now - 20_000, // also stale
+      }),
+    );
 
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-stale-b");
@@ -432,18 +460,20 @@ describe("pickBridge", () => {
 
   it("prefers the SOLE healthy bridge over multiple stale ones — does not require staleness ties to be broken by connectedAt", () => {
     const app = fakeApp(0);
-    app.connectedBridges.set("bridge-stale", {
-      socket: {},
-      mux: {},
-      connectedAt: 999, // most-recently connected — but stale
-      lastPongAt: now - 30_000,
-    });
-    app.connectedBridges.set("bridge-healthy", {
-      socket: {},
-      mux: {},
-      connectedAt: 1, // ancient connection
-      lastPongAt: now, // just answered a PONG
-    });
+    app.connectedBridges.set(
+      "bridge-stale",
+      bridgeDouble({
+        connectedAt: 999, // most-recently connected — but stale
+        lastPongAt: now - 30_000,
+      }),
+    );
+    app.connectedBridges.set(
+      "bridge-healthy",
+      bridgeDouble({
+        connectedAt: 1, // ancient connection
+        lastPongAt: now, // just answered a PONG
+      }),
+    );
 
     const picked = pickBridge(app);
     expect(picked?.bridgeId).toBe("bridge-healthy");
@@ -453,20 +483,22 @@ describe("pickBridge", () => {
   describe("priority tiebreak (issue #1313)", () => {
     it("still breaks a priority TIE by liveness — unchanged pre-#1313 behavior", () => {
       const app = fakeApp(0);
-      app.connectedBridges.set("bridge-older-pong", {
-        socket: {},
-        mux: {},
-        connectedAt: 100,
-        lastPongAt: now - 3_000,
-        priority: 0,
-      });
-      app.connectedBridges.set("bridge-newer-pong", {
-        socket: {},
-        mux: {},
-        connectedAt: 100,
-        lastPongAt: now - 1_000,
-        priority: 0,
-      });
+      app.connectedBridges.set(
+        "bridge-older-pong",
+        bridgeDouble({
+          connectedAt: 100,
+          lastPongAt: now - 3_000,
+          priority: 0,
+        }),
+      );
+      app.connectedBridges.set(
+        "bridge-newer-pong",
+        bridgeDouble({
+          connectedAt: 100,
+          lastPongAt: now - 1_000,
+          priority: 0,
+        }),
+      );
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-newer-pong");
@@ -484,20 +516,22 @@ describe("pickBridge", () => {
     // wrong bridge.
     it("treats an entry with no priority field the same as an explicit priority: 0", () => {
       const app = fakeApp(0);
-      app.connectedBridges.set("bridge-explicit-5", {
-        socket: {},
-        mux: {},
-        connectedAt: 999, // more recently connected — must not win anyway
-        lastPongAt: now,
-        priority: 5,
-      });
-      app.connectedBridges.set("bridge-no-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 1,
-        lastPongAt: now,
-        // priority intentionally omitted — must be treated as 0.
-      });
+      app.connectedBridges.set(
+        "bridge-explicit-5",
+        bridgeDouble({
+          connectedAt: 999, // more recently connected — must not win anyway
+          lastPongAt: now,
+          priority: 5,
+        }),
+      );
+      app.connectedBridges.set(
+        "bridge-no-priority",
+        bridgeDouble({
+          connectedAt: 1,
+          lastPongAt: now,
+          // priority intentionally omitted — must be treated as 0.
+        }),
+      );
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-no-priority");
@@ -505,20 +539,22 @@ describe("pickBridge", () => {
 
     it("prefers the lower-priority (higher-precedence) bridge among two otherwise-equal healthy bridges", () => {
       const app = fakeApp(0);
-      app.connectedBridges.set("bridge-low-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 1,
-        lastPongAt: now, // both healthy, both just PONG'd
-        priority: 0,
-      });
-      app.connectedBridges.set("bridge-high-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 999, // more recently connected — must not win anyway
-        lastPongAt: now,
-        priority: 5,
-      });
+      app.connectedBridges.set(
+        "bridge-low-priority",
+        bridgeDouble({
+          connectedAt: 1,
+          lastPongAt: now, // both healthy, both just PONG'd
+          priority: 0,
+        }),
+      );
+      app.connectedBridges.set(
+        "bridge-high-priority",
+        bridgeDouble({
+          connectedAt: 999, // more recently connected — must not win anyway
+          lastPongAt: now,
+          priority: 5,
+        }),
+      );
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-low-priority");
@@ -530,20 +566,22 @@ describe("pickBridge", () => {
     // priority 0 must not reproduce the exact stall #1051 fixed.
     it("still prefers a healthy LOW-priority bridge over a stale HIGH-priority one", () => {
       const app = fakeApp(0);
-      app.connectedBridges.set("bridge-stale-top-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 999,
-        lastPongAt: now - 30_000, // stale — well past PONG_TIMEOUT_MS
-        priority: 0, // "tried first" — but must NOT win over a healthy bridge
-      });
-      app.connectedBridges.set("bridge-healthy-low-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 1,
-        lastPongAt: now, // healthy
-        priority: 9,
-      });
+      app.connectedBridges.set(
+        "bridge-stale-top-priority",
+        bridgeDouble({
+          connectedAt: 999,
+          lastPongAt: now - 30_000, // stale — well past PONG_TIMEOUT_MS
+          priority: 0, // "tried first" — but must NOT win over a healthy bridge
+        }),
+      );
+      app.connectedBridges.set(
+        "bridge-healthy-low-priority",
+        bridgeDouble({
+          connectedAt: 1,
+          lastPongAt: now, // healthy
+          priority: 9,
+        }),
+      );
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-healthy-low-priority");
@@ -551,20 +589,22 @@ describe("pickBridge", () => {
 
     it("applies the same priority-then-connectedAt ordering within the all-stale fallback partition", () => {
       const app = fakeApp(0);
-      app.connectedBridges.set("bridge-stale-low-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 1, // older connection — would lose on connectedAt alone
-        lastPongAt: now - 30_000,
-        priority: 0,
-      });
-      app.connectedBridges.set("bridge-stale-high-priority", {
-        socket: {},
-        mux: {},
-        connectedAt: 999, // more recently connected
-        lastPongAt: now - 30_000,
-        priority: 5,
-      });
+      app.connectedBridges.set(
+        "bridge-stale-low-priority",
+        bridgeDouble({
+          connectedAt: 1, // older connection — would lose on connectedAt alone
+          lastPongAt: now - 30_000,
+          priority: 0,
+        }),
+      );
+      app.connectedBridges.set(
+        "bridge-stale-high-priority",
+        bridgeDouble({
+          connectedAt: 999, // more recently connected
+          lastPongAt: now - 30_000,
+          priority: 5,
+        }),
+      );
 
       const picked = pickBridge(app);
       expect(picked?.bridgeId).toBe("bridge-stale-low-priority");
@@ -679,11 +719,16 @@ describe("startSshAgentFanout — channel fan-out", () => {
       channelIdParity: "even",
     });
     const helperMux = createMuxConnection(wsBridgeHelper as never, { channelIdParity: "odd" });
-    app.connectedBridges.set("bridge-0", {
-      socket: {},
-      mux: realBridgeMux,
-      connectedAt: Date.now(),
-    });
+    app.connectedBridges.set(
+      "bridge-0",
+      bridgeDouble({
+        // The mux here is REAL (paired with a FakeSocket above); only the
+        // socket field is a placeholder, because the mux was built from
+        // the pair rather than from this field.
+        mux: realBridgeMux,
+        connectedAt: Date.now(),
+      }),
+    );
 
     const atHelper: MuxChannel[] = [];
     helperMux.onChannel((ch) => atHelper.push(ch));
@@ -721,11 +766,13 @@ describe("startSshAgentFanout — channel fan-out", () => {
       () => new Promise<MuxChannel>((resolve) => (resolveBridgeChannel = resolve)),
     );
     const app = fakeApp(0);
-    app.connectedBridges.set("bridge-0", {
-      socket: {},
-      mux: { openChannel: bridgeOpenChannel },
-      connectedAt: Date.now(),
-    });
+    app.connectedBridges.set(
+      "bridge-0",
+      bridgeDouble({
+        mux: { openChannel: bridgeOpenChannel } as unknown as ConnectedBridge["mux"],
+        connectedAt: Date.now(),
+      }),
+    );
 
     const { agentConn } = await setupPrimaryAndAgent(app);
     const agentChannel = await agentConn.openChannel();
@@ -818,11 +865,15 @@ describe("startSshAgentFanout — channel fan-out", () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(app.log.info).toHaveBeenCalledTimes(1); // unambiguous now — no new log
 
-    app.connectedBridges.set("bridge-1", {
-      socket: {},
-      mux: { openChannel: vi.fn(() => new Promise(() => {})) },
-      connectedAt: 99,
-    });
+    app.connectedBridges.set(
+      "bridge-1",
+      bridgeDouble({
+        mux: {
+          openChannel: vi.fn(() => new Promise(() => {})),
+        } as unknown as ConnectedBridge["mux"],
+        connectedAt: 99,
+      }),
+    );
     await agentConn.openChannel(); // ambiguous again — a fresh streak logs once more
     await new Promise((resolve) => setImmediate(resolve));
     expect(app.log.info).toHaveBeenCalledTimes(2);

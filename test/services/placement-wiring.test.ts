@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
-import { eq } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 
 // M5 — never lets a real systemd-run fire (#1137): both node-pty and
@@ -61,7 +61,7 @@ describe("placement decides where a session runs (issue #1724)", () => {
     // fight the first one over the hooks socket), so the rows are.
     app.db.delete(sessions).run();
     app.db.delete(projects).run();
-    app.db.delete(hosts).where("id != 'local'").run();
+    app.db.delete(hosts).where(ne(hosts.id, "local")).run();
   });
 
   /** A backend that records the host it was asked for. */

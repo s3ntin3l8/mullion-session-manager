@@ -30,6 +30,11 @@ describe("applyHookAdapters (issue #174)", () => {
       controlSocketPath: path.join(dir, "mullion.sock"),
       forwarderPath: "/abs/forwarder.mjs",
       injectAgentGuide: false,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
       ...overrides,
     };
   }

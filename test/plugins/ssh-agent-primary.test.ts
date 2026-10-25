@@ -107,6 +107,12 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
       socket: {} as never,
       mux: { openChannel: () => Promise.resolve(channel) } as never,
       connectedAt: Date.now(),
+      // The two fields ConnectedBridge grew since this double was written
+      // (issue #1313's `priority`, issue #1051's `lastPongAt`) — a
+      // just-tracked bridge has priority 0 and no PONG yet, which is exactly
+      // what pickBridge's own defaults expect.
+      priority: 0,
+      lastPongAt: undefined,
     });
 
     const client = net.createConnection(bridgeSocketPath(app));

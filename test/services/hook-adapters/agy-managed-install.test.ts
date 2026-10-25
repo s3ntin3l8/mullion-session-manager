@@ -19,7 +19,7 @@ import os from "node:os";
 // genuine property access on every invocation (mergeAgyHooks/
 // mergeAgyMcpConfig too, harmlessly, since all fs calls are mocked below).
 const mockWriteFileSync = vi.fn();
-const mockReadFileSync = vi.fn(() => {
+const mockReadFileSync = vi.fn((_filePath: unknown) => {
   throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
 });
 const mockMkdirSync = vi.fn();
@@ -41,6 +41,11 @@ function baseCtx(overrides: Partial<Parameters<typeof agyAdapter.prepareLaunch>[
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/install/hooks/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other two spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
+    injectMullionBundle: false,
     ...overrides,
   };
 }

@@ -22,6 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext } from "../../src/services/hook-adapters/types.js";
+import type { AppliedHooks } from "../../src/services/hook-adapters/index.js";
 import { baseSession } from "./launch-plan-fixture.js";
 
 const callOrder: string[] = [];
@@ -48,11 +49,17 @@ vi.mock("../../src/services/workflow-conventions.js", () => ({
     mockWriteSessionWorkflowConventions(...args),
 }));
 
-const mockApplyHookAdapters = vi.fn((command: string, _ctx: HookAdapterContext) => {
+// The doubles carry the PRODUCTION return types: `applyHookAdapters` answers
+// an `AppliedHooks` (whose `emits` is a `readonly HookMessageKind[]`, not
+// the `never[]` an untyped `[]` literal infers) and
+// `getAdapterInitialPromptArgs` answers argv or null.
+const mockApplyHookAdapters = vi.fn((command: string, _ctx: HookAdapterContext): AppliedHooks => {
   callOrder.push("applyHookAdapters");
   return { command, envAdditions: {}, matched: false, emits: [] };
 });
-const mockGetAdapterInitialPromptArgs = vi.fn((_command: string, _prompt: string) => null);
+const mockGetAdapterInitialPromptArgs = vi.fn(
+  (_command: string, _prompt: string): string | null => null,
+);
 const mockResolveForwarderPath = vi.fn(() => "/fake/forwarder.mjs");
 vi.mock("../../src/services/hook-adapters/index.js", () => ({
   applyHookAdapters: (...args: [string, HookAdapterContext]) => mockApplyHookAdapters(...args),

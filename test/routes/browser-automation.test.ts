@@ -45,17 +45,24 @@ interface FakeSnapshotElement {
 class FakeLocator {
   clickSpy = vi.fn(async () => {});
   fillSpy = vi.fn(async (_value: string) => {});
-  evaluateSpy = vi.fn(async (_script: string, arg?: unknown) => ({
-    ref: arg,
-    role: "button",
-    name: "Submit",
-    tag: "button",
-  }));
+  // Playwright's Locator.evaluate takes the in-page FUNCTION and the
+  // argument to hand it — not a script string.
+  evaluateSpy = vi.fn(
+    async (
+      _fn: ((element: unknown, arg?: unknown) => unknown) | string,
+      _arg?: { ref?: string; refAttribute?: string },
+    ): Promise<FakeSnapshotElement> => ({
+      ref: _arg?.ref ?? "",
+      role: "button",
+      name: "Submit",
+      tag: "button",
+    }),
+  );
   ariaSnapshotSpy = vi.fn(async () => "- generic: Hello");
   allResult: FakeLocator[] = [];
-  pressSpy = vi.fn(async () => {});
-  typeSpy = vi.fn(async () => {});
-  selectOptionSpy = vi.fn(async () => []);
+  pressSpy = vi.fn(async (_value: string) => {});
+  typeSpy = vi.fn(async (_value: string) => {});
+  selectOptionSpy = vi.fn(async (_value: unknown) => []);
   checkSpy = vi.fn(async () => {});
   uncheckSpy = vi.fn(async () => {});
   waitForSpy = vi.fn(async () => {});
@@ -80,8 +87,11 @@ class FakeLocator {
   async fill(value: string) {
     return this.fillSpy(value);
   }
-  async evaluate(script: string, arg?: unknown) {
-    return this.evaluateSpy(script, arg);
+  async evaluate(
+    fn: ((element: unknown, arg?: unknown) => unknown) | string,
+    arg?: { ref?: string; refAttribute?: string },
+  ) {
+    return this.evaluateSpy(fn, arg);
   }
   async ariaSnapshot() {
     return this.ariaSnapshotSpy();
@@ -144,7 +154,7 @@ class FakeFrame {
   getByLabelResult = new FakeLocator();
   getByPlaceholderResult = new FakeLocator();
   getByTestIdResult = new FakeLocator();
-  waitForSelectorSpy = vi.fn(async () => {});
+  waitForSelectorSpy = vi.fn(async (_selector: string) => {});
   contentSpy = vi.fn(async () => "<html>frame</html>");
 
   locator(selector: string) {
@@ -187,7 +197,7 @@ class FakePage extends EventEmitter {
   screenshotBuffer = Buffer.from("PNGDATA");
   evalResult: unknown = null;
   taggedElementsResult: FakeSnapshotElement[] = [];
-  gotoSpy = vi.fn(async (url: string) => {
+  gotoSpy = vi.fn(async (url: string, _opts?: unknown) => {
     this.currentUrl = url;
   });
   evaluateSpy = vi.fn();
@@ -199,8 +209,8 @@ class FakePage extends EventEmitter {
   getByLabelResult = new FakeLocator();
   getByPlaceholderResult = new FakeLocator();
   getByTestIdResult = new FakeLocator();
-  waitForTimeoutSpy = vi.fn(async () => {});
-  waitForSelectorSpy = vi.fn(async () => {});
+  waitForTimeoutSpy = vi.fn(async (_timeout: number) => {});
+  waitForSelectorSpy = vi.fn(async (_selector: string) => {});
   contentSpy = vi.fn(async () => "<html></html>");
 
   keyboard = {
@@ -657,6 +667,9 @@ describe("browser automation API (issue #183)", () => {
         innerText: "",
         tagName: "BUTTON",
       };
+      // The production code hands Playwright the in-page FUNCTION plus the
+      // argument for it — the double records both, so narrow them to that.
+      if (typeof fn !== "function" || !arg) throw new Error("expected a function and an argument");
       const tagged = fn(stubElement, arg);
       expect(setAttribute).toHaveBeenCalledWith(arg.refAttribute, arg.ref);
       expect(tagged).toEqual({ ref: arg.ref, role: "button", name: "Submit form", tag: "button" });

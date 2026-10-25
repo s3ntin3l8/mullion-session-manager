@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import type { SpawnOptions } from "node:child_process";
 import type { FastifyInstance } from "fastify";
 import { startKeepAwake, CAFFEINATE_ARGS } from "../../src/services/keep-awake.js";
 
@@ -79,14 +80,19 @@ describe("startKeepAwake", () => {
   it("spawns caffeinate -dimsu -w <pid> while there are live sessions", () => {
     vi.useFakeTimers();
     const child = fakeChild();
-    const spawnFn = vi.fn(() => child);
+    // The double takes the SAME arguments the production code passes to
+    // `spawn` (command, args, options) so `mock.calls` records them
+    // faithfully instead of being cast into shape afterwards.
+    const spawnFn = vi.fn(
+      (_command: string, _args: readonly string[], _options: SpawnOptions) => child,
+    );
     const app = mockApp();
 
     const keepAwake = startKeepAwake(app, { platform: "darwin", spawnFn: spawnFn as never });
     keepAwake.sync();
 
     expect(spawnFn).toHaveBeenCalledTimes(1);
-    const [command, args] = spawnFn.mock.calls[0] as [string, string[]];
+    const [command, args] = spawnFn.mock.calls[0];
     expect(command).toBe("caffeinate");
     expect(args).toEqual([...CAFFEINATE_ARGS, "-w", String(process.pid)]);
     // -w <pid> is load-bearing: launchd's AbandonProcessGroup=true means

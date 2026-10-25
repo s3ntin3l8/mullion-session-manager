@@ -282,7 +282,12 @@ describe("auth plugin + routes (issues #19, #30)", () => {
       // up immediately via DELETE, keeping this describe block's writes
       // invisible to the sibling "spoofed preview Host" tests elsewhere in
       // this file that assert an empty project list.
-      async function postProject(app: Awaited<ReturnType<typeof buildApp>>, headers: object) {
+      // Fastify's inject() wants the header map in its own shape
+      // (IncomingHttpHeaders | OutgoingHttpHeaders), not a bare `object`.
+      async function postProject(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        headers: Record<string, string>,
+      ) {
         const res = await app.inject({
           method: "POST",
           url: "/api/projects",

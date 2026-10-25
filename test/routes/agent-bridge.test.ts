@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import type { Socket } from "node:net";
 import { WebSocket as NodeWebSocket } from "ws";
 import { buildTestApp } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
@@ -12,6 +13,13 @@ import { decodePairingPayload, issuePairingCode } from "../../src/services/bridg
 // WebSocket upgrade.
 
 const tmpDb = path.join(os.tmpdir(), `agent-bridge-test-${process.pid}.db`);
+
+/** The `ws` client keeps the raw TCP socket on a private `_socket`, and a
+ *  malformed frame has to be written BELOW the WebSocket framing — `ws`
+ *  exposes no public accessor for it, so reach for the private field. */
+function rawSocket(ws: NodeWebSocket): Socket {
+  return (ws as unknown as { _socket: Socket })._socket;
+}
 
 interface HandshakeReply {
   type: "ready" | "error";
@@ -750,7 +758,7 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       // rejects them with "Invalid WebSocket frame: …" and emits "error"
       // on the WebSocket before "close". Exactly the failure shape issue
       // #1047 reproduces: a transport-level fault that lands BEFORE close.
-      ws._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
+      rawSocket(ws).write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
 
       await waitUntil(() => !app.connectedBridges.has(reply.bridge_id!));
     });
@@ -813,7 +821,7 @@ describe("agent-bridge routes (POST/GET/DELETE /api/bridges, GET /ws/agent-bridg
       // surfaces as 'error' on the WebSocket. Without the route's
       // `() => {}` listener and with the fastify one removed, this
       // throw has nowhere to go and surfaces as uncaughtException.
-      ws._socket.write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
+      rawSocket(ws).write(Buffer.from([0xff, 0xff, 0xff, 0xff, 0xff]));
 
       await new Promise((resolve) => setTimeout(resolve, 200));
       process.off("uncaughtException", onUncaught);
