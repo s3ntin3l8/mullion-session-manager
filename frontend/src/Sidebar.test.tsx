@@ -779,6 +779,33 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     expect(container.querySelector(".project-host-badge")?.textContent).toBe("build-box");
   });
 
+  describe("project host status (issue #1892)", () => {
+    it("says the heartbeat's words next to the host name", () => {
+      projects = [makeProject({ id: PROJECT.id, name: "remote", hostId: "box" })];
+      hosts = [makeHost({ id: "box", name: "build-box", health: "degraded" })];
+      renderSidebar();
+      expect(screen.getByText("build-box")).toBeInTheDocument();
+      expect(screen.getByText("missed a ping")).toBeInTheDocument();
+      expect(screen.queryByText("unreachable")).toBeNull();
+    });
+
+    it("says parked as well as unreachable — they are not the same state", () => {
+      projects = [makeProject({ id: PROJECT.id, name: "remote", hostId: "box" })];
+      hosts = [makeHost({ id: "box", name: "build-box", health: "offline", drained: true })];
+      renderSidebar();
+      expect(screen.getByText("unreachable")).toBeInTheDocument();
+      expect(screen.getByText("parked")).toBeInTheDocument();
+    });
+
+    it("adds nothing for a local project, which does not name a host", () => {
+      projects = [makeProject({ id: PROJECT.id, hostId: "local" })];
+      hosts = [makeHost({ id: "local", name: "This machine", health: "offline", drained: true })];
+      renderSidebar();
+      expect(screen.queryByText("unreachable")).toBeNull();
+      expect(screen.queryByText("parked")).toBeNull();
+    });
+  });
+
   // Sidebar declutter (issue #1465) — a project the user has manually
   // EXPANDED (independent of its session count; ProjectHeader's collapse
   // toggle has no session-count gate) and which currently has zero sessions

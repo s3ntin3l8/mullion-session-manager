@@ -75,6 +75,9 @@ vi.mock("./store/index.js", () => {
       tasks: [],
       openRightSidebarPr: vi.fn(),
       sessions,
+      // Issue #1892 — HostStatusLabel subscribes (the name lookup stays on
+      // getState below). A remote session with no `hosts` here throws.
+      hosts,
       mutedSessionIds: [],
       promoteSession: promoteSessionMock,
       declinePromote: declinePromoteMock,
@@ -309,6 +312,27 @@ describe("SessionRow", () => {
       // Better a raw id than nothing: the session IS on some host, and the
       // id identifies it even when the fleet's list has no name for it.
       expect(screen.getByText("unknown-host")).toBeInTheDocument();
+      // No host record, so no derived status to invent.
+      expect(screen.queryByText("unreachable")).not.toBeInTheDocument();
+    });
+
+    // Issue #1892 — the row already names the host. The status is the
+    // heartbeat's own words, and "parked" (host.drained) is a different
+    // sentence from "unreachable".
+    it("states unreachable and parked as two different words", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText("mac-mini")).toBeInTheDocument();
+      expect(screen.getByText("unreachable")).toBeInTheDocument();
+      expect(screen.getByText("parked")).toBeInTheDocument();
     });
   });
 

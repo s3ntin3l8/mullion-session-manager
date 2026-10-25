@@ -8,6 +8,11 @@ import { BellIcon, CheckIcon, CloseIcon, HostsIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { describeHostBadge } from "./lib/hostBadge.js";
+import { HostStatusLabel } from "./HostStatusLabel.js";
+// From the shared module, not ./api/index.js — this file's test mocks that
+// module wholesale (only `api` is provided), the same reason lib/hostBadge.ts
+// does not import LOCAL_HOST_ID from there.
+import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
@@ -344,6 +349,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // decision's own words) are computed together, in one place, so the two
   // surfaces cannot disagree: see lib/hostBadge.ts.
   const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
+  // Issue #1892 — same split as the sidebar row: the name is non-reactive,
+  // the derived status has to follow the heartbeat.
+  const remoteHost = useDashboardStore((s) => {
+    const hostId = session?.resolvedHostId;
+    if (!hostId || hostId === LOCAL_HOST_ID) return null;
+    return s.hosts.find((h) => h.id === hostId) ?? null;
+  });
 
   return (
     <div
@@ -391,6 +403,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             <span className="pane-tab-host-badge-name">{hostBadge.name}</span>
           </span>
         )}
+        {!narrow && remoteHost && <HostStatusLabel host={remoteHost} />}
         {unreadCount > 0 && unreadIconKind && (
           <span
             className={`pane-tab-unread-badge ${unreadIconKind}${tight ? " compact" : ""}`}

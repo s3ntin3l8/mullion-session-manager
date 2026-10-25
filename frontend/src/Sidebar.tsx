@@ -18,6 +18,7 @@ import type { Device, DiscoveredProject, Host, Project, Session, Task } from "./
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
 import { describeHostBadge } from "./lib/hostBadge.js";
+import { HostStatusLabel } from "./HostStatusLabel.js";
 import {
   formatStatusLabel,
   isStatusReachable,
@@ -1225,6 +1226,9 @@ function ProjectHeader({
             {host.name}
           </span>
         )}
+        {/* Issue #1892 — outside the badge's own max-width, so a long host
+            name cannot ellipsis the status words away. */}
+        {host && <HostStatusLabel host={host} />}
         {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
         {/* Sidebar declutter — a project with no sessions at all doesn't need
           a "0" sitting in its header; the plain count only earns its place
@@ -2116,6 +2120,15 @@ export function SessionRow({
   // lib/hostBadge.ts's own comment for why the two disagree about how to
   // name a host.
   const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
+  // Issue #1892 — the badge above names the host and deliberately does not
+  // subscribe (a name does not change when the heartbeat does). The status
+  // does, so this row subscribes to that one host. Local sessions have no
+  // badge and get no status.
+  const remoteHost = useDashboardStore((s) => {
+    const hostId = session.resolvedHostId;
+    if (!hostId || hostId === LOCAL_HOST_ID) return null;
+    return s.hosts.find((h) => h.id === hostId) ?? null;
+  });
   const statusLabel = (
     <span className="session-status-group">
       <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
@@ -2141,6 +2154,7 @@ export function SessionRow({
           <span className="session-host-badge-name">{hostBadge.name}</span>
         </span>
       )}
+      {remoteHost && <HostStatusLabel host={remoteHost} />}
       {openInWorkspace && (
         // The word is the signal — a colour on the row would not say
         // "this pane is already open". aria-label below repeats it: that
