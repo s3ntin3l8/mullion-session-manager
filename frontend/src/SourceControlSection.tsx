@@ -5,6 +5,7 @@ import { useDashboardStore } from "./store/index.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
+import { ErrorText } from "./ui/ErrorText.js";
 import {
   ChevronDownIcon,
   ExternalLinkIcon,
@@ -16,6 +17,7 @@ import { SidebarToolbar } from "./right-sidebar/SidebarToolbar.js";
 import { useFollowedProject } from "./hooks/useFollowedProject.js";
 import type { FollowedProject } from "./hooks/useFollowedProject.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
+import { describeError } from "./lib/describeError.js";
 
 // Same threshold/reasoning as Sidebar.tsx's own BEHIND_STALE_THRESHOLD for
 // the project row badge — kept as a separate constant (not exported/shared)
@@ -189,11 +191,15 @@ function SourceControlView({
   const [isFetching, setIsFetching] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
   const [pullError, setPullError] = useState<string | null>(null);
+  // The fetch's own failure — the pull's sibling error above already has
+  // one, and the fetch used to have none (audit finding 29).
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const handleFetch = useCallback(async () => {
     if (effectiveProjectId == null) return;
     setIsFetching(true);
     setPullError(null);
+    setFetchError(null);
     try {
       await fetchProjectGit(effectiveProjectId);
       // Two separate staleness traps, both avoided here:
@@ -214,7 +220,12 @@ function SourceControlView({
         gitStatuses: { ...s.gitStatuses, [effectiveProjectId]: status ?? null },
       }));
     } catch (err) {
+      // This used to be console-only, while its SIBLING right below — the
+      // pull — sets a visible `pullError`. So a failed fetch was
+      // invisible and a failed pull was not (audit finding 29). The
+      // section's own error line is the right home for it.
       console.debug("[SourceControlSection] fetch failed", err);
+      setFetchError(describeError(err, "Could not fetch the git status — try again."));
     } finally {
       setIsFetching(false);
     }
@@ -402,7 +413,15 @@ function SourceControlView({
               )}
 
               {pullError && (
-                <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+                <ErrorText className="github-panel-empty-row github-panel-conflicts">
+                  {pullError}
+                </ErrorText>
+              )}
+
+              {fetchError && (
+                <ErrorText className="github-panel-empty-row github-panel-conflicts">
+                  {fetchError}
+                </ErrorText>
               )}
 
               {gitStatus.isClean ? (

@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { api } from "../../api/index.js";
+import { describeError } from "../../lib/describeError.js";
 import type { DashboardState, ProjectsSlice } from "../types.js";
 
 export const createProjectsSlice: StateCreator<DashboardState, [], [], ProjectsSlice> = (
@@ -8,9 +9,27 @@ export const createProjectsSlice: StateCreator<DashboardState, [], [], ProjectsS
 ) => ({
   projects: [],
   projectUrls: {},
+  // "Loading" and "failed" used to be the same state — an empty project
+  // list — so the sidebar showed its "Welcome to Mullion" first-run empty
+  // state both while the list was still in flight AND forever if the fetch
+  // failed (see the audit's finding 14). These two fields separate the
+  // three cases: still loading, loaded-and-empty, and failed.
+  projectsLoaded: false,
+  projectsError: null,
 
   refreshProjects: async () => {
-    set({ projects: await api.listProjects() });
+    let projects;
+    try {
+      projects = await api.listProjects();
+    } catch (err) {
+      // The failure is recorded BEFORE it is rethrown, so a caller that
+      // catches it (or doesn't) still leaves the UI able to say "the
+      // project list could not be loaded" rather than "you have no
+      // projects".
+      set({ projectsError: describeError(err, "Could not load projects."), projectsLoaded: true });
+      throw err;
+    }
+    set({ projects, projectsError: null, projectsLoaded: true });
     // Fire-and-forget: a project list change (create/rename/delete, or
     // just this tick's poll) shouldn't make every refreshProjects() caller
     // wait on N additional git-status round trips too.

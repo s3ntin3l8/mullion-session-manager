@@ -226,6 +226,8 @@ export function Toolbar({
                   icon: <PlusIcon size={14} />,
                   onClick: onOpenLauncher,
                   disabled: viewMode === "kanban",
+                  // The launcher is a focus-trapped overlay of its own.
+                  opensOverlay: true,
                 },
                 {
                   key: "theme",
@@ -238,6 +240,8 @@ export function Toolbar({
                   label: currentVersion !== null ? `Settings · v${currentVersion}` : "Settings",
                   icon: <GearIcon size={14} />,
                   onClick: () => onOpenSettings(),
+                  // The Settings modal is a focus-trapped overlay of its own.
+                  opensOverlay: true,
                 },
               ]}
             />

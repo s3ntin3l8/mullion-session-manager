@@ -122,6 +122,24 @@
   background: color-mix(in srgb, var(--r) 12%, transparent);
 }
 
+/* The permanent live region the terminal toasts live in (see
+   terminal-pane/TerminalToasts.tsx). It has to be mounted for the whole
+   lifetime of the pane, because a live region only announces content that
+   CHANGES inside it — a region inserted together with its content is not
+   reliably announced.
+
+   `position: absolute; inset: 0` makes it the containing block for the
+   absolutely-positioned toasts below, so their `top: 8px; left: 50%` land
+   in exactly the same place they did when they were direct children of the
+   pane (whose own `position: relative` root this matches). `pointer-events:
+   none` keeps the overlay from swallowing clicks on the terminal beneath
+   it — the toasts themselves already opt out individually. */
+.terminal-toasts {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
 .terminal-copy-indicator {
   position: absolute;
   top: 8px;
@@ -296,6 +314,13 @@
 .terminal-find-input:focus {
   outline: none;
 }
+/* Same specificity as the `:focus` rule above, and later in the cascade, so
+   this wins for keyboard focus — the base rule had removed the focus
+   indicator without replacing it. */
+.terminal-find-input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .terminal-find-count {
   flex-shrink: 0;
   font-family: "Geist Mono", monospace;
@@ -363,4 +388,12 @@ button.confirm-btn-stable > .confirm-btn-label {
 }
 button.confirm-btn-stable > .confirm-btn-label[data-active="false"] {
   visibility: hidden;
+}
+/* ConfirmButton's arm countdown — the "6s" that ticks down while the button
+   is armed. `tabular-nums` keeps the glyph width constant as the digit
+   changes, so the number does not reflow the button as it counts. */
+.confirm-btn-countdown {
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
 }

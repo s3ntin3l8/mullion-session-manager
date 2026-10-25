@@ -778,7 +778,17 @@ export function DockProjectGroup({
         if (!confirmBeforeKill || killArmedIds.has(control.id)) {
           disarmKill(control.id);
           bumpToggleGen(control.id);
-          void useDashboardStore.getState().deleteSession(running.id);
+          // The failure is reported on the row, the same way its two
+          // siblings in this file report theirs — "Failed to start — try
+          // again" and "Failed to switch — try again". This one used to
+          // reject unhandled, so a kill that failed was completely silent
+          // and the row just sat there looking alive (audit finding 10).
+          void useDashboardStore
+            .getState()
+            .deleteSession(running.id)
+            .catch(() => {
+              showCheckStatus(control.id, "Failed to kill — try again", true);
+            });
         } else {
           armKill(control.id);
         }

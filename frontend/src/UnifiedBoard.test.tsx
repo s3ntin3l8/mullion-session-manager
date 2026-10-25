@@ -40,6 +40,7 @@ let sessions: Session[];
 let projects: Project[];
 let tasks: Task[];
 let tasksLoaded: boolean;
+let tasksError: string | null;
 let taskMasterEnabled: boolean;
 let kanbanOrder: Record<string, number[]>;
 let events: Record<number, NotificationEvent[]>;
@@ -64,6 +65,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    tasksError,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,
@@ -165,6 +167,7 @@ beforeEach(() => {
   // covers directly. Individual tests override this to false where the
   // pre-load state matters.
   tasksLoaded = true;
+  tasksError = null;
   taskMasterEnabled = true;
   kanbanOrder = {};
   events = {};
@@ -972,6 +975,93 @@ describe("UnifiedBoard parent filter (#701)", () => {
     expect(updateTask).toHaveBeenCalledWith(2, { boardOrder: 1 });
     expect(updateTask).toHaveBeenCalledWith(1, { boardOrder: 2 });
     expect(updateTask).toHaveBeenCalledTimes(3);
+  });
+});
+
+// Audit finding 15 — a FAILED task fetch is not an empty task list. The
+// tasks slice keeps the last-known-good list on failure (so `tasks` stays
+// []) and records the failure in `tasksError`; before this, the board
+// rendered "No tasks yet." and invited the user to create a task, which is
+// actively misleading when the real cause is that the list could not be
+// loaded.
+describe("UnifiedBoard task load failure (audit finding 15)", () => {
+  it("says the task list could not be loaded instead of 'No tasks yet.'", () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("Couldn't load tasks.")).toBeInTheDocument();
+    // The error's own message, so the user can tell WHAT went wrong
+    // rather than only that something did.
+    expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
+    expect(screen.queryByText("No tasks yet.")).toBeNull();
+    // The "create a task" invitation is exactly what a failed load must
+    // not show — it sends the user off to fix the wrong problem.
+    expect(screen.queryByText(/mullion-task/)).toBeNull();
+  });
+
+  it("keeps the seven columns underneath the error note, so the board's shape stays legible", () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(
+      screen.getAllByText(/^Backlog$|^Ready$|^Claimed$|^In Progress$|^Reviewing$|^Done$|^Failed$/, {
+        selector: ".kanban-column-title",
+      }),
+    ).toHaveLength(7);
+  });
+
+  // The board keeps the last-known-good list on a failed refresh, so the
+  // columns below the note are REAL tasks — saying "Couldn't load tasks."
+  // next to them would read as if there were no tasks at all. This is the
+  // same split Sidebar and GitPanel already make.
+  it("says the tasks on screen are the last known ones when the refresh fails", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Still here" })];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(
+      screen.getByText("Could not refresh tasks — showing the last known list."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
+    // NOT the "there are no tasks" wording — there are.
+    expect(screen.queryByText("Couldn't load tasks.")).toBeNull();
+    expect(screen.getByText("Still here")).toBeInTheDocument();
+  });
+
+  it("still says the list could not be loaded when there are no tasks to show", () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("Couldn't load tasks.")).toBeInTheDocument();
+    expect(screen.queryByText("Could not refresh tasks — showing the last known list.")).toBeNull();
+  });
+
+  it("re-runs the task fetch when Retry is clicked", async () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    // The mount effect's own refreshTasks() call is not the one under
+    // test here — clear it so the assertion is about the click alone.
+    refreshTasks.mockClear();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(refreshTasks).toHaveBeenCalledTimes(1);
+  });
+
+  it("still shows the ordinary empty state when the task list loaded fine", () => {
+    tasks = [];
+    tasksError = null;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("No tasks yet.")).toBeInTheDocument();
+    expect(screen.getByText(/mullion-task/)).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load tasks.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
 

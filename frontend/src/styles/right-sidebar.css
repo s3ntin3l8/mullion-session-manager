@@ -61,7 +61,8 @@
   height: 14px;
   padding: 0 3px;
   border-radius: 7px;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   color: #fff;
   font-size: 9px;
   line-height: 14px;

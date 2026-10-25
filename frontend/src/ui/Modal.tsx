@@ -14,6 +14,11 @@ import { CloseIcon } from "./icons.js";
 // fix, piloted here on `PromoteDialog` only; the other six migrate in
 // follow-up PRs once this shape is validated.
 //
+// All seven have now migrated onto this component (the UI/UX audit's
+// blocker #1), so the "pilot" wording above is historical — the shape is
+// now the only way these dialogs are built, and a new `create-modal-*`
+// dialog should compose `Modal` rather than repeat its markup.
+//
 // Composes the existing `useFocusTrap` hook rather than reimplementing any
 // of its focus-in/Tab-wrap/restore-on-close behavior — see that hook's own
 // header comment for why Escape is deliberately NOT its job: this repo's
@@ -36,11 +41,12 @@ import { CloseIcon } from "./icons.js";
 // `PromoteDialog`'s two triggers: `PaneActionsMenu`'s kebab menu and
 // `Sidebar`'s `KebabMenu`) must make sure that overlay's own trap doesn't
 // restore focus to its trigger button AFTER this modal's focus-in runs —
-// the race `useFocusTrap`'s `suppressRestore()` exists for. Verified safe
-// for both existing `PromoteDialog` call sites: `PaneActionsMenu.tsx`'s
-// `closeMenuAfterAction` already calls `suppressRestore()` before closing
-// the menu in the same click handler that opens this dialog, and
-// `Sidebar.tsx`'s `KebabMenu` has no focus trap of its own to race against.
+// the race `useFocusTrap`'s `suppressRestore()` exists for. Both existing
+// `PromoteDialog` call sites handle it: `PaneActionsMenu.tsx`'s
+// `closeMenuAfterAction` calls `suppressRestore()` before closing the menu
+// in the same click handler that opens this dialog, and `Sidebar.tsx`'s
+// `KebabMenu` marks the item with `opensOverlay: true`, which makes the
+// menu suppress its own restore for the same reason.
 export interface ModalProps {
   // Fired on backdrop click, the header close button, and Escape — the
   // caller decides what "close" means (a plain `onClose`, or something like
@@ -67,6 +73,18 @@ export interface ModalProps {
   initialFocusRef?: RefObject<HTMLElement | null>;
   backdropClassName?: string;
   modalClassName?: string;
+  // The header/body/footer wrappers default to the `create-modal-*` family.
+  // A dialog with its own look (SavedUrlModal's inset panel with an <h2>
+  // header) overrides them so it can compose this shell — and its
+  // focus trap, Escape handling and dialog semantics — without having to
+  // restate them.
+  headerClassName?: string;
+  bodyClassName?: string;
+  footerClassName?: string;
+  // Replaces the default header markup (icon + title + subtitle + close
+  // button) entirely. The caller then owns the close button — including
+  // giving it an accessible name, which the default one has.
+  headerContent?: ReactNode;
 }
 
 export function Modal({
@@ -80,6 +98,10 @@ export function Modal({
   initialFocusRef,
   backdropClassName = "create-modal-backdrop",
   modalClassName = "create-modal",
+  headerClassName = "create-modal-header",
+  bodyClassName = "create-modal-body",
+  footerClassName = "create-modal-footer",
+  headerContent,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({
@@ -117,20 +139,24 @@ export function Modal({
         aria-modal="true"
         aria-label={ariaLabel ?? (typeof title === "string" ? title : undefined)}
       >
-        <div className="create-modal-header">
-          {icon && <span className="create-modal-icon">{icon}</span>}
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">{title}</span>
-            {subtitle && <span className="create-modal-subtitle">{subtitle}</span>}
-          </span>
-          <button className="create-modal-close" onClick={onClose}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
+        {headerContent ? (
+          <div className={headerClassName}>{headerContent}</div>
+        ) : (
+          <div className={headerClassName}>
+            {icon && <span className="create-modal-icon">{icon}</span>}
+            <span className="create-modal-header-text">
+              <span className="create-modal-title">{title}</span>
+              {subtitle && <span className="create-modal-subtitle">{subtitle}</span>}
+            </span>
+            <button className="create-modal-close" onClick={onClose} aria-label="Close dialog">
+              <CloseIcon size={15} />
+            </button>
+          </div>
+        )}
 
-        <div className="create-modal-body">{children}</div>
+        <div className={bodyClassName}>{children}</div>
 
-        {footer && <div className="create-modal-footer">{footer}</div>}
+        {footer && <div className={footerClassName}>{footer}</div>}
       </div>
     </div>
   );

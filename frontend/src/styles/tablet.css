@@ -197,7 +197,8 @@
   }
   .mobile-key-bar-ctrl.locked {
     color: #fff;
-    background: var(--accent-solid);
+    /* --accent-fill: white-on-fill background, not the text-role accent. */
+    background: var(--accent-fill);
   }
   .mobile-key-bar-mic.listening {
     color: var(--r);

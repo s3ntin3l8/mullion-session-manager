@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewPanelApi } from "dockview-react";
 import { BrowserPanel } from "./BrowserPanel.js";
@@ -1305,5 +1305,35 @@ describe("BrowserPanel", () => {
       await user.click(followBtn);
       expect(followBtn).not.toHaveClass("active");
     });
+  });
+});
+
+// Audit finding 30 — a failed favorites fetch was console-only, and the
+// effect of that was that it looked exactly like "you have no favorites":
+// the dropdown button simply never renders, with nothing to say why.
+describe("failed favorites fetch (audit finding 30)", () => {
+  it("reports the failure to the user", async () => {
+    useDashboardStore.getState().clearToasts();
+    vi.spyOn(api, "listFavoriteUrls").mockRejectedValue(new Error("the server said no"));
+    render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+
+    await waitFor(() => {
+      const toasts = useDashboardStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("error");
+      expect(toasts[0].message).toContain("Could not load your favorites.");
+      expect(toasts[0].message).toContain("the server said no");
+    });
+  });
+
+  it("reports nothing when the favorites load", async () => {
+    useDashboardStore.getState().clearToasts();
+    vi.spyOn(api, "listFavoriteUrls").mockResolvedValue([]);
+    render(<BrowserPanel params={{ kind: "external", url: "https://example.com" }} />);
+
+    await waitFor(() => {
+      expect(api.listFavoriteUrls).toHaveBeenCalled();
+    });
+    expect(useDashboardStore.getState().toasts).toHaveLength(0);
   });
 });

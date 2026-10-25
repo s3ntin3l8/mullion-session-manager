@@ -16,6 +16,7 @@ import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { ProjectFileDiff } from "./SourceControlSection.js";
 import { GitHistorySection } from "./git/GitHistorySection.js";
 import { PHASE_LABEL, phaseTone } from "./github/prPhase.js";
+import { describeError } from "./lib/describeError.js";
 
 export interface GitPanelParams {
   projectId: number;
@@ -65,6 +66,16 @@ function statusDotClass(status: GitFileStatus["status"]): string {
 // (the 503 "repo exists but git status itself failed" case, or a raw network
 // error) keeps whatever was last successfully shown, exactly like the
 // sidebar's own gitStatuses map now does (store.ts's refreshGitStatuses).
+//
+// Audit finding 28 (docs/ui-ux-audit.md) — that "keeps whatever was last
+// successfully shown" posture had a hole in it: `status === undefined` meant
+// BOTH "still loading" and "the first fetch failed", so a failed FIRST
+// attempt rendered "Loading…" forever. The user was told the panel was still
+// trying when it had in fact failed, and nothing in the panel ever said so.
+// `statusError` is the missing third state (see the state declaration
+// below): a failed first fetch now renders a named error with a Retry, and
+// a failed LATER refresh keeps the last-known-good status on screen but
+// marks it as no longer known to be current.
 export function GitPanel({
   params,
   onOpenSession,
@@ -87,6 +98,19 @@ export function GitPanel({
   onEditFile?: (path: string) => void;
 }) {
   const [status, setStatus] = useState<GitStatus | null | undefined>(undefined);
+  // Audit finding 28 — the git-status fetch's THIRD state. `status` alone
+  // could not tell "still loading" from "the fetch failed": `undefined`
+  // meant both, so a failed FIRST attempt left the panel rendering
+  // "Loading…" forever (see the component's own header comment).
+  // `statusError` carries the failure's own text and is cleared again by
+  // the next successful fetch — its presence means "the last status fetch
+  // failed", and whether that is fatal (nothing was ever loaded) or a
+  // staleness warning (a status WAS loaded) is decided by `status` alone.
+  const [statusError, setStatusError] = useState<string | null>(null);
+  // In-flight guard for the Retry button below, so a double-click can't
+  // fire two status requests — the same shape as the "Open session here"
+  // guard further down.
+  const [isRetryingStatus, setIsRetryingStatus] = useState(false);
   // Branches + worktrees (issue #162's "worktree awareness") — fetched once
   // when the panel opens, deliberately NOT polled: unlike working-tree
   // status, a branch/worktree list changes rarely and costs more to
@@ -148,16 +172,25 @@ export function GitPanel({
         const result = await api.getProjectGitStatus(params.projectId);
         if (cancelledRef?.current) return;
         setStatus(result ?? null);
+        // Audit finding 28 — a SUCCESS clears any earlier failure: the
+        // panel is current again, and a first-attempt failure (which
+        // renders the "could not load" state below) disappears entirely.
+        setStatusError(null);
       } catch (err) {
         // Transient failure (a thrown ApiError for the 503 "unavailable"
         // response, or any other network hiccup) — deliberately a no-op on
         // `status`, not `setStatus(null)`. Keeps rendering the last-known-good
-        // status (or stays in the initial "Loading…" state if this is the
-        // very first attempt) rather than incorrectly claiming "not a git
-        // repository". Logged at debug level (same pattern as git-status.ts's
-        // own stderr logging) so a *persistent* failure is still observable,
-        // even though a single one is intentionally invisible to the user.
+        // status rather than incorrectly claiming "not a git repository".
+        //
+        // Audit finding 28 — but the FAILURE itself is now recorded, which
+        // is what the old code was missing. `statusError` is what turns a
+        // failed FIRST fetch into a visible error (instead of "Loading…"
+        // forever) and what marks an already-loaded panel as stale. Logged
+        // at debug level too (same pattern as git-status.ts's own stderr
+        // logging) so a *persistent* failure is still observable in the
+        // console even though the panel now says so on screen.
         console.debug("[GitPanel] getProjectGitStatus failed", err);
+        setStatusError(describeError(err, "the request failed"));
       }
     },
     [params.projectId],
@@ -441,15 +474,70 @@ export function GitPanel({
     await store.toggleAutoFetch(params.projectId, null);
   }, [params.projectId]);
 
+  // Audit finding 28 — the Retry in the "could not load git status" state
+  // below. Re-runs the very same fetch, so a successful retry lands the
+  // panel in its normal loaded state and clears the error (fetchStatus
+  // clears `statusError` on success). The panel's own poll keeps running
+  // in the background, so a failure that clears on its own is recovered
+  // either way — this button is the user-driven path, not the only one.
+  const handleRetryStatus = useCallback(async () => {
+    if (isRetryingStatus) return;
+    setIsRetryingStatus(true);
+    try {
+      await fetchStatus();
+    } finally {
+      setIsRetryingStatus(false);
+    }
+  }, [fetchStatus, isRetryingStatus]);
+
   if (status === undefined) {
+    // Audit finding 28 — the FIRST fetch failed. There is no status to
+    // show and no last-known-good to fall back to, so the panel says what
+    // happened and offers a Retry, instead of claiming to still be
+    // loading (which is what this used to do, forever).
+    if (statusError) {
+      return (
+        <EmptyStateNote>
+          <div className="github-panel-conflicts" role="alert">
+            Could not load git status — {statusError}
+          </div>
+          <button
+            type="button"
+            className="git-panel-fetch-btn"
+            onClick={() => void handleRetryStatus()}
+            disabled={isRetryingStatus}
+          >
+            {isRetryingStatus ? "Retrying…" : "Retry"}
+          </button>
+        </EmptyStateNote>
+      );
+    }
     return <EmptyStateNote>Loading…</EmptyStateNote>;
   }
+
+  // Audit finding 28, second half — the STALENESS marker. A status WAS
+  // loaded and is still on screen, but the latest refresh failed, so what
+  // is on screen is no longer known to be current. The marker is TEXT, not
+  // colour alone (the `github-panel-conflicts` class only tints it) — a
+  // user who cannot distinguish the tint still gets the same information.
+  const staleStatusNote = statusError ? (
+    <div className="github-panel-empty-row github-panel-conflicts" role="status">
+      Git status is out of date — the last refresh failed: {statusError}
+    </div>
+  ) : null;
 
   if (status === null) {
     // Only reached via the durable 204 now — a transient failure (503, or
     // any other fetch error) is handled above by simply not calling
-    // setStatus, so it never lands here.
-    return <EmptyStateNote>Not a git repository.</EmptyStateNote>;
+    // setStatus, so it never lands here. The "not a git repository" answer
+    // is itself last-known-good information, so a later failed refresh
+    // marks it stale too rather than passing the failure off in silence.
+    return (
+      <>
+        <EmptyStateNote>Not a git repository.</EmptyStateNote>
+        {staleStatusNote}
+      </>
+    );
   }
 
   return (
@@ -459,6 +547,8 @@ export function GitPanel({
         <span className="github-panel-repo-name">{status.branch}</span>
         {status.hash && <span className="github-panel-row-number">{status.hash}</span>}
       </div>
+
+      {staleStatusNote}
 
       <div className="git-panel-sync-row">
         <span className="git-panel-ahead-behind">
