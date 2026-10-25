@@ -58,14 +58,16 @@
   top: 1px;
   right: 0;
   min-width: 14px;
-  height: 14px;
+  /* The count is 0.5625rem. A px line box clips it when the root font
+     scales, so this badge's box tracks the type (14px at a 16px root). */
+  height: 0.875rem;
   padding: 0 3px;
   border-radius: 7px;
   /* --accent-fill: white-on-fill background, not the text-role accent. */
   background: var(--accent-fill);
   color: #fff;
   font-size: 0.5625rem;
-  line-height: 14px;
+  line-height: 0.875rem;
   text-align: center;
 }
 .right-rail-badge.alert {
