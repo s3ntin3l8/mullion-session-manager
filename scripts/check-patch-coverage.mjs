@@ -35,6 +35,15 @@ function loadTypeScript() {
       tsModule = requireFromHere("typescript");
     } catch {
       tsModule = null;
+      // Visible on purpose. Without the parser the tool falls back to the
+      // line heuristic, which counts a type declaration's BODY as executable
+      // — the very defect #1899 fixes. An operator running this from the
+      // release tarball (where devDependencies are not installed) must not
+      // get a silently-degraded report and no sign that it happened.
+      console.warn(
+        "check-patch-coverage: the TypeScript parser is not available, so type and " +
+          "interface bodies are counted as executable lines (the pre-#1899 behaviour).",
+      );
     }
   }
   return tsModule;
@@ -102,6 +111,12 @@ export function nonExecutableLines(source, fileName) {
     ) {
       mark(node);
     } else if (ts.isExportDeclaration(node) && node.isTypeOnly) {
+      mark(node);
+    } else if ((ts.getCombinedModifierFlags(node) & ts.ModifierFlags.Ambient) !== 0) {
+      // An AMBIENT declaration — `declare module "x" { … }`, `declare global
+      // { … }`, `declare const x: T` — has no runtime code at all. Its
+      // header line was the last shape the old heuristic counted as
+      // executable (src/plugins/db.ts's `declare module "fastify"`).
       mark(node);
     }
     ts.forEachChild(node, visit);

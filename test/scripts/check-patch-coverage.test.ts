@@ -274,6 +274,25 @@ diff --git a/docs/README.md b/docs/README.md
     expect(lines.has(7)).toBe(false);
   });
 
+  it("nonExecutableLines marks an ambient declaration, which has no runtime code", () => {
+    // `declare module "x" { … }` is a type-only declaration — the header
+    // line was the last shape the old heuristic counted as executable
+    // (src/plugins/db.ts's `declare module "fastify"`).
+    const source = [
+      'declare module "fastify" {',
+      "  interface FastifyInstance {",
+      "    db: string;",
+      "  }",
+      "}",
+      "",
+      "export const real = 1;",
+    ].join("\n");
+
+    const lines = nonExecutableLines(source, "src/example.ts");
+    expect([...lines].sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+    expect(lines.has(7)).toBe(false);
+  });
+
   it("nonExecutableLines marks a plain value import, and leaves a statement alone", () => {
     const source = ["import { thing } from './thing.js';", "", "thing();"].join("\n");
     const lines = nonExecutableLines(source, "src/example.ts");
