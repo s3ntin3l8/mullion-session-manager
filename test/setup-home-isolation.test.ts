@@ -50,7 +50,10 @@ describe("test HOME isolation (issue #1944)", () => {
       injectProjectBriefing: false,
       injectMullionBundle: false,
     });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // managedInstall is fire-and-forget; poll rather than guess a delay.
+    for (let i = 0; i < 100 && existsSync(skillDir); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
 
     expect(existsSync(skillDir)).toBe(false);
     const after = existsSync(realManifest) ? statSync(realManifest).mtimeMs : null;
