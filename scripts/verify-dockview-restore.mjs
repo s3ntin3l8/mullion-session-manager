@@ -22,15 +22,22 @@
  *   4. The restore path reads a saved layout back: the blob captured in (1)
  *      is stored server-side and the app restores the tile from it on a
  *      fresh page load; the blob captured in (2) restores to an empty board.
+ *   5. The legacy sweep inside the restore also removes an emptied group:
+ *      a stored blob whose group holds a legacy "tasks" panel is restored,
+ *      `closeLegacyPanels` closes that panel (the app's own restore effect
+ *      calls it right after `fromJSON`), and the group it leaves behind must
+ *      be gone. The blob carries a second, ordinary group alongside it, so
+ *      "the legacy group is gone" cannot be confused with "the whole layout
+ *      failed to restore".
  *
- * Step 4 stores the blobs through the demo's own Node-side API helper rather
- * than through the browser. The demo runs vite on one port and the backend on
- * another, so the browser's `Origin` is not the backend's own origin and
- * plugins/auth.ts rejects every mutating browser request ("cross-origin
- * request rejected") — a demo-topology artifact, not a product behavior. A
- * Node fetch carries no `Origin` header, which the same check deliberately
- * allows. The browser's own autosave is still observed (step 3 reads the
- * payload it sends); only the write is re-routed.
+ * Steps 4 and 5 store the blobs through the demo's own Node-side API helper
+ * rather than through the browser. The demo runs vite on one port and the
+ * backend on another, so the browser's `Origin` is not the backend's own
+ * origin and plugins/auth.ts rejects every mutating browser request
+ * ("cross-origin request rejected") — a demo-topology artifact, not a product
+ * behavior. A Node fetch carries no `Origin` header, which the same check
+ * deliberately allows. The browser's own autosave is still observed (step 3
+ * reads the payload it sends); only the write is re-routed.
  *
  * Usage: `node scripts/verify-dockview-restore.mjs` (or `make
  * verify-dockview-restore`). Needs Playwright's Chromium once:
@@ -89,120 +96,196 @@ function captureAutosavedLayout(page) {
 
 async function run(browser, demo) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const page = await context.newPage();
-  const autosaved = captureAutosavedLayout(page);
+  try {
+    const page = await context.newPage();
+    const autosaved = captureAutosavedLayout(page);
 
-  await page.goto(demo.frontendUrl, { waitUntil: "networkidle" });
-  await page.waitForTimeout(1500);
+    await page.goto(demo.frontendUrl, { waitUntil: "networkidle" });
+    await page.waitForTimeout(1500);
 
-  const initial = await boardState(page);
-  check(
-    "an empty board shows no group, shows the watermark and Mullion's overlay",
-    initial.groups === 0 && initial.watermark === 1 && initial.emptyOverlay === 1,
-    JSON.stringify(initial),
-  );
+    const initial = await boardState(page);
+    check(
+      "an empty board shows no group, shows the watermark and Mullion's overlay",
+      initial.groups === 0 &&
+        initial.watermark === 1 &&
+        initial.emptyOverlay === 1 &&
+        initial.emptyText,
+      JSON.stringify(initial),
+    );
 
-  // --- 1. open a tile -----------------------------------------------------
-  const session = page.locator(".session-item", { hasText: "fake-agent.sh" }).first();
-  await session.waitFor({ timeout: 30_000 });
-  await session.click();
-  await page.waitForTimeout(3000);
+    // --- 1. open a tile -----------------------------------------------------
+    const session = page.locator(".session-item", { hasText: "fake-agent.sh" }).first();
+    await session.waitFor({ timeout: 30_000 });
+    await session.click();
+    await page.waitForTimeout(3000);
 
-  const opened = await boardState(page);
-  check(
-    "opening a tile creates exactly one dockview group and clears the empty overlay",
-    opened.groups === 1 && opened.tabs === 1 && opened.watermark === 0 && opened.emptyOverlay === 0,
-    JSON.stringify(opened),
-  );
+    const opened = await boardState(page);
+    check(
+      "opening a tile creates exactly one dockview group and clears the empty overlay",
+      opened.groups === 1 &&
+        opened.tabs === 1 &&
+        opened.watermark === 0 &&
+        opened.emptyOverlay === 0 &&
+        !opened.emptyText,
+      JSON.stringify(opened),
+    );
 
-  // The autosave is debounced 800ms and the payload is what the server would
-  // store, so wait for it before reading it.
-  await page.waitForTimeout(1500);
-  const openLayout = autosaved.body;
-  check(
-    "the app autosaved a layout for the open tile",
-    !!openLayout,
-    JSON.stringify(openLayout)?.slice(0, 160),
-  );
-  check(
-    "the saved layout holds the tiled group and its panel",
-    !!openLayout &&
-      openLayout.grid?.root?.data?.length === 1 &&
-      Object.keys(openLayout.panels ?? {}).length === 1,
-    JSON.stringify(openLayout?.grid?.root?.data)?.slice(0, 160),
-  );
+    // The autosave is debounced 800ms and the payload is what the server would
+    // store, so wait for it before reading it.
+    await page.waitForTimeout(1500);
+    const openLayout = autosaved.body;
+    check(
+      "the app autosaved a layout for the open tile",
+      !!openLayout,
+      JSON.stringify(openLayout)?.slice(0, 160),
+    );
+    check(
+      "the saved layout holds the tiled group and its panel",
+      !!openLayout &&
+        openLayout.grid?.root?.data?.length === 1 &&
+        Object.keys(openLayout.panels ?? {}).length === 1,
+      JSON.stringify(openLayout?.grid?.root?.data)?.slice(0, 160),
+    );
 
-  // --- 2. close the only pane of the only group ---------------------------
-  const closePane = page.getByRole("button", { name: "Close pane" });
-  check("the open tile exposes a close control", (await closePane.count()) === 1);
-  await closePane.first().click();
-  await page.waitForTimeout(2500);
+    // --- 2. close the only pane of the only group ---------------------------
+    const closePane = page.getByRole("button", { name: "Close pane" });
+    check("the open tile exposes a close control", (await closePane.count()) === 1);
+    await closePane.first().click();
+    await page.waitForTimeout(2500);
 
-  const closed = await boardState(page);
-  check(
-    "closing the only pane of the only group removes that group",
-    closed.groups === 0 && closed.tabs === 0 && closed.watermark === 1 && closed.emptyOverlay === 1,
-    JSON.stringify(closed),
-  );
+    const closed = await boardState(page);
+    check(
+      "closing the only pane of the only group removes that group",
+      closed.groups === 0 &&
+        closed.tabs === 0 &&
+        closed.watermark === 1 &&
+        closed.emptyOverlay === 1 &&
+        closed.emptyText,
+      JSON.stringify(closed),
+    );
 
-  // --- 3. the emptied group is gone from the saved layout -----------------
-  await page.waitForTimeout(1500);
-  const closedLayout = autosaved.body;
-  check(
-    "the autosaved layout after the close carries no leftover group",
-    !!closedLayout &&
-      (closedLayout.grid?.root?.data?.length ?? -1) === 0 &&
-      Object.keys(closedLayout.panels ?? {}).length === 0,
-    JSON.stringify(closedLayout?.grid?.root?.data)?.slice(0, 160),
-  );
+    // --- 3. the emptied group is gone from the saved layout -----------------
+    await page.waitForTimeout(1500);
+    const closedLayout = autosaved.body;
+    check(
+      "the autosaved layout after the close carries no leftover group",
+      !!closedLayout &&
+        (closedLayout.grid?.root?.data?.length ?? -1) === 0 &&
+        Object.keys(closedLayout.panels ?? {}).length === 0,
+      JSON.stringify(closedLayout?.grid?.root?.data)?.slice(0, 160),
+    );
 
-  // --- 4. the restore path reads a saved layout back ----------------------
-  // Store the blob captured with the tile open, then load the app fresh: the
-  // tile must come back from the blob.
-  const workspaces = await demo.api("/api/workspaces");
-  const workspaceId = workspaces[0]?.id;
-  check("the demo has a workspace to store layouts against", typeof workspaceId === "number");
-  if (typeof workspaceId !== "number") return;
+    // --- 4. the restore path reads a saved layout back ----------------------
+    // Store the blob captured with the tile open, then load the app fresh: the
+    // tile must come back from the blob.
+    const workspaces = await demo.api("/api/workspaces");
+    const workspaceId = workspaces[0]?.id;
+    check("the demo has a workspace to store layouts against", typeof workspaceId === "number");
+    if (typeof workspaceId !== "number") return;
 
-  await demo.api(`/api/workspaces/${workspaceId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ layout: openLayout }),
-  });
-  const stored = await demo.api("/api/workspaces");
-  check(
-    "the stored workspace row holds the layout blob",
-    !!stored[0]?.layout && (stored[0].layout.grid?.root?.data?.length ?? 0) === 1,
-    JSON.stringify(stored[0]?.layout?.grid?.root?.data)?.slice(0, 120),
-  );
+    await demo.api(`/api/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ layout: openLayout }),
+    });
+    const stored = await demo.api("/api/workspaces");
+    check(
+      "the stored workspace row holds the layout blob",
+      !!stored[0]?.layout && (stored[0].layout.grid?.root?.data?.length ?? 0) === 1,
+      JSON.stringify(stored[0]?.layout?.grid?.root?.data)?.slice(0, 120),
+    );
 
-  await page.reload({ waitUntil: "networkidle" });
-  await page.waitForTimeout(4000);
-  const restored = await boardState(page);
-  check(
-    "a fresh load restores the saved tile from the layout blob",
-    restored.groups === 1 && restored.tabs === 1,
-    JSON.stringify(restored),
-  );
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(4000);
+    const restored = await boardState(page);
+    check(
+      "a fresh load restores the saved tile from the layout blob",
+      restored.groups === 1 && restored.tabs === 1 && !restored.emptyText,
+      JSON.stringify(restored),
+    );
 
-  // And the emptied layout restores to an empty board — the removed group
-  // must not come back from the blob.
-  await demo.api(`/api/workspaces/${workspaceId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ layout: closedLayout }),
-  });
-  await page.reload({ waitUntil: "networkidle" });
-  await page.waitForTimeout(4000);
-  const restoredEmpty = await boardState(page);
-  check(
-    "a fresh load of the emptied layout restores an empty board",
-    restoredEmpty.groups === 0 &&
-      restoredEmpty.watermark === 1 &&
-      restoredEmpty.emptyOverlay === 1 &&
-      restoredEmpty.emptyText,
-    JSON.stringify(restoredEmpty),
-  );
+    // And the emptied layout restores to an empty board — the removed group
+    // must not come back from the blob.
+    await demo.api(`/api/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ layout: closedLayout }),
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(4000);
+    const restoredEmpty = await boardState(page);
+    check(
+      "a fresh load of the emptied layout restores an empty board",
+      restoredEmpty.groups === 0 &&
+        restoredEmpty.watermark === 1 &&
+        restoredEmpty.emptyOverlay === 1 &&
+        restoredEmpty.emptyText,
+      JSON.stringify(restoredEmpty),
+    );
 
-  await context.close();
+    // --- 5. the legacy sweep inside the restore empties a group too ---------
+    // A blob whose group holds a legacy "tasks" panel: the restore effect
+    // calls closeLegacyPanels right after fromJSON, which closes that panel,
+    // and the group it leaves behind must go with it. A second, ordinary
+    // group rides along, so "the legacy group is gone" cannot be confused
+    // with "the whole layout failed to restore".
+    const sessionPanelId = Object.keys(openLayout?.panels ?? {})[0];
+    const sessionPanel = openLayout?.panels?.[sessionPanelId];
+    const leaf = openLayout?.grid?.root?.data?.[0];
+    check(
+      "the captured layout can be turned into a legacy-panel layout",
+      !!sessionPanel && !!leaf,
+      `panel=${sessionPanelId}`,
+    );
+    if (!sessionPanel || !leaf) return;
+
+    const legacyLayout = {
+      ...openLayout,
+      grid: {
+        ...openLayout.grid,
+        root: {
+          ...openLayout.grid.root,
+          data: [
+            {
+              ...leaf,
+              data: { ...leaf.data, views: ["tasks"], activeView: "tasks", id: "legacy-group" },
+            },
+            {
+              ...leaf,
+              data: {
+                ...leaf.data,
+                views: [sessionPanelId],
+                activeView: sessionPanelId,
+                id: "kept-group",
+              },
+            },
+          ],
+        },
+      },
+      panels: {
+        ...openLayout.panels,
+        tasks: { ...sessionPanel, id: "tasks", contentComponent: "tasks" },
+      },
+    };
+
+    await demo.api(`/api/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ layout: legacyLayout }),
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(4000);
+    const legacyRestored = await boardState(page);
+    check(
+      "a restored legacy 'tasks' panel is closed and leaves no empty group behind",
+      legacyRestored.groups === 1 &&
+        legacyRestored.tabs === 1 &&
+        legacyRestored.watermark === 0 &&
+        !legacyRestored.emptyText,
+      JSON.stringify(legacyRestored),
+    );
+  } finally {
+    // The browser context leaks on the failure path otherwise; the demo still
+    // tears down through withDemo, but the context is ours to close.
+    await context.close();
+  }
 }
 
 async function main() {
