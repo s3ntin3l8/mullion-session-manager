@@ -5150,6 +5150,94 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // The remote PLAN: the plan is computed by the agent that owns the
+    // clone, exactly like the check.
+    it("asks a remote host for the plan, without confirming anything", async () => {
+      const { createServer } = await import("node:http");
+      const bodies: unknown[] = [];
+      const server = createServer((req, res) => {
+        let raw = "";
+        req.on("data", (chunk) => {
+          raw += chunk;
+        });
+        req.on("end", () => {
+          bodies.push(JSON.parse(raw || "{}"));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              gitDir: "/remote/.git",
+              quarantine: ["abcdef"],
+              willFetch: true,
+              indexesToRebuild: ["/remote"],
+              indexesToSkip: [],
+              actionable: true,
+            }),
+          );
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const app = await buildApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "git-repair-plan-host",
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
+          },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-git-repair-plan", cwd: "/x", hostId: host.json().id },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${project.json().id}/git-repair`,
+          payload: {},
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(
+          expect.objectContaining({ quarantine: ["abcdef"], actionable: true }),
+        );
+        // The agent was asked for the PLAN — nothing was confirmed.
+        expect(bodies).toContainEqual({ cwd: "/x", confirm: false });
+        expect(bodies.every((b) => (b as { confirm?: boolean }).confirm !== true)).toBe(true);
+
+        await app.close();
+      } finally {
+        server.close();
+      }
+    });
+
+    it("503s when the plan for a remote host cannot be fetched", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-repair-plan-dead-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-repair-plan-dead", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-repair`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toContain("is unreachable");
+
+      await app.close();
+    });
+
     it("says the host REJECTED the repair when the agent answers with an error", async () => {
       const { createServer } = await import("node:http");
       const server = createServer((_req, res) => {

@@ -502,6 +502,131 @@ describe("GitPanel", () => {
     expect(await screen.findByText(/1 damaged object\(s\) moved into/)).toBeInTheDocument();
   });
 
+  it("says so when the repair plan cannot be computed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: ["ab/cdef"],
+            otherZeroByteFiles: [],
+            fsckErrors: ["error: invalid sha1 pointer in cache-tree of .git/index"],
+            timedOut: false,
+          }),
+        repair: () => jsonResponse(500, { message: "the plan could not be computed" }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 18 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/the plan could not be computed/)).toBeInTheDocument();
+    // With no plan there is nothing to confirm, so no repair button.
+    expect(screen.queryByRole("button", { name: /repair/i })).toBeNull();
+  });
+
+  it("says so when the repair itself fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: ["ab/cdef"],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: false,
+          }),
+        repair: (body) =>
+          body.confirm
+            ? jsonResponse(500, { message: "the repair could not run" })
+            : jsonResponse(200, {
+                gitDir: "/tmp/x/.git",
+                quarantine: ["abcdef"],
+                willFetch: true,
+                indexesToRebuild: ["/tmp/x"],
+                indexesToSkip: [],
+                actionable: true,
+              }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 19 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    const repairButton = await screen.findByRole("button", { name: /repair/i });
+    await userEvent.click(repairButton);
+    await userEvent.click(repairButton);
+
+    expect(await screen.findByText(/the repair could not run/)).toBeInTheDocument();
+  });
+
+  it("reports the parts of the outcome that are not a clean success", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: ["ab/cdef"],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: false,
+          }),
+        repair: (body) =>
+          body.confirm
+            ? jsonResponse(200, {
+                healthy: false,
+                gitDir: "/tmp/x/.git",
+                zeroByteObjects: ["ab/cdef"],
+                otherZeroByteFiles: [],
+                fsckErrors: [],
+                timedOut: false,
+                quarantine: "/tmp/x/.git/gc-quarantine-1",
+                quarantined: ["abcdef"],
+                recovered: ["123456"],
+                unrecovered: ["fedcba"],
+                refsRestored: false,
+                indexesRebuilt: ["/tmp/x"],
+                indexesSkipped: ["/tmp/y"],
+                whole: false,
+              })
+            : jsonResponse(200, {
+                gitDir: "/tmp/x/.git",
+                quarantine: ["abcdef"],
+                willFetch: true,
+                indexesToRebuild: ["/tmp/x"],
+                indexesToSkip: [{ path: "/tmp/y", paths: ["a.txt"] }],
+                actionable: true,
+              }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 20 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    // The plan says an index would be left alone, and why.
+    expect(await screen.findByText(/leave 1 index\(es\) alone/)).toBeInTheDocument();
+
+    const repairButton = await screen.findByRole("button", { name: /repair/i });
+    await userEvent.click(repairButton);
+    await userEvent.click(repairButton);
+
+    // The outcome is what is reported, not the plan.
+    expect(await screen.findByText(/the clone is NOT whole/)).toBeInTheDocument();
+    expect(screen.getByText(/1 index\(es\) left alone/)).toBeInTheDocument();
+    expect(screen.getByText(/1 object\(s\) read fine again/)).toBeInTheDocument();
+    expect(screen.getByText(/1 object\(s\) could not be recovered/)).toBeInTheDocument();
+  });
+
   it("clears a previous failure when a later check succeeds", async () => {
     let calls = 0;
     vi.stubGlobal(

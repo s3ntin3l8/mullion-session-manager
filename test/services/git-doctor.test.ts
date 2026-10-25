@@ -248,6 +248,19 @@ describe("git-doctor — the plan", () => {
     expect(plan.indexesToSkip).toEqual([]);
   });
 
+  it("has nothing to plan for a directory that is not a git checkout", async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-plan-not-a-repo-"));
+    try {
+      const plan = await planRepair(outside);
+      expect(plan.gitDir).toBeNull();
+      expect(plan.quarantine).toEqual([]);
+      expect(plan.indexesToRebuild).toEqual([]);
+      expect(plan.actionable).toBe(false);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("names the damaged objects it would quarantine", async () => {
     const tree = damageTheStagedTree();
 
