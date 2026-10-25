@@ -1627,6 +1627,38 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.destroy();
       });
 
+      // Issue #1951 — a child can be aimed at a host/platform and given its
+      // own server-chosen worktree. Those three keys are forwarded; the raw
+      // `worktree` object stays stripped.
+      it("session scope: forwards targetHostId/targetPlatform/isolate but still strips worktree (#1951)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: {
+              command: "bash",
+              targetPlatform: "darwin",
+              isolate: true,
+              worktree: { baseRef: "main" },
+            },
+          })}\n`,
+        );
+        await waitForReply(socket);
+        const post = injectedOptions(injectSpy).find(
+          (o) => o.method === "POST" && o.url === "/api/sessions",
+        )!;
+        const payload = JSON.parse(String(post.payload));
+        expect(payload.targetPlatform).toBe("darwin");
+        expect(payload.isolate).toBe(true);
+        expect(payload).not.toHaveProperty("worktree");
+        socket.destroy();
+      });
+
       it("session scope: forwards the advisory `open` hint and stores it on the child (#1624)", async () => {
         app = await buildApp();
         await app.ready();

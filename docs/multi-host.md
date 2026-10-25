@@ -240,6 +240,45 @@ decision survives a primary restart.
 Park one from **Settings → Hosts** (the row's kebab menu), or over the
 API: `PATCH /api/hosts/:id` with `{"drained": true}`.
 
+### Dispatching a child session to another host
+
+Automatic placement chooses a host for you. A coordinating session can also
+**name** one: `spawn_child_session` (MCP) / `mullion session spawn-child`
+(CLI) take `host` (a host id) or `platform` (`darwin`, `linux`, `win32`) —
+for example, a Linux session handing Xcode or iOS-Simulator work to a Mac
+agent:
+
+```bash
+mullion session spawn-child --command claude --platform darwin --isolate \
+  --initial-prompt "run the iOS build and fix what breaks"
+```
+
+Unlike automatic placement, **a target is a hard requirement**: if no host
+matches, the spawn is refused with a **409** (`no eligible host matches
+platform darwin`) instead of falling back to the project's host, because a
+Mac-only job on the Linux fallback would just fail later. The message names
+only the target you asked for, never other hosts. A host is eligible when it
+is online, not parked, has reported capacity, and **has the project**:
+register its checkout in the project's `hostCwds` map (`PATCH /api/projects/:id`)
+first. A target works for a `pinned` project too — it
+does not depend on the placement mode — and the usual load-per-core rule
+chooses among the hosts that match.
+
+`--isolate` (`isolate: true`) gives the child its own fresh worktree on the
+host it runs on: a new `mullion/child-…` branch cut from the default base
+ref, **resolved on that host**. The remote child commits and pushes that
+branch; the coordinator fetches and reviews it. `--isolate` cannot be
+combined with `--cwd`. The worktree is **kept** after the child ends — it
+holds the child's commits and any unpushed work, exactly like the launcher's
+"isolate" toggle — so remove it yourself with `git worktree remove` once the
+branch is merged; automatic reclamation is tracked in #1964.
+
+Supervising a remote child from the coordinator works with `session wait`,
+`session children` (each row carries its `hostId` and `placementReason`),
+`session logs` and `session kill`. Prompting it (`session prompt`) and
+`wait_for_output` are not available yet — see [Current
+limitations](#current-limitations).
+
 ### Seeing it in the UI
 
 **The fleet's capacity — Settings → Hosts.** Every host row carries its

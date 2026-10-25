@@ -160,6 +160,19 @@ interface OpSpec {
  * `kind` does NOT join: making a child a dock session hides it from the
  * session list, which is a visibility change rather than a permission one,
  * and #426 called it out explicitly.
+ *
+ * Issue #1951 — `targetHostId`/`targetPlatform` (run the child on a chosen
+ * host) and `isolate` (a server-chosen fresh worktree on that host) join.
+ * A target only reaches hosts the PROJECT is mapped on (`hostCwds`, the
+ * operator's own list of where the project lives) that are also eligible
+ * (placement.ts's resolveTargetHost). That DOES widen where a session-scoped
+ * caller can put a child compared with a `pinned` project's default of "the
+ * project's own host": a `pinned` project is not placed automatically, but
+ * an explicit target may use any host the operator mapped for it. Mapping a
+ * host under `hostCwds` is therefore the opt-in; do not map one you do not
+ * want children to reach. `isolate` is the safe spelling of a worktree — the
+ * raw `worktree` stays stripped. createSessionRecord rejects `isolate`
+ * combined with `cwd`/`worktree`.
  */
 const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "command",
@@ -170,6 +183,9 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "seedPrompt",
   "open",
   "skipPermissions",
+  "targetHostId",
+  "targetPlatform",
+  "isolate",
 ];
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {

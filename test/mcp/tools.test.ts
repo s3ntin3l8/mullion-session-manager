@@ -210,6 +210,21 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ id: 7, parentSessionId: 3 });
   });
 
+  // Issue #1951 — aim the child at a host/platform, in its own worktree.
+  it("spawn_child_session forwards host, platform and isolate (#1951)", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });
+    await tool.handler(
+      { command: "claude", platform: "darwin", isolate: true },
+      { spawnChildSession },
+    );
+    expect(spawnChildSession).toHaveBeenCalledWith(
+      expect.objectContaining({ platform: "darwin", isolate: true }),
+    );
+    await tool.handler({ command: "claude", host: "mac-1" }, { spawnChildSession });
+    expect(spawnChildSession).toHaveBeenLastCalledWith(expect.objectContaining({ host: "mac-1" }));
+  });
+
   it("spawn_child_session forwards a valid `open` hint and rejects an invalid one (#1624)", async () => {
     const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
     const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });

@@ -687,6 +687,12 @@ const SESSION_SPAWN_CHILD_SPEC = {
   command: "string",
   name: "string",
   cwd: "string",
+  // Issue #1951 — run the child on a chosen host id / platform, optionally in
+  // its own server-chosen worktree. Sent as targetHostId / targetPlatform /
+  // isolate (POST /api/sessions' field names).
+  host: "string",
+  platform: "string",
+  isolate: "boolean",
   kind: "string",
   "skip-permissions": "boolean",
   // Sent over the wire as `seedPrompt` (POST /api/sessions' own field name
@@ -939,6 +945,9 @@ const sessionCommands = {
     if (parentId !== undefined) body.parentSessionId = parentId;
     if (flags.name !== undefined) body.name = flags.name;
     if (flags.cwd !== undefined) body.cwd = flags.cwd;
+    if (flags.host !== undefined) body.targetHostId = flags.host;
+    if (flags.platform !== undefined) body.targetPlatform = flags.platform;
+    if (flags.isolate === true) body.isolate = true;
     if (flags.kind !== undefined) body.kind = flags.kind;
     if (flags["skip-permissions"] === true) body.skipPermissions = true;
     if (flags["initial-prompt"] !== undefined) body.seedPrompt = flags["initial-prompt"];

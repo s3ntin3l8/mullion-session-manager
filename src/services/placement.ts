@@ -64,6 +64,13 @@ export interface PlacementCandidate {
    * like a missing capacity reading.
    */
   projectCwd: string | null;
+  /**
+   * The host's platform ("darwin" | "linux" | "win32" | …) — null when it
+   * never reported one. Issue #1951: only a TARGETED placement reads it
+   * (`resolveTargetHost`); the policy's own scoring ignores it. Optional so
+   * a candidate built without it keeps working.
+   */
+  platform?: string | null;
 }
 
 /** What the caller knows about the session being placed. */
@@ -429,6 +436,12 @@ function collectCandidates(app: FastifyInstance, project: PlacementProject): Col
       // Issue #1724 — where the project lives on THIS host. Null for a
       // host the project is not on, which makes it not a candidate.
       projectCwd: projectCwdOnHost(project, host.id, hostCwds),
+      // Issue #1951 — what a targeted spawn matches `platform` against: the
+      // host's self-reported platform, else its cached capacity reading's,
+      // else (the local host) this process's own.
+      platform: isLocal
+        ? (localCapacity?.platform ?? process.platform)
+        : (host.platform ?? app.hostCapacityTracker?.get(host.id)?.capacity.platform ?? null),
     };
   });
   return { localCapacity, candidates };
@@ -553,6 +566,83 @@ export function resolvePlacement(
   },
 ): PlacementDecision {
   return decide(app, opts.project, opts.unattended, true);
+}
+
+/**
+ * Issue #1951 — WHERE a caller insists a session run: one host by id, or any
+ * host of one platform. A target is a hard requirement, not a preference.
+ */
+export type PlacementTarget = { hostId: string } | { platform: string };
+
+export type TargetPlacementResult =
+  { ok: true; decision: PlacementDecision } | { ok: false; detail: string };
+
+function describeTarget(target: PlacementTarget): string {
+  return "hostId" in target ? `host ${target.hostId}` : `platform ${target.platform}`;
+}
+
+/**
+ * Places a session on a host the CALLER named (issue #1951) — the one place
+ * "placement never fails a spawn" does not hold, on purpose: a session that
+ * needs a Mac (Xcode, the iOS Simulator) running on the Linux fallback would
+ * just fail later, so an unsatisfiable target is REFUSED instead.
+ *
+ * The candidates are narrowed to the target, then the usual `chooseHost`
+ * scoring picks among them — so "eligible" means exactly what it means for
+ * automatic placement (online, not drained, has a capacity reading, and the
+ * project lives there — `projects.hostCwds`). It runs for a `pinned` project
+ * too: an explicit target does not depend on the project's placement mode.
+ *
+ * The refusal names only the TARGET the caller asked for, never other hosts:
+ * a session-scoped caller must not be able to enumerate the fleet through it.
+ */
+export function resolveTargetHost(
+  app: FastifyInstance,
+  opts: {
+    project: PlacementProject;
+    target: PlacementTarget;
+    /** True for an unattended session (a Task Master worker or reviewer). */
+    unattended: boolean;
+  },
+): TargetPlacementResult {
+  const refusal = (): TargetPlacementResult => ({
+    ok: false,
+    detail: `no eligible host matches ${describeTarget(opts.target)}`,
+  });
+
+  let collected: CollectedCandidates;
+  try {
+    collected = collectCandidates(app, opts.project);
+  } catch (err) {
+    app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
+    return refusal();
+  }
+
+  const wanted = "hostId" in opts.target ? null : opts.target.platform.toLowerCase();
+  const matching = collected.candidates.filter((candidate) =>
+    "hostId" in opts.target
+      ? candidate.hostId === opts.target.hostId
+      : (candidate.platform ?? "").toLowerCase() === wanted,
+  );
+
+  const decision = chooseHost(matching, {
+    pinnedHostId: opts.project.hostId,
+    unattended: opts.unattended,
+    localCapacity: collected.localCapacity,
+  });
+  // chooseHost falls back to the pinned host when nothing is eligible; for a
+  // target that is exactly the case to refuse.
+  if (decision.fellBack) return refusal();
+
+  const decorated: PlacementDecision = {
+    ...decision,
+    reason: `placed on ${describeTarget(opts.target)} at the caller's request — ${decision.reason}`,
+  };
+  app.log.info(
+    { hostId: decorated.hostId, target: opts.target, reason: decorated.reason },
+    "placement: chose a host for a targeted spawn",
+  );
+  return { ok: true, decision: decorated };
 }
 
 /**

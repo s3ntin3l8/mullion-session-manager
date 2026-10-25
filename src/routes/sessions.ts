@@ -81,6 +81,21 @@ const worktreeIntentSchema = {
 // Field-for-field mirror of services/session-lifecycle.ts's `CreateSessionBody`
 // TS interface — see that interface's own doc comment for why the two live
 // in different files and why nothing but code review keeps them in sync.
+/** Node's `process.platform` values — what a host can report as its platform. */
+const NODE_PLATFORMS = [
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+  "cygwin",
+  "netbsd",
+] as const;
+
 const createSessionSchema = {
   body: {
     type: "object",
@@ -95,6 +110,16 @@ const createSessionSchema = {
       kind: { type: "string", enum: ["terminal", "dock"] },
       worktree: worktreeIntentSchema,
       worktreeRefresh: { type: "boolean" },
+      // Issue #1951 — run on a chosen host (an id) or platform; refused with
+      // a 409 when no eligible host matches. See CreateSessionBody.
+      targetHostId: { type: "string", minLength: 1, maxLength: 128 },
+      // An enum, not a free string: a typo ("macos") would otherwise surface
+      // as a 409 "no eligible host matches", which reads as a fleet problem
+      // instead of the bad request it is. 409 stays for a KNOWN platform no
+      // eligible host has. These are Node's own `process.platform` values.
+      targetPlatform: { type: "string", enum: [...NODE_PLATFORMS] },
+      // Issue #1951 — a server-chosen fresh worktree on the placement host.
+      isolate: { type: "boolean" },
       skipPermissions: { type: "boolean" },
       parentSessionId: { type: "integer" },
       // Issue #1624 — where the frontend should open this session's panel
@@ -471,6 +496,14 @@ export async function sessionsRoute(app: FastifyInstance) {
     "/api/sessions",
     { schema: createSessionSchema },
     async (request, reply) => {
+      // Issue #1951 — the one targeting check that only exists on the wire:
+      // `targetHostId` + `targetPlatform` collapse into a single `target`
+      // below, so the service never sees the pair. The other contradictory
+      // options (hostId+target, isolate+worktree, isolate+cwd) are enforced
+      // in createSessionRecord and surface here as `invalid-options` (400).
+      if (request.body.targetHostId !== undefined && request.body.targetPlatform !== undefined) {
+        return reply.badRequest("targetHostId and targetPlatform are mutually exclusive");
+      }
       // Issue #957 — when the caller doesn't supply a model, resolve the
       // install-wide default so manual opencode spawns also pick it up (same
       // as Task Master spawns do via task-claim/task-reconciler). Gated to
@@ -602,7 +635,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // full reasoning (never send both `initialPrompt` and `seedPrompt` to
       // createSessionRecord; a resumed/transferred session isn't a concept
       // here, unlike promote, so there's no third branch to consider).
-      const { seedPrompt: rawSeedPrompt, ...restBody } = body;
+      const { seedPrompt: rawSeedPrompt, targetHostId, targetPlatform, ...restBody } = body;
       // Hermes review, PR #1333 — trim before the emptiness check: an
       // untrimmed `"   "` has length > 0, so without this a whitespace-only
       // prompt would count as "wants a seed" and land as a literal
@@ -613,6 +646,12 @@ export async function sessionsRoute(app: FastifyInstance) {
       const deliverAsInitialPrompt = wantsSeed && commandSupportsSeed(restBody.command);
       const result = await createSessionRecord(app, {
         ...restBody,
+        target:
+          targetHostId !== undefined
+            ? { hostId: targetHostId }
+            : targetPlatform !== undefined
+              ? { platform: targetPlatform }
+              : undefined,
         initialPrompt: deliverAsInitialPrompt ? callerSeedPrompt : undefined,
         seedPrompt: wantsSeed && !deliverAsInitialPrompt ? callerSeedPrompt : undefined,
       });
@@ -640,6 +679,14 @@ export async function sessionsRoute(app: FastifyInstance) {
             result.detail ?? "The host this session was pinned to has no path for this project",
           );
         }
+        if (result.reason === "invalid-options") return reply.badRequest(result.detail);
+        if (result.reason === "no-target-host") {
+          // Issue #1951 — the caller named a host/platform nothing eligible
+          // matches. A conflict with the fleet's current state, not a
+          // malformed request: the same body succeeds once such a host is
+          // online and mapped for the project.
+          return reply.conflict(result.detail);
+        }
         if (result.reason === "cwd-outside-project") {
           return reply.badRequest(
             "cwd must resolve inside the project directory or be a registered git worktree of its repo",
@@ -656,12 +703,11 @@ export async function sessionsRoute(app: FastifyInstance) {
 
       reply.code(201);
       const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-      const liveStatus = await withLiveStatus(
-        app,
-        result.row,
-        idleThresholdMs,
-        result.project.hostId,
-      );
+      // Issue #1951 — the row's own host, not the project's: a placed or
+      // targeted session can be on a different machine than its project, and
+      // the live status / seed echo have to be read from where it runs.
+      const sessionHostId = result.row.hostId ?? result.project.hostId;
+      const liveStatus = await withLiveStatus(app, result.row, idleThresholdMs, sessionHostId);
       if (!wantsSeed) return liveStatus;
 
       // Same `initialPromptApplied`/version-skew reasoning as the promote
@@ -675,7 +721,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // four known agent CLIs was actually spawned.
       const seedDelivered = resolveSeedDelivered(
         deliverAsInitialPrompt,
-        result.project.hostId,
+        sessionHostId,
         result.initialPromptApplied,
       );
       if (deliverAsInitialPrompt && !seedDelivered) {

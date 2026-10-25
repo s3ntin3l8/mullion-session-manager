@@ -434,7 +434,7 @@ from, the connection's own pinned session. Full scope must instead pass
 derived server-side from the resolved parent session's own project, via a
 real `GET /api/sessions/:id`, never trusted from the request. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
-`env`/`seedPrompt`/`model`/`smallModel`) maps onto `POST /api/sessions`;
+`env`/`seedPrompt`/`model`/`smallModel`/`targetHostId`/`targetPlatform`/`isolate`) maps onto `POST /api/sessions`; the last three (issue #1951) run the child on a chosen host id or platform and, with `isolate`, in a server-chosen worktree on that host — `POST /api/sessions` answers 409 when no eligible host matches and 400 for `isolate` with `cwd`/`worktree` or both targets, and all three are forwarded at session scope;
 `worktree`/`worktreeRefresh` are stripped even if present, since a child
 spawn's cwd-containment check (below) assumes no worktree was requested.
 `seedPrompt` is deliberately NOT in the session-scope strip list below — it

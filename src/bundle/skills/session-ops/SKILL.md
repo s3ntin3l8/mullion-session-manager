@@ -19,6 +19,13 @@ raise `settings.sessions.maxChildSessionsPerParent` if you hit it); `cwd`,
 if overridden, must stay inside the project directory or be another registered
 git worktree of the project's repo (`git worktree list`, e.g. a sibling
 `repo-pr408` checkout); any other outside path is rejected.
+To run the child on a **different machine** — e.g. a Mac for Xcode/iOS work or a
+macOS-only spike — pass `host: "<hostId>"` or `platform: "darwin"` (CLI
+`--host`/`--platform`) and usually `isolate: true` (`--isolate`): the child
+gets its own fresh worktree on that host and should commit and push its
+branch for you to fetch. A target is a hard requirement — if no eligible host
+has the project you get a 409, not a silent fallback. `session wait`, `children`,
+`logs` and `kill` work on a remote child; prompting it does not yet.
 Pass `open: "right"|"below"` (CLI `--open right|below`) to have the dashboard
 open the child's panel beside yours, so the human sees it without hunting —
 only a hint: dropped if your panel isn't open in their current workspace within about a minute of the spawn.
