@@ -7,7 +7,7 @@ import { searchPaletteCommands } from "../paletteCommands.js";
 import type { PaletteCommand } from "../paletteCommands.js";
 
 // CommandPalette.tsx's three parallel filter pipelines (U2, issue #581) —
-// Sessions, Workspaces, and the launcher "Matching commands" list — plus the
+// Sessions, Workspaces, and the Launchers list — plus the
 // single flattened selection index arrow-key nav walks across all three.
 // Extracted verbatim from CommandPalette.tsx (PR 29, Wave 5 of
 // .claude/plans/can-we-do-a-warm-cocke.md): the plan calls the combined-index
@@ -51,7 +51,7 @@ export interface UseCommandSearchResult {
    * +/-1-against-`activeIndex` nav this hook's callers do inline. */
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   /** Launchers matching the current query, with hidden agents stripped —
-   * renders as "Matching commands". */
+   * renders as "Launchers". */
   filtered: Launcher[];
   /** Live, non-killed terminal sessions matching the current query — empty
    * on a blank query (this is search, not an always-on browse list; the
@@ -73,15 +73,15 @@ export interface UseCommandSearchResult {
    * Enter/highlight/the options-strip from targeting a stale index. */
   activeIndex: number;
   activeEntry: PaletteEntry | undefined;
-  /** Integrations commands matching the current query (empty on a blank
+  /** Palette commands matching the current query (empty on a blank
    * query), ranked after the launchers so a typed name still lands on its
    * launcher first. */
   matchingCommands: PaletteCommand[];
   /** `matchingSessions.length + matchingWorkspaces.length` — the absolute
-   * index the launcher ("Matching commands") group starts at within
+   * index the Launchers group starts at within
    * `entries`. */
   groupOffset: number;
-  /** `groupOffset + filtered.length` — where the Integrations group starts. */
+  /** `groupOffset + filtered.length` — where the Commands group starts. */
   commandOffset: number;
 }
 
@@ -168,11 +168,11 @@ export function useCommandSearch({
     [commands, query],
   );
 
-  // Sessions, Workspaces, Matching commands (launchers) and Integrations
-  // commands render as separate groups but share ONE selection index across
-  // all of them for arrow-key nav — this flattens the result arrays into one
-  // ordered list purely for index math. Integrations come last so the
-  // launcher offsets (and the default-agent selection seed) are unchanged.
+  // Sessions, Workspaces, Launchers and Commands render as separate groups
+  // but share ONE selection index across all of them for arrow-key nav —
+  // this flattens the result arrays into one ordered list purely for index
+  // math. Commands come last so the launcher offsets (and the default-agent
+  // selection seed) are unchanged.
   const entries = useMemo<PaletteEntry[]>(
     () => [
       ...matchingSessions.map((session): PaletteEntry => ({ type: "session", session })),

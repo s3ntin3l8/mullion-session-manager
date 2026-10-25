@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ComponentProps } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store/index.js";
 import { DEFAULT_SETTINGS } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
-import { makeWorkspace } from "./test/fixtures.js";
+import { makeSession, makeWorkspace } from "./test/fixtures.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
 // for the current project plus a link into Settings -> Integrations.
@@ -826,7 +826,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     // claude (global settings list) + codex (launcher skipPermissions:true) = 2 badges
     expect(screen.getAllByText("⚠ skip perms")).toHaveLength(2);
   });
@@ -859,7 +859,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
 
     // opencode has skipPermissions: false in launcher config and is NOT in
     // the global settings list — no badge expected.
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
     await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
     await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "opencode");
@@ -892,7 +892,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
     await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
     await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "bash");
@@ -928,7 +928,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
     );
 
     // claude is in the global settings list; launch without touching the checkbox.
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "claude");
@@ -977,7 +977,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "opencode");
@@ -1015,7 +1015,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
 
     // bash is a shell — the options-strip still renders (visibility:hidden).
     // The toggle text must be in the DOM even when the selected launcher
@@ -1054,7 +1054,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
 
     // Check the "Skip permissions (all agents)" override checkbox.
     const checkbox = screen.getByRole("checkbox", {
@@ -1173,7 +1173,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     renderPalette();
 
     // Claude is settings.launchers.defaultAgent — highlighted without typing.
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     const select = await screen.findByRole("combobox", { name: "Model for this session" });
     await user.selectOptions(select, "opusplan");
     // Enter launches entries[activeIndex] (Claude, still highlighted) — the
@@ -1190,7 +1190,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await screen.findByRole("combobox", { name: "Model for this session" });
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.keyboard("{Enter}");
@@ -1205,7 +1205,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     const select = await screen.findByRole("combobox", { name: "Model for this session" });
     await user.selectOptions(select, "opusplan");
 
@@ -1240,7 +1240,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     expect(await screen.findByText("Loading launchers…")).toBeInTheDocument();
 
     resolveActions(jsonResponse(200, [BASH]));
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
 
     expect(screen.queryByText("Loading launchers…")).not.toBeInTheDocument();
     expect(document.querySelector(".cmd-palette-options-strip")).toHaveClass("collapsed");
@@ -1251,7 +1251,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
@@ -1269,7 +1269,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "claude opus");
@@ -1284,7 +1284,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "claude review");
@@ -1297,7 +1297,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
     const user = userEvent.setup();
     renderPalette();
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.click(screen.getByPlaceholderText(/Launch a session/));
     await user.clear(screen.getByPlaceholderText(/Launch a session/));
     await user.type(screen.getByPlaceholderText(/Launch a session/), "codex");
@@ -1312,7 +1312,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
 
 // U2 (audit finding: "⌘K is a launcher, not a switcher") — the Sessions and
 // Workspaces result groups, plus the flattened keyboard nav across all three
-// groups (Sessions -> Workspaces -> Matching commands).
+// groups (Sessions -> Workspaces -> Launchers).
 describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
   const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
 
@@ -1452,7 +1452,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "hotfix");
 
     expect(await screen.findByText("Sessions")).toBeInTheDocument();
@@ -1501,7 +1501,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
 
     await screen.findByText("matchme live");
@@ -1548,7 +1548,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
 
     // The target strip reads "Runs in mullion" for this scope, and the
@@ -1597,7 +1597,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
 
     // Global scope's own project picker isn't bound to one project (unlike
@@ -1647,7 +1647,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
 
     expect(await screen.findByText("Workspaces")).toBeInTheDocument();
@@ -1658,7 +1658,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("arrow-keys and Enter navigate Sessions -> Workspaces -> Matching commands as one flattened list", async () => {
+  it("arrow-keys and Enter navigate Sessions -> Workspaces -> Launchers as one flattened list", async () => {
     const session = makeSession({ id: 5, name: "bashful session" });
     const workspace = makeWorkspace({ id: 3, name: "bashful workspace" });
     useDashboardStore.setState({
@@ -1694,7 +1694,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     // Matches all three groups: the session/workspace names both contain
     // "bash", and "bash" is also the shell launcher's own title.
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
@@ -1703,7 +1703,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
 
     // Typing resets selection to index 0 -> the first Sessions row is
     // highlighted by default. Two ArrowDowns walk Sessions -> Workspaces ->
-    // Matching commands (one flattened index across all three groups), then
+    // Launchers (one flattened index across all three groups), then
     // Enter should launch the bash command, not reopen the session or
     // switch the workspace.
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
@@ -1754,7 +1754,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
@@ -1807,7 +1807,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
@@ -1853,7 +1853,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
 
     expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
     expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
@@ -1901,7 +1901,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bashful");
     await screen.findByText("bashful workspace");
     await user.keyboard("{Enter}");
@@ -1945,7 +1945,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Matching commands");
+    await screen.findByText("Launchers");
     await user.type(screen.getByPlaceholderText(/Launch a session/), "clickable");
     await user.click(await screen.findByText("clickable workspace"));
 
@@ -2603,11 +2603,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(o);
     await user.click(await screen.findByText("Project: mullion"));
 
-    // Agent Rules (0) -> Briefing (1) -> Scaffold (2) -> Dock (3) -> back up to Scaffold (2).
+    // Agent Rules (0) -> Dock (1) -> Edit project files (2) -> Briefing (3),
+    // then back up to Edit project files (2). Title order, not insertion order.
     await user.keyboard("{ArrowDown}{ArrowDown}{ArrowDown}{ArrowUp}{Enter}");
 
-    expect(o.onOpenProjectSetup).toHaveBeenCalledWith(PROJECT.id);
-    expect(o.onOpenDockConfig).not.toHaveBeenCalled();
+    expect(o.onOpenFileEditor).toHaveBeenCalledWith(PROJECT.id);
+    expect(o.onOpenProjectBriefing).not.toHaveBeenCalled();
   });
 
   it("Escape and Backspace-on-empty step back out instead of closing the palette", async () => {
@@ -2678,5 +2679,159 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.getByText("New preview tab")).toBeTruthy();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
+  });
+
+  it("labels the empty list Commands and Launchers, and has no Navigate group", async () => {
+    renderPalette(openers());
+
+    expect(await screen.findByText("Launchers")).toBeTruthy();
+    expect(screen.getByText("Commands")).toBeTruthy();
+    expect(screen.queryByText("Navigate")).toBeNull();
+    expect(screen.queryByText("Matching commands")).toBeNull();
+    expect(screen.queryByText("Integrations")).toBeNull();
+  });
+
+  it("opens Devices, Hosts, and Settings through the same callbacks the rest of the UI uses", async () => {
+    const onOpenDevices = vi.fn();
+    const onOpenHosts = vi.fn();
+    const onOpenSettings = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette(openers(), { onOpenDevices, onOpenHosts, onOpenSettings, onClose });
+
+    await user.click(await screen.findByText(/^Devices$/));
+    expect(onOpenDevices).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByText(/^Hosts$/));
+    expect(onOpenHosts).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByText(/^Settings$/));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(3);
+  });
+
+  it("finds Devices from a query", async () => {
+    const onOpenDevices = vi.fn();
+    const user = userEvent.setup();
+    renderPalette(openers(), { onOpenDevices });
+
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "devices");
+    expect(screen.getByText(/^Devices$/)).toBeTruthy();
+    await user.keyboard("{Enter}");
+    expect(onOpenDevices).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the session timeline only for the active, non-killed session pane", async () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix" });
+    const killed = makeSession({ id: 8, projectId: PROJECT.id, name: "old", status: "killed" });
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [session, killed],
+      activePanelId: null,
+      workspaces: [],
+    });
+    const onOpenTimeline = vi.fn();
+    const { unmount } = renderPalette(openers(), { onOpenTimeline });
+
+    expect(await screen.findByText("New workspace")).toBeTruthy();
+    expect(screen.queryByText("Session timeline")).toBeNull();
+    unmount();
+
+    useDashboardStore.setState({ activePanelId: "session-8" });
+    const killedOnly = renderPalette(openers(), { onOpenTimeline });
+    expect(await screen.findByText("New workspace")).toBeTruthy();
+    expect(screen.queryByText("Session timeline")).toBeNull();
+    killedOnly.unmount();
+
+    useDashboardStore.setState({ activePanelId: "session-7" });
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette(openers(), { onOpenTimeline, onClose });
+    await user.click(await screen.findByText("Session timeline"));
+    expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 7, name: "hotfix" }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("asks for a workspace name, then creates and switches, and backs out without closing", async () => {
+    const workspace = makeWorkspace({ id: 4, name: "side" });
+    const createWorkspace = vi.fn().mockResolvedValue(workspace);
+    const reportError = vi.fn();
+    const prior = useDashboardStore.getState();
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [],
+      createWorkspace,
+      reportError,
+    });
+    const onShowWorkspace = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    try {
+      renderPalette(openers(), { onShowWorkspace, onClose });
+
+      await user.click(await screen.findByText("New workspace"));
+      expect(screen.getByPlaceholderText("Workspace name…")).toBeTruthy();
+      expect(screen.getByText("Name the workspace")).toBeTruthy();
+      await user.keyboard("{Enter}");
+      expect(createWorkspace).not.toHaveBeenCalled();
+
+      await user.keyboard("{Escape}");
+      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(onClose).not.toHaveBeenCalled();
+
+      await user.click(screen.getByText("New workspace"));
+      await user.keyboard("{Backspace}");
+      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(onClose).not.toHaveBeenCalled();
+
+      await user.click(screen.getByText("New workspace"));
+      await user.type(screen.getByPlaceholderText("Workspace name…"), "side");
+      expect(screen.getAllByText("Create side").length).toBeGreaterThan(0);
+      await user.keyboard("{Enter}");
+      await waitFor(() => {
+        expect(createWorkspace).toHaveBeenCalledWith("side");
+        expect(onShowWorkspace).toHaveBeenCalledWith(4);
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      useDashboardStore.setState({
+        createWorkspace: prior.createWorkspace,
+        reportError: prior.reportError,
+        activePanelId: null,
+      });
+    }
+  });
+
+  it("keeps the name step open when creating a workspace fails", async () => {
+    const createWorkspace = vi.fn().mockRejectedValue(new Error("taken"));
+    const reportError = vi.fn();
+    const prior = useDashboardStore.getState();
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [],
+      createWorkspace,
+      reportError,
+    });
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    try {
+      renderPalette(openers(), { onClose });
+      await user.click(await screen.findByText("New workspace"));
+      await user.type(screen.getByPlaceholderText("Workspace name…"), "again");
+      await user.keyboard("{Enter}");
+      await waitFor(() => {
+        expect(reportError).toHaveBeenCalledWith("Could not create the workspace.", "taken");
+      });
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByDisplayValue("again")).toBeTruthy();
+    } finally {
+      useDashboardStore.setState({
+        createWorkspace: prior.createWorkspace,
+        reportError: prior.reportError,
+      });
+    }
   });
 });

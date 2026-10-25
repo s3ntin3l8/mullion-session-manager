@@ -1,20 +1,27 @@
 import type { ComponentType, CSSProperties } from "react";
 import {
+  CheckIcon,
+  DeviceIcon,
   DockIcon,
   FileTextIcon,
+  GearIcon,
   GitBranchIcon,
   GitHubIcon,
   GlobeIcon,
+  HostsIcon,
+  ListIcon,
+  PlusIcon,
   RightSidebarIcon,
   SkillIcon,
 } from "./ui/icons.js";
 import { DOCK_UNAVAILABLE, type DockUnavailableReason } from "./lib/dockAvailability.js";
+import type { Session } from "./api/index.js";
 
 type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 
-// The command palette's non-launcher entries ("Integrations"): fixed
-// navigation actions, as plain data so CommandPalette renders them with one
-// row component and useCommandSearch can match them against a query.
+// The command palette's non-launcher entries: fixed actions, as plain data
+// so CommandPalette renders them with one row component and useCommandSearch
+// can match them against a query.
 export interface PaletteCommand {
   id: string;
   title: string;
@@ -23,7 +30,7 @@ export interface PaletteCommand {
   // Matched alongside `title` (never `subtitle`) — kept conservative so a
   // command never outranks a launcher for a name like "claude".
   keywords: string[];
-  // Where it shows on an empty query: the top-level Integrations list, or
+  // Where it shows on an empty query: the top-level Commands list, or
   // the "Project ›" drill-in list.
   placement: "top" | "project";
   // Set when the command's effect cannot be seen on this device — the Dock
@@ -38,6 +45,10 @@ export interface PaletteCommand {
   // Shown before the title in a search result ("Project › Skills") so a
   // sub-item reads in context once it leaves its sub-list.
   breadcrumb?: string;
+  // Enter/click asks for one more input in the search box instead of
+  // calling `run`. "New workspace" needs a name; the palette owns that
+  // step and then calls the same createWorkspace the sidebar form does.
+  prompt?: "workspace-name";
   run: () => void;
 }
 
@@ -58,6 +69,16 @@ export interface PaletteCommandOpeners {
   // Absent where there is no right sidebar (phone) — the command is then
   // omitted rather than shown dead.
   toggleRightSidebar?: () => void;
+  // The task board, Settings (the modal and two of its sections), and the
+  // active session's timeline. Optional so a caller that doesn't own that
+  // surface omits the row instead of showing one that does nothing — same
+  // shape as toggleRightSidebar. App.tsx passes the same openSettings /
+  // onOpenTimeline the rest of the UI uses.
+  tasks?: () => void;
+  devices?: () => void;
+  hosts?: () => void;
+  settings?: () => void;
+  timeline?: (session: Session) => void;
 }
 
 export interface PaletteCommandContext {
@@ -70,6 +91,10 @@ export interface PaletteCommandContext {
   // phone tier — so this is the shared predicate's answer, not a pointer
   // test; see lib/dockAvailability.ts.
   dockUnavailable: DockUnavailableReason | null;
+  // The session whose pane is active, if any. The timeline command is the
+  // pane menu's "View timeline" for that session, so it is omitted when
+  // there isn't one — the menu only offers the item on a session pane.
+  activeSession?: Session | null;
 }
 
 export function buildPaletteCommands({
@@ -78,6 +103,7 @@ export function buildPaletteCommands({
   favoriteUrls,
   open,
   dockUnavailable,
+  activeSession,
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
@@ -249,7 +275,91 @@ export function buildPaletteCommands({
       placement: "top",
       run: () => open.blankBrowser(),
     },
+    {
+      // Same create-then-switch as WorkspaceSwitcher's inline form. The
+      // palette collects the name (prompt) because that form is the only
+      // other way to supply one — there is no default name to invent.
+      id: "new-workspace",
+      title: "New workspace",
+      subtitle: "Create a workspace and switch to it",
+      icon: PlusIcon,
+      keywords: ["workspace", "new", "create"],
+      placement: "top",
+      prompt: "workspace-name",
+      run: () => {},
+    },
   );
+
+  if (open.tasks) {
+    const openTasks = open.tasks;
+    commands.push({
+      id: "task-board",
+      title: "Task board",
+      subtitle: "Every project's tasks, in one board",
+      icon: CheckIcon,
+      keywords: ["tasks", "kanban", "board"],
+      placement: "top",
+      run: openTasks,
+    });
+  }
+
+  if (open.devices) {
+    const openDevices = open.devices;
+    commands.push({
+      id: "devices",
+      title: "Devices",
+      subtitle: "Settings → Devices",
+      icon: DeviceIcon,
+      keywords: ["devices", "android", "emulator"],
+      placement: "top",
+      run: openDevices,
+    });
+  }
+
+  if (open.hosts) {
+    const openHosts = open.hosts;
+    commands.push({
+      id: "hosts",
+      title: "Hosts",
+      subtitle: "Settings → Hosts",
+      icon: HostsIcon,
+      keywords: ["hosts", "ssh", "bridge", "remote"],
+      placement: "top",
+      run: openHosts,
+    });
+  }
+
+  if (open.settings) {
+    const openSettings = open.settings;
+    commands.push({
+      id: "settings",
+      title: "Settings",
+      subtitle: "Open settings",
+      icon: GearIcon,
+      keywords: ["settings", "preferences"],
+      placement: "top",
+      run: openSettings,
+    });
+  }
+
+  if (open.timeline && activeSession) {
+    const openTimeline = open.timeline;
+    const session = activeSession;
+    const label = session.name || session.lastTitle || session.command;
+    commands.push({
+      id: "session-timeline",
+      title: "Session timeline",
+      subtitle: label,
+      icon: ListIcon,
+      keywords: ["timeline", "events", "history", label],
+      placement: "top",
+      run: () => openTimeline(session),
+    });
+  }
+
+  // Within each placement the row order is the title. Callers render one
+  // group per placement, so sorting the whole list sorts each group.
+  commands.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
 
   return commands;
 }

@@ -1901,6 +1901,10 @@ export function App() {
           onOpenSkills={onOpenSkills}
           onOpenBrowser={onOpenBrowser}
           onOpenIntegrationsSettings={() => openSettings("integrations")}
+          onOpenDevices={() => openSettings("devices")}
+          onOpenHosts={() => openSettings("hosts")}
+          onOpenSettings={() => openSettings()}
+          onOpenTimeline={onOpenTimeline}
           onOpenBlankBrowser={onOpenBlankBrowser}
           onToggleRightSidebar={
             isMobile ? undefined : () => useDashboardStore.getState().toggleRightSidebar()
