@@ -829,6 +829,17 @@ export interface Session {
   // so the frontend never re-derives it. This is what the per-session host
   // badge shows.
   resolvedHostId: string;
+  // Issue #1852 — WHY this session is on the host it is on, in the
+  // placement decision's own words ("least loaded: mac-mini at 1.2 load on
+  // 12 cores (0.10 per core)"). Written with the row (issue #1724) and
+  // read back by the host badge's tooltip, so the answer does not require
+  // the server log.
+  //
+  // Null ONLY for a row written before placement existed: every session
+  // since records its decision's reason, a PINNED one included ("pinned to
+  // the project's host mac-mini") — the pinned path short-circuits the
+  // policy but does not skip the record.
+  placementReason: string | null;
   createdAt: string;
   lastAttachedAt: string | null;
   alive: boolean;

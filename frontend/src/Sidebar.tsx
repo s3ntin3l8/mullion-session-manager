@@ -9,6 +9,7 @@ import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import type { Device, DiscoveredProject, Host, Project, Session } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
+import { describeHostBadge } from "./lib/hostBadge.js";
 import {
   formatStatusLabel,
   isStatusReachable,
@@ -1902,12 +1903,11 @@ export function SessionRow({
   // (getState) so a session row does not re-render every time the fleet's
   // health dot refreshes — the row re-renders on every session refresh
   // anyway, which is often enough for a label.
-  const remoteHostName = (() => {
-    const hostId = session.resolvedHostId;
-    if (!hostId || hostId === LOCAL_HOST_ID) return null;
-    const hosts = useDashboardStore.getState().hosts ?? [];
-    return hosts.find((h) => h.id === hostId)?.name ?? hostId;
-  })();
+  // Issue #1852 — the host badge AND its tooltip (the placement
+  // decision's own words) are computed together, in one place: see
+  // lib/hostBadge.ts's own comment for why the two disagree about how to
+  // name a host.
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
   const statusLabel = (
     <span className="session-status-group">
       <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
@@ -1927,10 +1927,10 @@ export function SessionRow({
       {/* The host badge is a SIBLING of the status label, not a child of it:
           the label ellipsis-overflows its own box (overflow: hidden), so a
           badge inside it would be clipped by a long status detail. */}
-      {remoteHostName && (
-        <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
+      {hostBadge && (
+        <span className="session-host-badge" title={hostBadge.title}>
           <HostsIcon size={10} />
-          <span className="session-host-badge-name">{remoteHostName}</span>
+          <span className="session-host-badge-name">{hostBadge.name}</span>
         </span>
       )}
     </span>
