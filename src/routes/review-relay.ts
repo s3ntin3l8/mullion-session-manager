@@ -1003,10 +1003,16 @@ export function reviewReader(
    */
   reviewerBotLogin = "",
   /**
-   * A token that can read check runs (the ledger markers). Without one the
-   * base falls back to the reviews' own `commit_id`, which GitHub re-points
-   * when the branch is rewritten and is therefore only trusted while it
-   * provably predates the review.
+   * A token that can read check runs (the ledger markers) — often the App's
+   * checks-only installation token, so it is used for the markers and nothing
+   * else. Without one the base falls back to the reviews' own `commit_id`,
+   * which GitHub re-points when the branch is rewritten and is therefore only
+   * trusted while it provably predates the review.
+   *
+   * The relay always reads the "Hermes review" ledger. A consumer of the
+   * shared workflow that sets `hermes-review-ledger: off` or renames the
+   * ledger gets the `commit_id` rule there but the ledger rule here, and the
+   * two bases (and so idempotency keys) differ.
    */
   ledgerToken?: string,
 ): {
@@ -1024,7 +1030,10 @@ export function reviewReader(
   const commitInfo = (sha: string) => {
     let info = infos.get(sha);
     if (!info) {
-      info = getCommitInfo(ledgerToken ?? token, owner, repo, sha);
+      // The MAIN token, not the ledger one: the ledger token is the App's
+      // checks-only installation token (`checks` + `metadata`), which cannot
+      // read a private repository's commits.
+      info = getCommitInfo(token, owner, repo, sha);
       infos.set(sha, info);
     }
     return info;

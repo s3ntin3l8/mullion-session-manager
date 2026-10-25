@@ -85,6 +85,7 @@ import {
   pruneLandedMemo,
   repoRefMemoSize,
   resetRepoRefMemo,
+  reviewReader,
 } from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
@@ -561,6 +562,10 @@ describe("review-request routes", () => {
       const res = await post(sessionId, {});
       expect(res.statusCode).toBe(200);
       expect(await resolvedBase()).toBe("sha-reviewed");
+      // The App's checks-only token cannot read a private repo's commits: it
+      // is for the markers, and nothing else.
+      expect(mocks.getCommitInfo).toHaveBeenCalled();
+      expect(mocks.getCommitInfo.mock.calls.every((c) => c[0] !== "ghs_checks")).toBe(true);
     });
 
     it("does not trust a commit_id that is newer than its review when no marker pairs", async () => {
@@ -612,7 +617,7 @@ describe("review-request routes", () => {
       await post(sessionId, {});
       await resolvedBase();
       expect(mocks.listReviewMarkers).toHaveBeenCalledWith(
-        expect.any(String),
+        "ghs_checks", // the check-run read token, not the PR token
         "acme",
         "widgets",
         expect.any(Number),
@@ -631,6 +636,52 @@ describe("review-request routes", () => {
       const res = await post(sessionId, {});
       expect(res.statusCode).toBe(200);
       expect(res.json().warning).toBeUndefined();
+    });
+  });
+
+  describe("reviewReader().sameContent / committedAt (s3ntin3l8/.github#129)", () => {
+    const reader = () =>
+      reviewReader("pr-token", "acme", "widgets", 1, "hermes[bot]", "ghs_checks");
+
+    it("treats the same commit as the same content without asking GitHub", async () => {
+      expect(await reader().sameContent("a", "a")).toBe(true);
+      expect(mocks.getCommitInfo).not.toHaveBeenCalled();
+    });
+
+    it("compares trees, reading commits with the PR token and not the checks token", async () => {
+      mocks.getCommitInfo.mockImplementation(
+        async (_t: string, _o: string, _r: string, sha: string) => ({
+          treeSha: sha === "rebased" ? "tree-a" : `tree-${sha}`,
+          committedAt: "2000-01-01T00:00:00Z",
+        }),
+      );
+      const r = reader();
+      // A rebase that changed nothing: a new SHA with the reviewed commit's tree.
+      expect(await r.sameContent("a", "rebased")).toBe(true);
+      // An "Update branch" merge: new content, new tree.
+      expect(await r.sameContent("a", "merged")).toBe(false);
+      expect(mocks.getCommitInfo.mock.calls.every((c) => c[0] === "pr-token")).toBe(true);
+    });
+
+    it("is not 'the same' when a tree is unreadable or empty", async () => {
+      mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("nope", 404));
+      expect(await reader().sameContent("x", "y")).toBe(false);
+      mocks.getCommitInfo.mockResolvedValue({ treeSha: "", committedAt: "" });
+      expect(await reader().sameContent("x", "y")).toBe(false);
+    });
+
+    it("reads each commit once per request", async () => {
+      mocks.getCommitInfo.mockResolvedValue({ treeSha: "t", committedAt: "2000-01-01T00:00:00Z" });
+      const r = reader();
+      await r.sameContent("x", "y");
+      await r.committedAt("x");
+      await r.committedAt("y");
+      expect(mocks.getCommitInfo).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports an unreadable commit's date as unknown", async () => {
+      mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("nope", 404));
+      expect(await reader().committedAt("x")).toBe("");
     });
   });
 
