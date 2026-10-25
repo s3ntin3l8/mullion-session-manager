@@ -59,10 +59,11 @@
   right: 0;
   min-width: 14px;
   /* The count is 0.5625rem. A px line box clips it when the root font
-     scales, so this badge's box tracks the type (14px at a 16px root). */
+     scales, so this badge's box tracks the type (14px at a 16px root).
+     999px keeps the pill: a 7px radius no longer matches that height. */
   height: 0.875rem;
   padding: 0 3px;
-  border-radius: 7px;
+  border-radius: 999px;
   /* --accent-fill: white-on-fill background, not the text-role accent. */
   background: var(--accent-fill);
   color: #fff;

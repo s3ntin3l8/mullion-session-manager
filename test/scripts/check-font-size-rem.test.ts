@@ -18,6 +18,11 @@
 // `fontSize={t.fontSize}`) in TerminalPane / TerminalPreview. dockHelpers'
 // PX_PER_COL ratio lives in a `.ts` module and is not a font-size.
 //
+// A `'` or `"` in JSX text (`doesn't`, `gateway's`) is not a string that
+// runs to the end of the file. Those literals cannot contain a raw newline,
+// so the scanner abandons them there. Template literals may span lines, and
+// a mention inside one is still not a hit.
+//
 // A declaration that truly cannot be rem may keep px with a same-line
 // `font-size-px-ok` marker.
 import { describe, it, expect } from "vitest";
@@ -62,6 +67,31 @@ function inSpan(index: number, spans: readonly Span[]): boolean {
   return false;
 }
 
+/**
+ * Index just after the string or template literal that starts at `open`.
+ * A `'`/`"` literal ends at a raw newline: it cannot span lines, so a JSX
+ * apostrophe does not swallow the rest of the file. A backslash line
+ * continuation is not a raw newline and still continues. Template literals
+ * may span lines.
+ */
+function endOfStringLiteral(source: string, open: number): number {
+  const quote = source[open];
+  let i = open + 1;
+  while (i < source.length) {
+    if (source[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (quote !== "`" && source[i] === "\n") break;
+    if (source[i] === quote) {
+      i++;
+      break;
+    }
+    i++;
+  }
+  return i;
+}
+
 /** Comments and string/template literals, so a mention in prose is not a hit. */
 function nonCodeSpans(source: string): Span[] {
   const spans: Span[] = [];
@@ -83,20 +113,8 @@ function nonCodeSpans(source: string): Span[] {
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
       const start = i;
-      i++;
-      while (i < source.length) {
-        if (source[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (source[i] === quote) {
-          i++;
-          break;
-        }
-        i++;
-      }
+      i = endOfStringLiteral(source, i);
       spans.push([start, i]);
       continue;
     }
@@ -122,19 +140,7 @@ function braceEnd(source: string, openBrace: number): number {
       continue;
     }
     if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
-      i++;
-      while (i < source.length) {
-        if (source[i] === "\\") {
-          i += 2;
-          continue;
-        }
-        if (source[i] === quote) {
-          i++;
-          break;
-        }
-        i++;
-      }
+      i = endOfStringLiteral(source, i);
       continue;
     }
     if (c === "{") depth++;
@@ -341,6 +347,9 @@ describe("frontend/src inline type scale", () => {
       `<TerminalPreview fontSize={t.fontSize} />`,
       `// the old call site was <div style={{ fontSize: 12, color: "var(--r)" }}>`,
       `const noted = "fontSize: 12px was the pre-rem shape";`,
+      "const across = `",
+      "  fontSize: 12",
+      "`;",
       `const settings = {`,
       `  terminal: {`,
       `    clipboardKeys: { ctrlV: false, ctrlC: false },`,
@@ -355,6 +364,16 @@ describe("frontend/src inline type scale", () => {
   it("still flags a type-scale fontSize beside a closed terminal settings object", () => {
     const tsx = [
       `const settings = { terminal: { clipboardKeys: { ctrlV: false }, fontSize: 14 } };`,
+      `<span style={{ fontSize: 12 }} />`,
+    ].join("\n");
+    expect(inlinePxFontSizeViolations(tsx)).toEqual([
+      "fixture.tsx:2: <span style={{ fontSize: 12 }} />",
+    ]);
+  });
+
+  it("reports a px fontSize that follows a JSX apostrophe", () => {
+    const tsx = [
+      `<p>The gateway's offline and it doesn't retry.</p>`,
       `<span style={{ fontSize: 12 }} />`,
     ].join("\n");
     expect(inlinePxFontSizeViolations(tsx)).toEqual([
