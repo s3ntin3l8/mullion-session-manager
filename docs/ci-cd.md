@@ -335,7 +335,7 @@ test && make format-check` before pushing.
   posts a real `APPROVE` from a separate identity, but none is configured for
   this repo. Hermes's `auto-review` skips `mullion/task-*` branches on
   purpose, and release-please PRs get no reviewer at all — they would need
-  the maintainer's approval by hand.
+  a review approval by hand.
 - **Release-please PRs are approval-gated.** The workflows on a
   release-please pull request sit at `action_required` with no jobs
   executed until the maintainer approves them, which happens as part of
