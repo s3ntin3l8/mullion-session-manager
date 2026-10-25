@@ -105,20 +105,26 @@ describe("languageForFile", () => {
       "Dockerfile.dev",
       "Containerfile",
       "app.dockerfile",
-      ".gitignore",
-      ".dockerignore",
+      "Containerfile.dev",
       "docker-compose.yml",
     ]) {
       expect(languageForFile(name), name).not.toBeNull();
     }
     expect(languageForFile("notes.txt")).toBeNull();
+    // KEY=value grammar would mislead on these (`!keep` reads as a comment)
+    expect(languageForFile(".gitignore")).toBeNull();
+    expect(languageForFile(".dockerignore")).toBeNull();
     expect(languageForFile("Makefile")).toBeNull();
   });
 
   it("colours .env keys and values, not just comments", () => {
     const { container } = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
-    const line = container.querySelectorAll(".cm-line")[1] as HTMLElement;
-    // Unstyled text has no wrapping span; each highlighted token does.
-    expect(line.querySelectorAll("span").length).toBeGreaterThanOrEqual(2);
+    const spans = (container.querySelectorAll(".cm-line")[1] as HTMLElement).querySelectorAll(
+      "span",
+    );
+    // key and value each get their own highlight class, and they differ
+    // (before the token remap the value was unstyled and the key plain text)
+    expect(spans).toHaveLength(2);
+    expect(spans[0]!.className).not.toBe(spans[1]!.className);
   });
 });

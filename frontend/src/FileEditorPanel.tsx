@@ -678,7 +678,7 @@ function FileEditorBody({
                   className="file-editor-icon-btn"
                   aria-label="Save"
                   aria-busy={saving}
-                  title={saving ? "Saving…" : "Save (Ctrl+S)"}
+                  title={saving ? "Saving…" : `Save (${SAVE_SHORTCUT})`}
                   onClick={handleSaveClick}
                   disabled={!dirty || saving}
                 >
@@ -719,6 +719,12 @@ function FileEditorBody({
 // .env is its own) above the editor body. Switching root remounts the body
 // (via `key`) so the tree, open file and draft never leak across roots, and
 // the picker is disabled while the body reports unsaved edits.
+// The editor binds Mod-s: Cmd+S on macOS, Ctrl+S elsewhere.
+const SAVE_SHORTCUT =
+  typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.userAgent)
+    ? "⌘S"
+    : "Ctrl+S";
+
 export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   const [sessionId, setSessionId] = useState<number | undefined>(params.sessionId);
   const [dirty, setDirty] = useState(false);
