@@ -220,6 +220,25 @@ describe("Settings -> Integrations -> Review relay", () => {
     );
   });
 
+  it("commits the ledger check-run name, and an empty one turns the ledger off", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    const field = screen.getByLabelText("Ledger check-run name");
+    // The default mirrors the shared workflow's hermes-review-ledger-name.
+    expect(field).toHaveValue("Hermes review");
+    await user.clear(field);
+    await user.type(field, "Custom ledger{Enter}");
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { ledgerName: "Custom ledger" } }),
+    );
+    // Empty = off, like the workflow's hermes-review-ledger: off.
+    await user.clear(screen.getByLabelText("Ledger check-run name"));
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { ledgerName: "" } }),
+    );
+  });
+
   it("commits the triage prompt repository and path (#1629)", async () => {
     const user = userEvent.setup();
     await renderCard();

@@ -439,14 +439,26 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   reviewed** is refused the same way: there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first). "Already
   reviewed" means the head holds the content of the last commit the reviewer
-  demonstrably reviewed — read from the `Hermes review` marker, not from the
+  demonstrably reviewed — read from the ledger marker (the check run named by
+  `reviewRelay.ledgerName`, default `Hermes review`), not from the
   review's own `commit_id`, which GitHub re-points at the head when the branch
-  is rewritten — so a rebase that changes nothing is refused, while an "Update
-  branch" merge is reviewed. When the marker cannot be used (the check-run
-  token lacks access, the repository's workflow keeps no ledger, or the marker was
-  never closed so its run has no end) the
+  is rewritten — so a rewrite that changes nothing is refused while the reviewed
+  commit is still one of the pull request's commits, and an "Update branch" merge
+  is reviewed. (A force-push or rebase that drops the reviewed commit hides its
+  marker, and the round reviews again: s3ntin3l8/.github#136.) A review is a
+  marker's own only if it was submitted while the run ran — between the marker's
+  start and its close, and at most 90 minutes after the start, so a marker that
+  was closed hours late does not claim a later, unrelated review. When the marker
+  cannot be used (the check-run token lacks access, the ledger is off, or the
+  marker was never closed so its run has no end) the
   review's `commit_id` is used only while that commit is not newer than the
-  review; otherwise the whole diff is reviewed. A
+  review; otherwise the whole diff is reviewed. The relay and the shared Hermes
+  workflow must derive the same base (it goes into one idempotency key), so two
+  relay settings mirror workflow inputs and have to be set together with them:
+  `reviewRelay.ledgerName` is `hermes-review-ledger-name` (default `Hermes
+review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
+  `reviewRelay.reviewerBotLogin` is the workflow's `mention-trigger` plus `[bot]`
+  (if it is empty the relay derives no base and reviews the whole diff). A
   repeat request for the **same commit** inside the configured cooldown exits
   non-zero with a 409 as well. A session that works an **active Task Master
   task** (claimed, in progress or reviewing) is refused with a 409 for that
@@ -458,8 +470,8 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   one. The confirmation names the run id. A commit that has already been
   reviewed is refused the same way — there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first).
-  The relay also writes an in-flight **marker** (a check run named
-  `Hermes review`) that the repository's own review workflow reads to see the
+  The relay also writes an in-flight **marker** (a check run named by
+  `reviewRelay.ledgerName`, default `Hermes review`; none if it is empty) that the repository's own review workflow reads to see the
   run; only a GitHub App with Checks: Read & write can write it. When it
   cannot, the review still runs, and the confirmation ends with
   `— marker not written: <reason>` (JSON: `marker.written: false` with a

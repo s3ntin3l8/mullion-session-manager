@@ -720,6 +720,88 @@ describe("hermes review relay", () => {
       }
     });
 
+    describe("the ledger setting", () => {
+      // The settings live in a DB shared by the tests of this file: put them back.
+      afterEach(() => {
+        applySettingsPatch(app, {
+          reviewRelay: { ledgerName: "Hermes review", cooldownMinutes: 10 },
+        });
+      });
+
+      it("writes the marker under the configured ledger name", async () => {
+        // reviewRelay.ledgerName mirrors the workflow's hermes-review-ledger-name.
+        applySettingsPatch(app, { reviewRelay: { ledgerName: "Custom ledger" } });
+        let written: Record<string, unknown> = {};
+        createCheckRun = async (init: RequestInit) => {
+          written = JSON.parse(init.body as string) as Record<string, unknown>;
+          return new Response(JSON.stringify({ id: 4242 }), { status: 201 });
+        };
+        await requestHermesReview(app, {
+          ...PR,
+          githubToken: "gh-token",
+          markerWriteToken: "app-token",
+        });
+        expect(written.name).toBe("Custom ledger");
+      });
+
+      it("writes no marker and reads no remembered session when the ledger is off", async () => {
+        // An empty ledger name is the workflow's hermes-review-ledger: off.
+        applySettingsPatch(app, { reviewRelay: { ledgerName: "" } });
+        let wrote = false;
+        createCheckRun = async () => {
+          wrote = true;
+          return new Response(JSON.stringify({ id: 1 }), { status: 201 });
+        };
+        let reads = 0;
+        checkRuns = async () => {
+          reads += 1;
+          return new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
+        };
+        const result = await requestHermesReview(app, {
+          ...PR,
+          githubToken: "gh-token",
+          markerWriteToken: "app-token",
+          resolveBase: async () => "base123",
+        });
+        expect(wrote).toBe(false);
+        expect(reads).toBe(0);
+        expect(result.marker).toBeUndefined();
+      });
+
+      it("finds the remembered session on the markers named by the ledger", async () => {
+        checkRuns = async () =>
+          new Response(
+            JSON.stringify({
+              check_runs: [
+                {
+                  id: 900,
+                  name: "Custom ledger",
+                  external_id: "run_new",
+                  status: "completed",
+                  output: { summary: "session: hermes-review-acme-widgets-7-2" },
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        const sessionOf = async () => {
+          await requestHermesReview(app, {
+            ...PR,
+            githubToken: "gh-token",
+            resolveBase: async () => "base123",
+          });
+          const post = calls("/v1/runs").at(-1);
+          return JSON.parse((post?.[1] as RequestInit).body as string).session_id;
+        };
+        // Under the default name the marker is not ours: the base session.
+        expect(await sessionOf()).toBe("hermes-review-acme-widgets-7");
+        applySettingsPatch(app, {
+          reviewRelay: { ledgerName: "Custom ledger", cooldownMinutes: 0 },
+        });
+        expect(await sessionOf()).toBe("hermes-review-acme-widgets-7-2");
+      });
+    });
+
     it("writes the in-flight marker, with the session the round runs in", async () => {
       // The marker is what the shared workflow reads to see that a review of
       // this pull request is already running — and which session it runs in.

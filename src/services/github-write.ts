@@ -822,7 +822,8 @@ export function truncateText(text: string, max: number): string {
  * A check run on a commit — the "a review of this pull request is in flight"
  * marker the Hermes review protocol uses (issue #1749).
  *
- * The marker is a check run named "Hermes review" on the reviewed head, whose
+ * The marker is a check run on the reviewed head (named by `reviewRelay.ledgerName`,
+ * default "Hermes review"), whose
  * `external_id` is the Hermes run id. The shared workflow reads and writes the
  * same marker, so both entry points see one another's in-flight review.
  */
@@ -897,7 +898,8 @@ export async function listCommitCheckRuns(
 }
 
 /**
- * A finished "Hermes review" ledger marker on one of a PR's commits.
+ * A finished ledger marker (the check run named by `reviewRelay.ledgerName`) on one
+ * of a PR's commits.
  *
  * The marker sits on the commit the run reviewed and does NOT follow the PR's
  * head, which makes it the one reliable record of what a review covered:

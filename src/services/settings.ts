@@ -501,9 +501,29 @@ export interface AppSettings {
      * relay's status (the pill and `review status`), so another bot's review
      * of the head does not show as the relay's. It decides the same for the
      * triage reply (`triage status`): only this bot's issue comment counts.
-     * Empty = any bot's review or comment counts (the old rule).
+     * Empty = any bot's review or comment counts in the STATUS the relay
+     * shows (the old rule). It does NOT count for the delta base: the shared
+     * workflow only ever accepts `<mention-trigger>[bot]`, so with no login
+     * the relay cannot derive the same base and reviews the whole diff
+     * instead (s3ntin3l8/.github#133).
      */
     reviewerBotLogin: string;
+    /**
+     * The name of the check run that records which commit a review round
+     * covered (the "ledger"). The relay writes it, and reads it to find the
+     * commit the last round covered (the delta base) and the session it ran in.
+     *
+     * Mirrors the shared workflow's inputs: this is `hermes-review-ledger-name`
+     * (default "Hermes review"), and EMPTY means the ledger is off, like
+     * `hermes-review-ledger: off`. The two must be set together: a relay that
+     * keeps a ledger the workflow does not (or under another name) derives a
+     * different base, and the two SILENTLY stop deduplicating against each other
+     * (nothing detects it; the same range can be reviewed twice). With
+     * the ledger off the delta base falls back to the review's `commit_id`,
+     * which GitHub re-points when the branch is rewritten, and is trusted only
+     * while it provably predates the review.
+     */
+    ledgerName: string;
   };
   /**
    * The Runway quota integration (issue #29).
@@ -706,6 +726,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
+    ledgerName: "Hermes review",
   },
   runway: {
     apiUrl: "",
@@ -1322,6 +1343,13 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
           DEFAULT_SETTINGS.reviewRelay.reviewerBotLogin,
         ),
       ),
+      // A check run's name is at most 100 characters; empty is meaningful (ledger off).
+      ledgerName: safeString(
+        settings.reviewRelay.ledgerName,
+        DEFAULT_SETTINGS.reviewRelay.ledgerName,
+      )
+        .trim()
+        .slice(0, 100),
     },
     runway: {
       apiUrl: safeString(settings.runway.apiUrl, DEFAULT_SETTINGS.runway.apiUrl),

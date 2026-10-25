@@ -261,8 +261,9 @@ export interface RelayTarget {
   resolveBase?: () => Promise<string>;
   /**
    * Does the head hold the same content as the reviewed commit (the same
-   * commit, or the same tree)? A rebase or a recreated branch that changed
-   * nothing has nothing new to review; an "Update branch" merge does. The
+   * commit, or the same tree)? A rewrite that changed nothing has nothing new to
+   * review (while the reviewed commit is still one of the PR's commits: a rewrite that
+   * drops it hides its marker, s3ntin3l8/.github#136); an "Update branch" merge does. The
    * workflow skips on the same test. Without it only the same commit counts.
    */
   sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
@@ -853,7 +854,7 @@ export async function requestRelay(
 ): Promise<RelayResult> {
   const { owner, repo, number } = target;
   const settings = getStoredSettings(app.db).reviewRelay;
-  const { apiUrl, model, cooldownMinutes } = settings;
+  const { apiUrl, model, cooldownMinutes, ledgerName } = settings;
   // The alias means "whatever the profile is configured with", so neither it
   // nor a provider goes on the wire (see HERMES_PROFILE_DEFAULT_MODEL); a
   // provider only ever qualifies a real model.
@@ -914,8 +915,9 @@ export async function requestRelay(
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
     // An empty range means the reviewed commit holds the head's content (it IS
-    // the head, or has its tree — a rebase or a recreated branch that changed
-    // nothing): there is nothing new to review, and a run for it would be a
+    // the head, or has its tree — a rewrite that changed nothing, while the
+    // reviewed commit is still one of the PR's commits, s3ntin3l8/.github#136):
+    // there is nothing new to review, and a run for it would be a
     // second review of the same diff. The reviewed commit comes from the
     // ledger, not from a review's commit_id, which GitHub re-points at the
     // head when the branch is rewritten (s3ntin3l8/.github#129).
@@ -953,13 +955,20 @@ export async function requestRelay(
     // wrote records the session it used, so the next round continues in it
     // instead of starting from the stuck base id and paying a refused POST
     // every round. The shared workflow reads the same marker (issue #1757).
-    if (target.kind === "pull_request" && baseSha && baseSessionId && target.githubToken) {
+    if (
+      target.kind === "pull_request" &&
+      baseSha &&
+      baseSessionId &&
+      target.githubToken &&
+      ledgerName !== ""
+    ) {
       const remembered = await readRememberedSession(
         target.githubToken,
         owner,
         repo,
         baseSha,
         baseSessionId,
+        ledgerName,
       );
       if (remembered) {
         sessionId = remembered.id;
@@ -1043,7 +1052,16 @@ export async function requestRelay(
     // (issue #1751) and continues in its session (issue #1757).
     let markerCheckRunId: number | undefined;
     let marker: ReviewMarkerResult | undefined;
-    if (target.kind === "pull_request" && target.headSha && sessionId && !run.replayed) {
+    // An empty ledger name means the ledger is off (`reviewRelay.ledgerName`), like the
+    // workflow's `hermes-review-ledger: off`: no marker is written, so both entry points
+    // derive the base the same way (from the review's commit_id).
+    if (
+      target.kind === "pull_request" &&
+      target.headSha &&
+      sessionId &&
+      !run.replayed &&
+      ledgerName !== ""
+    ) {
       if (!target.markerWriteToken) {
         // No App token with `checks: write` (#1790): GitHub refuses a check
         // run from a user token, so the write is skipped — and the caller is
@@ -1062,7 +1080,7 @@ export async function requestRelay(
             owner,
             repo,
             {
-              name: REVIEW_MARKER_NAME,
+              name: ledgerName,
               headSha: target.headSha,
               externalId: run.runId,
               sessionId,
@@ -1123,17 +1141,6 @@ export async function requestRelay(
 }
 
 /**
- * The in-flight marker's check-run name.
- *
- * The shared workflow writes the same marker under the same name (its
- * `hermes-review-ledger-name` input, default "Hermes review"), so a marker
- * written by one entry point is found by the other — that is what lets a
- * request through the relay see a review the workflow started, and the other
- * way round.
- */
-export const REVIEW_MARKER_NAME = "Hermes review";
-
-/**
  * The session the previous round ran in, read off the in-flight marker it
  * wrote (issue #1757).
  *
@@ -1152,6 +1159,7 @@ async function readRememberedSession(
   repo: string,
   baseSha: string,
   baseSessionId: string,
+  markerName: string,
 ): Promise<{ id: string; attempt: number } | null> {
   try {
     const runs = await listCommitCheckRuns(token, owner, repo, baseSha);
@@ -1159,7 +1167,7 @@ async function readRememberedSession(
     // id), and the newest one is the round that actually ran — an older
     // marker names the session that was stuck, which is exactly the id the
     // next round must not go back to.
-    const marker = runs.find((r) => r.name === REVIEW_MARKER_NAME);
+    const marker = runs.find((r) => r.name === markerName);
     const match = /^session: (\S+)$/.exec((marker?.summary ?? "").trim());
     if (!match) return null;
     const id = match[1];
