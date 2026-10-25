@@ -263,6 +263,28 @@ describe("check-token-contrast.mjs", () => {
     expect(result.stderr).toContain("in the light theme");
   });
 
+  it("names a background shorthand it cannot composite, instead of claiming nothing paints", async () => {
+    // `background: var(--dim)` is one solid colour and is measured.
+    // `background: var(--dim) no-repeat` is the same token plus a repeat
+    // keyword — still the dot's only paint, but not a colour this check
+    // can composite. "Nothing paints it" would be the wrong diagnosis:
+    // the shorthand is there.
+    writeSidebar((css) =>
+      css.replace(
+        /(\.project-git-dot \{[^}]*?)background: var\(--dim\);/,
+        "$1background: var(--dim) no-repeat;",
+      ),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".project-git-dot");
+    expect(result.stderr).toContain("background");
+    expect(result.stderr).toContain("var(--dim) no-repeat");
+    expect(result.stderr).toContain("shorthand this check cannot composite");
+    expect(result.stderr).toContain("not a single solid colour");
+    expect(result.stderr).not.toContain("nothing paints it any more");
+  });
+
   it("fails when the active row's handle stops declaring full strength", async () => {
     // White at the resting 0.75 over --accent-fill still clears 3:1
     // (3.74:1 dark / 4.28:1 light), so the runtime check would not catch

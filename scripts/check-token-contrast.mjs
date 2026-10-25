@@ -413,21 +413,25 @@ function readOpacity(declarations) {
  * `color` is the icon. `background-color`, or a `background` that is a
  * single colour, is a filled mark. An object that declares both is measured
  * on both — first-match would let a failing fill hide behind a passing
- * text colour. A `background` shorthand that is not one colour (a gradient,
- * a `color-mix`) is not a paint this check can composite, and is skipped
- * rather than reported as the object having no colour.
+ * text colour. A `background` shorthand that is not one solid colour — a
+ * gradient, a `color-mix`, `var(--dim) no-repeat`, a `var()` with a
+ * fallback — is not a paint this check can composite. It is returned
+ * separately, not dropped: when it is the object's only paint, "nothing
+ * paints it" would be the wrong diagnosis for a rule that does paint.
  */
 function paintedDeclarations(declarations) {
   const paints = [];
+  const cannotComposite = [];
   for (const property of ["color", "background-color", "background"]) {
     if (!declarations.has(property)) continue;
     const value = bareValue(declarations.get(property));
     if (property === "background" && !/^(?:var\(\s*--[\w-]+\s*\)|#[0-9a-fA-F]{3,8})$/.test(value)) {
+      cannotComposite.push({ property, value });
       continue;
     }
     paints.push({ property, value });
   }
-  return paints;
+  return { paints, cannotComposite };
 }
 
 for (const faded of FADED_GRAPHICS) {
@@ -495,15 +499,37 @@ for (const faded of FADED_GRAPHICS) {
     );
   }
 
-  const paints = paintedDeclarations(resting);
+  const { paints, cannotComposite } = paintedDeclarations(resting);
   if (paints.length === 0) {
-    failures.push(
-      `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour and no solid ` +
-        `background — nothing paints it any more`,
-    );
+    if (cannotComposite.length > 0) {
+      // The shorthand is there. It is not a single solid colour, so this
+      // check cannot composite it — that is a different defect from a rule
+      // that declares no paint at all.
+      for (const skipped of cannotComposite) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) declares ${skipped.property} ` +
+            `${skipped.value} — a shorthand this check cannot composite, because it is not ` +
+            `a single solid colour`,
+        );
+      }
+    } else {
+      failures.push(
+        `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour and no solid ` +
+          `background — nothing paints it any more`,
+      );
+    }
     continue;
   }
 
+  // Every paint below is measured against `--surface` (the surface the
+  // entry names). That is right for a fill, and for an icon whose only
+  // paint is `color` — both sit on that surface.
+  //
+  // An entry that declares BOTH a `color` and a background paints its text
+  // ON the fill, not on the surface: the icon's backdrop is the fill, so a
+  // `color` measured here would be against the wrong pixel. Nothing has
+  // both today. When the next entry does, composite `color` over the fill
+  // colour instead of the surface, or the number is misleading.
   for (const painted of paints) {
     for (const [themeName, theme] of [
       ["dark", dark],
