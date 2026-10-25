@@ -5,7 +5,7 @@ import type { Device, Project, Session, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
-  findSessionWorkspace,
+  findSessionWorkspaces,
   focusPanelForTier,
   isTiledPanel,
   maximizeIfTiled,
@@ -66,7 +66,7 @@ export interface UsePanelOpenerParams {
   dockviewApi: DockviewApi | null;
   layout: LayoutContext;
   projects: Project[];
-  // Only onOpenSession's cross-workspace branch reads this (findSessionWorkspace) —
+  // Only onOpenSession's cross-workspace branch reads this (findSessionWorkspaces) —
   // every other opener below is workspace-agnostic (it only ever acts within
   // whichever workspace's dockview instance is currently live).
   workspaces: Workspace[];
@@ -232,7 +232,7 @@ export function usePanelOpener({
       if (strandedFloat) {
         // #1440 (e) — this used to fall through to the `else` branch below,
         // which re-derives the session's workspace from the *server*
-        // layout blobs (findSessionWorkspace). `existing` was only found by
+        // layout blobs (findSessionWorkspaces). `existing` was only found by
         // asking the live grid for `panelId` in the first place, so the
         // session already has a panel in whichever workspace is currently
         // active — there's nothing to look up, and doing so anyway could
@@ -244,10 +244,25 @@ export function usePanelOpener({
         focusPanelForTier(dockviewApi, existing, layout.tier);
         useDashboardStore.getState().triggerPanelHighlight(panelId);
       } else {
-        const wsId = findSessionWorkspace(session.id, workspaces);
-        if (wsId != null && wsId !== activeWorkspaceId) {
+        // Issue #1883 — a session can be tiled into more than one workspace's
+        // saved layout, so there is no single "the" workspace it is in. The
+        // old lookup returned the FIRST match, which meant two things the
+        // user could not predict or influence: the answer depended on the
+        // server's row order, and the branch switched away from the
+        // workspace the user was sitting in whenever another workspace's
+        // (possibly stale) saved layout also mentioned the session.
+        //
+        // The rule now: switch only when the answer is unique AND it is not
+        // the workspace the user is already in. Otherwise open it here — the
+        // panel the user asked for, in the grid they are looking at. A
+        // session may legitimately be open in several workspaces at once
+        // (that is the premise of this issue), so opening it here is not a
+        // workaround, it is the honest answer to an ambiguous question.
+        const claims = findSessionWorkspaces(session.id, workspaces);
+        const onlyClaim = claims.length === 1 ? claims[0] : null;
+        if (onlyClaim !== null && onlyClaim !== activeWorkspaceId) {
           useDashboardStore.getState().triggerPanelHighlight(panelId);
-          useDashboardStore.getState().setActiveWorkspaceId(wsId);
+          useDashboardStore.getState().setActiveWorkspaceId(onlyClaim);
         } else {
           openSessionPanel(dockviewApi, session, layout, projects);
         }

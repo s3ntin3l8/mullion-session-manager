@@ -239,6 +239,49 @@ describe("usePanelOpener — onOpenSession", () => {
     expect(setActiveWorkspaceId).not.toHaveBeenCalled();
   });
 
+  // Issue #1883 — the old lookup returned the FIRST workspace claiming the
+  // session, so with several claimants the switch went to whichever came
+  // first in the array (the server's row order) — an answer the user could
+  // not predict. With no unique claimant there is nothing to switch TO, so
+  // the session opens in the workspace the user is already in.
+  it("opens locally rather than switching when several workspaces claim the session", () => {
+    const api = mockDockviewApi();
+    const claims = (id: number) =>
+      makeWorkspace({ id, layout: { sessionId: 1 } as Record<string, unknown> });
+    const { result } = setup({
+      dockviewApi: api,
+      workspaces: [makeWorkspace({ id: 1, layout: null }), claims(2), claims(3)],
+      activeWorkspaceId: 1,
+    });
+
+    result.current.onOpenSession(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "session-1" }));
+    expect(setActiveWorkspaceId).not.toHaveBeenCalled();
+    expect(triggerPanelHighlight).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same fix: the active workspace's own saved layout
+  // claiming the session means the session belongs HERE too, so the old
+  // first-match lookup could switch the user out of the workspace they were
+  // already in, to a workspace whose stale layout happened to come first.
+  it("opens locally rather than switching away when the active workspace also claims the session", () => {
+    const api = mockDockviewApi();
+    const claims = (id: number) =>
+      makeWorkspace({ id, layout: { sessionId: 1 } as Record<string, unknown> });
+    const { result } = setup({
+      dockviewApi: api,
+      workspaces: [claims(1), claims(2)],
+      activeWorkspaceId: 1,
+    });
+
+    result.current.onOpenSession(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "session-1" }));
+    expect(setActiveWorkspaceId).not.toHaveBeenCalled();
+    expect(triggerPanelHighlight).not.toHaveBeenCalled();
+  });
+
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenSession(SESSION)).not.toThrow();

@@ -1107,7 +1107,7 @@ export function App() {
     }
     // onOpenSession's cross-workspace branch only guarantees SOME panel
     // referencing this session existed in the target workspace's saved
-    // layout — findSessionWorkspace matches any panel type
+    // layout — findSessionWorkspaces matches any panel type
     // (panelUtils.ts's extractSessionIds also walks timeline/browserPane's
     // own `sessionIds`), not necessarily this session's own terminal panel.
     // If the restore just completed and the terminal panel still isn't
