@@ -2256,7 +2256,34 @@ function DiscoverProjects({
 
   return (
     <div className="discover-block">
-      <div className="discover-header" onClick={onToggleCollapsed}>
+      <div
+        className="discover-header"
+        onClick={onToggleCollapsed}
+        // Issue #1893 — this header was a plain <div onClick>: a keyboard
+        // user could not reach it at all, and a screen reader announced it
+        // as unlabelled text. The disclosure pattern the four sibling sites
+        // already use (the project header, the session row, the workspace
+        // group's header and the task board's lane header): role="button",
+        // tabIndex, aria-expanded, aria-controls, and Enter/Space to toggle.
+        role="button"
+        tabIndex={0}
+        aria-expanded={!collapsed}
+        aria-controls="discover-projects-body"
+        onKeyDown={(e) => {
+          // The `e.target !== e.currentTarget` guard the siblings use, and
+          // what it is FOR here: the header nests the host picker (the
+          // `stopPropagation` span below), and a nested control's own
+          // Enter/Space activation dispatches a raw keydown that bubbles
+          // here independently of the click's stopped propagation — so
+          // without the guard, picking a host with the keyboard would also
+          // collapse the section.
+          if (e.target !== e.currentTarget) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggleCollapsed();
+          }
+        }}
+      >
         <ChevronDownIcon
           size={14}
           className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
@@ -2266,7 +2293,7 @@ function DiscoverProjects({
         {hostPicker}
       </div>
       {!collapsed && (
-        <div className="discover-body">
+        <div id="discover-projects-body" className="discover-body">
           {remaining.map((c) => (
             <div key={c.cwd} className="discover-item">
               <FolderIcon size={14} style={{ color: "var(--muted)" }} />

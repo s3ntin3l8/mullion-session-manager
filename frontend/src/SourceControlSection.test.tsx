@@ -205,6 +205,50 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     expect(screen.queryByText("Working tree clean")).toBeNull();
   });
 
+  // Issue #1893 — the header was a plain <div onClick>: a keyboard user
+  // could not reach it at all, and a screen reader announced it as
+  // unlabelled text. These pin the disclosure pattern the four sibling
+  // sites already use.
+  it("exposes the disclosure pattern on its header", () => {
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen.getByText("Source Control").closest(".source-control-header");
+    expect(header).toHaveAttribute("role", "button");
+    expect(header).toHaveAttribute("tabindex", "0");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAttribute("aria-controls", "source-control-body");
+  });
+
+  it("toggles on Enter and on Space", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen
+      .getByText("Source Control")
+      .closest(".source-control-header") as HTMLElement;
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Working tree clean")).toBeTruthy();
+
+    await user.keyboard(" ");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Working tree clean")).toBeNull();
+  });
+
   it("renders nothing when there are no projects", () => {
     useDashboardStore.setState({ projects: [], sessions: [], activePanelId: null });
     const { container } = render(<SourceControlSection onOpenGit={vi.fn()} />);

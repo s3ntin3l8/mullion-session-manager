@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
@@ -1212,6 +1212,69 @@ describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
     expect(await screen.findByText(/does not exist/i)).toBeInTheDocument();
     // Not marked as added on failure.
     expect(screen.getByText("Add")).toBeInTheDocument();
+  });
+});
+
+describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
+  // The header was a plain <div onClick>: a keyboard user could not reach
+  // it at all, and a screen reader announced it as unlabelled text.
+  const renderWithCandidate = async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([
+      { name: "widgets", cwd: "/repos/widgets", isGitRepo: true, isRegistered: false },
+    ]);
+    const user = userEvent.setup();
+    renderSidebar();
+    const header = (await screen.findByText("Discover projects")).closest(".discover-header");
+    return { user, header: header as HTMLElement };
+  };
+
+  it("exposes the disclosure pattern on its header", async () => {
+    const { header } = await renderWithCandidate();
+
+    expect(header).toHaveAttribute("role", "button");
+    expect(header).toHaveAttribute("tabindex", "0");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAttribute("aria-controls", "discover-projects-body");
+  });
+
+  it("toggles on Enter and on Space", async () => {
+    const { user, header } = await renderWithCandidate();
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard(" ");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("does not toggle when the nested host picker is used", async () => {
+    // The guard the four sibling sites use: `e.target !== e.currentTarget`.
+    // The header nests the host picker, and a nested control's own
+    // Enter/Space activation dispatches a raw keydown that bubbles here
+    // independently of the click's stopped propagation — so without the
+    // guard, picking a host with the keyboard would also collapse the
+    // section.
+    hosts = [
+      makeHost({
+        id: "remote-1",
+        name: "build-box",
+        baseUrl: null,
+        isLocal: false,
+        hasToken: true,
+        health: "online",
+      }),
+    ];
+    const { header } = await renderWithCandidate();
+    const select = header.querySelector("select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+
+    fireEvent.keyDown(select, { key: "Enter" });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.keyDown(select, { key: " " });
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });
 
