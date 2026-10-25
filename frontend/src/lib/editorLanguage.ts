@@ -3,6 +3,7 @@ import { StreamLanguage } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
 import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
@@ -16,6 +17,12 @@ export function languageForFile(fileName: string): Extension | null {
   if (lower === ".env" || lower.startsWith(".env.") || lower.endsWith(".env")) {
     return StreamLanguage.define(properties);
   }
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.") || lower === "containerfile") {
+    return StreamLanguage.define(dockerFile);
+  }
+  if (lower === ".gitignore" || lower === ".dockerignore") {
+    return StreamLanguage.define(properties);
+  }
   const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
   switch (ext) {
     case "properties":
@@ -23,6 +30,8 @@ export function languageForFile(fileName: string): Extension | null {
     case "cfg":
     case "conf":
       return StreamLanguage.define(properties);
+    case "dockerfile":
+      return StreamLanguage.define(dockerFile);
     case "sh":
     case "bash":
     case "zsh":

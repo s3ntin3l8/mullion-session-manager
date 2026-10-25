@@ -55,6 +55,15 @@ const highlight = HighlightStyle.define([
   { tag: [t.string, t.special(t.string)], color: "var(--g)" },
   { tag: [t.number, t.bool, t.null, t.atom], color: "var(--o)" },
   { tag: [t.propertyName, t.definition(t.propertyName), t.attributeName], color: "var(--b)" },
+  // Legacy (StreamLanguage) modes map their token names onto these: the
+  // properties mode tags `.env` keys "def" and values "quote", yaml tags
+  // `:`/`-` "meta". Keep them ahead of the generic variableName rule below,
+  // which would otherwise win for definitions (a more specific tag only
+  // beats a generic one when listed first).
+  { tag: [t.definition(t.variableName), t.special(t.variableName)], color: "var(--b)" },
+  { tag: t.quote, color: "var(--g)" },
+  { tag: [t.meta, t.punctuation, t.separator], color: "var(--dim)" },
+  { tag: t.labelName, color: "var(--p)" },
   { tag: [t.variableName, t.name], color: "var(--fg)" },
   { tag: [t.typeName, t.className], color: "var(--y)" },
   { tag: [t.heading, t.strong], fontWeight: "bold", color: "var(--b)" },

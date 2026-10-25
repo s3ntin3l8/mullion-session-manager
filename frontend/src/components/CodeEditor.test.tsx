@@ -101,10 +101,24 @@ describe("languageForFile", () => {
       "x.tsx",
       "README.md",
       "dir/.env",
+      "Dockerfile",
+      "Dockerfile.dev",
+      "Containerfile",
+      "app.dockerfile",
+      ".gitignore",
+      ".dockerignore",
+      "docker-compose.yml",
     ]) {
       expect(languageForFile(name), name).not.toBeNull();
     }
     expect(languageForFile("notes.txt")).toBeNull();
     expect(languageForFile("Makefile")).toBeNull();
+  });
+
+  it("colours .env keys and values, not just comments", () => {
+    const { container } = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
+    const line = container.querySelectorAll(".cm-line")[1] as HTMLElement;
+    // Unstyled text has no wrapping span; each highlighted token does.
+    expect(line.querySelectorAll("span").length).toBeGreaterThanOrEqual(2);
   });
 });
