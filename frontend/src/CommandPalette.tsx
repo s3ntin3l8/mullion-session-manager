@@ -14,6 +14,7 @@ import {
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
+import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
@@ -379,6 +380,12 @@ export function CommandPalette({
   // time.
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
+  // The project drill-in and the "New workspace" name step. Declared up
+  // here so "New workspace" `.run()` can open the name step without a ref:
+  // the step's query reset needs setQuery, which does not exist until the
+  // commands (which include this opener) have been built.
+  const [subView, setSubView] = useState<"project" | "workspace-name" | null>(null);
+  const [subIndex, setSubIndex] = useState(0);
 
   // The non-launcher commands (paletteCommands.ts): the empty-query view
   // lists the `top` ones and drills into the `project` ones; a typed query
@@ -418,6 +425,10 @@ export function CommandPalette({
       hosts: onOpenHosts,
       settings: onOpenSettings,
       timeline: onOpenTimeline,
+      newWorkspace: () => {
+        setSubView("workspace-name");
+        setSubIndex(0);
+      },
     },
   });
   const topCommands = commands.filter((c) => c.placement === "top");
@@ -428,14 +439,13 @@ export function CommandPalette({
   const {
     query,
     setQuery,
+    selectedIndex,
     setSelectedIndex,
     filtered,
     matchingSessions,
     matchingWorkspaces,
     matchingCommands,
     entries,
-    activeIndex,
-    activeEntry,
     groupOffset,
     commandOffset,
   } = useCommandSearch({
@@ -449,12 +459,28 @@ export function CommandPalette({
     commands,
   });
 
+  // Blank query: the Commands group is painted above Launchers, but
+  // `matchingCommands` stays empty until there is a query, so `entries`
+  // would otherwise be launchers only and arrows could not reach New
+  // workspace, Settings or Devices. Prepend the painted rows. Search
+  // ranking is unchanged — a typed query still uses `entries` as
+  // useCommandSearch built it (commands after launchers). The default-agent
+  // seed below adds the same lead, so Enter still launches that launcher.
+  const blankCommands = query.trim() === "" ? topCommands : [];
+  const navEntries: PaletteEntry[] =
+    blankCommands.length === 0
+      ? entries
+      : [
+          ...blankCommands.map((command): PaletteEntry => ({ type: "command", command })),
+          ...entries,
+        ];
+  const navIndex = navEntries.length === 0 ? -1 : Math.min(selectedIndex, navEntries.length - 1);
+  const navEntry = navEntries[navIndex];
+
   // "Project ›" drill-in, and the name step for "New workspace". Same shape
   // as the project picker above: while open it swaps the list and the
   // placeholder and handles its own arrows/Enter/Escape. Entering and
   // leaving clear the (shared) query.
-  const [subView, setSubView] = useState<"project" | "workspace-name" | null>(null);
-  const [subIndex, setSubIndex] = useState(0);
   const subCommands = commands.filter(
     (c) =>
       c.placement === subView &&
@@ -478,7 +504,15 @@ export function CommandPalette({
   // create-then-switch, matching WorkspaceSwitcher's inline form. A failure
   // leaves the name step up and reports through the same toast other
   // workspace mutations use — closing would hide the name the user can fix.
+  // Enter is the only submit, and a held key repeats, so a second Enter
+  // before this settles would create a second workspace of the same name
+  // (audit finding 18, the Add host guard). The flag clears on both
+  // success and failure — success closes the palette, failure stays so the
+  // name can be edited and submitted again.
+  const creatingWorkspaceRef = useRef(false);
   const submitNewWorkspace = (name: string) => {
+    if (creatingWorkspaceRef.current) return;
+    creatingWorkspaceRef.current = true;
     void useDashboardStore
       .getState()
       .createWorkspace(name)
@@ -491,15 +525,29 @@ export function CommandPalette({
         useDashboardStore
           .getState()
           .reportError("Could not create the workspace.", describeError(err));
+      })
+      .finally(() => {
+        creatingWorkspaceRef.current = false;
       });
   };
   const runCommand = (command: PaletteCommand) => {
+    // `.run()` is the behaviour, including opening the name step.
+    // `prompt` only keeps the palette open and clears the box so the
+    // name can be typed; the focus move is an event-handler concern.
+    command.run();
     if (command.prompt === "workspace-name") {
-      enterSubView("workspace-name");
+      setQuery("");
+      inputRef.current?.focus();
       return;
     }
-    command.run();
     closeAfterAction();
+  };
+  const activateCommand = (command: PaletteCommand) => {
+    if (command.drillIn) {
+      enterSubView(command.drillIn);
+      return;
+    }
+    runCommand(command);
   };
 
   const filteredProjects = useMemo(() => {
@@ -582,10 +630,14 @@ export function CommandPalette({
         // occupying the front of the flattened `entries` list — resetting
         // to 0 there lands on whichever group is actually first, rather
         // than aiming this launcher-only `defaultIndex` at an unrelated
-        // flattened slot. The common case (project resolved before any
-        // typing) always has an empty query here, so those groups are empty
-        // and this is exactly the old plain-launcher-index behavior.
-        setSelectedIndex(query.trim() !== "" ? 0 : defaultIndex >= 0 ? defaultIndex : 0);
+        // flattened slot. On a blank query the Commands group leads the
+        // arrow list (it is painted above the launchers), so the seed adds
+        // that same lead — Enter still launches the default agent, and a
+        // list with no default agent still starts on the first launcher.
+        const commandLead = query.trim() === "" ? topCommands.length : 0;
+        setSelectedIndex(
+          query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
+        );
       })
       .catch(() => {
         if (ignore) return;
@@ -646,8 +698,7 @@ export function CommandPalette({
     value: string | null;
   } | null>(null);
 
-  const activeLauncherCommand =
-    activeEntry?.type === "launcher" ? activeEntry.launcher.command : null;
+  const activeLauncherCommand = navEntry?.type === "launcher" ? navEntry.launcher.command : null;
   const activeCli = activeLauncherCommand !== null ? commandModelCli(activeLauncherCommand) : null;
   // A command that already has its own --model (or codex's -m) flag keeps it
   // — offering a picker that the backend would then silently ignore
@@ -852,12 +903,12 @@ export function CommandPalette({
                 openProjectPicker();
               } else if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setSelectedIndex(Math.min(activeIndex + 1, entries.length - 1));
+                setSelectedIndex(Math.min(navIndex + 1, navEntries.length - 1));
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
-                setSelectedIndex(Math.max(activeIndex - 1, 0));
+                setSelectedIndex(Math.max(navIndex - 1, 0));
               } else if (e.key === "Enter") {
-                const picked = entries[activeIndex];
+                const picked = navEntries[navIndex];
                 if (!picked) return;
                 if (picked.type === "session") {
                   onOpenSession(picked.session);
@@ -866,7 +917,7 @@ export function CommandPalette({
                   selectWorkspace(picked.workspace.id);
                   closeAfterAction();
                 } else if (picked.type === "command") {
-                  runCommand(picked.command);
+                  activateCommand(picked.command);
                 } else {
                   launch(picked.launcher);
                 }
@@ -972,7 +1023,7 @@ export function CommandPalette({
         {!pickerOpen && effectiveProjectId !== null && launchersLoaded && (
           <div
             className={`cmd-palette-options-strip${
-              (activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent") ||
+              (navEntry?.type === "launcher" && navEntry.launcher.kind === "agent") ||
               showModelPicker
                 ? ""
                 : " collapsed"
@@ -981,13 +1032,11 @@ export function CommandPalette({
             <div
               style={{
                 visibility:
-                  activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent"
+                  navEntry?.type === "launcher" && navEntry.launcher.kind === "agent"
                     ? "visible"
                     : "hidden",
               }}
-              aria-hidden={
-                !(activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent")
-              }
+              aria-hidden={!(navEntry?.type === "launcher" && navEntry.launcher.kind === "agent")}
             >
               <label className="cmd-palette-worktree-toggle">
                 <input
@@ -1112,13 +1161,13 @@ export function CommandPalette({
             {query.trim() === "" && (
               <>
                 <div className="cmd-palette-group-label">Commands</div>
-                {topCommands.map((command) => (
+                {blankCommands.map((command, i) => (
                   <CommandRow
                     key={command.id}
                     command={command}
-                    onClick={() =>
-                      command.drillIn ? enterSubView(command.drillIn) : runCommand(command)
-                    }
+                    selected={i === navIndex}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => activateCommand(command)}
                   />
                 ))}
               </>
@@ -1144,7 +1193,7 @@ export function CommandPalette({
                   return (
                     <button
                       key={`session-${session.id}`}
-                      className={`cmd-row${i === activeIndex ? " selected" : ""}`}
+                      className={`cmd-row${i === navIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(i)}
                       onClick={() => {
                         onOpenSession(session);
@@ -1166,7 +1215,7 @@ export function CommandPalette({
                           <span className="cmd-row-subtitle">{subtitleParts.join(" · ")}</span>
                         )}
                       </span>
-                      {i === activeIndex && <span className="kbd">↵</span>}
+                      {i === navIndex && <span className="kbd">↵</span>}
                     </button>
                   );
                 })}
@@ -1180,7 +1229,7 @@ export function CommandPalette({
                   return (
                     <button
                       key={`workspace-${workspace.id}`}
-                      className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
+                      className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
                         selectWorkspace(workspace.id);
@@ -1196,7 +1245,7 @@ export function CommandPalette({
                       <span className="cmd-row-body">
                         <span className="cmd-row-title">{workspace.name}</span>
                       </span>
-                      {absoluteIndex === activeIndex && <span className="kbd">↵</span>}
+                      {absoluteIndex === navIndex && <span className="kbd">↵</span>}
                     </button>
                   );
                 })}
@@ -1209,12 +1258,15 @@ export function CommandPalette({
               </div>
             )}
             {filtered.map((launcher, i) => {
-              const absoluteIndex = groupOffset + i;
+              // Blank query prepends the Commands rows to the arrow list;
+              // a typed query does not (`blankCommands` is empty), so this
+              // is still `groupOffset + i`.
+              const absoluteIndex = blankCommands.length + groupOffset + i;
               const logo = resolveLauncherLogo(launcher, theme);
               return (
                 <button
                   key={launcher.id}
-                  className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
+                  className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
                   onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                   onClick={() => launch(launcher)}
                 >
@@ -1258,7 +1310,7 @@ export function CommandPalette({
                         ⚠ skip perms
                       </span>
                     )}
-                  {absoluteIndex === activeIndex && <span className="kbd">↵</span>}
+                  {absoluteIndex === navIndex && <span className="kbd">↵</span>}
                 </button>
               );
             })}
@@ -1272,7 +1324,7 @@ export function CommandPalette({
                       key={command.id}
                       command={command}
                       showBreadcrumb
-                      selected={absoluteIndex === activeIndex}
+                      selected={absoluteIndex === navIndex}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => runCommand(command)}
                     />
@@ -1300,9 +1352,9 @@ export function CommandPalette({
                 ? filteredProjects[activeProjectIndex]?.name
                   ? `Select ${filteredProjects[activeProjectIndex]?.name}`
                   : "Select project"
-                : activeEntry?.type === "session"
+                : navEntry?.type === "session"
                   ? "Open session"
-                  : activeEntry?.type === "workspace"
+                  : navEntry?.type === "workspace"
                     ? "Switch workspace"
                     : `Launch in ${target?.name ?? "…"}`}
           </span>

@@ -2827,11 +2827,76 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       });
       expect(onClose).not.toHaveBeenCalled();
       expect(screen.getByDisplayValue("again")).toBeTruthy();
+      // The pending flag clears on failure, so the name can be submitted again.
+      await user.keyboard("{Enter}");
+      await waitFor(() => expect(createWorkspace).toHaveBeenCalledTimes(2));
     } finally {
       useDashboardStore.setState({
         createWorkspace: prior.createWorkspace,
         reportError: prior.reportError,
       });
     }
+  });
+
+  it("ignores a second Enter while creating a workspace is still pending", async () => {
+    const workspace = makeWorkspace({ id: 4, name: "side" });
+    let resolveCreate: (value: typeof workspace) => void = () => {};
+    const createWorkspace = vi.fn(
+      () =>
+        new Promise<typeof workspace>((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+    const prior = useDashboardStore.getState();
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      workspaces: [],
+      createWorkspace,
+    });
+    const onShowWorkspace = vi.fn();
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    try {
+      renderPalette(openers(), { onShowWorkspace, onClose });
+      await user.click(await screen.findByText("New workspace"));
+      await user.type(screen.getByPlaceholderText("Workspace name…"), "side");
+      await user.keyboard("{Enter}{Enter}");
+      expect(createWorkspace).toHaveBeenCalledTimes(1);
+      expect(createWorkspace).toHaveBeenCalledWith("side");
+      resolveCreate(workspace);
+      await waitFor(() => {
+        expect(onShowWorkspace).toHaveBeenCalledWith(4);
+        expect(onClose).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      useDashboardStore.setState({ createWorkspace: prior.createWorkspace });
+    }
+  });
+
+  it("arrow keys reach the Commands group on a blank query", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          jsonResponse(200, [{ id: "shell:bash", kind: "shell", title: "bash", command: "bash" }]),
+        ),
+      ),
+    );
+    const onOpenSettings = vi.fn();
+    const o = openers();
+    const user = userEvent.setup();
+    renderPalette(o, { onOpenSettings });
+
+    // No claude in this list, so the default-agent seed lands on the first
+    // launcher. Commands are painted above it; ArrowUp walks into them
+    // from the bottom (Task board, then Settings).
+    const bash = await screen.findByRole("button", { name: /bash/ });
+    await waitFor(() => expect(bash).toHaveClass("selected"));
+    await user.click(screen.getByPlaceholderText(/Launch a session/));
+    await user.keyboard("{ArrowUp}{ArrowUp}{Enter}");
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(o.onOpenTasks).not.toHaveBeenCalled();
   });
 });

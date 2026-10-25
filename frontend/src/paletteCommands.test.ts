@@ -22,6 +22,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     browserUrl: vi.fn(),
     integrationsSettings: vi.fn(),
     blankBrowser: vi.fn(),
+    newWorkspace: vi.fn(),
   };
   const context: PaletteCommandContext = {
     projectId: 5,
@@ -152,7 +153,7 @@ describe("buildPaletteCommands", () => {
   });
 
   it("offers Devices, Hosts, Settings, the task board, and the active session's timeline only when wired", () => {
-    const { context } = ctx();
+    const { context, open } = ctx();
     const bare = buildPaletteCommands(context);
     for (const id of ["task-board", "devices", "hosts", "settings", "session-timeline"]) {
       expect(bare.some((c) => c.id === id)).toBe(false);
@@ -160,7 +161,8 @@ describe("buildPaletteCommands", () => {
     const create = bare.find((c) => c.id === "new-workspace")!;
     expect(create.prompt).toBe("workspace-name");
     expect(create.placement).toBe("top");
-    expect(() => create.run()).not.toThrow();
+    create.run();
+    expect(open.newWorkspace).toHaveBeenCalledTimes(1);
 
     const tasks = vi.fn();
     const devices = vi.fn();

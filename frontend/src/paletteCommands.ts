@@ -45,9 +45,11 @@ export interface PaletteCommand {
   // Shown before the title in a search result ("Project › Skills") so a
   // sub-item reads in context once it leaves its sub-list.
   breadcrumb?: string;
-  // Enter/click asks for one more input in the search box instead of
-  // calling `run`. "New workspace" needs a name; the palette owns that
-  // step and then calls the same createWorkspace the sidebar form does.
+  // Enter/click calls `run`, then leaves the palette open so the search box
+  // can collect one more input. "New workspace" needs a name; `run` starts
+  // that step and the palette calls the same createWorkspace the sidebar
+  // form does. A command with `prompt` still has a real `run` — the flag is
+  // not a substitute for one.
   prompt?: "workspace-name";
   run: () => void;
 }
@@ -79,6 +81,11 @@ export interface PaletteCommandOpeners {
   hosts?: () => void;
   settings?: () => void;
   timeline?: (session: Session) => void;
+  // "New workspace". `.run()` starts the palette's name step, so a caller
+  // that invokes the command directly does not miss it. The `prompt` flag
+  // only tells the palette to stay open while the name is typed — it is not
+  // the behaviour itself.
+  newWorkspace: () => void;
 }
 
 export interface PaletteCommandContext {
@@ -286,7 +293,7 @@ export function buildPaletteCommands({
       keywords: ["workspace", "new", "create"],
       placement: "top",
       prompt: "workspace-name",
-      run: () => {},
+      run: () => open.newWorkspace(),
     },
   );
 
