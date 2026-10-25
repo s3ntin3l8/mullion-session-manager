@@ -29,21 +29,31 @@ export interface HostBadge {
   title: string;
 }
 
+/**
+ * @param hosts A LAZY getter for the fleet's host list. It is called only
+ *   for a session that is NOT on the local host — a local session has no
+ *   badge, and reading the store for every row of the sidebar (to answer a
+ *   question that has already been answered) is work for nothing.
+ */
 export function describeHostBadge(
   session: { resolvedHostId: string; placementReason: string | null } | null | undefined,
-  hosts: Host[],
+  hosts: () => Host[],
 ): HostBadge | null {
   const hostId = session?.resolvedHostId;
   // A LOCAL session carries no badge: the sidebar already shows a
   // per-PROJECT host badge, and the per-session one is for the case that
   // matters — one project's sessions on different hosts.
   if (!hostId || hostId === LOCAL_HOST_ID) return null;
-  const name = hosts.find((h) => h.id === hostId)?.name ?? hostId;
+  const name = hosts().find((h) => h.id === hostId)?.name ?? hostId;
   const reason = session?.placementReason;
   return {
     name,
-    // A session with no recorded reason — a row written before placement
-    // existed — keeps the older tooltip, which answers "which host?".
+    // The reason names the host by its id. Replacing it is a blind
+    // substring replace, and that is safe because the id being replaced is
+    // a REMOTE host's — a UUID (host-registry.ts's createHost mints one),
+    // which cannot be a substring of anything else in the sentence. (The
+    // local host's id IS a short slug, "local" — but a local session never
+    // gets a badge, so its id is never substituted.)
     title: reason ? reason.replaceAll(hostId, name) : `Runs on host: ${name}`,
   };
 }

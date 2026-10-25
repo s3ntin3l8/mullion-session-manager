@@ -343,7 +343,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // Issue #1852 — the host badge AND its tooltip (the placement
   // decision's own words) are computed together, in one place, so the two
   // surfaces cannot disagree: see lib/hostBadge.ts.
-  const hostBadge = describeHostBadge(session, useDashboardStore.getState().hosts ?? []);
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
 
   return (
     <div

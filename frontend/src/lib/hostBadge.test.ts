@@ -15,14 +15,30 @@ const HOSTS = [
 describe("describeHostBadge (issue #1852)", () => {
   it("is nothing for a LOCAL session — the per-project badge already says that", () => {
     expect(
-      describeHostBadge({ resolvedHostId: "local", placementReason: "pinned to local" }, HOSTS),
+      describeHostBadge(
+        { resolvedHostId: "local", placementReason: "pinned to local" },
+        () => HOSTS,
+      ),
     ).toBeNull();
+  });
+
+  it("does NOT read the fleet list for a LOCAL session", () => {
+    // The getter is lazy on purpose: a local session has no badge, so
+    // reading the fleet's host list for it is work for nothing — and a
+    // store mock without a getState() would throw on the way.
+    let reads = 0;
+    const badge = describeHostBadge({ resolvedHostId: "local", placementReason: null }, () => {
+      reads += 1;
+      return HOSTS;
+    });
+    expect(badge).toBeNull();
+    expect(reads).toBe(0);
   });
 
   it("names the host, by its DISPLAY name", () => {
     const badge = describeHostBadge(
       { resolvedHostId: "3f2a9c1e-0000-4000-8000-000000000000", placementReason: null },
-      HOSTS,
+      () => HOSTS,
     );
     expect(badge?.name).toBe("studio-mac");
   });
@@ -30,7 +46,7 @@ describe("describeHostBadge (issue #1852)", () => {
   it("falls back to the host id when the fleet list has no name for it", () => {
     const badge = describeHostBadge(
       { resolvedHostId: "unknown-host", placementReason: null },
-      HOSTS,
+      () => HOSTS,
     );
     expect(badge?.name).toBe("unknown-host");
   });
@@ -41,7 +57,7 @@ describe("describeHostBadge (issue #1852)", () => {
         resolvedHostId: "mac-mini",
         placementReason: "least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)",
       },
-      HOSTS,
+      () => HOSTS,
     );
     expect(badge?.title).toBe("least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)");
   });
@@ -56,21 +72,24 @@ describe("describeHostBadge (issue #1852)", () => {
         placementReason:
           "least loaded: 3f2a9c1e-0000-4000-8000-000000000000 at 1.20 load on 12 cores",
       },
-      HOSTS,
+      () => HOSTS,
     );
     expect(badge?.title).toBe("least loaded: studio-mac at 1.20 load on 12 cores");
     expect(badge?.title).not.toContain("3f2a9c1e");
   });
 
   it("falls back to 'Runs on host: X' when the session has no recorded reason", () => {
-    const badge = describeHostBadge({ resolvedHostId: "mac-mini", placementReason: null }, HOSTS);
+    const badge = describeHostBadge(
+      { resolvedHostId: "mac-mini", placementReason: null },
+      () => HOSTS,
+    );
     expect(badge?.title).toBe("Runs on host: mac-mini");
   });
 
   it("shows a PINNED session's reason — the pinned path records one too", () => {
     const badge = describeHostBadge(
       { resolvedHostId: "mac-mini", placementReason: "pinned to the project's host mac-mini" },
-      HOSTS,
+      () => HOSTS,
     );
     expect(badge?.title).toBe("pinned to the project's host mac-mini");
   });

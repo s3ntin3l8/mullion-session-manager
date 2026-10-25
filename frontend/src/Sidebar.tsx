@@ -1907,7 +1907,7 @@ export function SessionRow({
   // decision's own words) are computed together, in one place: see
   // lib/hostBadge.ts's own comment for why the two disagree about how to
   // name a host.
-  const hostBadge = describeHostBadge(session, useDashboardStore.getState().hosts ?? []);
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
   const statusLabel = (
     <span className="session-status-group">
       <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
