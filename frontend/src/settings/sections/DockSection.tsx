@@ -1,22 +1,24 @@
 import { useDashboardStore } from "../../store/index.js";
 import { Row, Segmented, Toggle } from "../../ui/primitives.js";
-import { useCoarsePointer } from "../../lib/layoutTier.js";
+import { DOCK_UNAVAILABLE } from "../../lib/dockAvailability.js";
+import { useDockUnavailableReason } from "../../lib/useDockUnavailableReason.js";
 
 export function DockSection() {
   const { settings, updateSettings } = useDashboardStore();
   const d = settings.dock;
-  // The Dock is hidden by tablet.css's `(pointer: coarse)` block, and that
-  // media query is the only thing that decides it — so the section says the
-  // same thing the palette's Dock command says, on exactly the devices where
-  // the Dock cannot be shown (issue #1881).
-  const dockAvailable = !useCoarsePointer();
+  // The Dock is hidden by tablet.css's `(pointer: coarse)` block AND by
+  // mobile.css's phone-tier block, so this asks the shared predicate rather
+  // than testing the pointer alone (issue #1881). The palette's Dock command
+  // says the same thing, from the same source.
+  const unavailable = useDockUnavailableReason();
+  const reason = unavailable ? DOCK_UNAVAILABLE[unavailable].text : null;
   return (
     <>
-      {!dockAvailable && (
+      {reason && (
         <div className="settings-footer-note">
-          The Dock is hidden on touch-only devices, so the Docker settings below have nowhere to
-          show until you use a mouse or trackpad. They still apply, and the preview settings above
-          work either way.
+          {reason.charAt(0).toUpperCase() + reason.slice(1)}, so its Docker services and log panes
+          have nowhere to show. These settings still apply — the preview worktree and dev-server
+          ones work either way.
         </div>
       )}
       <Row

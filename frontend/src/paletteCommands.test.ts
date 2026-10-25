@@ -4,6 +4,7 @@ import {
   searchPaletteCommands,
   type PaletteCommandContext,
 } from "./paletteCommands.js";
+import type { DockUnavailableReason } from "./lib/dockAvailability.js";
 
 function ctx(over: Partial<PaletteCommandContext> = {}) {
   const open = {
@@ -27,7 +28,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     favoriteUrls: [],
     open,
     // The Dock can be shown unless the test says otherwise.
-    dockAvailable: true,
+    dockUnavailable: null,
     ...over,
   };
   return { context, open };
@@ -170,28 +171,41 @@ describe("searchPaletteCommands", () => {
   });
 });
 
-// Issue #1881 — the Dock is hidden on coarse-pointer tiers (tablet.css's
-// `(pointer: coarse)` block), but the palette still offered its Dock command
-// with no word about it: a tablet user ran a command that configures a panel
-// they cannot see, and got no explanation.
-describe("the Dock command's wording (issue #1881)", () => {
-  const dock = (dockAvailable: boolean) =>
-    buildPaletteCommands(ctx({ dockAvailable }).context).find((c) => c.id === "dock-config")!;
+// Issue #1881 — the Dock is hidden on touch-only and phone-tier devices, but
+// the palette still offered its Dock command with no word about it: a tablet
+// user ran a command that configures a panel they cannot see, and got no
+// explanation.
+describe("the Dock command's availability (issue #1881)", () => {
+  const dock = (dockUnavailable: DockUnavailableReason | null) =>
+    buildPaletteCommands(ctx({ dockUnavailable }).context).find((c) => c.id === "dock-config")!;
 
-  it("describes the Dock plainly where the Dock can be shown", () => {
-    expect(dock(true).subtitle).toBe("Edit this project's dock monitors");
+  it("carries no availability where the Dock can be shown", () => {
+    expect(dock(null).availability).toBeUndefined();
+    expect(dock(null).subtitle).toBe("Edit this project's dock monitors");
   });
 
   it("says why the Dock is unavailable where it cannot be shown", () => {
-    const subtitle = dock(false).subtitle;
-    expect(subtitle).toContain("dock monitors");
-    expect(subtitle).toMatch(/hidden on touch-only devices/i);
+    expect(dock("coarse-pointer").availability).toEqual({
+      label: "Not shown here",
+      reason: "the Dock is hidden while touch is the primary pointer",
+    });
+    expect(dock("phone-tier").availability).toEqual({
+      label: "Not shown here",
+      reason: "the Dock is hidden on the phone layout",
+    });
+  });
+
+  it("keeps the reason out of the subtitle, which is ellipsized", () => {
+    // The row's subtitle is `nowrap` + `text-overflow: ellipsis`: a reason
+    // in there is cut off mid-word on a phone-width palette. The reason
+    // rides in the row's own availability slot instead.
+    expect(dock("coarse-pointer").subtitle).toBe("Edit this project's dock monitors");
   });
 
   it("keeps the command, and its keywords, on both sides", () => {
     // The command edits the project's `.crs/dock.json`, which applies
     // wherever the Dock IS shown — so it is not withdrawn, only explained.
-    expect(dock(false).id).toBe("dock-config");
-    expect(dock(false).keywords).toContain("dock");
+    expect(dock("coarse-pointer").id).toBe("dock-config");
+    expect(dock("coarse-pointer").keywords).toContain("dock");
   });
 });

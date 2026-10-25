@@ -19,7 +19,7 @@ import {
 } from "./dock/dockHelpers.js";
 import { DockProjectGroup } from "./dock/DockProjectGroup.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
-import { useCoarsePointer } from "./lib/layoutTier.js";
+import { useDockUnavailableReason } from "./lib/useDockUnavailableReason.js";
 
 // Dock master-detail rework — everything below dock-header chrome the dock
 // needs before the log pane gets any room at all. Not exact (padding/border
@@ -189,7 +189,16 @@ export function Dock({
   // registerTerminalInput() for every running dock monitor. This actually
   // skips mounting DockProjectGroup (and therefore registering) under a
   // coarse pointer, rather than just hiding the result.
-  const isCoarsePointer = useCoarsePointer();
+  //
+  // Issue #1881 — the Dock is hidden by TWO rules, not one: tablet.css's
+  // `(pointer: coarse)` block AND mobile.css's phone-tier block. A
+  // phone-tier window with a fine pointer (a narrow window, or
+  // `settings.layoutMode: "phone"`) is hidden by the second rule alone, so
+  // this gate asks the shared predicate — the same one the palette and the
+  // Settings section state their reason from — rather than testing the
+  // pointer alone. Without that, the phone tier mounted the very
+  // DockProjectGroups this gate exists to suppress.
+  const dockUnavailable = useDockUnavailableReason();
   const [collapsed, setCollapsed] = useState(() => readBool(STORAGE_KEYS.dockCollapsed, false));
   const [height, setHeight] = useState(() => {
     const n = readNumber(STORAGE_KEYS.dockHeight, NaN);
@@ -512,16 +521,16 @@ export function Dock({
         )}
         <div className="dock-header-rule" />
         {
-          // Hermes review — also gated on `!isCoarsePointer`, matching the
-          // split below: under a coarse pointer, nothing renders there at
-          // all (no DockProjectGroup ever mounts, so a newly-pinned
-          // project has nowhere to show up until the pointer changes
-          // back). Persisting `manualIds` from a control the user can't
-          // see the effect of is harmless but pointless — hiding it here
-          // matches that reality instead of offering an action with no
-          // visible result.
+          // Hermes review — also gated on the Dock being unavailable,
+          // matching the split below: while the Dock cannot be shown,
+          // nothing renders there at all (no DockProjectGroup ever mounts,
+          // so a newly-pinned project has nowhere to show up until the
+          // pointer changes back). Persisting `manualIds` from a control
+          // the user can't see the effect of is harmless but pointless —
+          // hiding it here matches that reality instead of offering an
+          // action with no visible result.
         }
-        {!collapsed && !isCoarsePointer && (
+        {!collapsed && !dockUnavailable && (
           <AddColumnControl projects={projects} shownIds={columnIds} onAdd={addColumn} />
         )}
         <button
@@ -537,7 +546,7 @@ export function Dock({
         </button>
       </div>
       {!collapsed &&
-        !isCoarsePointer &&
+        !dockUnavailable &&
         (columnIds.length === 0 ? (
           <div className="dock-empty dock-empty-workspace">
             No projects tiled in this workspace yet

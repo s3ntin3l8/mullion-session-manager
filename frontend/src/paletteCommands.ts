@@ -8,6 +8,7 @@ import {
   RightSidebarIcon,
   SkillIcon,
 } from "./ui/icons.js";
+import { DOCK_UNAVAILABLE, type DockUnavailableReason } from "./lib/dockAvailability.js";
 
 type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 
@@ -25,6 +26,11 @@ export interface PaletteCommand {
   // Where it shows on an empty query: the top-level Integrations list, or
   // the "Project ›" drill-in list.
   placement: "top" | "project";
+  // Set when the command's effect cannot be seen on this device — the Dock
+  // on a touch-only or phone-tier device (issue #1881). The row carries the
+  // label in its own availability slot rather than in the subtitle, which is
+  // ellipsized and too short to hold a reason.
+  availability?: { label: string; reason: string };
   // Set on the "Project ›" row: Enter/click opens that sub-list instead of
   // running anything, and it is not itself a search result (its sub-items
   // are, directly).
@@ -59,11 +65,11 @@ export interface PaletteCommandContext {
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];
   open: PaletteCommandOpeners;
-  // Whether the Dock can be shown at all on this device. The Dock is hidden
-  // by tablet.css's `(pointer: coarse)` block — the same condition, and no
-  // other, that decides it — so the command says so rather than pretending
-  // the Dock is there (issue #1881).
-  dockAvailable: boolean;
+  // Why the Dock cannot be shown on this device, or null when it can (issue
+  // #1881). The Dock is hidden by two rules — a coarse pointer and the
+  // phone tier — so this is the shared predicate's answer, not a pointer
+  // test; see lib/dockAvailability.ts.
+  dockUnavailable: DockUnavailableReason | null;
 }
 
 export function buildPaletteCommands({
@@ -71,7 +77,7 @@ export function buildPaletteCommands({
   projectName,
   favoriteUrls,
   open,
-  dockAvailable,
+  dockUnavailable,
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
@@ -140,14 +146,20 @@ export function buildPaletteCommands({
       {
         id: "dock-config",
         title: "Dock",
-        // The Dock is hidden on touch-only devices (tablet.css's
-        // `(pointer: coarse)` block). The command still works — it edits the
-        // project's `.crs/dock.json`, which applies whenever the Dock is
-        // shown — but a user who cannot see the Dock deserves to be told why,
-        // here, where they decide to run it (issue #1881).
-        subtitle: dockAvailable
-          ? "Edit this project's dock monitors"
-          : "Edit this project's dock monitors — the Dock is hidden on touch-only devices",
+        // The Dock is hidden on touch-only and phone-tier devices. The
+        // command still works — it edits the project's `.crs/dock.json`,
+        // which applies wherever the Dock IS shown — but a user who cannot
+        // see the Dock deserves to be told why, here, where they decide to
+        // run it (issue #1881). The reason rides in the row's own
+        // availability slot: the subtitle is ellipsized, and a reason does
+        // not survive being cut off mid-word.
+        subtitle: "Edit this project's dock monitors",
+        availability: dockUnavailable
+          ? {
+              label: DOCK_UNAVAILABLE[dockUnavailable].short,
+              reason: DOCK_UNAVAILABLE[dockUnavailable].text,
+            }
+          : undefined,
         icon: DockIcon,
         keywords: ["dock", "monitors"],
         placement: "project",
