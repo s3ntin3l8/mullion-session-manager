@@ -24,6 +24,11 @@
 //   - a known condition with no hiding rule — the palette would warn about
 //     a Dock that is actually there.
 //
+// A "condition" is read as strictly as a media query reads: a LIST's every
+// arm, a CONJUNCTION's every feature, and a negated feature all count, and
+// a rule whose condition the predicate cannot name fails rather than
+// passing.
+//
 // It lives here rather than in a vitest file for one concrete reason: Vitest
 // stubs CSS imports (`css: false` in frontend/vitest.config.ts), so a test
 // cannot read a stylesheet's text — the `?raw` import resolves to an empty
@@ -249,11 +254,24 @@ function dockHidingRules(): HidingRule[] {
         // matching arm is not enough: the other arm hides the Dock somewhere
         // the predicate says nothing about.
         for (const arm of condition.split(",")) {
-          const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(arm));
-          if (known) {
-            if (!reasons.includes(known.reason)) reasons.push(known.reason);
-          } else {
-            unknown = true;
+          // …and an arm can CONJUNCTION several features — `@media (pointer:
+          // coarse) and (orientation: portrait)`. Every feature of the
+          // conjunction is a condition too, so each one is checked.
+          for (const feature of arm.split(/\s+and\s+/i)) {
+            // `not` inverts a feature: `@media not (pointer: coarse)` hides
+            // the Dock when the pointer is FINE, which is the opposite of
+            // what the coarse-pointer reason says. The predicate has no
+            // reason for an inverted condition, so such an arm is unknown.
+            if (/\bnot\b/i.test(feature)) {
+              unknown = true;
+              continue;
+            }
+            const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(feature));
+            if (known) {
+              if (!reasons.includes(known.reason)) reasons.push(known.reason);
+            } else {
+              unknown = true;
+            }
           }
         }
       }
