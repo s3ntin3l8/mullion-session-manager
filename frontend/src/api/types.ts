@@ -16,6 +16,7 @@ import type {
   GitStatus,
   GitPullReason,
   GitPullResult,
+  CloneHealth,
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleaseWorkflowInfo,
@@ -35,7 +36,7 @@ import type {
 } from "../../../src/shared/types.js";
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
-export type { GitPullReason, GitPullResult };
+export type { GitPullReason, GitPullResult, CloneHealth };
 export type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,

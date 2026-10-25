@@ -165,7 +165,12 @@ describe("git child processes scrub the ambient git environment", () => {
     // passing over sites that had neither the env scrub nor the gc override.
     // If this fails, either a git spawn was removed (lower it deliberately) or
     // the scan stopped matching (fix the scan).
-    expect(seen).toBeGreaterThanOrEqual(30);
+    //
+    // 28, not 30: the doctor used to have its own git spawn, and now that it
+    // lives in src/ (src/services/git-doctor.ts) all of its git calls go
+    // through ONE spawn helper — `runGit` — so the doctor contributes a single
+    // site rather than two.
+    expect(seen).toBeGreaterThanOrEqual(28);
   });
 
   // The override lives in three places — the TypeScript source of truth, the

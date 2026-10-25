@@ -605,13 +605,15 @@ describe("App tablet pane-cap notice", () => {
     render(<App />);
     const launch = await screen.findByTestId("launch-split");
     fireEvent.click(launch);
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "This split is past the tablet pane cap",
-    );
+    // Scoped to the app's OWN notice rather than "any role=status" — the
+    // app also mounts the app-wide toast host, which is a role=status
+    // region that is always present (the global toast slice).
+    const notice = await screen.findByText(/This split is past the tablet pane cap/);
+    expect(notice).toHaveAttribute("role", "status");
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("show-workspace"));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
 
     useDashboardStore.setState({
       splitRequest: { referencePanelId: "session-1", direction: "right" },
@@ -620,7 +622,7 @@ describe("App tablet pane-cap notice", () => {
     // added. A new session is what can add another column.
     splitHarness.launch = { ...splitHarness.launch!, id: 10 };
     fireEvent.click(await screen.findByTestId("launch-split"));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
   });
 });

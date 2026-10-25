@@ -1673,4 +1673,43 @@ describe("RemoteHostClient", () => {
       });
     });
   });
+
+  // Issue #1851 — the READ-ONLY clone health check. The agent-side check runs
+  // `git fsck`, which has a 30s budget of its own (git-doctor.ts's
+  // GIT_TIMEOUT_MS), so the proxy's default 5s would abandon the request
+  // while the agent is still working and report a perfectly healthy host as
+  // unreachable. The call carries its own budget for exactly that reason.
+  describe("resolveGitHealth (issue #1851)", () => {
+    it("asks the agent for the clone's health, with a budget that outlives its fsck", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          gitDir: "/x/.git",
+          zeroByteObjects: [],
+          otherZeroByteFiles: [],
+          fsckErrors: [],
+          healthy: true,
+          timedOut: false,
+        }),
+      );
+      try {
+        const health = await client().resolveGitHealth("/x/y");
+        expect(health.healthy).toBe(true);
+        expect(health.timedOut).toBe(false);
+        expect(fetchMock.mock.calls[0][0]).toBe(
+          "http://example.invalid:1234/internal/git-health?cwd=%2Fx%2Fy",
+        );
+        // Comfortably above the 30s the agent's own fsck may take, and above
+        // the 5s default this call would otherwise have inherited.
+        expect(timeoutSpy).toHaveBeenLastCalledWith(75_000);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    it("surfaces an agent that REJECTED the request as a HostRequestError, not an unreachable host", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(404, "no such route"));
+      await expect(client().resolveGitHealth("/x/y")).rejects.toBeInstanceOf(HostRequestError);
+    });
+  });
 });

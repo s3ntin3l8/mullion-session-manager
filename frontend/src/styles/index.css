@@ -35,3 +35,6 @@
 @import "./compact.css";
 @import "./tablet.css";
 @import "./sidebar-density.css";
+/* New section — appended last, so the overlay layer sits on top of
+   everything above it without any existing rule being reordered. */
+@import "./toasts.css";

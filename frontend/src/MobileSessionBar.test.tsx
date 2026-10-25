@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { DockviewApi, IDockviewPanel } from "dockview";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 
 const renameSession = vi.fn();
+// The app-wide failure channel (store/slices/toasts.ts) — the rejected
+// rename is reported through it.
+const reportError = vi.fn();
 let storeState: Record<string, unknown>;
 
 vi.mock("./store/index.js", () => {
@@ -38,7 +41,9 @@ let panels: IDockviewPanel[];
 let dockviewApi: DockviewApi;
 
 beforeEach(() => {
-  renameSession.mockClear();
+  renameSession.mockReset();
+  renameSession.mockResolvedValue(undefined);
+  reportError.mockClear();
   onOpenSession.mockClear();
   storeState = {
     sessions: [
@@ -86,6 +91,7 @@ beforeEach(() => {
     dismissedEventKeys: {},
     theme: "dark",
     renameSession,
+    reportError,
   };
   panels = [
     fakePanel("session-1", "shell", 1),
@@ -251,5 +257,43 @@ describe("MobileSessionBar", () => {
     renderBar();
     // Only session 3 counts: session 2 is muted, session 1 (active) has none.
     expect(screen.getByLabelText("1 unread elsewhere")).toBeInTheDocument();
+  });
+});
+
+// Audit finding 9 — the rename was optimistic with no rollback, and this
+// call site dropped the rejection, so a failed rename left the panel
+// showing a name the server never accepted and told the user nothing.
+describe("failed rename (audit finding 9)", () => {
+  it("reports the failure to the user", async () => {
+    renameSession.mockRejectedValue(new Error("the server said no"));
+    renderBar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    await user.click(screen.getByText("Rename…"));
+    const input = screen.getByLabelText("Session name");
+    await user.clear(input);
+    await user.type(input, "renamed{Enter}");
+
+    await waitFor(() => {
+      expect(reportError).toHaveBeenCalledWith(
+        "Could not rename the session.",
+        expect.stringContaining("the server said no"),
+      );
+    });
+  });
+
+  it("puts the panel title back", async () => {
+    renameSession.mockRejectedValue(new Error("the server said no"));
+    renderBar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    await user.click(screen.getByText("Rename…"));
+    const input = screen.getByLabelText("Session name");
+    await user.clear(input);
+    await user.type(input, "renamed{Enter}");
+
+    await waitFor(() => {
+      expect(panels[0].api.setTitle).toHaveBeenLastCalledWith("shell");
+    });
   });
 });
