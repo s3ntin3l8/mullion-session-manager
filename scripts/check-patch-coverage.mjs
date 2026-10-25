@@ -23,9 +23,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 //
 // The degradation is in the SAFE direction: the heuristic counts a type
 // declaration's body as executable, so the reported percentage goes DOWN and
-// the gate gets stricter, never looser. Nothing in the release path or in CI
-// runs this script (CI uses Codecov's advisory `codecov/patch` status), so
-// the degraded path is a safety net, not a working configuration.
+// the gate gets stricter, never looser. Nothing in the release path runs this
+// script, and CI runs it only as the advisory `patch-coverage` job (after
+// `npm ci`, so TypeScript is present), so the degraded path is a safety net,
+// not a working configuration.
 const requireFromHere = createRequire(import.meta.url);
 let tsModule;
 let tsLoaded = false;
@@ -278,16 +279,24 @@ function addHits(dst = {}, src = {}) {
 // counts summed: CI shards cover overlapping files, so overwriting would keep
 // only the last shard's hits. The maps are keyed by id, which is stable across
 // shards of the same source.
+const DEFAULT_COVERAGE_FILES = [
+  path.join(root, "coverage/coverage-final.json"),
+  path.join(root, "frontend/coverage/coverage-final.json"),
+];
+
 export function loadCoverageReports(files) {
   const coverageData = {};
 
-  const paths = files ?? [
-    path.join(root, "coverage/coverage-final.json"),
-    path.join(root, "frontend/coverage/coverage-final.json"),
-  ];
+  const paths = files ?? DEFAULT_COVERAGE_FILES;
 
   for (const p of paths) {
-    if (existsSync(p)) {
+    if (!existsSync(p)) {
+      // Only an explicit --coverage path is worth a diagnostic: the defaults are
+      // routinely absent when one workspace was not tested.
+      if (files && files !== DEFAULT_COVERAGE_FILES) {
+        console.warn(`Warning: coverage file ${p} does not exist; skipping it.`);
+      }
+    } else {
       try {
         const content = JSON.parse(readFileSync(p, "utf8"));
         for (const [key, val] of Object.entries(content)) {
@@ -559,7 +568,10 @@ export function runPatchCoverageCheck(options = {}) {
           return { ok: false, overallPercent: 0, error: "coverage-run-failed" };
         }
       }
-      coverageData = loadCoverageReports(options.coverageFiles);
+      // The run above wrote the default reports; keep the supplied ones too.
+      coverageData = loadCoverageReports(
+        options.coverageFiles ? [...options.coverageFiles, ...DEFAULT_COVERAGE_FILES] : undefined,
+      );
     }
   }
 
@@ -579,6 +591,14 @@ export function runPatchCoverageCheck(options = {}) {
     }
   }
   console.log("----------------------------------------------------------------------");
+  if (options.annotations) {
+    // GitHub Actions workflow commands: they attach to the PR diff.
+    for (const r of summary.results) {
+      for (const line of r.uncoveredLines) {
+        console.log(`::warning file=${r.file},line=${line}::not covered by tests`);
+      }
+    }
+  }
   console.log(
     `Overall Patch Coverage: ${summary.overallPercent.toFixed(1)}% ` +
       `(${summary.totalCoveredLines}/${summary.totalExecutableLines} lines, threshold: ${threshold.toFixed(1)}%)\n`,
@@ -596,6 +616,7 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
   let baseRef = undefined;
   let noRun = false;
   const coverageFiles = [];
+  let annotations = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--threshold" && args[i + 1]) {
@@ -607,6 +628,8 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
     } else if (args[i] === "--coverage" && args[i + 1]) {
       coverageFiles.push(path.resolve(args[i + 1]));
       i++;
+    } else if (args[i] === "--annotations") {
+      annotations = true;
     } else if (args[i] === "--no-run") {
       noRun = true;
     }
@@ -616,6 +639,7 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
     threshold,
     baseRef,
     noRun,
+    annotations,
     coverageFiles: coverageFiles.length ? coverageFiles : undefined,
     ...testOptions,
   });

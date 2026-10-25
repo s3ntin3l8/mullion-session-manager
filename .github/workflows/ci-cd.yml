@@ -203,21 +203,14 @@ jobs:
             exit 0
           fi
           status=0
-          node scripts/check-patch-coverage.mjs --no-run \
+          node scripts/check-patch-coverage.mjs --no-run --annotations \
             --base "origin/${BASE_REF}" "${args[@]}" | tee patch-coverage.txt || status=$?
           {
-            echo '### Patch coverage (own check, advisory)'
+            echo '### Patch coverage (own check, advisory; threshold 75%)'
             echo '```'
-            cat patch-coverage.txt
+            grep -v '^::warning' patch-coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          # Uncovered lines become annotations on the PR diff.
-          grep -E '^  \S+ .*Uncovered: ' patch-coverage.txt | while IFS= read -r line; do
-            file=${line%% *}
-            for n in $(sed 's/.*Uncovered: //' <<<"$line" | tr ',' ' '); do
-              echo "::warning file=${file},line=${n}::not covered by tests"
-            done
-          done || true
           exit "$status"
 
   # Issue #407 (B3 of the audit remediation plan) — runs the opt-in e2e

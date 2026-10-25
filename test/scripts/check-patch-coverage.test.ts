@@ -416,6 +416,33 @@ diff --git a/${rel} b/${rel}
     }
   });
 
+  it("cli --annotations emits a ::warning with the file and line of each uncovered line", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const rel = "src/services/task-reconciler.ts";
+      const stmt = { start: { line: 11, column: 0 }, end: { line: 11, column: 5 } };
+      const report = path.join(dir, "cov.json");
+      writeFileSync(
+        report,
+        JSON.stringify({ [rel]: { statementMap: { "0": stmt }, s: { "0": 0 }, f: {}, b: {} } }),
+      );
+      const mockDiff = `
+diff --git a/${rel} b/${rel}
+--- a/${rel}
++++ b/${rel}
+@@ -10,0 +11,1 @@
++const a = 1;
+`;
+      cli(["--annotations", "--no-run", "--coverage", report], { diffText: mockDiff });
+      const out = log.mock.calls.map((c) => String(c[0]));
+      expect(out).toContain(`::warning file=${rel},line=11::not covered by tests`);
+    } finally {
+      log.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("runPatchCoverageCheck executes cleanly with no-run option against HEAD", () => {
     const res = runPatchCoverageCheck({ baseRef: "HEAD", threshold: 0.0, noRun: true });
     expect(res.ok).toBe(true);
