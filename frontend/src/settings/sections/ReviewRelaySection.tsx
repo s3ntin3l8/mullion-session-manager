@@ -13,6 +13,7 @@ import {
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
+import { formatRelativeAge } from "../../relativeTime.js";
 import { ModelPicker } from "../ModelPicker.js";
 import {
   PROFILE_DEFAULT_MODEL,
@@ -155,7 +156,13 @@ function RecentReviews() {
               title={`${run.repo}#${run.number ?? run.prNumber}${
                 run.kind === "issue" ? " (issue)" : ""
               }`}
-              subtitle={`${run.status} · ${new Date(run.dispatchedAt).toLocaleTimeString()}${
+              // Issue #1890 — the app renders times through the shared
+              // relative-age formatter ("3m ago", "2h ago"); this row used
+              // to render a raw `toLocaleTimeString()`, so one screen showed
+              // two different ways of saying when something happened.
+              subtitle={`${run.status} · ${formatRelativeAge(
+                new Date(run.dispatchedAt).getTime(),
+              )}${
                 run.error ? ` · ${run.error}` : ""
               }${run.marker && !run.marker.written ? ` · marker not written: ${run.marker.message}` : ""}`}
               trailing={

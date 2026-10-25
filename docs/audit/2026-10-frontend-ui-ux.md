@@ -4,11 +4,11 @@
 accessibility, interaction-feedback and information-architecture defects. The backend
 (`src/`) and the CLI were not audited.
 
-**Status.** Every blocker is fixed, and so are 21 of the 21 major and 10 of the 24 minor
-findings, in nine pull requests: #1895 (accessibility and contrast), #1897 (surfacing
+**Status.** Every blocker is fixed, and so are 21 of the 21 major and 11 of the 24 minor
+findings, in ten pull requests: #1895 (accessibility and contrast), #1897 (surfacing
 failures instead of swallowing them), #1898 (guards on destructive actions), #1923,
-#1926, #1927, #1930, #1933 and #1934 (the series that closes the deferred backlog one
-finding per pull request). The other 14 findings are deferred and tracked as issues;
+#1926, #1927, #1930, #1933, #1934 and #1935 (the series that closes the deferred backlog
+one finding per pull request). The other 13 findings are deferred and tracked as issues;
 see [Deferred backlog](#deferred-backlog).
 
 ---
@@ -76,14 +76,14 @@ inventing new ones.
 
 ## Findings
 
-Forty-eight findings: 34 fixed and 14 deferred.
+Forty-eight findings: 35 fixed and 13 deferred.
 
 | Severity  | Findings | Fixed  | Deferred |
 | --------- | -------- | ------ | -------- |
 | Blocker   | 3        | 3      | 0        |
 | Major     | 21       | 21     | 0        |
-| Minor     | 24       | 10     | 14       |
-| **Total** | **48**   | **34** | **14**   |
+| Minor     | 24       | 11     | 13       |
+| **Total** | **48**   | **35** | **13**   |
 
 The defects are ordered by severity, not by screen. The recurring theme is
 that most of them are **divergences from patterns the codebase had already
@@ -95,9 +95,9 @@ sites. The fixes are therefore mostly consolidation rather than invention.
 The table lists the findings that were fixed, with the pull request that fixed each:
 #1895 fixed 12 (the accessibility and contrast pass), #1897 fixed 11 (failures surfaced
 instead of swallowed), #1898 fixed 4 (guards on destructive actions), #1923 fixed 1, #1926
-fixed 1, #1927 fixed 1, #1930 fixed 2, #1933 fixed 1 and #1934 fixed 1 (the series that
-closes the deferred backlog, one pull request at a time). The deferred ones are in
-the [Deferred backlog](#deferred-backlog), under the same numbers.
+fixed 1, #1927 fixed 1, #1930 fixed 2, #1933 fixed 1, #1934 fixed 1 and #1935 fixed 1 (the
+series that closes the deferred backlog, one pull request at a time). The deferred
+ones are in the [Deferred backlog](#deferred-backlog), under the same numbers.
 
 | #   | Severity | PR    | Finding                                                                                                                                             | Where                                                                                                                                                                                           | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | --- | -------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -133,6 +133,7 @@ the [Deferred backlog](#deferred-backlog), under the same numbers.
 | 31  | Minor    | #1897 | `SidebarDevices` shows device errors only in a `title` tooltip                                                                                      | `SidebarDevices` error path                                                                                                                                                                     | The error is inline in the failing row, not only in a `title` tooltip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 32  | Minor    | #1898 | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one                                            | `ui/ConfirmButton.tsx`                                                                                                                                                                          | The arm window counts down in the button and in its title                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 38  | Minor    | #1930 | The phone Settings list has no search, while the desktop rail does (`styles/mobile.css`, `Settings.tsx` nav)                                        | `PhoneNavigator.tsx:78-109`; `settings/settingsSections.tsx:216-228`                                                                                                                            | The phone's list filters by section name, description and control text through the same `filterSettingsSections` the desktop rail uses, so the two agree on what a query finds — and the desktop rail now matches descriptions too, which it did not before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 40  | Minor    | #1935 | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                          | `settings/sections/ReviewRelaySection.tsx:159-165`; `scripts/check-timestamp-format.mjs`                                                                                                        | The review relay's Settings section renders each run's age through the shared `formatRelativeAge` ("3m ago", "2h ago") instead of a raw locale-dependent clock time, so it says when something happened the way every other surface does. A lint-time guard fails if `.toLocaleTimeString()` or `.toLocaleDateString()` appears anywhere in `frontend/src` again; the shared time module is exempt, so an absolute timestamp can be added there as a shared formatter rather than spelled out inline                                                                                                                                                                                                                                                               |
 | 41  | Minor    | #1934 | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:602`)                                             | `NotificationBell.tsx:587-604`; `scripts/check-aria-haspopup.mjs`                                                                                                                               | The bell's trigger declares `aria-haspopup="dialog"` — the generic `"true"` maps to `menu` in the ARIA spec, while what the trigger opens is the notifications panel (`role="dialog"` on the desktop, a `ui/BottomSheet.tsx` on the phone). `aria-expanded` still tracks the panel's open state. A lint-time guard fails if `aria-haspopup="true"` appears anywhere in `frontend/src` again, in every spelling React accepts — `="true"`, `={'true'}`, `={"true"}` and `={true}` (React renders a boolean `aria-*` value as the string `"true"`), with the value allowed to sit on its own line                                                                                                                                                                    |
 | 42  | Minor    | #1933 | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:462`)                                         | `Sidebar.tsx:360-369`; `Sidebar.tsx:490-502`; `styles/sidebar.css:236-256`                                                                                                                      | The header states the count of the sessions the section holds, with its unit ("24 sessions") — the sum of the per-project numbers directly beneath it, counted over the projects the section is actually listing. The number wears the sidebar's mono count face; the unit word wears the UI face. It renders only once there is something to count, so a section with no sessions has no caption at all                                                                                                                                                                                                                                                                                                                                                           |
 
@@ -478,6 +479,44 @@ how `src/ui/primitives.a11y.test.tsx`, `src/ui/Modal.migration.test.tsx` and
 that the frontend's tsconfig deliberately omits Node's global types — but those tests
 all scan a subtree or a single directory, not every file in `frontend/src`.
 
+### When things happened (finding 40)
+
+**The rendering itself is a unit-test guard**: the defect was that one panel
+spoke a different dialect, so the fix is about what the panel renders.
+`frontend/src/settings/sections/Settings.reviewRelay.test.tsx` pins that a run's
+age is rendered as "3m ago" — and not as a clock time — and that the run's
+status and the server's error message still sit beside it.
+
+**The convention is a script guard**, because the convention is app-wide.
+`frontend/src/relativeTime.ts` holds `formatRelativeAge`, the app's one way of
+saying when something happened. `scripts/check-timestamp-format.mjs` (wired into
+`npm run lint`) fails if `.toLocaleTimeString()` or `.toLocaleDateString()`
+appears anywhere in `frontend/src`.
+
+Two boundaries are deliberate, and both are about what a text scan can and
+cannot see. `.toLocaleString()` is **not** covered: it is also how the app
+formats plain numbers (a byte count, say), and a scan cannot tell a `Date`'s
+`.toLocaleString()` from a number's — the two that unambiguously format a date
+are the two covered. And the shared time module itself is **exempt**, so an
+absolute timestamp (a real deadline, say) can be added there as a shared
+formatter and used from the surfaces that need it, rather than being spelled
+out inline at each call site.
+
+The scan reads the file as a whole rather than line by line, so a call whose
+name and paren sit on different lines is still caught, and it blanks both
+comments and string literals before matching — prose is not code, and this
+repo's own comments and copy-pasteable snippets quote the raw call without
+using it. A template literal's `${...}` part is left intact, because that part
+is real code.
+
+**The guard has a test of its own**
+(`test/scripts/check-timestamp-format.test.ts`), which drives it against
+fixture trees in both directions: every spelling of the locale-dependent
+date/time API it must catch, and the four it must not — `.toLocaleString()`,
+a comment that quotes the call, a string literal that mentions it, and the
+shared time module. A guard whose matcher is loosened later fails that test
+rather than silently passing.
+
 ---
 
 ## Evidence
@@ -724,7 +763,6 @@ implying more:
 | 36  | Minor    | The palette's group labels do not describe their contents; "Navigate" holds one row (`CommandPalette.tsx`, group definitions)              | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
 | 37  | Minor    | Palette coverage is not uniform — no Devices, Hosts, Settings, Timeline or new-workspace command (`CommandPalette.tsx`, command list)      | [#1879](https://github.com/s3ntin3l8/mullion-session-manager/issues/1879) |
 | 39  | Minor    | An ended session's status label composites to 1.54:1–1.70:1 (ended-session status styling)                                                 | [#1886](https://github.com/s3ntin3l8/mullion-session-manager/issues/1886) |
-| 40  | Minor    | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                 | [#1890](https://github.com/s3ntin3l8/mullion-session-manager/issues/1890) |
 | 43  | Minor    | A palette action that does not move focus deliberately leaves focus on `<body>` (`CommandPalette.tsx:292`)                                 | [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884) |
 | 44  | Minor    | There is no skeleton primitive — twenty-plus panels render the bare word "Loading…" (no `skeleton` anywhere in `frontend/src/styles`)      | [#1885](https://github.com/s3ntin3l8/mullion-session-manager/issues/1885) |
 | 45  | Minor    | The global keyboard shortcuts are discoverable nowhere in the UI (`hooks/useGlobalShortcuts.ts`, not user-facing)                          | [#1887](https://github.com/s3ntin3l8/mullion-session-manager/issues/1887) |
