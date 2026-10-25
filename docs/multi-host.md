@@ -275,9 +275,11 @@ branch is merged; automatic reclamation is tracked in #1964.
 
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),
-`session logs` and `session kill`. Prompting it (`session prompt`) and
-`wait_for_output` are not available yet — see [Current
-limitations](#current-limitations).
+`session logs` and `session kill`. `session prompt` (without `--wait`) and
+`session wait-output` work too and run on the child's host: send the prompt,
+then wait on its output with the reply's `outputOffset` as `--after-offset`
+(`prompt --wait` is not supported for a remote child yet, #1962). See [Current
+limitations](#current-limitations) for what is still missing.
 
 ### Seeing it in the UI
 
