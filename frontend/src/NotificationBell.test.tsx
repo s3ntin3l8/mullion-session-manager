@@ -653,6 +653,46 @@ describe("NotificationBell", () => {
   });
 });
 
+describe("NotificationBell — the trigger's popup semantics (issue #1894)", () => {
+  // The trigger used to declare `aria-haspopup="true"`, the generic "this
+  // opens something" value, which the ARIA spec maps to `menu`. What it
+  // opens is the notifications panel — `role="dialog"` on the desktop, a
+  // `ui/BottomSheet.tsx` on the phone — so the token now says so.
+  const trigger = () => screen.getByRole("button", { name: /notifications/i });
+
+  it('names what it opens: aria-haspopup="dialog", not the generic "true"', () => {
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
+    expect(trigger()).toHaveAttribute("aria-haspopup", "dialog");
+    expect(trigger()).not.toHaveAttribute("aria-haspopup", "true");
+  });
+
+  it("keeps aria-expanded tracking the panel's open state", async () => {
+    const user = userEvent.setup();
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
+    expect(trigger()).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(trigger());
+    expect(trigger()).toHaveAttribute("aria-expanded", "true");
+
+    await user.click(trigger());
+    expect(trigger()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens a dialog on the phone too, where the panel is a bottom sheet", async () => {
+    // The phone renders the same trigger and the same `sheet` panel — a
+    // `ui/BottomSheet.tsx`, which is itself `role="dialog"`. That is what
+    // the trigger's token describes, so it is what the test pins.
+    const user = userEvent.setup();
+    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} sheet />);
+
+    await user.click(trigger());
+
+    const sheet = await screen.findByRole("dialog");
+    expect(sheet).toHaveAttribute("aria-modal", "true");
+    expect(sheet).toHaveAttribute("aria-label", "Notifications");
+  });
+});
+
 describe("review gate Approve/Deny (issue #178)", () => {
   function makeGateEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
     return {

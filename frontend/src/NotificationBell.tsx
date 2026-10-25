@@ -590,7 +590,16 @@ export function NotificationBell({
         title={
           unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "No unread notifications"
         }
-        aria-haspopup="true"
+        // Issue #1894 — "dialog", not the generic "true". `aria-haspopup="true"`
+        // maps to `menu` in the ARIA spec, so assistive technology was told
+        // this trigger opens a menu; what it opens is the notifications
+        // panel, which carries `role="dialog"` (the desktop popover) or is
+        // a `ui/BottomSheet.tsx` on the phone — itself `role="dialog"`.
+        // The token states the actual relationship, and it is the one
+        // `ui/Modal.tsx`, `ui/BottomSheet.tsx`, `MobileSessionSwitcher.tsx`
+        // and `unified-board/TasksToolbar.tsx` already use for their own
+        // triggers.
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={
           unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications, none unread"
