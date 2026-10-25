@@ -279,9 +279,10 @@ describe("SessionRow", () => {
     });
 
     it("falls back to 'Runs on host: X' when nothing was decided", () => {
-      // A pinned project, or a session created before placement existed:
-      // there is no reason, so the tooltip keeps answering the older
-      // question — which host?
+      // A row written BEFORE placement existed is the only session without
+      // a recorded reason — a pinned project records one too ("pinned to
+      // the project's host X"), because the pinned path short-circuits the
+      // policy but does not skip the record.
       render(
         <SessionRow
           session={{ ...SESSION, resolvedHostId: "mac-mini", placementReason: null }}

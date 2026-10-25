@@ -833,8 +833,12 @@ export interface Session {
   // placement decision's own words ("least loaded: mac-mini at 1.2 load on
   // 12 cores (0.10 per core)"). Written with the row (issue #1724) and
   // read back by the host badge's tooltip, so the answer does not require
-  // the server log. Null when nothing was decided here — a pinned project,
-  // or a session created before placement existed.
+  // the server log.
+  //
+  // Null ONLY for a row written before placement existed: every session
+  // since records its decision's reason, a PINNED one included ("pinned to
+  // the project's host mac-mini") — the pinned path short-circuits the
+  // policy but does not skip the record.
   placementReason: string | null;
   createdAt: string;
   lastAttachedAt: string | null;
