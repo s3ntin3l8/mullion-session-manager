@@ -69,6 +69,9 @@ describe("settings route", () => {
       const edited = getStoredSettings(app.db).sessions;
       expect(edited.workflowConventionsText).toBe("my own rules");
       expect(edited.workflowConventionsAppliedText).toBe("");
+      // A client cannot forge the snapshot for hand-edited text.
+      await patch(app, { workflowConventionsAppliedText: "my own rules" });
+      expect(getStoredSettings(app.db).sessions.workflowConventionsAppliedText).toBe("");
       // Later tests share this DB and expect the untouched defaults.
       await patch(app, {
         workflowConventionsText: "",

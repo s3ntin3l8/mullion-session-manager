@@ -62,6 +62,59 @@ describe("worktree-hook", () => {
     expect(git(repo, ["branch", "--list", "worktree-busy"])).toContain("worktree-busy");
   });
 
+  it("leaves a worktree with uncommitted or untracked work, and its branch, alone", () => {
+    const dirty = createWorktree({ cwd: repo, name: "dirty" });
+    fs.writeFileSync(path.join(dirty, "uncommitted.txt"), "x");
+    removeWorktree({ worktree_path: dirty });
+    expect(fs.existsSync(path.join(dirty, "uncommitted.txt"))).toBe(true);
+    expect(git(repo, ["branch", "--list", "worktree-dirty"])).toContain("worktree-dirty");
+  });
+
+  it("picks a new name when the branch was kept or the directory is not a worktree", () => {
+    const kept = createWorktree({ cwd: repo, name: "kept" });
+    fs.writeFileSync(path.join(kept, "b.txt"), "b");
+    git(kept, ["add", "b.txt"]);
+    git(kept, ["commit", "-m", "work", "--no-verify"]);
+    removeWorktree({ worktree_path: kept });
+    expect(createWorktree({ cwd: repo, name: "kept" })).toBe(path.join(repo, ".wt", "kept-2"));
+
+    fs.mkdirSync(path.join(repo, ".wt", "squat"), { recursive: true });
+    const dest = createWorktree({ cwd: repo, name: "squat" });
+    expect(dest).toBe(path.join(repo, ".wt", "squat-2"));
+    expect(git(dest, ["rev-parse", "--abbrev-ref", "HEAD"])).toBe("worktree-squat-2");
+  });
+
+  it("does not copy a symlinked .worktreeinclude entry", () => {
+    const outside = path.join(tmp, "outside.txt");
+    fs.writeFileSync(outside, "secret");
+    fs.symlinkSync(outside, path.join(repo, "link.txt"));
+    fs.writeFileSync(path.join(repo, ".worktreeinclude"), "link.txt\n");
+    const dest = createWorktree({ cwd: repo, name: "sym" });
+    expect(fs.existsSync(path.join(dest, "link.txt"))).toBe(false);
+  });
+
+  it("runs as a script, also when reached through a symlinked directory", () => {
+    const real = path.join(tmp, "releases", "1.0.0", "dist", "hooks");
+    fs.mkdirSync(real, { recursive: true });
+    fs.copyFileSync(
+      path.resolve("src/hooks/worktree-hook.mjs"),
+      path.join(real, "worktree-hook.mjs"),
+    );
+    fs.symlinkSync(path.join(tmp, "releases", "1.0.0"), path.join(tmp, "current"));
+    const script = path.join(tmp, "current", "dist", "hooks", "worktree-hook.mjs");
+    const run = (mode: string, payload: object) =>
+      execFileSync(process.execPath, [script, mode], {
+        input: JSON.stringify(payload),
+        encoding: "utf8",
+        env: gitEnv(),
+      });
+    const out = run("create", { cwd: repo, name: "viascript" }).trim();
+    expect(out).toBe(path.join(repo, ".wt", "viascript"));
+    expect(fs.existsSync(out)).toBe(true);
+    run("remove", { worktree_path: out });
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
   it("refuses to remove a path outside .wt", () => {
     const other = path.join(tmp, "other");
     git(repo, ["worktree", "add", other, "-b", "other"]);

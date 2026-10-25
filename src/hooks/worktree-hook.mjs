@@ -15,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const WT_DIR = ".wt";
 
@@ -90,27 +91,58 @@ function copyWorktreeInclude(root, dest) {
     const to = path.resolve(dest, rel);
     if (!from.startsWith(root + path.sep) || !to.startsWith(dest + path.sep)) continue;
     try {
+      // A symlink would copy whatever it points at, outside the repo.
+      if (fs.lstatSync(from).isSymbolicLink()) continue;
       fs.mkdirSync(path.dirname(to), { recursive: true });
-      fs.cpSync(from, to, { recursive: true });
+      fs.cpSync(from, to, { recursive: true, dereference: false });
     } catch {
       // Missing or unreadable entry: a worktree without it still works.
     }
   }
 }
 
+/** Whether `dir` is a registered worktree of the repo at `root`. */
+function isRegisteredWorktree(root, dir) {
+  const listed = git(root, ["worktree", "list", "--porcelain"], { quiet: true });
+  return listed
+    .split("\n")
+    .some((line) => line.startsWith("worktree ") && path.resolve(line.slice(9)) === dir);
+}
+
+function branchExists(root, branch) {
+  try {
+    git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { quiet: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function createWorktree({ cwd, name }) {
   const root = mainCheckoutRoot(cwd);
-  const slug = slugify(name);
-  const dest = path.join(root, WT_DIR, slug);
-  if (fs.existsSync(dest)) return dest;
-  try {
-    git(root, ["fetch", "origin"], { quiet: true });
-  } catch {
-    // Offline or no origin: branch from whatever we have.
+  const base = slugify(name);
+  // Claude reuses a subagent name across sessions, and removeWorktree keeps a
+  // branch that holds unmerged commits: suffix instead of failing on the old
+  // branch (or resetting it, which would orphan those commits) or adopting a
+  // directory that is not a worktree (git there answers for the main checkout).
+  for (let n = 1; n <= 50; n++) {
+    const slug = n === 1 ? base : `${base}-${n}`;
+    const dest = path.join(root, WT_DIR, slug);
+    if (fs.existsSync(dest)) {
+      if (isRegisteredWorktree(root, dest)) return dest;
+      continue;
+    }
+    if (branchExists(root, `worktree-${slug}`)) continue;
+    try {
+      git(root, ["fetch", "origin"], { quiet: true });
+    } catch {
+      // Offline or no origin: branch from whatever we have.
+    }
+    git(root, ["worktree", "add", dest, "-b", `worktree-${slug}`, defaultBaseRef(root)]);
+    copyWorktreeInclude(root, dest);
+    return dest;
   }
-  git(root, ["worktree", "add", dest, "-b", `worktree-${slug}`, defaultBaseRef(root)]);
-  copyWorktreeInclude(root, dest);
-  return dest;
+  throw new Error(`no free worktree name for ${base} under ${WT_DIR}/`);
 }
 
 export function removeWorktree({ worktree_path: worktreePath }) {
@@ -118,8 +150,12 @@ export function removeWorktree({ worktree_path: worktreePath }) {
   const root = mainCheckoutRoot(resolved);
   // Only ever remove what createWorktree made.
   if (!resolved.startsWith(path.join(root, WT_DIR) + path.sep)) return;
+  // Leave anything with uncommitted or untracked work alone: no --force, so
+  // git refuses a dirty tree itself. Same rule as git-worktree.ts's
+  // removeListedWorktree.
+  if (git(resolved, ["status", "--porcelain"], { quiet: true }) !== "") return;
   const branch = git(resolved, ["rev-parse", "--abbrev-ref", "HEAD"], { quiet: true });
-  git(root, ["worktree", "remove", "--force", resolved]);
+  git(root, ["worktree", "remove", resolved]);
   // Keep any branch that still holds commits the default branch doesn't.
   if (!branch.startsWith("worktree-")) return;
   try {
@@ -144,7 +180,18 @@ async function main() {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
+// Realpath both sides: in production the script is reached through the
+// `current` symlink, while import.meta.url is the resolved release path.
+function isEntrypoint() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isEntrypoint()) {
   main().catch((err) => {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(1);

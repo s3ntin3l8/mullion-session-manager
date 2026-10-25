@@ -1483,6 +1483,13 @@ export function getStoredSettings(db: ReturnType<typeof getDb>): AppSettings {
   }
 }
 
+function withoutAppliedSnapshot(patch: Record<string, unknown>): Record<string, unknown> {
+  const sessions = patch.sessions;
+  if (typeof sessions !== "object" || sessions === null) return patch;
+  const { workflowConventionsAppliedText: _ignored, ...rest } = sessions as Record<string, unknown>;
+  return { ...patch, sessions: rest };
+}
+
 /**
  * Conventions text that is still exactly what the wizard generated (it equals
  * `workflowConventionsAppliedText`) follows the generator: when the rules in
@@ -1525,8 +1532,11 @@ function refreshGeneratedConventions(settings: AppSettings): AppSettings {
  */
 export function applySettingsPatch(
   app: FastifyInstance,
-  patch: Record<string, unknown>,
+  rawPatch: Record<string, unknown>,
 ): AppSettings {
+  // The snapshot is the server's to write (below); a client cannot mark
+  // hand-edited text as wizard output.
+  const patch = withoutAppliedSnapshot(rawPatch);
   const previous = getStoredSettings(app.db);
   const next: AppSettings = sanitizeSettings(deepMerge(previous, patch, DEFAULT_SETTINGS));
   // A patched conventions text is "applied" only when it is exactly what the

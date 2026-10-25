@@ -186,7 +186,9 @@ directory), and `.claude/worktrees/agent-*`, which Claude Code's isolated
 sub-agents leave behind. When a session's conventions say `.wt/`, Mullion's
 Claude Code adapter registers a `WorktreeCreate`/`WorktreeRemove` hook
 (`src/hooks/worktree-hook.mjs`) so those sub-agent worktrees are created under
-`.wt/<name>` on a `worktree-<name>` branch instead. Each is a full checkout, usually with its own `node_modules`, a few
+`.wt/<name>` on a `worktree-<name>` branch instead.
+
+Each is a full checkout, usually with its own `node_modules`, a few
 hundred MB apiece, and nothing removes one once its PR is merged. Aggressive
 cleanup removes the ones whose work is already elsewhere. `.mullion-worktrees/`
 is not touched: Task Master owns those.
