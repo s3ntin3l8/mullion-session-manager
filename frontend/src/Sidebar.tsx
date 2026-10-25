@@ -357,13 +357,20 @@ export function Sidebar({
   // rather than over every project keeps that promise while a filter is
   // active: a project the filter matched nothing in is not listed at all, so
   // its sessions are not counted either.
+  //
+  // With no filter active, `visibleProjects` IS `projects` and the sum is
+  // `totalBaseSessionCount` by construction — so that is what it reads,
+  // rather than a second reduction of the same numbers (one source of truth
+  // for "how many sessions").
   const sectionSessionCount = useMemo(
     () =>
-      visibleProjects.reduce(
-        (sum, project) => sum + (baseSessionsByProject.get(project.id)?.length ?? 0),
-        0,
-      ),
-    [visibleProjects, baseSessionsByProject],
+      filterActive
+        ? visibleProjects.reduce(
+            (sum, project) => sum + (baseSessionsByProject.get(project.id)?.length ?? 0),
+            0,
+          )
+        : totalBaseSessionCount,
+    [filterActive, visibleProjects, baseSessionsByProject, totalBaseSessionCount],
   );
 
   // U3 — the virtualized path's own re-flatten trigger for collapse
@@ -493,7 +500,7 @@ export function Sidebar({
                 header"). */}
             {sectionSessionCount > 0 && (
               <span className="sidebar-section-count">
-                <span className="project-session-count">{sectionSessionCount}</span>{" "}
+                <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
                 <span className="sidebar-section-count-unit">
                   {sectionSessionCount === 1 ? "session" : "sessions"}
                 </span>

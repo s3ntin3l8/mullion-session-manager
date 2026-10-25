@@ -430,15 +430,19 @@ over the projects the section is listing. That is what makes the header the
 total of the numbers beneath it rather than a second, different notion of "how
 many sessions", and it is why the sum is taken over `visibleProjects` and not
 over every project: a project the filter matched nothing in is not rendered, so
-its sessions are not counted either.
+its sessions are not counted either. With no filter active `visibleProjects`
+_is_ `projects`, so the sum is `totalBaseSessionCount` by construction — and
+the code reads that one rather than reducing the same numbers a second time.
 
-Two details the test would not catch on its own. The number wears the sidebar's
-mono count face (`.project-session-count`, like every other count here) while
-the unit word wears the UI face, because a word in a mono face reads as an
-identifier rather than as a caption. And the space between them is a **text
-node**, not the flex `gap` alone: a screen reader reads the caption's text, and
-"2sessions" is not a number and a word. CSS ignores a whitespace-only text node
-between flex items, so the `gap` still sets the visual distance.
+Two details the test would not catch on its own. The number wears the
+sidebar's mono count face — `.sidebar-section-count-value`, declared in the
+same rule as `.project-session-count`, because the two counts are the same
+kind of number but not the same thing — while the unit word wears the UI
+face, because a word in a mono face reads as an identifier rather than as a
+caption. And the space between them is a **text node**, not the flex `gap`
+alone: a screen reader reads the caption's text, and "2sessions" is not a
+number and a word. CSS ignores a whitespace-only text node between flex items,
+so the `gap` still sets the visual distance.
 
 ---
 

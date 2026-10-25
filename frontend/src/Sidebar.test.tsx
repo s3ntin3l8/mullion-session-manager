@@ -1072,6 +1072,30 @@ describe("Sidebar section header count (issue #1889)", () => {
     expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("2 sessions");
   });
 
+  it("counts a partly-matched project's WHOLE count, not just its matches", async () => {
+    // The deliberate choice, pinned: the per-project number is the project's
+    // own session count — its "base" list, ignoring the search box — so the
+    // header does too. A project of three sessions, one of which matches,
+    // contributes three to the caption while one row shows.
+    //
+    // (The alternative — counting only the rows on screen — would make the
+    // caption a different quantity from the numbers beneath it, and would
+    // change every time the search box changed.)
+    projects = [PROJECT];
+    sessions = [
+      makeSession({ id: 1, command: "npm run build" }),
+      makeSession({ id: 2, command: "npm run test" }),
+      makeSession({ id: 3, command: "claude code" }),
+    ];
+    const user = userEvent.setup();
+    const { container } = renderSidebar();
+
+    await user.type(screen.getByLabelText("Filter sessions"), "npm");
+
+    expect(container.querySelectorAll(".session-item")).toHaveLength(2);
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("3 sessions");
+  });
+
   it("counts the phone's Projects section too", () => {
     projects = [PROJECT];
     sessions = [makeSession({ id: 1 })];
