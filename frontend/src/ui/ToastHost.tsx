@@ -68,10 +68,11 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
   // toast that is still focused would expire the moment the pointer left
   // it, and a toast under the pointer would expire when focus moved away.
   const paused = hovered || focused;
-  // The time left when the timer was last (re)started. A plain
+  // The time LEFT when the timer was last (re)started. A plain
   // `setTimeout` restarted from scratch on every pause would give a
-  // hovered toast an unbounded lifetime; this keeps the ORIGINAL
-  // deadline.
+  // hovered toast an unbounded lifetime; this keeps what was left of
+  // the original lifetime, so resuming continues the countdown rather
+  // than starting a new one.
   const remainingRef = useRef(lifetime);
   const deadlineRef = useRef<number | null>(null);
 
