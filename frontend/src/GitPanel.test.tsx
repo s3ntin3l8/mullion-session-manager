@@ -114,7 +114,9 @@ describe("GitPanel", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    expect(container.querySelector(".ui-skeleton-bones")).toHaveAttribute("aria-busy", "true");
+    const group = container.querySelector(".ui-skeleton-bones");
+    expect(group).toHaveAttribute("aria-hidden", "true");
+    expect(group).not.toHaveAttribute("aria-busy");
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading git status");

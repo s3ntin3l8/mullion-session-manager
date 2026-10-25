@@ -111,15 +111,15 @@ export function ServerInfoSection() {
     // Banner, then the two-by-two stat cards, then the info lines — the
     // shape this section has once the probe lands. The word "Loading…"
     // gave none of that, so the cards jumped in. The status is clipped
-    // off screen and is not inside the busy bones: aria-busy tells
-    // assistive technology to defer announcements in that subtree. The
-    // bones are hidden from assistive technology.
+    // off screen. The bones are hidden, so they do not carry aria-busy:
+    // a busy state on an aria-hidden node is never exposed, and putting
+    // it on an ancestor of the status would defer the announcement.
     return (
       <div>
         <span className="visually-hidden" role="status">
           Loading server status
         </span>
-        <div className="ui-skeleton-stack" aria-hidden="true" aria-busy="true">
+        <div className="ui-skeleton-stack" aria-hidden="true">
           <Skeleton height={40} radius={11} />
           <div className="settings-stat-grid">
             <Skeleton height={58} radius={10} />

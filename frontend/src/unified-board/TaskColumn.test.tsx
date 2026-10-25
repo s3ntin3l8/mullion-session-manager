@@ -194,9 +194,9 @@ describe("UnifiedBoard task columns", () => {
     // The status is a sibling of the busy region, not a descendant. aria-busy
     // would otherwise defer the announcement.
     expect(status.closest("[aria-busy='true']")).toBeNull();
-    for (const count of container.querySelectorAll(".kanban-column-count")) {
-      expect(count.textContent).toBe("");
-    }
+    // Pending columns have no count node. An empty span would still paint
+    // the pill (background and padding).
+    expect(container.querySelector(".kanban-column-count")).toBeNull();
   });
 
   it("calls refreshTasks on mount", () => {

@@ -15,7 +15,8 @@ describe("SettingsLoadingFallback", () => {
     const dialog = screen.getByRole("dialog", { name: "Settings" });
     expect(dialog).not.toHaveAttribute("aria-busy");
     const body = container.querySelector(".settings-modal-body");
-    expect(body).toHaveAttribute("aria-busy", "true");
+    // The body is hidden, so a busy flag on it would never be exposed.
+    expect(body).not.toHaveAttribute("aria-busy");
     expect(body).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     expect(container.querySelector(".terminal-status-spinner")).not.toBeInTheDocument();

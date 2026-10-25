@@ -63,7 +63,9 @@ describe("Settings -> Server", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    expect(container.querySelector("[aria-busy='true']")).toHaveClass("ui-skeleton-stack");
+    const stack = container.querySelector(".ui-skeleton-stack");
+    expect(stack).toHaveAttribute("aria-hidden", "true");
+    expect(stack).not.toHaveAttribute("aria-busy");
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading server status");

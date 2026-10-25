@@ -60,7 +60,7 @@ describe("ui/Skeleton", () => {
     expect(bone.style.borderRadius).toBe("8px");
   });
 
-  it("puts the loading announcement outside the busy bones", () => {
+  it("announces loading outside any busy ancestor and does not mark hidden bones busy", () => {
     const { container } = render(
       <SkeletonRegion label="Loading GitHub">
         <Skeleton />
@@ -68,9 +68,10 @@ describe("ui/Skeleton", () => {
     );
     const region = container.firstElementChild as HTMLElement;
     const bones = region.querySelector(".ui-skeleton-bones");
-    // Busy marks the bones, not the region. A status inside aria-busy is
-    // deferred by assistive technology and never spoken.
-    expect(bones).toHaveAttribute("aria-busy", "true");
+    // The bones are hidden, so aria-busy on them is never exposed. The
+    // status must also sit outside any busy ancestor: assistive technology
+    // defers announcements inside an aria-busy subtree.
+    expect(bones).not.toHaveAttribute("aria-busy");
     expect(bones).toHaveAttribute("aria-hidden", "true");
     expect(region).not.toHaveAttribute("aria-busy");
     const status = screen.getByRole("status");

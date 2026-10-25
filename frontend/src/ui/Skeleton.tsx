@@ -55,8 +55,9 @@ export interface SkeletonProps {
  *
  * Always `aria-hidden`: a shimmering block is not content, and announcing
  * each bone would be noise. The surrounding region carries the loading
- * state (`SkeletonRegion`: a visually-hidden status, with `aria-busy` on
- * the bones and not on an ancestor of that status).
+ * state (`SkeletonRegion`: a visually-hidden status). `aria-busy` does not
+ * belong on a hidden bone — a busy flag excluded from the accessibility
+ * tree is never exposed, and it must not wrap the status either.
  *
  * The shimmer is motion for its own sake — it only says "still working".
  * When the user has asked the OS to stop moving things, the bone is a
@@ -84,10 +85,13 @@ export function Skeleton({ width, height, radius, className, style }: SkeletonPr
  * The visually-hidden status is what a screen reader actually announces —
  * `aria-busy` alone is not reliably spoken, and a second visible "Loading…"
  * would put the word this primitive exists to retire back on screen.
- * `aria-busy` sits on the bones, not around the status: ARIA tells
- * assistive technology to defer announcements inside a busy subtree, so a
- * status nested under `aria-busy` would never be spoken. The bones are
- * `aria-hidden` so the status text is the only accessible content. */
+ * The bones wrapper is `aria-hidden` and does not carry `aria-busy`: a
+ * busy state on a node outside the accessibility tree is never exposed.
+ * The status is a sibling of that group, so it is not a descendant of any
+ * `aria-busy` node — ARIA tells assistive technology to defer announcements
+ * inside a busy subtree. A visible container that is actually in the tree
+ * (the board's task columns) is the place to mark busy; this region has no
+ * such container that isn't also an ancestor of the status. */
 export function SkeletonRegion({
   label,
   className,
@@ -102,7 +106,7 @@ export function SkeletonRegion({
       <span className="visually-hidden" role="status">
         {label}
       </span>
-      <div className="ui-skeleton-bones" aria-hidden="true" aria-busy="true">
+      <div className="ui-skeleton-bones" aria-hidden="true">
         {children}
       </div>
     </div>

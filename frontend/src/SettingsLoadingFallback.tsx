@@ -9,11 +9,12 @@ import { Skeleton } from "./ui/Skeleton.js";
 //
 // Issue #1885 — a centered spinner in an empty box tells you nothing
 // about the nav rail and the section body that are about to land. Bones
-// in those two columns keep the shape. aria-busy sits on the bones (the
-// modal body), not on the dialog: a busy ancestor would tell assistive
-// technology to defer the status, which is the announcement. The bones
-// are hidden, and the status text is clipped off screen so the shell
-// doesn't grow a visible "Loading…" next to its title.
+// in those two columns keep the shape. The modal body is hidden, so it
+// does not carry aria-busy: a busy state on an aria-hidden node is never
+// exposed. The status is a sibling of that body (not under aria-busy) and
+// is clipped off screen so the shell doesn't grow a visible "Loading…"
+// next to its title. The dialog stays unmarked too — it contains the
+// status, and a busy ancestor would defer the announcement.
 export function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -38,7 +39,7 @@ export function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
         <span className="visually-hidden" role="status">
           Loading settings
         </span>
-        <div className="settings-modal-body" aria-hidden="true" aria-busy="true">
+        <div className="settings-modal-body" aria-hidden="true">
           <div className="settings-nav">
             <div className="settings-nav-items">
               <div className="ui-skeleton-stack">

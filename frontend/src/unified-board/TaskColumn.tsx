@@ -68,8 +68,9 @@ export function TaskColumn({
     <div className="kanban-column-header">
       <span className="kanban-column-title">{title}</span>
       {/* Length is 0 until the first fetch lands, which is not an answer
-          to "how many tasks". An empty count doesn't announce that zero. */}
-      <span className="kanban-column-count">{pending ? "" : tasks.length}</span>
+          to "how many tasks". Omit the pill entirely: an empty span still
+          paints the track (background and padding). */}
+      {!pending && <span className="kanban-column-count">{tasks.length}</span>}
       {blockedCount > 0 && (
         <span
           className="kanban-column-blocked-count"
