@@ -221,8 +221,10 @@ Required status checks for merge:
 `dependency-review` is safe to require: `dependency-review.yml` runs on
 every pull request to `main` with no paths filter, finishes in seconds, and
 its job-level `if:` only skips it on a private repository, which this one is
-not. Its trigger is `pull_request` only, so it never runs on `main` at all:
-it gates the PR, and nothing re-checks the dependency change after the merge.
+not. Its trigger is `pull_request` only, so this licence/vulnerability review
+never re-runs on `main`: it gates the PR, and nothing repeats it after the
+merge. (Dependabot and CodeQL's scheduled `main` scan still watch merged
+dependencies for known vulnerabilities.)
 
 Both workspaces shard their test run, so **both** `test-merge` contexts are
 required — see the "Test sharding" note above for why dropping one is not
