@@ -102,7 +102,14 @@ describe("CreateHostModal", () => {
 // yet when the second Enter arrives, so the second submission went
 // through and the same host was registered twice.
 describe("re-entry guard (audit finding 18)", () => {
-  it("does not submit twice when the button is clicked twice", async () => {
+  // This is the PRE-EXISTING protection, not the guard: the button
+  // carries `disabled={saving}`, so the browser swallows the second click
+  // outright. It passes with or without the `if (saving) return;` guard,
+  // and it is kept because it is a real property of the form — but the
+  // Enter test below is the one that pins the guard, because a keyboard
+  // Enter reaches the handler directly and is not stopped by a disabled
+  // button.
+  it("swallows a second click on the disabled submit button", async () => {
     const user = userEvent.setup();
     // A save that never settles, so the second click lands while the
     // first is still in flight.
@@ -120,6 +127,9 @@ describe("re-entry guard (audit finding 18)", () => {
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
+  // This is the regression test for the guard: Enter reaches the form's
+  // own handler, which is not stopped by the disabled button, so without
+  // `if (saving) return;` the second Enter submitted a second time.
   it("does not submit twice when Enter is pressed twice", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockReturnValue(new Promise<void>(() => {}));

@@ -47,6 +47,12 @@ export function IntegrationsSection() {
   }, []);
 
   const connect = () => {
+    // The same re-entry guard the "Add host" modal got in this PR: the
+    // token input's onKeyDown calls this directly, so pressing Enter
+    // twice fired two requests. Setting the same token twice is
+    // idempotent, so the old behaviour was merely wasteful — but it is
+    // the same defect, in the file this PR already edits.
+    if (connecting) return;
     const t = token.trim();
     if (!t) return;
     setError(null);

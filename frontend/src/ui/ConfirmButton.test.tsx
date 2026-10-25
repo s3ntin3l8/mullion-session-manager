@@ -256,5 +256,44 @@ describe("ConfirmButton arm countdown (audit finding 32)", () => {
 
     expect(screen.getByText("Click again to remove")).toBeInTheDocument();
     expect(screen.getByText("6s")).toBeInTheDocument();
+
+    // The countdown has to actually MOVE. Both label spans are always in
+    // the DOM — the inactive one is `visibility: hidden` so it reserves
+    // the button's width — which means "6s" was already there before the
+    // click, and asserting it alone proves nothing. A tick is the real
+    // assertion.
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.getByText("5s")).toBeInTheDocument();
+    expect(screen.queryByText("6s")).toBeNull();
+  });
+
+  // A backgrounded tab has its timers throttled to roughly one firing a
+  // minute. A countdown that decremented one step per firing would then
+  // tick once a minute and leave the button armed for MINUTES — and the
+  // number it showed would be wrong the whole time. The window is a
+  // wall-clock deadline, so the first firing after it has passed ends it.
+  it("disarms on the deadline even when the interval fires late", () => {
+    render(
+      <ConfirmButton onConfirm={vi.fn()} title="Remove thing">
+        Remove
+      </ConfirmButton>,
+    );
+
+    act(() => {
+      screen.getByText("Remove").click();
+    });
+    expect(screen.getByText("6s")).toBeInTheDocument();
+
+    // The clock jumps a minute while the tab is throttled. The interval
+    // does NOT fire 60 times — it fires once, late.
+    act(() => {
+      vi.setSystemTime(Date.now() + 60_000);
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(screen.queryByText("6s")).toBeNull();
+    expect(screen.getByText("Remove")).toBeInTheDocument();
   });
 });

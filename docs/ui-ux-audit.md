@@ -13,7 +13,8 @@ are not listed.
 **How to read this document.** Every finding carries a severity, the evidence
 that proves it, and its disposition:
 
-- **Fixed** — landed in this pull request.
+- **Fixed** — landed in one of the three pull requests in this series; the
+  Summary table above says which one.
 - **Filed as an issue** — tracked as a GitHub issue, with the issue linked.
 
 The defects are ordered by severity, not by screen. The recurring theme is
@@ -236,7 +237,7 @@ have.
 | 29  | `SourceControlSection`'s fetch failure is console-only — its sibling pull is not                         | `SourceControlSection.tsx` fetch handler                      | **Fixed** — the fetch now has its own visible error, like its sibling pull                                                                                                                                         |
 | 30  | `BrowserPanel`'s favorites failure is console-only, and renders as "no favorites"                        | `BrowserPanel.tsx` favourites fetch                           | **Fixed** — the failure is reported through the app-wide toast                                                                                                                                                     |
 | 31  | `SidebarDevices` shows device errors only in a `title` tooltip                                           | `SidebarDevices` error path                                   | **Fixed** — the error is inline in the failing row, not only in a `title` tooltip                                                                                                                                  |
-| 32  | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one | `ui/primitives.tsx` `ConfirmButton`                           | **Fixed** — the arm window counts down in the button and in its title                                                                                                                                              |
+| 32  | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one | `ui/ConfirmButton.tsx`                                        | **Fixed** — the arm window counts down in the button and in its title                                                                                                                                              |
 | 33  | "host" names two things: a remote agent, and a local Android device                                      | `HostsSection.tsx:280` vs `DevicesSection.tsx`                | _Filed — [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878)_                                                                                                                                |
 | 34  | "Workspace" names two things: a saved layout, and a Settings section group                               | `WorkspaceSwitcher.tsx:266` vs `settingsSections.tsx:141-167` | _Filed — [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878)_                                                                                                                                |
 | 35  | The sidebar's project tree is not workspace-scoped, while the Dock's is                                  | `Sidebar.tsx` project tree                                    | _Filed — [#1877](https://github.com/s3ntin3l8/mullion-session-manager/issues/1877)_                                                                                                                                |

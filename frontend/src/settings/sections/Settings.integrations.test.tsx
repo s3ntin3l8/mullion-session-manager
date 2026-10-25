@@ -56,6 +56,11 @@ describe("Settings -> Integrations", () => {
         if (token === "bad-token") {
           return Promise.resolve(jsonResponse(400, { message: "GitHub rejected this token" }));
         }
+        // A token whose request never settles, so a second Enter lands
+        // while the first is still in flight.
+        if (token === "hanging-token") {
+          return new Promise<Response>(() => {});
+        }
         integration = {
           connected: true,
           tokenType: "pat",
@@ -647,6 +652,31 @@ describe("Settings -> Integrations", () => {
       expect(button).not.toHaveClass("armed");
       await user.click(button);
       expect(screen.getByRole("button", { name: /^Disconnect/ })).toHaveClass("armed");
+    });
+  });
+
+  // The token input's onKeyDown calls connect() directly, so Enter reaches
+  // the handler without going through the Connect button — which IS
+  // disabled while a connect is in flight. This is the same defect class
+  // as audit finding 18 ("Add host" submitted twice on Enter), in the file
+  // this PR already edits.
+  describe("connect re-entry guard", () => {
+    it("does not send the token twice when Enter is pressed twice", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      await screen.findByText("Not connected");
+
+      const input = screen.getByPlaceholderText("github_pat_…");
+      await user.type(input, "hanging-token{Enter}");
+      // The first request never settles, so the second Enter lands while
+      // it is still in flight.
+      await user.type(input, "{Enter}");
+
+      const tokenCalls = fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/integrations/github/token" && (init as RequestInit)?.method === "PUT",
+      );
+      expect(tokenCalls).toHaveLength(1);
     });
   });
 });

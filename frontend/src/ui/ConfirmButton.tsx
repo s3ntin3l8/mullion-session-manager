@@ -58,11 +58,17 @@ export function ConfirmButton({
   // window — a countdown that doesn't move reads as stuck (the same
   // reasoning as KebabMenu's and PaneActionsMenu's own countdowns).
   const [secondsLeft, setSecondsLeft] = useState(ARM_SECONDS);
-  // Mirrors secondsLeft so the interval callback can branch on the current
-  // count without reaching into a setState updater — calling setArmed/
-  // clearInterval (side effects) from inside a setSecondsLeft updater
-  // function is impure and can warn under StrictMode.
-  const secondsRef = useRef(ARM_SECONDS);
+  // The window is a WALL-CLOCK DEADLINE, not a number of interval ticks.
+  //
+  // A backgrounded tab has its timers throttled to roughly one firing a
+  // minute, so a countdown that decrements one step per firing ticks
+  // once a minute — the button then stays armed for minutes instead of
+  // six seconds, and the number it shows is wrong the whole time. The
+  // deadline is compared against Date.now() on every firing, so the first
+  // firing after the window has passed ends it, and the number on screen
+  // is the time actually left rather than the number of ticks that have
+  // happened.
+  const deadlineRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const clearCountdown = () => {
@@ -70,6 +76,7 @@ export function ConfirmButton({
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
+    deadlineRef.current = null;
   };
 
   // The timer is cleared on unmount: an armed ConfirmButton that unmounts
@@ -78,17 +85,18 @@ export function ConfirmButton({
 
   const arm = () => {
     setArmed(true);
-    secondsRef.current = ARM_SECONDS;
     setSecondsLeft(ARM_SECONDS);
     clearCountdown();
+    deadlineRef.current = Date.now() + ARM_MS;
     intervalRef.current = setInterval(() => {
-      secondsRef.current -= 1;
-      if (secondsRef.current <= 0) {
+      const remaining =
+        deadlineRef.current === null ? 0 : Math.ceil((deadlineRef.current - Date.now()) / 1000);
+      if (remaining <= 0) {
         clearCountdown();
         setSecondsLeft(ARM_SECONDS);
         setArmed(false);
       } else {
-        setSecondsLeft(secondsRef.current);
+        setSecondsLeft(remaining);
       }
     }, 1000);
   };
