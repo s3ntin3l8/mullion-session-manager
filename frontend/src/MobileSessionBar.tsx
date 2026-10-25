@@ -204,12 +204,15 @@ export function MobileSessionBar({
     // panel title is this component's.
     const previousTitle = panel.title ?? "";
     panel.api.setTitle(value);
-    void useDashboardStore.getState().renameSession(sessionId, value).catch((err) => {
-      panel.api.setTitle(previousTitle);
-      useDashboardStore
-        .getState()
-        .reportError("Could not rename the session.", describeError(err));
-    });
+    void useDashboardStore
+      .getState()
+      .renameSession(sessionId, value)
+      .catch((err) => {
+        panel.api.setTitle(previousTitle);
+        useDashboardStore
+          .getState()
+          .reportError("Could not rename the session.", describeError(err));
+      });
   };
 
   return (

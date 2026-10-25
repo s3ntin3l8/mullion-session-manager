@@ -537,7 +537,10 @@ export function Sidebar({
                   <button
                     className="ui-empty-state-btn-primary"
                     onClick={() => {
-                      void useDashboardStore.getState().refreshProjects().catch(() => {});
+                      void useDashboardStore
+                        .getState()
+                        .refreshProjects()
+                        .catch(() => {});
                     }}
                   >
                     <RefreshIcon size={12} strokeWidth={2} />

@@ -250,9 +250,7 @@ export function PaneActionsMenu({
         // (audit finding 11). The session is still running on the host;
         // the user has to know that.
         console.error("Failed to kill session", session.id, err);
-        useDashboardStore
-          .getState()
-          .reportError("Could not kill the session.", describeError(err));
+        useDashboardStore.getState().reportError("Could not kill the session.", describeError(err));
       });
     } else {
       setKillArmed(true);

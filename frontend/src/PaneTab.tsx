@@ -278,9 +278,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     props.api.setTitle(value);
     void renameSession(session.id, value).catch((err) => {
       props.api.setTitle(previousTitle);
-      useDashboardStore
-        .getState()
-        .reportError("Could not rename the session.", describeError(err));
+      useDashboardStore.getState().reportError("Could not rename the session.", describeError(err));
     });
   };
 
