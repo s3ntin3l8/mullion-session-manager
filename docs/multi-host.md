@@ -869,7 +869,7 @@ alternative, and how the two compose.
   credential (plus, for a session credential, the signature described above
   in "Request signing"); put it behind the same network/VPN boundary you'd
   use for anything else with shell access.
-- **Parent→child control isn't available on remote hosts (#1627).** The control
+- **Parent→child control from a session on an agent host isn't available (#1627).** The control
   socket (`mullion session …`, the MCP control tools) lives only on the
   primary. A session running on an agent host gets
   `MULLION_CONTROL_UNAVAILABLE=remote-host` in its env, and the `mullion` CLI /
