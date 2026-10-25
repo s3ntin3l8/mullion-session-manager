@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Calculates patch test coverage for modified/added lines against base branch (origin/main).
-// Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend).
+// Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend),
+// or each report passed with a repeatable `--coverage <file>` (CI shards; overlapping files are merged).
 // Enforces minimum threshold (default 75%).
 
 import { execFileSync } from "node:child_process";
@@ -261,10 +262,26 @@ export function deletedFiles(diffText) {
   return deleted;
 }
 
-export function loadCoverageReports() {
+// Adds `src`'s hit counts into `dst` (both istanbul `s`/`f`/`b` maps keyed by
+// statement/function/branch id). Branch counters are arrays, one per arm.
+function addHits(dst = {}, src = {}) {
+  for (const [id, hits] of Object.entries(src)) {
+    dst[id] = Array.isArray(hits)
+      ? hits.map((n, i) => n + (dst[id]?.[i] ?? 0))
+      : hits + (dst[id] ?? 0);
+  }
+  return dst;
+}
+
+// `files` overrides the two default report paths (the CI job feeds it every
+// downloaded shard report). A file that appears in several reports has its hit
+// counts summed: CI shards cover overlapping files, so overwriting would keep
+// only the last shard's hits. The maps are keyed by id, which is stable across
+// shards of the same source.
+export function loadCoverageReports(files) {
   const coverageData = {};
 
-  const paths = [
+  const paths = files ?? [
     path.join(root, "coverage/coverage-final.json"),
     path.join(root, "frontend/coverage/coverage-final.json"),
   ];
@@ -276,7 +293,15 @@ export function loadCoverageReports() {
         for (const [key, val] of Object.entries(content)) {
           // Normalize to path relative to root
           const relPath = path.isAbsolute(key) ? path.relative(root, key) : key;
-          coverageData[relPath] = val;
+          const prev = coverageData[relPath];
+          coverageData[relPath] = prev
+            ? {
+                ...prev,
+                s: addHits(prev.s, val.s),
+                f: addHits(prev.f, val.f),
+                b: addHits(prev.b, val.b),
+              }
+            : val;
         }
       } catch (err) {
         console.warn(`Warning: failed to parse coverage file ${p}:`, err);
@@ -496,7 +521,7 @@ export function runPatchCoverageCheck(options = {}) {
     return { ok: true, overallPercent: 100 };
   }
 
-  let coverageData = loadCoverageReports();
+  let coverageData = loadCoverageReports(options.coverageFiles);
   if (!options.noRun) {
     const hasBackend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("src/"));
     const hasFrontend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("frontend/src/"));
@@ -534,7 +559,7 @@ export function runPatchCoverageCheck(options = {}) {
           return { ok: false, overallPercent: 0, error: "coverage-run-failed" };
         }
       }
-      coverageData = loadCoverageReports();
+      coverageData = loadCoverageReports(options.coverageFiles);
     }
   }
 
@@ -570,6 +595,7 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
   let threshold = 75.0;
   let baseRef = undefined;
   let noRun = false;
+  const coverageFiles = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--threshold" && args[i + 1]) {
@@ -578,12 +604,21 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
     } else if (args[i] === "--base" && args[i + 1]) {
       baseRef = args[i + 1];
       i++;
+    } else if (args[i] === "--coverage" && args[i + 1]) {
+      coverageFiles.push(path.resolve(args[i + 1]));
+      i++;
     } else if (args[i] === "--no-run") {
       noRun = true;
     }
   }
 
-  const res = runPatchCoverageCheck({ threshold, baseRef, noRun, ...testOptions });
+  const res = runPatchCoverageCheck({
+    threshold,
+    baseRef,
+    noRun,
+    coverageFiles: coverageFiles.length ? coverageFiles : undefined,
+    ...testOptions,
+  });
   if (!res.ok) {
     console.error(
       `ERROR: Patch coverage ${res.overallPercent.toFixed(1)}% is below required ${threshold.toFixed(1)}% threshold.`,
