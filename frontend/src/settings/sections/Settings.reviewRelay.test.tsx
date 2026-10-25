@@ -541,5 +541,32 @@ describe("Settings -> Integrations -> Review relay", () => {
       await renderCard();
       expect(await screen.findByText(/The Hermes API is unreachable/)).toBeInTheDocument();
     });
+
+    // Issue #1890 — the app renders times through the shared relative-age
+    // formatter ("3m ago"); this row used to render a raw
+    // `toLocaleTimeString()`, so one screen spoke two ways of saying when.
+    it("renders the run's age through the shared relative-time formatter", async () => {
+      reviewRuns = [run({ dispatchedAt: new Date(Date.now() - 3 * 60_000).toISOString() })];
+      await renderCard();
+      const row = await screen.findByTestId("review-run-run_1");
+      expect(row).toHaveTextContent("3m ago");
+      // Not a raw clock time — "10:00:00 AM" would be the old rendering.
+      expect(row.textContent ?? "").not.toMatch(/\d{1,2}:\d{2}/);
+    });
+
+    it("keeps the status and the error beside the age", async () => {
+      reviewRuns = [
+        run({
+          status: "failed",
+          error: "no App credentials",
+          dispatchedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+        }),
+      ];
+      await renderCard();
+      const row = await screen.findByTestId("review-run-run_1");
+      expect(row).toHaveTextContent("failed");
+      expect(row).toHaveTextContent("2h ago");
+      expect(row).toHaveTextContent("no App credentials");
+    });
   });
 });
