@@ -382,12 +382,21 @@ export function ReviewRelaySection() {
           />
           <TextSettingRow
             label="Reviewer bot login"
-            desc="The GitHub login of the bot that posts the review and the triage comment. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree — and only its comments count as a triage reply. Empty accepts any bot."
+            desc="The GitHub login of the bot that posts the review and the triage comment. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree — and only its comments count as a triage reply. Empty accepts any bot in the status shown here, but then no delta base is derived and every round reviews the whole diff."
             key={`relay-reviewerBotLogin:${relay.reviewerBotLogin}`}
             value={relay.reviewerBotLogin}
             placeholder="name[bot]"
             width={220}
             onCommit={(v) => updateSettings({ reviewRelay: { reviewerBotLogin: v } })}
+          />
+          <TextSettingRow
+            label="Ledger check-run name"
+            desc="The check run that records which commit a review round covered. It must match the shared Hermes workflow's hermes-review-ledger-name (default “Hermes review”); leave it empty if the workflow runs with hermes-review-ledger: off. If the two differ, the relay and the workflow derive different bases for the same pull request."
+            key={`relay-ledgerName:${relay.ledgerName}`}
+            value={relay.ledgerName}
+            placeholder="Hermes review (empty = off)"
+            width={220}
+            onCommit={(v) => updateSettings({ reviewRelay: { ledgerName: v } })}
           />
           <Row
             label="Cooldown"

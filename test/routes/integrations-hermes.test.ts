@@ -244,6 +244,7 @@ describe("Hermes review relay integration routes", () => {
         triagePromptPath: "hermes-triage-prompt.md",
         cooldownMinutes: 10,
         reviewerBotLogin: "s3ntin3l8-hermes[bot]",
+        ledgerName: "Hermes review",
       });
     });
 
@@ -276,6 +277,30 @@ describe("Hermes review relay integration routes", () => {
         applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } }).reviewRelay
           .reviewerBotLogin,
       ).toBe("");
+    });
+
+    it("sanitises the ledger name: trimmed, capped at a check run's 100 characters, empty = off", async () => {
+      // Mirrors the shared workflow's hermes-review-ledger-name; empty is its
+      // hermes-review-ledger: off, so it must survive sanitising.
+      expect(
+        applySettingsPatch(app, { reviewRelay: { ledgerName: "  Custom ledger  " } }).reviewRelay
+          .ledgerName,
+      ).toBe("Custom ledger");
+      expect(
+        applySettingsPatch(app, { reviewRelay: { ledgerName: "x".repeat(150) } }).reviewRelay
+          .ledgerName,
+      ).toHaveLength(100);
+      expect(
+        applySettingsPatch(app, { reviewRelay: { ledgerName: "" } }).reviewRelay.ledgerName,
+      ).toBe("");
+      // A value that is not a string is ignored: it neither turns the ledger off nor renames it.
+      applySettingsPatch(app, { reviewRelay: { ledgerName: "Custom ledger" } });
+      expect(
+        applySettingsPatch(app, { reviewRelay: { ledgerName: 5 as unknown as string } }).reviewRelay
+          .ledgerName,
+      ).toBe("Custom ledger");
+      // Leave the shared settings as found.
+      applySettingsPatch(app, { reviewRelay: { ledgerName: "Hermes review" } });
     });
   });
 });

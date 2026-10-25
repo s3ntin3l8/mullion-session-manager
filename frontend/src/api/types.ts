@@ -2194,9 +2194,18 @@ export interface AppSettings {
      * reviews set the delta base of the next round — the shared workflow
      * applies the same rule, and the two must agree or their idempotency
      * keys diverge. It also decides which review, and which triage issue
-     * comment, shows as the relay's. Empty = any bot's counts.
+     * comment, shows as the relay's. Empty = any bot's counts in that
+     * status, but no delta base is derived (the workflow never accepts
+     * "any bot"), so the round reviews the whole diff.
      */
     reviewerBotLogin: string;
+    /**
+     * The name of the check run that records which commit a round covered
+     * (the ledger). Mirrors the shared workflow's `hermes-review-ledger-name`;
+     * EMPTY = ledger off, like `hermes-review-ledger: off`. The two must be set
+     * together or the relay and the workflow derive different bases.
+     */
+    ledgerName: string;
   };
   /**
    * The Runway quota integration (issue #29) — the non-secret half. The

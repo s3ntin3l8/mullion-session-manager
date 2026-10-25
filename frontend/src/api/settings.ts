@@ -243,6 +243,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     triagePromptPath: "hermes-triage-prompt.md",
     cooldownMinutes: 10,
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
+    ledgerName: "Hermes review",
   },
   runway: {
     apiUrl: "",

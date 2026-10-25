@@ -30,7 +30,6 @@ import {
   ReviewCooldownError,
   ReviewInFlightError,
   ReviewSessionRefusedError,
-  REVIEW_MARKER_NAME,
   ReviewRunForbiddenError,
   ReviewRunNotFoundError,
   assertReviewerConfigured,
@@ -658,13 +657,16 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, headSha } = target;
 
       try {
+        const { reviewerBotLogin, ledgerName } = getStoredSettings(app.db).reviewRelay;
         const reader = reviewReader(
           target.token,
           owner,
           repo,
           prNumber,
-          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
-          target.markerReadToken ?? target.token,
+          reviewerBotLogin,
+          ledgerName === ""
+            ? undefined
+            : { token: target.markerReadToken ?? target.token, name: ledgerName },
           (detail) => app.log.warn({ detail, owner, repo, prNumber }, "review-base: degraded"),
         );
         const run = await requestHermesReview(app, {
@@ -1004,18 +1006,19 @@ export function reviewReader(
    */
   reviewerBotLogin = "",
   /**
-   * A token that can read check runs (the ledger markers) — often the App's
-   * checks-only installation token, so it is used for the markers and nothing
-   * else. Without one the base falls back to the reviews' own `commit_id`,
-   * which GitHub re-points when the branch is rewritten and is therefore only
-   * trusted while it provably predates the review.
+   * The ledger: the check-run name the markers carry and a token that can read
+   * check runs — often the App's checks-only installation token, so it reads the
+   * markers and nothing else. ABSENT means the ledger is off (an empty
+   * `reviewRelay.ledgerName`, like the workflow's `hermes-review-ledger: off`):
+   * the base then falls back to the reviews' own `commit_id`, which GitHub
+   * re-points when the branch is rewritten and is therefore only trusted while it
+   * provably predates the review.
    *
-   * The relay always reads the "Hermes review" ledger. A consumer of the
-   * shared workflow that sets `hermes-review-ledger: off` or renames the
-   * ledger gets the `commit_id` rule there but the ledger rule here, and the
-   * two bases (and so idempotency keys) differ.
+   * The name and the on/off state must match the shared workflow's
+   * (`hermes-review-ledger-name` / `hermes-review-ledger`), or the two derive
+   * different bases and idempotency keys.
    */
-  ledgerToken?: string,
+  ledger?: { token: string; name: string },
   /** Told when a read failed and the base degraded (see `resolveReviewedCommit`). */
   onError?: (detail: string) => void,
 ): {
@@ -1061,21 +1064,20 @@ export function reviewReader(
      * anyway.
      */
     base: async () => {
+      // The workflow only ever accepts `<mention-trigger>[bot]`, never "any bot":
+      // with no login configured the relay cannot derive the same base, so it
+      // reviews the whole diff (the safe direction) and says why.
+      if (reviewerBotLogin === "") {
+        onError?.("reviewRelay.reviewerBotLogin is empty; the delta base cannot be derived");
+        return "";
+      }
       try {
         return await resolveReviewedCommit({
           reviews: await reviews(),
           reviewerBotLogin,
-          markers: ledgerToken
+          markers: ledger
             ? () =>
-                listReviewMarkers(
-                  token,
-                  ledgerToken,
-                  owner,
-                  repo,
-                  prNumber,
-                  REVIEW_MARKER_NAME,
-                  onError,
-                )
+                listReviewMarkers(token, ledger.token, owner, repo, prNumber, ledger.name, onError)
             : undefined,
           committedAt: async (sha) => (await commitInfo(sha)).committedAt,
           onError,
@@ -1086,8 +1088,10 @@ export function reviewReader(
     },
     /**
      * Is the head's content what the reviewed commit had? Same commit, or the
-     * same tree (a rebase or a recreated branch that changed nothing). An
-     * unreadable tree is not "the same". The workflow skips on the same test.
+     * same tree (a rewrite that changed nothing — while the reviewed commit is still
+     * one of the PR's commits; one that drops it hides its marker,
+     * s3ntin3l8/.github#136). An unreadable tree is not "the same". The workflow
+     * skips on the same test.
      */
     sameContent: async (baseSha, headSha) => {
       if (baseSha === headSha) return true;

@@ -256,16 +256,17 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
   });
 
   it("takes the newest marker that a landed review was submitted after", async () => {
-    // Deliberately not in id order: the newest is decided by id, not by position.
+    // Deliberately not in id order: the newest is decided by id, not by position. Each run
+    // started within 90 minutes before the review (a run cannot have lasted longer).
     const markers = async () => [
-      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
+      { oid: "new", id: 2, startedAt: "2026-01-01T23:40:00Z", completedAt: "2026-01-09T00:00:00Z" },
       {
         oid: "silent",
         id: 3,
         startedAt: "2026-01-03T00:00:00Z",
         completedAt: "2026-01-09T00:00:00Z",
       },
-      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
+      { oid: "old", id: 1, startedAt: "2026-01-01T23:30:00Z", completedAt: "2026-01-09T00:00:00Z" },
     ];
     expect(await resolve([review()], { markers })).toBe("new");
   });
@@ -317,6 +318,66 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
         markers,
         committedAt: async () => "2026-01-02T00:00:00Z",
       }),
+    ).toBe("");
+  });
+
+  it("does not pair a silent marker that was closed hours late with an unrelated review", async () => {
+    // Run A (10:00-10:30) posted the review at 10:20. Run B (11:00) posted nothing and was
+    // closed with "now" at 17:00. An unrelated review at 13:00 comes from a run whose marker
+    // was never written. Without a cap on the run length the late close made B pair it, and
+    // the base became B: too new, code skipped (s3ntin3l8/.github#133).
+    const markers = async () => [
+      {
+        oid: "reviewed",
+        id: 1,
+        startedAt: "2026-01-01T10:00:00Z",
+        completedAt: "2026-01-01T10:30:00Z",
+      },
+      {
+        oid: "silent",
+        id: 2,
+        startedAt: "2026-01-01T11:00:00Z",
+        completedAt: "2026-01-01T17:00:00Z",
+      },
+    ];
+    const reviews = [
+      review({ submittedAt: "2026-01-01T10:20:00Z" }),
+      review({ submittedAt: "2026-01-01T13:00:00Z" }),
+    ];
+    expect(await resolve(reviews, { markers })).toBe("reviewed");
+  });
+
+  it("still pairs a genuine run that was closed just as late", async () => {
+    const markers = async () => [
+      {
+        oid: "late",
+        id: 2,
+        startedAt: "2026-01-01T11:00:00Z",
+        completedAt: "2026-01-01T17:00:00Z",
+      },
+    ];
+    expect(await resolve([review({ submittedAt: "2026-01-01T11:20:00Z" })], { markers })).toBe(
+      "late",
+    );
+  });
+
+  it("caps a run at 90 minutes whatever its close says", async () => {
+    const markers = async () => [
+      {
+        oid: "m",
+        id: 1,
+        startedAt: "2026-01-01T10:00:00Z",
+        completedAt: "2026-01-01T23:00:00Z",
+      },
+    ];
+    const committedAt = async () => "2026-01-02T00:00:00Z"; // newer than the review: untrusted
+    // 89 min after the start: inside the cap.
+    expect(
+      await resolve([review({ submittedAt: "2026-01-01T11:29:00Z" })], { markers, committedAt }),
+    ).toBe("m");
+    // 95 min after the start: past it, so no pairing and nothing is known: the whole diff.
+    expect(
+      await resolve([review({ submittedAt: "2026-01-01T11:35:00Z" })], { markers, committedAt }),
     ).toBe("");
   });
 

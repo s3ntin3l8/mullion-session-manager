@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -553,7 +553,7 @@ describe("review-request routes", () => {
         {
           oid: "sha-reviewed",
           id: 10,
-          startedAt: "2026-01-01T12:00:00Z",
+          startedAt: "2026-01-01T23:30:00Z",
           completedAt: "2026-01-09T00:00:00Z",
         },
       ]);
@@ -611,13 +611,13 @@ describe("review-request routes", () => {
         {
           oid: "sha-newer",
           id: 30,
-          startedAt: "2026-01-01T13:00:00Z",
+          startedAt: "2026-01-01T23:40:00Z",
           completedAt: "2026-01-09T00:00:00Z",
         },
         {
           oid: "sha-older",
           id: 10,
-          startedAt: "2026-01-01T12:00:00Z",
+          startedAt: "2026-01-01T23:30:00Z",
           completedAt: "2026-01-09T00:00:00Z",
         },
       ]);
@@ -665,7 +665,10 @@ describe("review-request routes", () => {
 
   describe("reviewReader().sameContent / committedAt (s3ntin3l8/.github#129)", () => {
     const reader = () =>
-      reviewReader("pr-token", "acme", "widgets", 1, "hermes[bot]", "ghs_checks");
+      reviewReader("pr-token", "acme", "widgets", 1, "hermes[bot]", {
+        token: "ghs_checks",
+        name: "Hermes review",
+      });
 
     it("treats the same commit as the same content without asking GitHub", async () => {
       expect(await reader().sameContent("a", "a")).toBe(true);
@@ -706,6 +709,62 @@ describe("review-request routes", () => {
     it("reports an unreadable commit's date as unknown", async () => {
       mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("nope", 404));
       expect(await reader().committedAt("x")).toBe("");
+    });
+  });
+
+  describe("the ledger and reviewer settings decide the base (s3ntin3l8/.github#133)", () => {
+    // The settings live in a DB shared by the tests of this file: put them back.
+    afterEach(() => {
+      applySettingsPatch(app, {
+        reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]", ledgerName: "Hermes review" },
+      });
+    });
+
+    const resolvedBase = async () => {
+      const call = mocks.requestHermesReview.mock.calls[0];
+      const resolveBase = (call?.[1] as { resolveBase?: () => Promise<string> }).resolveBase;
+      return resolveBase ? resolveBase() : undefined;
+    };
+    const approval = (over: Record<string, unknown> = {}) => ({
+      author: "s3ntin3l8-hermes[bot]",
+      authorIsBot: true,
+      state: "APPROVED",
+      commitId: "sha40",
+      submittedAt: "2026-01-02T00:00:00Z",
+      ...over,
+    });
+
+    it("reads the ledger under the configured name", async () => {
+      applySettingsPatch(app, { reviewRelay: { ledgerName: "Custom ledger" } });
+      mocks.listPullRequestReviews.mockResolvedValue([approval()]);
+      await post(sessionId, {});
+      await resolvedBase();
+      expect(mocks.listReviewMarkers).toHaveBeenCalledWith(
+        expect.any(String),
+        "ghs_checks",
+        "acme",
+        "widgets",
+        expect.any(Number),
+        "Custom ledger",
+        expect.any(Function),
+      );
+    });
+
+    it("reads no ledger at all when it is off (an empty name), using the commit_id rule", async () => {
+      applySettingsPatch(app, { reviewRelay: { ledgerName: "" } });
+      mocks.listPullRequestReviews.mockResolvedValue([approval()]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+      expect(mocks.listReviewMarkers).not.toHaveBeenCalled();
+    });
+
+    it("reviews the whole diff, and says why, when no reviewer login is configured", async () => {
+      // The workflow only ever accepts <mention-trigger>[bot], never "any bot": the relay
+      // cannot derive the same base, so it must not guess one.
+      applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
+      mocks.listPullRequestReviews.mockResolvedValue([approval()]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("");
     });
   });
 

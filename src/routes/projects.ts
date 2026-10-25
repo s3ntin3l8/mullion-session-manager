@@ -2406,14 +2406,17 @@ export async function projectsRoute(app: FastifyInstance) {
         // once the agent's own round had used the same key, the two bodies
         // differed and Hermes answered a conflict).
         const markerTokens = await resolveMarkerTokens(app, ctx.repoRef, ctx.token);
+        const { reviewerBotLogin, ledgerName } = getStoredSettings(app.db).reviewRelay;
         const reader = reviewReader(
           ctx.token,
           ctx.repoRef.owner,
           ctx.repoRef.repo,
           number,
-          getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
-          // The ledger markers are check runs: any token that can read them.
-          markerTokens.markerReadToken ?? ctx.token,
+          reviewerBotLogin,
+          // The ledger markers are check runs: any token that can read them. No name = ledger off.
+          ledgerName === ""
+            ? undefined
+            : { token: markerTokens.markerReadToken ?? ctx.token, name: ledgerName },
           (detail) =>
             app.log.warn(
               { detail, owner: ctx.repoRef.owner, repo: ctx.repoRef.repo, prNumber: number },
