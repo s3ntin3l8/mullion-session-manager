@@ -4,11 +4,11 @@
 accessibility, interaction-feedback and information-architecture defects. The backend
 (`src/`) and the CLI were not audited.
 
-**Status.** Every blocker is fixed, and so are 20 of the 21 major and 7 of the 24 minor
-findings, in six pull requests: #1895 (accessibility and contrast), #1897 (surfacing
+**Status.** Every blocker is fixed, and so are 21 of the 21 major and 9 of the 24 minor
+findings, in eight pull requests: #1895 (accessibility and contrast), #1897 (surfacing
 failures instead of swallowing them), #1898 (guards on destructive actions), #1923,
-#1926 and #1927 (the first three of a series that closes the deferred backlog one
-finding per pull request). The other 18 findings are deferred and tracked as issues;
+#1926, #1927, #1930 and #1933 (the series that closes the deferred backlog one
+finding per pull request). The other 15 findings are deferred and tracked as issues;
 see [Deferred backlog](#deferred-backlog).
 
 ---
@@ -76,14 +76,14 @@ inventing new ones.
 
 ## Findings
 
-Forty-eight findings: 32 fixed and 16 deferred.
+Forty-eight findings: 33 fixed and 15 deferred.
 
 | Severity  | Findings | Fixed  | Deferred |
 | --------- | -------- | ------ | -------- |
 | Blocker   | 3        | 3      | 0        |
 | Major     | 21       | 21     | 0        |
-| Minor     | 24       | 8      | 16       |
-| **Total** | **48**   | **32** | **16**   |
+| Minor     | 24       | 9      | 15       |
+| **Total** | **48**   | **33** | **15**   |
 
 The defects are ordered by severity, not by screen. The recurring theme is
 that most of them are **divergences from patterns the codebase had already
@@ -95,8 +95,8 @@ sites. The fixes are therefore mostly consolidation rather than invention.
 The table lists the findings that were fixed, with the pull request that fixed each:
 #1895 fixed 12 (the accessibility and contrast pass), #1897 fixed 11 (failures surfaced
 instead of swallowed), #1898 fixed 4 (guards on destructive actions), #1923 fixed 1, #1926
-fixed 1, #1927 fixed 1 and #1930 fixed 2 (the series that closes the deferred backlog,
-one pull request at a time). The deferred ones are in the
+fixed 1, #1927 fixed 1, #1930 fixed 2 and #1933 fixed 1 (the series that closes the
+deferred backlog, one pull request at a time). The deferred ones are in the
 [Deferred backlog](#deferred-backlog), under the same numbers.
 
 | #   | Severity | PR    | Finding                                                                                                                                             | Where                                                                                                                                                                                           | What changed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -133,6 +133,7 @@ one pull request at a time). The deferred ones are in the
 | 31  | Minor    | #1897 | `SidebarDevices` shows device errors only in a `title` tooltip                                                                                      | `SidebarDevices` error path                                                                                                                                                                     | The error is inline in the failing row, not only in a `title` tooltip                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | 32  | Minor    | #1898 | `ConfirmButton` disarms silently after 6 s, with no countdown — while the pane-kill path _does_ show one                                            | `ui/ConfirmButton.tsx`                                                                                                                                                                          | The arm window counts down in the button and in its title                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | 38  | Minor    | #1930 | The phone Settings list has no search, while the desktop rail does (`styles/mobile.css`, `Settings.tsx` nav)                                        | `PhoneNavigator.tsx:78-109`; `settings/settingsSections.tsx:216-228`                                                                                                                            | The phone's list filters by section name, description and control text through the same `filterSettingsSections` the desktop rail uses, so the two agree on what a query finds — and the desktop rail now matches descriptions too, which it did not before                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 42  | Minor    | #1933 | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:462`)                                         | `Sidebar.tsx:360-369`; `Sidebar.tsx:490-502`; `styles/sidebar.css:236-256`                                                                                                                      | The header states the count of the sessions the section holds, with its unit ("24 sessions") — the sum of the per-project numbers directly beneath it, counted over the projects the section is actually listing. The number wears the sidebar's mono count face; the unit word wears the UI face. It renders only once there is something to count, so a section with no sessions has no caption at all                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Blocker detail
 
@@ -412,6 +413,33 @@ text its search index holds — and `frontend/src/PhoneNavigator.test.tsx` pins 
 phone's list uses it: that it filters, that the group headings of the sections it
 removed go away with them, and that it says so when nothing matches.
 
+### The sidebar's section count (finding 42)
+
+**What the header says is a unit-test guard**: the defect was a caption that read
+as a label with no number, so the fix is about what the header renders.
+`frontend/src/Sidebar.test.tsx` pins that the caption states the count with its
+unit, that it is the sum of the per-project numbers beneath it, that it follows
+the projects the section is actually listing while a filter is active, that
+nothing at all is rendered when there is nothing to count, and that the phone's
+Projects section counts too.
+
+The count is deliberately **the per-project quantity** — a project's own session
+count (its "base" list: the sessions the sidebar would list for it, ignoring
+the search box and the chips), which `ProjectHeader` already reads — summed
+over the projects the section is listing. That is what makes the header the
+total of the numbers beneath it rather than a second, different notion of "how
+many sessions", and it is why the sum is taken over `visibleProjects` and not
+over every project: a project the filter matched nothing in is not rendered, so
+its sessions are not counted either.
+
+Two details the test would not catch on its own. The number wears the sidebar's
+mono count face (`.project-session-count`, like every other count here) while
+the unit word wears the UI face, because a word in a mono face reads as an
+identifier rather than as a caption. And the space between them is a **text
+node**, not the flex `gap` alone: a screen reader reads the caption's text, and
+"2sessions" is not a number and a word. CSS ignores a whitespace-only text node
+between flex items, so the `gap` still sets the visual distance.
+
 ---
 
 ## Evidence
@@ -660,7 +688,6 @@ implying more:
 | 39  | Minor    | An ended session's status label composites to 1.54:1–1.70:1 (ended-session status styling)                                                 | [#1886](https://github.com/s3ntin3l8/mullion-session-manager/issues/1886) |
 | 40  | Minor    | One timestamp format breaks from the app's shared relative-time formatter (review-relay section timestamp)                                 | [#1890](https://github.com/s3ntin3l8/mullion-session-manager/issues/1890) |
 | 41  | Minor    | `NotificationBell` uses `aria-haspopup="true"` where `"dialog"` is correct (`NotificationBell.tsx:593`)                                    | [#1894](https://github.com/s3ntin3l8/mullion-session-manager/issues/1894) |
-| 42  | Minor    | The sidebar's "Projects" header shows the literal word "sessions" where a count belongs (`Sidebar.tsx:444`)                                | [#1889](https://github.com/s3ntin3l8/mullion-session-manager/issues/1889) |
 | 43  | Minor    | A palette action that does not move focus deliberately leaves focus on `<body>` (`CommandPalette.tsx:292`)                                 | [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884) |
 | 44  | Minor    | There is no skeleton primitive — twenty-plus panels render the bare word "Loading…" (no `skeleton` anywhere in `frontend/src/styles`)      | [#1885](https://github.com/s3ntin3l8/mullion-session-manager/issues/1885) |
 | 45  | Minor    | The global keyboard shortcuts are discoverable nowhere in the UI (`hooks/useGlobalShortcuts.ts`, not user-facing)                          | [#1887](https://github.com/s3ntin3l8/mullion-session-manager/issues/1887) |
