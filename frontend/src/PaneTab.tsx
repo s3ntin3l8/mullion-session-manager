@@ -7,12 +7,8 @@ import { formatBranchLabel } from "./paneTitle.js";
 import { BellIcon, CheckIcon, CloseIcon, HostsIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { describeHostBadge } from "./lib/hostBadge.js";
+import { describeHostBadge, selectRemoteHost } from "./lib/hostBadge.js";
 import { HostStatusLabel } from "./HostStatusLabel.js";
-// From the shared module, not ./api/index.js — this file's test mocks that
-// module wholesale (only `api` is provided), the same reason lib/hostBadge.ts
-// does not import LOCAL_HOST_ID from there.
-import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
@@ -343,19 +339,17 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // Issue #1727 / roadmap 8.13 — the host this session runs on. Quiet by
   // design, and not shown for a local session (the common case): it exists
   // for the case that matters, one project's sessions on DIFFERENT hosts.
-  // The host's name comes from the store's hosts list, read non-reactively
-  // so the tab does not re-render on every fleet refresh.
+  // The host's NAME is read non-reactively (getState). A local tab's
+  // selector stays null, so a fleet refresh does not re-render it. A remote
+  // tab subscribes to its own host so the derived status follows the
+  // heartbeat.
   // Issue #1852 — the host badge AND its tooltip (the placement
   // decision's own words) are computed together, in one place, so the two
   // surfaces cannot disagree: see lib/hostBadge.ts.
   const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
   // Issue #1892 — same split as the sidebar row: the name is non-reactive,
   // the derived status has to follow the heartbeat.
-  const remoteHost = useDashboardStore((s) => {
-    const hostId = session?.resolvedHostId;
-    if (!hostId || hostId === LOCAL_HOST_ID) return null;
-    return s.hosts.find((h) => h.id === hostId) ?? null;
-  });
+  const remoteHost = useDashboardStore((s) => selectRemoteHost(s.hosts, session?.resolvedHostId));
 
   return (
     <div

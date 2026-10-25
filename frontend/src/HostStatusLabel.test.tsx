@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { HostStatusLabel } from "./HostStatusLabel.js";
 import { makeHost } from "./test/fixtures.js";
+import type { Host } from "./api/index.js";
 
 describe("HostStatusLabel (issue #1892)", () => {
   it("says online, in words, for a host the heartbeat reports online", () => {
@@ -41,5 +42,22 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(screen.getByText("parked")).toBeInTheDocument();
     expect(screen.queryByText("unreachable")).toBeNull();
     expect(screen.queryByText("online")).toBeNull();
+  });
+
+  it("does not call an unknown or missing health unreachable", () => {
+    // KNOWN_HEALTH — a host that has not carried one of the four real
+    // values must not fall through deriveHostStatus's final branch. The
+    // real Host type always has one; this is the guard for a test double
+    // or a row still arriving.
+    const unknown = makeHost({ health: "unknown" as Host["health"] });
+    const unknownView = render(<HostStatusLabel host={unknown} />);
+    expect(unknownView.container).toBeEmptyDOMElement();
+    expect(screen.queryByText("unreachable")).toBeNull();
+
+    const missing = makeHost();
+    delete (missing as Partial<Host>).health;
+    const missingView = render(<HostStatusLabel host={missing} />);
+    expect(missingView.container).toBeEmptyDOMElement();
+    expect(screen.queryByText("unreachable")).toBeNull();
   });
 });

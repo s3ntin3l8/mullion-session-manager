@@ -17,7 +17,7 @@ import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import type { Device, DiscoveredProject, Host, Project, Session, Task } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
-import { describeHostBadge } from "./lib/hostBadge.js";
+import { describeHostBadge, selectRemoteHost } from "./lib/hostBadge.js";
 import { HostStatusLabel } from "./HostStatusLabel.js";
 import {
   formatStatusLabel,
@@ -2111,10 +2111,13 @@ export function SessionRow({
   // for the case that matters: one project's sessions on DIFFERENT hosts,
   // which is what automatic placement produces.
   //
-  // The host's name comes from the store's hosts list, read NON-reactively
-  // (getState) so a session row does not re-render every time the fleet's
-  // health dot refreshes — the row re-renders on every session refresh
-  // anyway, which is often enough for a label.
+  // The host's NAME comes from the store's hosts list, read non-reactively
+  // (getState). A name does not change when the heartbeat does, and a local
+  // row never reads the fleet list. A REMOTE row subscribes to its own host
+  // below, so that row re-renders when that host's health changes. A local
+  // row's selector stays null and does not track the fleet, so a health-dot
+  // refresh still does not re-render it — the row re-renders on session
+  // refresh, which is often enough for the name.
   // Issue #1852 — the host badge AND its tooltip (the placement
   // decision's own words) are computed together, in one place: see
   // lib/hostBadge.ts's own comment for why the two disagree about how to
@@ -2124,11 +2127,7 @@ export function SessionRow({
   // subscribe (a name does not change when the heartbeat does). The status
   // does, so this row subscribes to that one host. Local sessions have no
   // badge and get no status.
-  const remoteHost = useDashboardStore((s) => {
-    const hostId = session.resolvedHostId;
-    if (!hostId || hostId === LOCAL_HOST_ID) return null;
-    return s.hosts.find((h) => h.id === hostId) ?? null;
-  });
+  const remoteHost = useDashboardStore((s) => selectRemoteHost(s.hosts, session.resolvedHostId));
   const statusLabel = (
     <span className="session-status-group">
       <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
