@@ -1073,7 +1073,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(screen.getByText("system-images;android-35;google_apis;arm64-v8a")).toBeInTheDocument();
 
     // "Not installed" filter — only arm64-v8a image remains
-    await user.click(screen.getByRole("button", { name: "Not installed" }));
+    await user.click(screen.getByRole("radio", { name: "Not installed" }));
     await waitFor(() => {
       expect(
         screen.getByText("system-images;android-35;google_apis;arm64-v8a"),
@@ -1084,7 +1084,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     });
 
     // "Installed" filter — only x86_64 image remains
-    await user.click(screen.getByRole("button", { name: "Installed" }));
+    await user.click(screen.getByRole("radio", { name: "Installed" }));
     await waitFor(() => {
       expect(screen.getByText("system-images;android-35;google_apis;x86_64")).toBeInTheDocument();
       expect(

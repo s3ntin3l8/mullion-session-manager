@@ -36,6 +36,11 @@
 .settings-modal-title {
   font-size: 15px;
   font-weight: 600;
+  /* This is an <h2> (it is the modal's own heading — the app's <h1> lives
+     in App.tsx), and nothing in this codebase resets the UA's heading
+     margins, so the default `margin: 0.83em 0` has to go or the header
+     grows a gap above and below the title. */
+  margin: 0;
 }
 /* Mobile UI/UX overhaul, item D — the drill-down's "back to nav list"
    chevron (Settings.tsx). Hidden unconditionally here; only the phone tier

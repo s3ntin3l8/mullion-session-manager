@@ -536,6 +536,8 @@ function GroupSection({
                 label: "Edit",
                 icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: () => setEditOpen(true),
+                // Opens the Edit-group modal, which traps focus itself.
+                opensOverlay: true,
               },
               {
                 key: "delete",
@@ -771,6 +773,10 @@ function WorkspaceItem({
       // Enter/Space from ALSO switching to this workspace.
       role="button"
       tabIndex={0}
+      // Which workspace is currently in effect. `aria-current` is how a
+      // screen reader announces "you are here" in a list like this; the
+      // visual `.active` class alone says nothing to one.
+      aria-current={active ? "true" : undefined}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {

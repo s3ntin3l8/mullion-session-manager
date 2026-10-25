@@ -79,3 +79,6 @@ when you'd reach for it.
 - [`roadmap.md`](roadmap.md) — phase-by-phase design history and
   architecture decisions. Mostly a historical record, not a forward-looking
   plan — see its own opening note.
+- [`ui-ux-audit.md`](ui-ux-audit.md) — the frontend UI/UX audit: accessibility,
+  interaction-feedback and information-architecture findings, each with its
+  evidence and its disposition (fixed, or deferred to a tracked issue).

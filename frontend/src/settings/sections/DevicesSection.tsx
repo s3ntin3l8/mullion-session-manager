@@ -1056,6 +1056,7 @@ export function DevicesSection() {
                 + free-text search. All four AND together. */}
             <div className="settings-image-filters">
               <Segmented
+                ariaLabel="Installed status filter"
                 options={[
                   { value: "all", label: "All" },
                   { value: "installable", label: "Not installed" },
@@ -1065,12 +1066,14 @@ export function DevicesSection() {
                 onChange={setAvailableFilter}
               />
               <Dropdown
+                ariaLabel="Variant filter"
                 options={[{ value: "", label: "All variants" }, ...variantOptions]}
                 value={availableVariant}
                 onChange={setAvailableVariant}
                 small
               />
               <Dropdown
+                ariaLabel="API filter"
                 options={[{ value: "", label: "All APIs" }, ...apiOptions]}
                 value={availableApi}
                 onChange={setAvailableApi}

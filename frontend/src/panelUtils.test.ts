@@ -45,6 +45,7 @@ import {
   parseDeepLinkSessionId,
   handleGlobalEscape,
   shouldShowCodexHookTrustBanner,
+  sessionIdFromPanelId,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api/index.js";
@@ -2768,5 +2769,28 @@ describe("planAutoOpenChildren (issue #1624)", () => {
     expect(freshHintedChildIds([row(2, { createdAt: "2026-01-01T00:05:00Z" })], now).has(2)).toBe(
       true,
     );
+  });
+});
+
+describe("sessionIdFromPanelId", () => {
+  it("extracts the session id from the panel kinds that belong to a session", () => {
+    expect(sessionIdFromPanelId("session-12")).toBe(12);
+    expect(sessionIdFromPanelId("timeline-7")).toBe(7);
+    expect(sessionIdFromPanelId("browserPane-3")).toBe(3);
+  });
+
+  it("returns null for ids that don't carry a session id", () => {
+    expect(sessionIdFromPanelId("device-1")).toBeNull();
+    expect(sessionIdFromPanelId("taskDetail-4")).toBeNull();
+    expect(sessionIdFromPanelId("project-abc")).toBeNull();
+    expect(sessionIdFromPanelId("session-")).toBeNull();
+    expect(sessionIdFromPanelId("session-abc")).toBeNull();
+    expect(sessionIdFromPanelId("session-12-extra")).toBeNull();
+  });
+
+  it("returns null for an absent panel id", () => {
+    expect(sessionIdFromPanelId(null)).toBeNull();
+    expect(sessionIdFromPanelId(undefined)).toBeNull();
+    expect(sessionIdFromPanelId("")).toBeNull();
   });
 });

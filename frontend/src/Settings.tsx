@@ -207,10 +207,10 @@ export function Settings({
               <ChevronLeftIcon size={16} />
             </button>
           )}
-          <span className="settings-modal-title">
+          <h2 className="settings-modal-title">
             {/* Phone drill-down: name the section you're in, not just the app. */}
             {phone && !mobileNavOpen ? meta.title : "Settings"}
-          </span>
+          </h2>
           <button
             ref={closeBtnRef}
             className="settings-modal-close"
@@ -242,6 +242,9 @@ export function Settings({
                   <button
                     className={`settings-nav-item${s.id === section ? " active" : ""}`}
                     onClick={() => selectSection(s.id)}
+                    // The section you are looking at — a screen reader
+                    // announces this as "current page" within the modal.
+                    aria-current={s.id === section ? "page" : undefined}
                   >
                     {s.icon(16)}
                     <span className="settings-nav-label">{s.title}</span>
