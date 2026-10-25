@@ -11,7 +11,55 @@ import { GIT_ENV_KEYS_TO_STRIP, gitEnv } from "../src/services/git-env.js";
 
 const ROOT = path.resolve(__dirname, "..");
 // \w* on both sides also catches promisified wrappers (execFileAsync("git", …)).
-const GIT_SPAWN = /\b\w*(execFile|exec|spawn)\w*\(\s*["']git["']/;
+// Two forms on purpose: the non-global one is a plain "does this line start a
+// spawn-ish call" test (a /g regex carries `lastIndex` between calls, so
+// using it for `.test()` would skip lines), and the global one is for
+// `matchAll` over a statement.
+const SPAWN_CALL = /\b\w*(execFile|exec|spawn)\w*\s*\(/;
+const SPAWN_CALL_G = /\b\w*(execFile|exec|spawn)\w*\s*\(/g;
+const GIT_LITERAL = /^\s*["']git["']\s*$/;
+
+/**
+ * The first argument of the call that starts at `from` — up to the next
+ * top-level comma.
+ */
+function firstArgument(statement: string, open: number): string {
+  let depth = 0;
+  for (let i = open + 1; i < statement.length; i++) {
+    const ch = statement[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") {
+      // The call's own closing bracket ends the argument list.
+      if (depth === 0) return statement.slice(open + 1, i);
+      depth--;
+    } else if (ch === "," && depth === 0) return statement.slice(open + 1, i);
+  }
+  return statement.slice(open + 1);
+}
+
+/**
+ * Whether this statement spawns git — i.e. whether one of its spawn-ish
+ * calls has the LITERAL "git" as its first argument.
+ *
+ * Two things this gets right that a line-anchored match did not:
+ *
+ * - the command is looked for in the whole STATEMENT, not the line the call
+ *   starts on. Many call sites put it on its own line
+ *   (`spawnChild(\n  "git",\n  [...]`), and the old line-anchored match
+ *   never saw those — it silently skipped 9 of the 30 git spawns in src/ and
+ *   scripts/, three of which had no `env: gitEnv()` and no gc override.
+ * - the command must be the LITERAL "git". A test double that forwards
+ *   (`actual.spawn(command, args, options)`) takes the command from a
+ *   variable, and the real spawn's env and argv come from the src/ caller
+ *   this guard already checks.
+ */
+function spawnsGit(statement: string): boolean {
+  for (const match of statement.matchAll(SPAWN_CALL_G)) {
+    const open = match.index + match[0].length - 1;
+    if (GIT_LITERAL.test(firstArgument(statement, open))) return true;
+  }
+  return false;
+}
 
 describe("git child processes scrub the ambient git environment", () => {
   // test/setup.ts strips the hook env (pre-push exports GIT_DIR in a linked
@@ -58,11 +106,13 @@ describe("git child processes scrub the ambient git environment", () => {
       lines.forEach((line, i) => {
         const trimmed = line.trim();
         if (trimmed.startsWith("//") || trimmed.startsWith("*")) return;
-        if (!GIT_SPAWN.test(line)) return;
+        if (!SPAWN_CALL.test(line)) return;
         // Just this call's own statement: up to the first line ending in `);`.
         let end = i;
         while (end < lines.length - 1 && !/\)\s*;?\s*$/.test(lines[end].trimEnd())) end++;
         const call = lines.slice(i, end + 1).join("\n");
+        // Not every spawn is a git one.
+        if (!spawnsGit(call)) return;
         // An explicit env built from process.env (spread or passed as is)
         // hands a leaked GIT_DIR straight through; start from gitEnv() instead.
         if (!/\benv\s*:/.test(call) || /(\.\.\.|\benv\s*:\s*)process\.env\b/.test(call))
@@ -89,20 +139,30 @@ describe("git child processes scrub the ambient git environment", () => {
       .filter((f) => /\.(ts|mjs|js)$/.test(f) && f !== "test/git-env-guard.test.ts");
 
     const offenders: string[] = [];
+    let seen = 0;
     for (const file of files) {
       const lines = readFileSync(path.join(ROOT, file), "utf8").split("\n");
       lines.forEach((line, i) => {
         const trimmed = line.trim();
         if (trimmed.startsWith("//") || trimmed.startsWith("*")) return;
-        if (!GIT_SPAWN.test(line)) return;
+        if (!SPAWN_CALL.test(line)) return;
         // Just this call's own statement: up to the first line ending in `);`.
         let end = i;
         while (end < lines.length - 1 && !/\)\s*;?\s*$/.test(lines[end].trimEnd())) end++;
         const call = lines.slice(i, end + 1).join("\n");
+        // Not every spawn is a git one.
+        if (!spawnsGit(call)) return;
+        seen++;
         if (!call.includes("GIT_NO_AUTO_GC")) offenders.push(`${file}:${i + 1}`);
       });
     }
     expect(offenders).toEqual([]);
+    // The scan must still SEE the git spawns. An earlier, line-anchored version
+    // of this scan silently skipped 9 of the 30, so the rules above were
+    // passing over sites that had neither the env scrub nor the gc override.
+    // If this fails, either a git spawn was removed (lower it deliberately) or
+    // the scan stopped matching (fix the scan).
+    expect(seen).toBeGreaterThanOrEqual(30);
   });
 
   // The override lives in three places — the TypeScript source of truth, the

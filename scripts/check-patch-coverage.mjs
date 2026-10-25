@@ -308,7 +308,17 @@ export function runPatchCoverageCheck(options = {}) {
     try {
       baseSourceFiles = execFileSync(
         "git",
-        ["ls-tree", "-r", "-z", "--name-only", diffBase, "--", "src", "frontend/src"],
+        [
+          ...GIT_NO_AUTO_GC,
+          "ls-tree",
+          "-r",
+          "-z",
+          "--name-only",
+          diffBase,
+          "--",
+          "src",
+          "frontend/src",
+        ],
         { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
       )
         .split("\0")
