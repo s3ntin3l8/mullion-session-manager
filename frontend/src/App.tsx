@@ -21,6 +21,7 @@ import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
 import { GridIcon, RefreshIcon, ServerRackIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
+import { ToastHost } from "./ui/ToastHost.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
@@ -1529,6 +1530,10 @@ export function App() {
           heading gives a screen-reader user nothing to orient by when they
           tab into it. Visually hidden, not absent. */}
       <h1 className="visually-hidden">Mullion</h1>
+      {/* The app-wide toast host. Mounted here, at the top of the tree, so
+          every surface's failure has somewhere to land — including ones
+          rendered inside a modal or a panel further down. */}
+      <ToastHost />
       <Toolbar
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}

@@ -105,6 +105,7 @@ export function UnifiedBoard({
   const {
     tasks,
     tasksLoaded,
+    tasksError,
     sessions,
     projects,
     taskMasterEnabled,
@@ -115,6 +116,7 @@ export function UnifiedBoard({
     useShallow((s) => ({
       tasks: s.tasks,
       tasksLoaded: s.tasksLoaded,
+      tasksError: s.tasksError,
       sessions: s.sessions,
       projects: s.projects,
       taskMasterEnabled: s.taskMasterEnabled,
@@ -733,14 +735,41 @@ export function UnifiedBoard({
               {dragError}
             </div>
           )}
+          {/* Audit finding 15 — a FAILED task fetch is NOT an empty task
+              list. The tasks slice keeps the last-known-good list on
+              failure (so `tasks` is still []) and records the failure in
+              `tasksError`; before this, the board said "No tasks yet." and
+              invited the user to create a task, which is actively
+              misleading when the real cause is that the list could not be
+              loaded. Same "above the columns, not instead of them"
+              posture as the empty state below — the seven empty columns
+              still communicate the board's shape. The failure is spelled
+              out in words (never by colour alone), and Retry re-runs the
+              fetch. */}
+          {tasksError && (
+            <EmptyStateNote>
+              <LayersIcon size={20} />
+              <div>Couldn't load tasks.</div>
+              <div className="tasks-panel-empty-hint">{tasksError}</div>
+              <button
+                type="button"
+                className="git-panel-fetch-btn"
+                onClick={() => void useDashboardStore.getState().refreshTasks()}
+              >
+                Retry
+              </button>
+            </EmptyStateNote>
+          )}
           {/* Shown ABOVE the columns, not instead of them — at zero tasks
               this used to replace the whole board, so a first-time user saw
               no workflow model and no drop targets at all. The seven empty
               columns underneath still communicate the board's shape.
               Gated on tasksLoaded (store.ts) too — without it this flashed
               on every board open, since the mount effect above always
-              starts from tasks === [] until its own refreshTasks() lands. */}
-          {tasksLoaded && tasks.length === 0 && (
+              starts from tasks === [] until its own refreshTasks() lands.
+              Gated on !tasksError too — a failed fetch is not an empty
+              list (see the error note above). */}
+          {tasksLoaded && tasks.length === 0 && !tasksError && (
             <EmptyStateNote>
               <LayersIcon size={20} />
               <div>No tasks yet.</div>

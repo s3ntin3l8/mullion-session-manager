@@ -16,6 +16,7 @@ import type { TerminalPaneParams } from "./TerminalPane.js";
 import { focusPanelForTier, panelSessionId } from "./panelUtils.js";
 import type { LayoutTier } from "./lib/layoutTier.js";
 import { resolveAgentLogo } from "./cliLogos.js";
+import { describeError } from "./lib/describeError.js";
 
 // Phone/tablet glue between App's dockview panels and MobileSessionSwitcher
 // (which App renders into the toolbar in place of the old `.mobile-tabs`
@@ -197,8 +198,18 @@ export function MobileSessionBar({
     if (!panel || !value) return;
     const sessionId = panelSessionId(panel);
     if (sessionId === undefined) return;
+    // The title is set optimistically, before the server has accepted the
+    // rename, so a rejected rename has to put it back — the store's own
+    // rollback restores the session's name in the list, but the dockview
+    // panel title is this component's.
+    const previousTitle = panel.title ?? "";
     panel.api.setTitle(value);
-    void useDashboardStore.getState().renameSession(sessionId, value);
+    void useDashboardStore.getState().renameSession(sessionId, value).catch((err) => {
+      panel.api.setTitle(previousTitle);
+      useDashboardStore
+        .getState()
+        .reportError("Could not rename the session.", describeError(err));
+    });
   };
 
   return (

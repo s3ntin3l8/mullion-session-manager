@@ -78,6 +78,14 @@ export interface ProjectsSlice {
   projects: Project[];
   // Per-project saved URLs (issue #109), keyed by project id.
   projectUrls: Record<number, ProjectUrl[]>;
+  // Separates the three states an empty project list can be in: still
+  // loading, loaded-and-genuinely-empty, and failed. Before these existed
+  // the sidebar's first-run empty state covered all three, so a failed
+  // fetch looked like a fresh install (audit finding 14).
+  projectsLoaded: boolean;
+  // The failure message from the last failed listProjects(), or null. Set
+  // on failure and cleared on the next success.
+  projectsError: string | null;
   refreshProjects: () => Promise<void>;
   createProject: (
     name: string,
@@ -290,6 +298,14 @@ export interface TasksSlice {
   // ATTEMPT, not the first success — see that function's own comment for
   // why that has to differ from sessionsLoaded's success-only semantics.
   tasksLoaded: boolean;
+  // The failure message from the last failed listTasks(), or null.
+  //
+  // A failed task fetch used to be indistinguishable from an empty task
+  // list: the board rendered "No tasks yet." and invited the user to
+  // create one, which is actively misleading when the real cause is that
+  // the fetch failed (audit finding 15). This is what lets the board say
+  // what actually happened.
+  tasksError: string | null;
   // Phase 6 Task Master (6.5/#218) — refreshes the task list (always) and,
   // once per page load, taskMasterEnv (see slices/tasks.ts's own
   // tasksRefreshInFlight doc comment for why that isn't re-fetched every
@@ -749,6 +765,30 @@ export interface UiSlice {
   toggleSessionMute: (sessionId: number) => void;
 }
 
+// The app's one shared channel for telling the user something went wrong.
+// Before this existed, every failure improvised its own surface — a
+// `title` tooltip, a console.error, an unhandled rejection, or a catch that
+// set the same state a success would have set. See slices/toasts.ts.
+export interface Toast {
+  id: number;
+  // "error" is the one that matters for this slice's purpose; "info" and
+  // "success" exist so a surface that wants a transient confirmation does
+  // not need a second mechanism.
+  kind: "info" | "success" | "error";
+  message: string;
+}
+
+export interface ToastsSlice {
+  toasts: Toast[];
+  // Returns the new toast's id so a caller can dismiss it early.
+  pushToast: (input: { message: string; kind?: Toast["kind"] }) => number;
+  dismissToast: (id: number) => void;
+  clearToasts: () => void;
+  // `message` is the actionable headline; `detail` is the raw error text,
+  // appended only when it says something the headline does not.
+  reportError: (message: string, detail?: string) => number;
+}
+
 // Stays one store object, so every `useDashboardStore(s => s.x)` selector
 // is unchanged — see slices/index (store/index.ts)'s own doc comment for
 // why this is what caps the risk of the slice split. Cross-slice `get()`/
@@ -766,4 +806,5 @@ export type DashboardState = ProjectsSlice &
   WorkspacesSlice &
   HostsSlice &
   DevicesSlice &
-  UiSlice;
+  UiSlice &
+  ToastsSlice;

@@ -202,6 +202,15 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
   },
 
   renameSession: async (id, name) => {
+    // The name the session had before this rename, captured BEFORE the
+    // optimistic write below. Without it there is nothing to roll back
+    // to: the rename is optimistic (the row shows the new name
+    // immediately, before the PATCH lands), so a failed rename used to
+    // leave the session showing a name the server never accepted — and
+    // the rejection was dropped by every one of the three call sites
+    // (PaneTab.tsx, Sidebar.tsx, MobileSessionBar.tsx all `void`ed it),
+    // so the user was never told (audit finding 9).
+    const previous = get().sessions.find((s) => s.id === id);
     // Set nameLocked optimistically (same pattern as reorderWorkspaces in
     // slices/workspaces.ts) — closes the narrow window between PaneTab's
     // immediate `props.api.setTitle(value)` and this PATCH+refresh
@@ -211,7 +220,26 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     set((state) => ({
       sessions: state.sessions.map((s) => (s.id === id ? { ...s, name, nameLocked: true } : s)),
     }));
-    await api.renameSession(id, name);
+    try {
+      await api.renameSession(id, name);
+    } catch (err) {
+      // Roll the optimistic write back to the name the server still has,
+      // so the row stops claiming a rename that did not happen. The
+      // error is rethrown so the CALLER can tell the user — the store is
+      // not the place that decides how a failure is surfaced.
+      set((state) => ({
+        sessions: state.sessions.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                name: previous?.name ?? s.name,
+                nameLocked: previous?.nameLocked ?? false,
+              }
+            : s,
+        ),
+      }));
+      throw err;
+    }
     await get().refreshSessions();
   },
 

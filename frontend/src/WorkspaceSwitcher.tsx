@@ -9,6 +9,7 @@ import type { ReorderItem } from "./reorder.js";
 import type { Group, Session, Workspace } from "./api/index.js";
 import { extractSessionIds } from "./panelUtils.js";
 import { STORAGE_KEYS, readBool, writeBool } from "./lib/persistedState.js";
+import { describeError } from "./lib/describeError.js";
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -317,8 +318,31 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
               sessionIdsByWorkspace={sessionIdsByWorkspace}
               activeWorkspaceId={displayActiveWorkspaceId}
               onSelect={(id) => handleSelectWorkspace(id)}
-              onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
-              onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
+              onRename={(id, name) => {
+                // Every one of these used to `void` its action, which
+                // turned a rejected request into an unhandled promise
+                // rejection — a failed delete looked exactly like a
+                // successful one, and the workspace was simply still
+                // there with no explanation (audit finding 12).
+                void useDashboardStore
+                  .getState()
+                  .renameWorkspace(id, name)
+                  .catch((err) => {
+                    useDashboardStore
+                      .getState()
+                      .reportError("Could not rename the workspace.", describeError(err));
+                  });
+              }}
+              onDelete={(id) => {
+                void useDashboardStore
+                  .getState()
+                  .deleteWorkspace(id)
+                  .catch((err) => {
+                    useDashboardStore
+                      .getState()
+                      .reportError("Could not delete the workspace.", describeError(err));
+                  });
+              }}
               onToggleCollapsed={() =>
                 void useDashboardStore
                   .getState()
@@ -330,7 +354,16 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
               onRenameGroup={(name) =>
                 void useDashboardStore.getState().updateGroup(group.id, { name })
               }
-              onDeleteGroup={() => void useDashboardStore.getState().deleteGroup(group.id)}
+              onDeleteGroup={() => {
+                void useDashboardStore
+                  .getState()
+                  .deleteGroup(group.id)
+                  .catch((err) => {
+                    useDashboardStore
+                      .getState()
+                      .reportError("Could not delete the group.", describeError(err));
+                  });
+              }}
               dragCtx={dragCtx}
               onHeaderDragOver={(e) => {
                 if (!dragCtx.dragging) return;
@@ -356,8 +389,29 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
             sessions={sessions}
             sessionIdsByWorkspace={sessionIdsByWorkspace}
             onSelect={(id) => handleSelectWorkspace(id)}
-            onRename={(id, name) => void useDashboardStore.getState().renameWorkspace(id, name)}
-            onDelete={(id) => void useDashboardStore.getState().deleteWorkspace(id)}
+            onRename={(id, name) => {
+              // The grouped list above has the same guard on its own
+              // rename — a rejected request must not become an unhandled
+              // rejection (audit finding 12).
+              void useDashboardStore
+                .getState()
+                .renameWorkspace(id, name)
+                .catch((err) => {
+                  useDashboardStore
+                    .getState()
+                    .reportError("Could not rename the workspace.", describeError(err));
+                });
+            }}
+            onDelete={(id) => {
+              void useDashboardStore
+                .getState()
+                .deleteWorkspace(id)
+                .catch((err) => {
+                  useDashboardStore
+                    .getState()
+                    .reportError("Could not delete the workspace.", describeError(err));
+                });
+            }}
           />
 
           <div style={{ padding: "4px 12px 10px" }}>

@@ -5,6 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DEVICES_POLL_MS, SidebarDevices } from "./SidebarDevices.js";
 import type { Device } from "./api/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { mockFetch } from "./test/mockFetch.js";
 import { resetStore } from "./test/resetStore.js";
@@ -22,8 +23,8 @@ describe("SidebarDevices (issue #1326)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
   // Per-row outage switch: a key here makes that row's next start/stop fail
-  // with the mapped message, which is how the per-row error-title test below
-  // gets one row to fail while its neighbour stays healthy.
+  // with the mapped message, which is how the per-row error tests below get
+  // one row to fail while its neighbour stays healthy.
   let lifecycleFailures: Map<number, string>;
 
   beforeEach(() => {
@@ -311,10 +312,13 @@ describe("SidebarDevices (issue #1326)", () => {
     expect(onOpenDevice).not.toHaveBeenCalled();
   });
 
-  // A sidebar row has no room for an inline error line, so a failed
-  // start/stop rides on the row's `title` instead — which makes the error
-  // per-row data: one shared string would put whichever row failed LAST
-  // into every other row's tooltip until the next lifecycle click.
+  // A failed start/stop still rides on the row's `title` tooltip, which
+  // makes the error per-row data: one shared string would put whichever row
+  // failed LAST into every other row's tooltip until the next click.
+  //
+  // The `title` is still there (it is a fine TOOLTIP for the failure), but
+  // it is no longer the ONLY place the message appears — see the inline
+  // error tests below.
   it("shows a failed stop message only on the row it happened to", async () => {
     const shared = {
       hostId: "local",
@@ -344,6 +348,157 @@ describe("SidebarDevices (issue #1326)", () => {
     });
     const neighbourTitle = screen.getByTestId("device-row-2").getAttribute("title") ?? "";
     expect(neighbourTitle).not.toContain("adb refused the connection");
+  });
+
+  // Audit finding 31 — the failure used to live ONLY in the row's `title`
+  // tooltip: invisible on a touch device, never announced by a screen
+  // reader, and gone the moment the pointer moved away. It is now rendered
+  // INLINE, in the row it happened to.
+  it("renders a failed start as an inline error inside the row, not only in a title tooltip", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    lifecycleFailures.set(1, "adb refused the connection");
+    const user = userEvent.setup();
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByTestId("device-start-1"));
+
+    // The message is in the row's own DOM — a text node a screen reader can
+    // reach, not just an attribute.
+    await waitFor(() => {
+      expect(within(row).getByText("adb refused the connection")).toBeInTheDocument();
+    });
+    // The tooltip is still there too; it is simply no longer the only place
+    // the failure is shown.
+    expect(row.getAttribute("title")).toContain("adb refused the connection");
+  });
+
+  // The error is per-ROW state: it belongs to the row whose start failed
+  // and must never leak into a neighbour's row.
+  it("keeps a failed start's error on the failing row and off every other row", async () => {
+    const shared = {
+      hostId: "local",
+      projectId: null,
+      kind: "emulator" as const,
+      avdName: "pixel_7",
+      serial: null,
+      status: "killed" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      live: null,
+    };
+    devicesDb = [
+      { ...shared, id: 1, name: "Broken Pixel" },
+      { ...shared, id: 2, name: "Healthy Pixel" },
+    ];
+    lifecycleFailures.set(1, "adb refused the connection");
+    const user = userEvent.setup();
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const failedRow = await screen.findByTestId("device-row-1");
+    const healthyRow = screen.getByTestId("device-row-2");
+    await user.click(within(failedRow).getByTestId("device-start-1"));
+
+    await waitFor(() => {
+      expect(within(failedRow).getByText("adb refused the connection")).toBeInTheDocument();
+    });
+    expect(within(healthyRow).queryByText("adb refused the connection")).toBeNull();
+    expect(healthyRow).not.toHaveTextContent("adb refused the connection");
+    // One error, one row: the section renders a single alert.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  // A row's error is its own: it goes away when THAT row succeeds, not
+  // when some other row's start succeeds.
+  it("clears the row's error once that row's start succeeds", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    lifecycleFailures.set(1, "adb refused the connection");
+    const user = userEvent.setup();
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByTestId("device-start-1"));
+    await waitFor(() => {
+      expect(within(row).getByText("adb refused the connection")).toBeInTheDocument();
+    });
+
+    // The backend recovers; the same row's next start succeeds.
+    lifecycleFailures.delete(1);
+    await user.click(screen.getByTestId("device-start-1"));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    expect(
+      within(screen.getByTestId("device-row-1")).queryByText("adb refused the connection"),
+    ).toBeNull();
+  });
+
+  // The failure has to reach assistive technology, not just a `title`
+  // attribute: it is an alert in the accessibility tree, the row's own
+  // accessible name stays the row's (so the message is not swallowed into
+  // the button's name), and the app's permanent live region announces it
+  // too — a button's descendants are presentational, so the nested alert
+  // alone is not reliably announced.
+  it("exposes a failed start to assistive technology, not only through the title tooltip", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "killed",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    lifecycleFailures.set(1, "adb refused the connection");
+    const user = userEvent.setup();
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const row = await screen.findByTestId("device-row-1");
+    await user.click(within(row).getByTestId("device-start-1"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("adb refused the connection");
+    expect(alert).toBeInTheDocument();
+    // The row's accessible name is the row's own — the failure never
+    // becomes part of it.
+    expect(row).toHaveAccessibleName("Open device My Pixel");
+    // The app-wide announcement channel (the toast slice's live region)
+    // carries the failure as well.
+    const toasts = useDashboardStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe("error");
+    expect(toasts[0].message).toContain("adb refused the connection");
   });
 
   // Keyboard parity for the div-row conversion (role="button" + tabIndex +

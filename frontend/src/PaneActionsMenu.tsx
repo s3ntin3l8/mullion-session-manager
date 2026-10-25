@@ -31,6 +31,7 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { useVisualViewportChange, visibleViewport } from "./hooks/useVisualViewportChange.js";
 import { useLayoutContext } from "./lib/layoutTier.js";
+import { describeError } from "./lib/describeError.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — the kill/rename/timeline/browser/promote overflow
@@ -243,7 +244,15 @@ export function PaneActionsMenu({
       setOverflowOpen(false);
       api.close();
       void deleteSession(session.id).catch((err) => {
+        // The pane is already closed by this point, so the ONLY place the
+        // failure can surface is outside it — the console was the only
+        // place it surfaced, which made a failed kill completely silent
+        // (audit finding 11). The session is still running on the host;
+        // the user has to know that.
         console.error("Failed to kill session", session.id, err);
+        useDashboardStore
+          .getState()
+          .reportError("Could not kill the session.", describeError(err));
       });
     } else {
       setKillArmed(true);

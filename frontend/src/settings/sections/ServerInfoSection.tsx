@@ -3,6 +3,8 @@ import { api, ApiError } from "../../api/index.js";
 import type { ServerInfo, UpdateCheckResult, UpdateStatus } from "../../api/index.js";
 import type { SystemStats } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
+import { useAsyncData } from "../../hooks/useAsyncData.js";
+import { describeError } from "../../lib/describeError.js";
 import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
 import { LogLevelSetting } from "../RuntimeSettings.js";
@@ -19,23 +21,82 @@ function formatUptime(seconds: number): string {
   return `${m}m`;
 }
 
+// The two failure headlines. Each names WHAT failed, so the reader is never
+// left guessing which of the section's numbers is missing — the detail
+// after it says why.
+const SERVER_INFO_ERROR = "Could not load the server status.";
+const SYSTEM_STATS_ERROR = "Could not load the CPU and RAM figures.";
+
+// Same composition as the store's reportError(): the headline first, the
+// raw error text after it, and no trailing detail when the error carried
+// none of its own.
+function failureMessage(headline: string, err: unknown): string {
+  const detail = describeError(err, "");
+  return detail ? `${headline} ${detail}` : headline;
+}
+
 export function ServerInfoSection() {
   const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [infoError, setInfoError] = useState<string | null>(null);
   const [stats, setStats] = useState<SystemStats | null>(null);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  // A token per probe: each Retry re-runs only its own fetch, so a retry of
+  // the stats probe can't fail the info probe behind the user's back (a
+  // failure of a probe whose data is already on screen has nowhere to go).
+  // Same "bump a token, the effect re-runs" shape CreateProjectModal.tsx
+  // uses for its own retriable fetch.
+  const [infoReloadToken, setInfoReloadToken] = useState(0);
+  const [statsReloadToken, setStatsReloadToken] = useState(0);
 
-  useEffect(() => {
-    api
-      .getServerInfo()
-      .then(setInfo)
-      .catch(() => setInfo(null));
-    // CPU and RAM load on their own; nothing here waits on the disk probes.
-    api
-      .getSystemStats()
-      .then(setStats)
-      .catch(() => setStats(null));
-  }, []);
+  const reloadInfo = () => setInfoReloadToken((n) => n + 1);
+  const reloadStats = () => setStatsReloadToken((n) => n + 1);
 
-  if (!info) return <div className="settings-readonly-value">Loading…</div>;
+  // `null` used to mean BOTH "still loading" and "the request failed", so a
+  // failed fetch rendered "Loading…" forever and the user was told nothing
+  // (audit finding 13). The failures are their own state now, so the section
+  // can say what went wrong and offer a Retry.
+  useAsyncData(
+    () => api.getServerInfo(),
+    (next) => {
+      setInfo(next);
+      setInfoError(null);
+    },
+    (err: unknown) => {
+      setInfoError(failureMessage(SERVER_INFO_ERROR, err));
+    },
+    [infoReloadToken],
+    // Clears the previous failure as the new request starts, so a retry that
+    // succeeds shows the data instead of the old error.
+    { onStart: () => setInfoError(null) },
+  );
+
+  // CPU and RAM load on their own; nothing here waits on the disk probes.
+  useAsyncData(
+    () => api.getSystemStats(),
+    (next) => {
+      setStats(next);
+      setStatsError(null);
+    },
+    (err: unknown) => {
+      setStatsError(failureMessage(SYSTEM_STATS_ERROR, err));
+    },
+    [statsReloadToken],
+    { onStart: () => setStatsError(null) },
+  );
+
+  if (!info) {
+    if (infoError) {
+      return (
+        <>
+          <ErrorText>{infoError}</ErrorText>
+          <div style={{ marginTop: 10 }}>
+            <SecondaryButton onClick={reloadInfo}>Retry</SecondaryButton>
+          </div>
+        </>
+      );
+    }
+    return <div className="settings-readonly-value">Loading…</div>;
+  }
 
   return (
     <>
@@ -47,6 +108,16 @@ export function ServerInfoSection() {
       </div>
 
       <div className="settings-stat-grid">
+        {/* The stats probe is its own, smaller failure: the CPU and RAM
+            cards are simply missing, so the section says so in place
+            rather than going blank. Spans the grid so the other cards
+            (Version, Role, …) keep their own rows. */}
+        {statsError && (
+          <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10 }}>
+            <ErrorText style={{ flex: 1 }}>{statsError}</ErrorText>
+            <SecondaryButton onClick={reloadStats}>Retry</SecondaryButton>
+          </div>
+        )}
         {stats && (
           <>
             <div className="settings-stat-card">

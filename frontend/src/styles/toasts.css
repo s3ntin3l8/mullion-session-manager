@@ -1,0 +1,104 @@
+/* App-wide toast host — the one place a failure becomes visible.
+ *
+ * New section, so it is appended at the END of the cascade (see
+ * styles/index.css's own banner: the @import order is load-bearing and new
+ * sections go where their rules would have lived; an overlay layer belongs
+ * last). Nothing here reorders or overrides an existing rule — the class
+ * names are new.
+ *
+ * The colours come from the existing tokens, so the toast follows the
+ * theme automatically. The error variant tints the BACKGROUND with --r and
+ * keeps --fg for the text, so the message itself is never carried by the
+ * red alone (WCAG 1.4.1) — the border and the icon-shape difference do
+ * that work. */
+
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 32px));
+  /* The container is a live region, not an interactive surface — only the
+     toasts inside it should take clicks, so a stray click on the empty
+     space beside them does not swallow it. */
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px 9px 12px;
+  background: var(--chrome);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--dim);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  pointer-events: auto;
+}
+
+.toast--error {
+  border-left-color: var(--r);
+  background: color-mix(in srgb, var(--r) 14%, var(--chrome));
+}
+
+.toast--success {
+  border-left-color: var(--g);
+}
+
+.toast--info {
+  border-left-color: var(--b);
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  /* A long error message (a raw API error string) must not stretch the
+     toast off the screen. */
+  overflow-wrap: anywhere;
+}
+
+.toast-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -1px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toast-dismiss:hover {
+  background: var(--seg);
+  color: var(--fg);
+}
+
+.toast-dismiss:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
+
+/* The phone tier has no room for a bottom-right stack, and the bottom of
+   the screen is where the phone's own key bar lives. */
+@media (max-width: 700px) {
+  .toast-host {
+    right: 8px;
+    left: 8px;
+    bottom: 8px;
+    align-items: stretch;
+    max-width: none;
+  }
+}
