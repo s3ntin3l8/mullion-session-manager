@@ -325,6 +325,33 @@ describe("GitPanel", () => {
     expect(screen.getByText(/1 fsck error/)).toBeInTheDocument();
   });
 
+  // A project that is not a git repository at all has no clone to be
+  // damaged — "looks damaged" would be the wrong story.
+  it("says the project is not a git repository when there is no clone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: null,
+            zeroByteObjects: [],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: false,
+          }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 14 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/not a git repository/)).toBeInTheDocument();
+    expect(screen.queryByText(/looks damaged/)).toBeNull();
+  });
+
   // A check that could not finish has no verdict. Saying "looks damaged"
   // would send the user to repair a clone that may well be fine.
   it("says the check did not finish when it timed out, rather than that the repository is damaged", async () => {

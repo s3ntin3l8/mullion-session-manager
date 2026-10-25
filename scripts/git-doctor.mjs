@@ -46,10 +46,27 @@ import path from "node:path";
 //
 // The source is tried FIRST: in a checkout it is the truth, and a stale
 // dist/ would silently be an older doctor.
+//
+// The fallback is taken ONLY for "this module does not exist here" — a
+// missing file (a release install) or an extension plain node cannot load (a
+// checkout run without tsx). Any other failure — a syntax error, a broken
+// import inside the source — is rethrown: silently falling back to dist/
+// there would run an OLD doctor over someone's clone and say nothing.
 let runGitDoctor;
 try {
   ({ runGitDoctor } = await import("../src/services/git-doctor.ts"));
-} catch {
+} catch (err) {
+  const code = err?.code;
+  const sourceAbsent = code === "ERR_MODULE_NOT_FOUND" || code === "ERR_UNKNOWN_FILE_EXTENSION";
+  if (!sourceAbsent) {
+    console.error(
+      "git-doctor: the doctor's source module could not be loaded:\n" +
+        `  ${err?.message ?? err}\n` +
+        "  This is not a missing module, so the compiled copy in dist/ is NOT used here —" +
+        " it could be an older doctor.",
+    );
+    process.exit(1);
+  }
   try {
     ({ runGitDoctor } = await import("../dist/services/git-doctor.js"));
   } catch {

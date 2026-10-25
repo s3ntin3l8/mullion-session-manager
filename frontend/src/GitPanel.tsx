@@ -633,6 +633,10 @@ export function GitPanel({
         >
           {health.healthy ? (
             "This repository is healthy."
+          ) : health.gitDir === null ? (
+            // Not a git checkout at all — there is no clone here to be
+            // damaged, so "looks damaged" would be the wrong story.
+            "This project is not a git repository, so there is no clone to check."
           ) : health.timedOut ? (
             <>
               The health check did not finish — <code>git fsck</code> timed out. Nothing was

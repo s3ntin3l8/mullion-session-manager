@@ -122,6 +122,10 @@ describe("git-doctor.mjs", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("--apply");
     expect(result.stdout).toContain("--force");
+    // The help has to cover BOTH ways to run it: a checkout needs tsx, a
+    // release install has the compiled module and no tsx at all.
+    expect(result.stdout).toContain("--import tsx");
+    expect(result.stdout).toContain("release install");
   });
 
   // The clone to work on can be named explicitly, so the doctor can be run
