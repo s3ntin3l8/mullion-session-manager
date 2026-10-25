@@ -100,8 +100,10 @@ async function waitForPatch(autosaved, since, timeoutMs = 15_000, signal) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     // withDemo's header asks a polling step to stop on the abort signal — an
-    // abandoned poll would keep the process alive after teardown.
-    if (signal?.aborted) return false;
+    // abandoned poll would keep the process alive after teardown. Aborting
+    // throws rather than returning false: a run that was cancelled must not be
+    // reported as a failed check.
+    signal?.throwIfAborted();
     if (autosaved.count > since) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
