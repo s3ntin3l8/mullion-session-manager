@@ -661,6 +661,20 @@ From a published release, with no clone at all, use the bootstrap above
 (`sh mullion-install.sh --role agent ~/opt/mullion`) — it runs this same
 `install.sh`, out of the release tarball.
 
+**There is no `.pkg`, and there is not going to be one.** The install model is
+user-level on purpose: the job (`~/Library/LaunchAgents/…`, running as the
+logged-in user) and the CLI link (`~/.local/bin/mullion`) live under the user's
+own home, and the install root and the `.env` follow whatever root the operator
+passes (`~/opt/mullion` in the documented commands) — all of it owned by, and
+writable by, the logged-in user. A `.pkg` is a **system-wide, root-owned**
+install — it would move the job to `/Library/LaunchDaemons` (as root, or with
+`UserName=`), move the `.env` into a root-owned directory, and put the
+**updater** behind a privilege it does not have today, which is the one thing
+that has to keep working unattended. Mullion is deployed on a user-logged-in
+system, so the user-level model is the model, and the packaging follows it
+rather than the other way round. (Tracked and decided in
+[#1867](https://github.com/s3ntin3l8/mullion-session-manager/issues/1867).)
+
 What changes:
 
 - **The job.** `~/Library/LaunchAgents/com.mullion.<role>.plist` is written
