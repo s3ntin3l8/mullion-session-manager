@@ -119,23 +119,101 @@ esac
   // launchctl — the macOS counterpart of the systemctl shim above (issue
   // #1718). Every invocation is appended to launchctl.log so the darwin
   // branch's exact sequence can be asserted without ever touching a real
-  // launchd. `print` is the "is this job loaded?" probe — it reports "not
-  // found" (exit 1) by default, which keeps the bootout-the-other-role
-  // branch out of every test that isn't specifically exercising it.
+  // launchd.
+  //
+  // This one models launchd's STATE, not just exit codes, because the
+  // installer now asks launchd whether a label is still registered (issue
+  // #1924): `launchctl print DOMAIN/LABEL` exits 0 while the label is
+  // registered and non-zero ("Could not find service") once it is not, and
+  // the installer waits for that transition before bootstrapping the label
+  // back. So the shim keeps a set of registered labels:
+  //
+  //   launchctl.loaded  — the labels launchd currently has registered
+  //   launchctl.linger  — "label<TAB>count": a label that was booted out but
+  //                        has NOT finished unloading, and how many more
+  //                        `print` probes it will still report as registered
+  //                        for. That is the real race (issue #1924): bootout
+  //                        returns before the unload completes, so a
+  //                        bootstrap issued immediately afterwards is refused.
+  //
+  // `bootstrap` refuses a label that is still registered, exactly as real
+  // launchd does ("Bootstrap failed: 5: Input/output error") — which is what
+  // makes the race observable here rather than merely described.
+  //
+  // LAUNCHCTL_TEST_LINGER sets how many probes a booted-out label keeps
+  // reporting itself as registered (0 = it disappears at once). The default
+  // is 0 — the fast case every other test wants.
   writeShim(
     binDir,
     "launchctl",
     `#!/usr/bin/env bash
 DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 echo "$*" >> "$DIR/launchctl.log"
-case "$*" in
-  *print*)
-    exit 1
+LOADED="$DIR/launchctl.loaded"
+LINGER="$DIR/launchctl.linger"
+# 0 when the label is not registered, 1 when it is.
+registered() {
+  LABEL="$1"
+  if [ -f "$LINGER" ]; then
+    COUNT="$(awk -F'\\t' -v l="$LABEL" '$1==l {print $2}' "$LINGER")"
+    if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ]; then return 0; fi
+  fi
+  if [ -f "$LOADED" ] && grep -qxF "$LABEL" "$LOADED"; then return 0; fi
+  return 1
+}
+case "$1" in
+  print)
+    LABEL="\${2##*/}"
+    if registered "$LABEL"; then
+      # A lingering label keeps reporting itself as registered for a while
+      # (launchd's unload lagging the bootout's return), so the count ticks
+      # down with each probe.
+      if [ -f "$LINGER" ]; then
+        COUNT="$(awk -F'\\t' -v l="$LABEL" '$1==l {print $2}' "$LINGER")"
+        if [ -n "$COUNT" ] && [ "$COUNT" -gt 0 ]; then
+          awk -F'\\t' -v l="$LABEL" 'BEGIN { OFS="\\t" } $1==l { print $1, $2-1 } $1!=l { print }' "$LINGER" > "$LINGER.tmp"
+          mv "$LINGER.tmp" "$LINGER"
+        fi
+      fi
+      exit 0
+    fi
+    echo "Bad request." >&2
+    echo "Could not find service \\"$LABEL\\" in domain for user gui: 501" >&2
+    exit 113
     ;;
-  *)
+  bootout)
+    LABEL="\${2##*/}"
+    LINGER_COUNT="\${LAUNCHCTL_TEST_LINGER:-0}"
+    if [ "$LINGER_COUNT" -gt 0 ]; then
+      # REPLACE any earlier entry for this label, so a second bootout of the
+      # same label cannot leave two counters behind.
+      if [ -f "$LINGER" ]; then
+        awk -F'\\t' -v l="$LABEL" 'BEGIN { OFS="\\t" } $1!=l { print }' "$LINGER" > "$LINGER.tmp"
+      else
+        : > "$LINGER.tmp"
+      fi
+      printf '%s\\t%s\\n' "$LABEL" "$LINGER_COUNT" >> "$LINGER.tmp"
+      mv "$LINGER.tmp" "$LINGER"
+    fi
+    if [ -f "$LOADED" ]; then
+      grep -vxF "$LABEL" "$LOADED" > "$LOADED.tmp" 2>/dev/null || true
+      mv "$LOADED.tmp" "$LOADED"
+    fi
+    exit 0
+    ;;
+  bootstrap)
+    for last in "$@"; do PLIST="$last"; done
+    LABEL="\${PLIST##*/}"
+    LABEL="\${LABEL%.plist}"
+    if registered "$LABEL"; then
+      echo "Bootstrap failed: 5: Input/output error" >&2
+      exit 5
+    fi
+    echo "$LABEL" >> "$LOADED"
     exit 0
     ;;
 esac
+exit 0
 `,
   );
   // Copying (not symlinking) the real node binary — same reasoning as
@@ -603,6 +681,12 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
         .filter((line) => line.length > 0);
     }
 
+    // Registers a label with the shimmed launchd, so `launchctl print` on it
+    // reports it as still loaded — the state a re-install finds the job in.
+    function seedLoadedLabel(label: string): void {
+      fs.appendFileSync(path.join(binDir, "launchctl.loaded"), `${label}\n`);
+    }
+
     afterEach(() => {
       fs.rmSync(path.join(binDir, "uname"), { force: true });
     });
@@ -702,19 +786,91 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
       expect(bootstrap).toBeGreaterThan(bootout);
     });
 
+    // Issue #1924 — the bootout is NOT enough on its own.
+    //
+    // `launchctl bootout` returns BEFORE launchd has finished unloading the
+    // label, and `launchctl bootstrap` refuses a label that is still
+    // registered. Measured on real hardware, the immediate re-bootstrap
+    // failed about half the time — and because the abort happens after the
+    // plist was overwritten and the running job booted out, the losing side
+    // left the host with NO job loaded at all.
+    it("waits for the label to be unloaded before bootstrapping it back", async () => {
+      writeDarwinShim();
+      // The label is registered (a re-install finds it that way) AND keeps
+      // reporting itself as registered for 3 probes after the bootout —
+      // launchd's own teardown, lagging the bootout's return.
+      seedLoadedLabel("com.mullion.primary");
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const { stdout } = await runScript(["--role", "primary", mullionHome], {
+        env: { LAUNCHCTL_TEST_LINGER: "3" },
+      });
+      expect(stdout).not.toMatch(/still registered/);
+
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      const bootout = log.indexOf(`bootout ${domain}/com.mullion.primary`);
+      const bootstrap = log.findIndex((line) => line.startsWith(`bootstrap ${domain} `));
+      expect(bootout).toBeGreaterThanOrEqual(0);
+      expect(bootstrap).toBeGreaterThan(bootout);
+      // The probes came BETWEEN the bootout and the bootstrap: the installer
+      // asked launchd whether the label was still there, and waited. (Only
+      // the probes BEFORE the bootstrap count — the installer's own status
+      // dump prints the label once more, after it.)
+      const probes = log
+        .slice(bootout, bootstrap)
+        .filter((line) => line === `print ${domain}/com.mullion.primary`);
+      expect(probes.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("fails loudly and does not bootstrap when the label never goes away", async () => {
+      writeDarwinShim();
+      seedLoadedLabel("com.mullion.primary");
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      // The label never finishes unloading. The bootstrap would be refused
+      // with launchd's own opaque "Input/output error" — so the installer
+      // must NOT attempt it, and must say what happened instead.
+      const failure = await runScript(["--role", "primary", mullionHome], {
+        env: { LAUNCHCTL_TEST_LINGER: "9999" },
+      }).then(
+        () => {
+          throw new Error("expected the installer to fail");
+        },
+        (err: Error & { stdout?: string; stderr?: string }) => err,
+      );
+      expect(failure.stderr).toMatch(/still registered/);
+      expect(failure.stderr).toMatch(/com\.mullion\.primary/);
+      expect(failure.stderr).toMatch(/launchctl print/);
+      expect(failure.stdout).not.toMatch(/==> Done\. Status:/);
+
+      // And, the load-bearing part: no bootstrap was attempted at all, so
+      // the host is not left in the state the race used to produce.
+      const log = readLaunchctlLog();
+      expect(log.some((line) => line.startsWith("bootstrap "))).toBe(false);
+    });
+
+    it("does not wait when the label was never loaded (a fresh install)", async () => {
+      // A fresh install has no label to unload, so the wait must cost
+      // nothing: the installer asks once, is told the label is not there,
+      // and bootstraps immediately.
+      writeDarwinShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "primary", mullionHome]);
+      const log = readLaunchctlLog();
+      const domain = `gui/${process.getuid?.() ?? 501}`;
+      const probes = log.filter((line) => line === `print ${domain}/com.mullion.primary`);
+      expect(probes).toHaveLength(2); // the wait's probe, then the status dump
+      const bootstrap = log.findIndex((line) => line.startsWith(`bootstrap ${domain} `));
+      expect(bootstrap).toBeGreaterThan(log.indexOf(`print ${domain}/com.mullion.primary`));
+    });
+
     it("boots out the other role's job when launchd reports it loaded", async () => {
       writeDarwinShim();
-      // Overrides the default shim (which reports `print` as "not found") so
-      // the bootout-the-other-role branch is exercised specifically.
-      writeShim(
-        binDir,
-        "launchctl",
-        `#!/usr/bin/env bash
-DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-echo "$*" >> "$DIR/launchctl.log"
-exit 0
-`,
-      );
+      // Registers the other role's label with the shimmed launchd, so the
+      // bootout-the-other-role branch is exercised specifically.
+      seedLoadedLabel("com.mullion.agent");
       const mullionHome = freshMullionHome();
       skipDownload(mullionHome);
       await runScript(["--role", "primary", mullionHome]);
@@ -751,17 +907,13 @@ exit 0
     }
 
     // Every job reports as loaded, so the other-role teardown is the branch
-    // under test.
+    // under test. The shimmed launchd now models state rather than exit
+    // codes, so "everything is loaded" means registering the label the
+    // installer is about to install AND the one it tears down — the state a
+    // host is in when BOTH roles are installed.
     function writeLoadedLaunchctlShim(): void {
-      writeShim(
-        binDir,
-        "launchctl",
-        `#!/usr/bin/env bash
-DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
-echo "$*" >> "$DIR/launchctl.log"
-exit 0
-`,
-      );
+      seedLoadedLabel("com.mullion.primary");
+      seedLoadedLabel("com.mullion.agent");
     }
 
     // A stub for macOS's plutil — enough for the installer's plist reads

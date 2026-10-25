@@ -35,6 +35,18 @@ let launchctlExitCode = 0;
 let launchctlHangsOn: string[] = [];
 /** How long a given launchctl call takes before it exits, in ms. */
 let launchctlDelaysMs: Record<string, number> = {};
+/**
+ * How many `launchctl print` probes report the label as STILL registered
+ * (exit 0) before the rest report it gone (exit non-zero).
+ *
+ * `launchctl print` is the probe the label wait uses (issue #1924): exit 0
+ * while the label is registered, non-zero ("Could not find service") once
+ * it is not. The default — 0 — is "already gone", which is the common case
+ * (nothing was registered under that label).
+ */
+let launchctlPrintStillRegisteredTimes = 0;
+/** When true, `launchctl print` ALWAYS reports the label as registered. */
+let launchctlPrintNeverGoes = false;
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
@@ -58,6 +70,25 @@ vi.mock("node:child_process", async (importOriginal) => {
       const finish = () => {
         // A hung launchctl: the calls we were told to hang never exit.
         if (command === "launchctl" && launchctlHangsOn.includes(args[0] ?? "")) {
+          return;
+        }
+        // The label probe has its OWN exit status: `print` answers "still
+        // registered" (0) or "gone" (non-zero), which is the opposite
+        // convention from the other launchctl calls.
+        if (command === "launchctl" && args[0] === "print") {
+          const stillRegistered = launchctlPrintNeverGoes
+            ? true
+            : launchctlPrintStillRegisteredTimes > 0;
+          if (launchctlPrintStillRegisteredTimes > 0) launchctlPrintStillRegisteredTimes--;
+          const code = stillRegistered ? 0 : 113;
+          if (!stillRegistered) {
+            child.stderr.emit(
+              "data",
+              Buffer.from('Bad request.\nCould not find service "x" in domain for user gui: 501\n'),
+            );
+          }
+          child.emit("exit", code);
+          child.emit("close", code);
           return;
         }
         if (command === "launchctl" && launchctlExitCode !== 0) {
@@ -122,6 +153,8 @@ describe("spawnSelfUpdate", async () => {
     launchctlExitCode = 0;
     launchctlHangsOn = [];
     launchctlDelaysMs = {};
+    launchctlPrintStillRegisteredTimes = 0;
+    launchctlPrintNeverGoes = false;
   });
 
   afterEach(() => {
@@ -147,12 +180,14 @@ describe("spawnSelfUpdate", async () => {
       );
       expect(result.ok).toBe(true);
 
-      // Two launchctl calls: the bootout of a label a failed previous update
-      // left registered, then the bootstrap of this one.
-      expect(spawnCalls).toHaveLength(2);
+      // Three launchctl calls: the bootout of a label a failed previous
+      // update left registered, the probe that waits for it to actually
+      // unload (issue #1924), then the bootstrap of this one.
+      expect(spawnCalls).toHaveLength(3);
       expect(spawnCalls[0]!.command).toBe("launchctl");
       expect(spawnCalls[0]!.args[0]).toBe("bootout");
-      const call = spawnCalls[1]!;
+      expect(spawnCalls[1]!.args[0]).toBe("print");
+      const call = spawnCalls[2]!;
       expect(call.command).toBe("launchctl");
       expect(call.args[0]).toBe("bootstrap");
       expect(call.args[1]).toBe(`gui/${process.getuid?.() ?? 501}`);
@@ -187,14 +222,121 @@ describe("spawnSelfUpdate", async () => {
         checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
       });
       const calls = spawnCalls.filter((call) => call.command === "launchctl");
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(3);
       expect(calls[0]!.args[0]).toBe("bootout");
       expect(calls[0]!.args[1]).toMatch(/com\.mullion\.update-9\.9\.9$/);
-      expect(calls[1]!.args[0]).toBe("bootstrap");
+      // The wait for the label to actually unload, between the two.
+      expect(calls[1]!.args[0]).toBe("print");
+      expect(calls[1]!.args[1]).toMatch(/com\.mullion\.update-9\.9\.9$/);
+      expect(calls[2]!.args[0]).toBe("bootstrap");
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
   });
+
+  // Issue #1924 — the bootout is NOT enough on its own.
+  //
+  // `launchctl bootout` returns BEFORE launchd has finished unloading the
+  // label, and `launchctl bootstrap` refuses a label that is still
+  // registered. Measured on real hardware, the immediate re-bootstrap
+  // failed about half the time — and the losing side left the host with
+  // NO job loaded at all.
+  it("waits for the label to be unloaded before bootstrapping it back", async () => {
+    setPlatform("darwin");
+    // The label keeps reporting itself as registered for 3 probes after
+    // the bootout — launchd's own teardown, lagging the bootout's return.
+    launchctlPrintStillRegisteredTimes = 3;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-unload-wait-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      // The update still starts: the wait ends when the label is really
+      // gone, and the bootstrap then succeeds.
+      expect(result.ok).toBe(true);
+
+      const calls = spawnCalls.filter((call) => call.command === "launchctl");
+      const probeIndexes = calls
+        .map((call, index) => ({ call, index }))
+        .filter((entry) => entry.call.args[0] === "print")
+        .map((entry) => entry.index);
+      const bootoutIndex = calls.findIndex((call) => call.args[0] === "bootout");
+      const bootstrapIndex = calls.findIndex((call) => call.args[0] === "bootstrap");
+      // More than one probe: the first said "still registered".
+      expect(probeIndexes.length).toBeGreaterThanOrEqual(2);
+      expect(probeIndexes[0]!).toBeGreaterThan(bootoutIndex);
+      expect(probeIndexes[probeIndexes.length - 1]!).toBeLessThan(bootstrapIndex);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not start the update when the label never unloads", async () => {
+    setPlatform("darwin");
+    // The label never finishes unloading. The bootstrap would be refused
+    // with launchd's own opaque "Input/output error" — so the update must
+    // NOT start, and must say why instead.
+    launchctlPrintNeverGoes = true;
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-never-unloads-"));
+    try {
+      stubSelfUpdateScript(home);
+      const startedAt = Date.now();
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      const elapsed = Date.now() - startedAt;
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      expect(asFailure(result).message).toMatch(/still registered/);
+      expect(asFailure(result).message).toMatch(/com\.mullion\.update-9\.9\.9/);
+      // And the load-bearing part: the bootstrap was never attempted, so
+      // the host is not left in the state the race used to produce.
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(0);
+      // The wait is bounded by the shared deadline, not the test's timeout.
+      expect(elapsed).toBeLessThan(15_000);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it("does not start the update when the label probe never answers", async () => {
+    // The load-bearing distinction: a probe that NEVER RAN is not the same
+    // as a probe that ran and said "the label is gone". Reading the first
+    // as the second would let the bootstrap through on no evidence at all —
+    // and the bootstrap would then be refused by launchd with the very
+    // opaque error this wait exists to prevent.
+    setPlatform("darwin");
+    launchctlHangsOn = ["print"];
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-probe-hung-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      // The message says the probe never answered — NOT that the label is
+      // gone, and not that it is still registered.
+      expect(asFailure(result).message).toMatch(/probe never answered/);
+      expect(asFailure(result).message).not.toMatch(/still registered when the wait ran out/);
+      // And the bootstrap was never attempted: nothing was proved, so
+      // nothing was started.
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(0);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
 
   it("reports a launchctl refusal instead of claiming the update started", async () => {
     // A refusal that is swallowed would be a 202 and a UI that says

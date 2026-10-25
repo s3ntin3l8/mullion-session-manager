@@ -784,7 +784,27 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
   # leaving the old definition loaded. Boot the label out first: that is
   # what makes this idempotent, the way the systemd branch's
   # `daemon-reload` + `enable --now` is.
+  #
+  # The bootout alone is not enough, though: `launchctl bootout` returns
+  # BEFORE launchd has finished unloading the label, and `bootstrap` refuses
+  # a label that is still registered. Without the wait below, a re-install is
+  # a coin flip — and the losing side leaves the host with NO job loaded at
+  # all, because the abort happens after the plist was overwritten and the
+  # running job booted out (issue #1924).
+  #
+  # How long to wait for the unload, in tenths of a second. The unload was
+  # measured at well under a second on real hardware, so this is a wide
+  # margin — but a host whose launchd is slower than that would otherwise be
+  # stuck, so the number is named here (the ERROR below quotes it) rather
+  # than buried in the helper's default.
+  LAUNCHD_UNLOAD_WAIT_TENTHS=50
   launchctl bootout "$(launchd_gui_domain)/$LABEL" 2>/dev/null || true
+  if ! launchd_wait_label_gone "$(launchd_gui_domain)/$LABEL" "$LAUNCHD_UNLOAD_WAIT_TENTHS"; then
+    echo "ERROR: $LABEL is still registered after being booted out — not loading it back." >&2
+    echo "       It was given $((LAUNCHD_UNLOAD_WAIT_TENTHS / 10))s to unload. If this host's launchd is slower than that, re-running this installer will try again." >&2
+    echo "       Check it by hand: launchctl print $(launchd_gui_domain)/$LABEL" >&2
+    exit 1
+  fi
   launchctl bootstrap "$(launchd_gui_domain)" ~/Library/LaunchAgents/"$LABEL.plist"
   launchctl enable "$(launchd_gui_domain)/$LABEL"
 

@@ -683,6 +683,15 @@ gui/$UID <plist>` + `launchctl enable`. The job is booted out first (that is
   what makes a re-run work: `launchctl bootstrap` refuses an already-loaded
   label), and so is the other role's job — both roles load the same `.env`
   and bind the same port.
+  The bootout alone is not quite enough: `launchctl bootout` returns
+  **before** launchd has finished unloading the label, and `bootstrap` refuses
+  a label that is still registered ("Bootstrap failed: 5: Input/output
+  error"). So the installer waits for the label to actually be gone before
+  loading it back (`launchd_wait_label_gone` in `scripts/portable.sh`, which
+  polls `launchctl print` — its exit status is the answer). Without that
+  wait, a re-install is a coin flip, and the losing side leaves the host
+  with **no job loaded at all**, because the abort happens after the plist
+  was overwritten and the running job booted out ([#1924](https://github.com/s3ntin3l8/mullion-session-manager/issues/1924)).
 - **The PATH.** The app spawns `dtach` by bare name, but a launchd job's
   default PATH is only `/usr/bin:/bin:/usr/sbin:/sbin` — where a Homebrew
   dtach is not. The installer resolves `dtach`'s real directory and writes a
