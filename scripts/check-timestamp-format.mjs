@@ -28,11 +28,17 @@
 // contents" is a `scripts/check-*` node script wired into `npm run lint`
 // (see check-token-contrast.mjs, check-phone-palette.mjs and
 // check-aria-haspopup.mjs, whose header comments say the same thing).
+// Its own test therefore lives in the ROOT test tree
+// (test/scripts/check-timestamp-format.test.ts), which has node types.
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// The root is overridable so the guard can be driven against a fixture tree
+// by its own test (precedent: check-token-contrast.mjs).
+const ROOT = path.resolve(
+  process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
+);
 const SRC = path.join(ROOT, "frontend", "src");
 
 // The shared time module — where an absolute formatter belongs, and the one
@@ -61,23 +67,37 @@ function collectSourceFiles(dir, fileList = []) {
 // A comment is prose, not a call — and this repo's own comments quote the
 // call they are talking about, so reading comments would fail on the
 // explanation.
-const stripComments = (content) =>
+//
+// A string literal is prose too: the app never formats a date through one,
+// and a literal that merely mentions the method (a copy-pasteable snippet,
+// say) must not fail the lint step.
+//
+// A template literal WITH an interpolation is left intact: its `${...}`
+// part is real code, and a date could genuinely be formatted there.
+const blank = (match) => match.replace(/[^\r\n]/g, " ");
+
+const stripProse = (content) =>
   content.replace(
-    /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/g,
-    (match, _str, comment) => (comment ? match.replace(/[^\r\n]/g, " ") : match),
+    /("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\$]|\\.)*`)|(`(?:[^`\\]|\\.)*`)|(\/\*[\s\S]*?\*\/|\/\/[^\r\n]*)/g,
+    (match, plainText, templateWithCode, comment) => (comment || plainText ? blank(match) : match),
   );
 
 const RAW_DATE_FORMAT = /\.toLocale(?:Time|Date)String\s*\(/g;
 
+// The file is scanned as a whole, not line by line: a call whose name and
+// paren sit on different lines (`toLocaleTimeString` on one line, `(` on
+// the next) is still a call, and a line-by-line scan would miss it.
 const offenders = [];
 for (const file of collectSourceFiles(SRC)) {
   if (file === SHARED_TIME_MODULE) continue;
-  const content = stripComments(readFileSync(file, "utf8"));
-  content.split("\n").forEach((line, i) => {
-    RAW_DATE_FORMAT.lastIndex = 0;
-    if (!RAW_DATE_FORMAT.test(line)) return;
-    offenders.push(`${path.relative(ROOT, file)}:${i + 1}: ${line.trim()}`);
-  });
+  const content = stripProse(readFileSync(file, "utf8"));
+  const lines = content.split("\n");
+  for (const match of content.matchAll(RAW_DATE_FORMAT)) {
+    const lineNumber = content.slice(0, match.index).split("\n").length;
+    offenders.push(
+      `${path.relative(ROOT, file)}:${lineNumber}: ${lines[lineNumber - 1]?.trim() ?? ""}`,
+    );
+  }
 }
 
 if (offenders.length > 0) {
