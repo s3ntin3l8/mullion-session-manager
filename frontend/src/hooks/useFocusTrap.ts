@@ -156,5 +156,10 @@ export function useFocusTrap({
     suppressRestore: () => {
       suppressRestoreRef.current = true;
     },
+    // The node this trap will return focus to. A caller about to destroy
+    // that node (a workspace switch replaces the grid the opener often
+    // lives in) can aim somewhere else instead of restoring into an element
+    // that's about to unmount and drop focus on <body>.
+    restoreTarget: () => lastFocusedRef.current,
   };
 }
