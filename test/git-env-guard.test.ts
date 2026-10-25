@@ -17,7 +17,10 @@ const ROOT = path.resolve(__dirname, "..");
 // `matchAll` over a statement.
 const SPAWN_CALL = /\b\w*(execFile|exec|spawn)\w*\s*\(/;
 const SPAWN_CALL_G = /\b\w*(execFile|exec|spawn)\w*\s*\(/g;
-const GIT_LITERAL = /^\s*["']git["']\s*$/;
+// A backtick counts too: a future `spawnChild(`git`, …)` would otherwise
+// slip past the scan, and `seen >= 30` would still pass with a new site
+// added alongside.
+const GIT_LITERAL = /^\s*["'`]git["'`]\s*$/;
 
 /**
  * The first argument of the call that starts at `from` — up to the next
