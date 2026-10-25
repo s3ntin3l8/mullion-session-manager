@@ -146,6 +146,11 @@ export function contrast(a, b) {
  * nobody ever sees.
  *
  * @param {Array<{r:number,g:number,b:number,a:number}|null>} layers
+ * @returns {{r:number,g:number,b:number,a:number}} the composited colour —
+ *   white when there is nothing painted. Never null: the filter drops the
+ *   null layers, and `over` only ever returns an object. (Without this
+ *   annotation the inferred type carries the layers' own `| null` through,
+ *   and every caller has to null-check a value that cannot be null.)
  */
 export function compositeLayers(layers) {
   const painted = (layers ?? []).filter((c) => c && c.a > 0);

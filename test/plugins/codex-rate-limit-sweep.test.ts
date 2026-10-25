@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
 import { detectCodexRateLimits } from "../../src/services/codex-rate-limit.js";
+import type { StopFailureHookMessage } from "../../src/services/hook-protocol.js";
 
 function rolloutWithError(error: Record<string, unknown>): string {
   return `${JSON.stringify({
@@ -79,7 +80,10 @@ describe("detectCodexRateLimits (issue #1734)", () => {
     await detectCodexRateLimits(app);
 
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [sessionId, message] = emitSpy.mock.calls[0] as [string, Record<string, unknown>];
+    // The emitted message IS the stop_failure shape (asserted right below) —
+    // narrow the spy's call tuple to it, so `errorType`/`error` are typed
+    // instead of the old blanket `Record<string, unknown>`.
+    const [sessionId, message] = emitSpy.mock.calls[0] as [string, StopFailureHookMessage];
     expect(sessionId).toBe("17341");
     expect(message.kind).toBe("stop_failure");
     // The exact string task-rate-limit-grace.ts keys off.

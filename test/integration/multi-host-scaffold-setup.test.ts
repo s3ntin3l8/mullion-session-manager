@@ -94,7 +94,7 @@ const { buildApp } = await import("../../src/app.js");
 const AGENT_TOKEN = "integration-scaffold-setup-agent-token";
 
 async function buildAndListen(env: Record<string, string>) {
-  const withSessionsDir = {
+  const withSessionsDir: Record<string, string> = {
     SESSIONS_DIR: path.join(
       os.tmpdir(),
       `multi-host-scaffold-setup-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,

@@ -7,8 +7,48 @@ import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "../../src/services/git-worktree.js";
+import type { SessionBackend } from "../../src/services/session-backend.js";
 import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+
+// `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
+// remote backend has to satisfy all of it — a fake missing members would
+// fail at runtime with a TypeError that reads like a product bug rather
+// than a test-double gap. The members these tests never exercise are inert
+// stubs; the ones they do are passed in as overrides.
+function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend {
+  return {
+    spawn: vi.fn().mockResolvedValue({}),
+    liveStatus: vi.fn().mockResolvedValue({}),
+    liveness: vi.fn().mockResolvedValue({}),
+    terminate: vi.fn().mockResolvedValue(undefined),
+    getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    listSessionProcesses: vi.fn().mockResolvedValue([]),
+    uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
+    uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
+    resolveReviewGate: vi.fn().mockResolvedValue(false),
+    acknowledgeAttention: vi.fn().mockResolvedValue(false),
+    createWorktree: vi.fn().mockResolvedValue(null),
+    checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+    removeWorktree: vi.fn().mockResolvedValue(false),
+    syncWorktree: vi.fn().mockResolvedValue(false),
+    resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+    listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+    stashSeed: vi.fn().mockResolvedValue(undefined),
+    resolvePendingPromote: vi.fn().mockResolvedValue(false),
+    removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+    pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+    clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    deleteBranch: vi.fn().mockResolvedValue({ deleted: false, reason: "no-such-branch" }),
+    removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-listed" }),
+    pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
+    readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+    deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+    resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
+    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+    ...overrides,
+  };
+}
 
 // Claiming a task spawns a real session (routes/tasks.ts's claim endpoint
 // reuses session-lifecycle.ts's createSessionRecord) — faked the same way
@@ -489,7 +529,7 @@ describe("tasks route", () => {
       const session = outcome.session;
       expect(session.projectId).toBe(projectId);
       expect(session.cwd).toBe(predictedCwd);
-      expect(fs.existsSync(session.cwd)).toBe(true);
+      expect(fs.existsSync(session.cwd!)).toBe(true);
 
       const listed = await app.inject({ method: "GET", url: "/api/tasks" });
       const dispatched = (
@@ -499,6 +539,7 @@ describe("tasks route", () => {
           sessionId: number;
           worktreePath: string | null;
           branchName: string | null;
+          claimedAt: string | null;
         }[]
       ).find((t) => t.id === task.id);
       expect(dispatched).toMatchObject({
@@ -507,7 +548,7 @@ describe("tasks route", () => {
         worktreePath: session.cwd,
         branchName,
       });
-      expect((dispatched as { claimedAt: string | null }).claimedAt).not.toBeNull();
+      expect(dispatched!.claimedAt).not.toBeNull();
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
@@ -809,7 +850,7 @@ describe("tasks route", () => {
       const { createWorktree, removeWorktreeIfClean } =
         await import("../../src/services/git-worktree.js");
       const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
-      if (!created) throw new Error("test setup: failed to create worktree");
+      if (!created?.path) throw new Error("test setup: failed to create worktree");
       fs.writeFileSync(path.join(created.path, "work.txt"), "real committed work");
       git(created.path, ["add", "-A"]);
       git(created.path, ["commit", "-m", "agent did real work", "--no-verify"]);
@@ -1710,7 +1751,7 @@ describe("tasks route", () => {
     // adapter supports it locally.
     it("does not trust seedDelivered:true for a remote host that never confirms the re-seed prompt was applied (version skew)", async () => {
       const sessionBackendModule = await import("../../src/services/session-backend.js");
-      const fakeBackend = {
+      const fakeBackend = fakeSessionBackend({
         spawn: vi.fn().mockResolvedValue({}),
         liveStatus: vi.fn().mockResolvedValue({}),
         liveness: vi.fn().mockResolvedValue({}),
@@ -1727,7 +1768,7 @@ describe("tasks route", () => {
         removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
         pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
         clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
-      };
+      });
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
         .mockReturnValue(fakeBackend);
@@ -2532,7 +2573,13 @@ describe("tasks route", () => {
         .all();
 
       const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
-      const listed = (listRes.json() as Array<{ id: number }>).find((t) => t.id === row.id);
+      const listed = (
+        listRes.json() as Array<{
+          id: number;
+          mergeRequestedAt: string | null;
+          releaseRequestedAt: string | null;
+        }>
+      ).find((t) => t.id === row.id);
       expect(listed).toMatchObject({
         mergeError: "conflicts with main",
         releaseError: "no open release-please PR yet",
@@ -3137,7 +3184,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "closed", labels: ["mullion-task"] });
+          .mockResolvedValue({ state: "closed", labels: ["mullion-task"], isPullRequest: false });
 
         const row = await createLinkedFailedTask(app, cwd, 601);
         const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
@@ -3167,7 +3214,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "closed", labels: [] });
+          .mockResolvedValue({ state: "closed", labels: [], isPullRequest: false });
 
         const projectId = await createProject(app, cwd);
         const [row] = app.db
@@ -3203,7 +3250,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "open", labels: ["bug"] });
+          .mockResolvedValue({ state: "open", labels: ["bug"], isPullRequest: false });
 
         const row = await createLinkedFailedTask(app, cwd, 602);
         const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
@@ -3220,7 +3267,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"], isPullRequest: false });
 
         const row = await createLinkedFailedTask(app, cwd, 603);
         const res = await app.inject({ method: "DELETE", url: `/api/tasks/${row.id}` });
@@ -3502,7 +3549,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "closed", labels: ["mullion-done"] });
+          .mockResolvedValue({ state: "closed", labels: ["mullion-done"], isPullRequest: false });
 
         const projectId = await createProject(app, cwd);
         const [row] = app.db
@@ -3541,7 +3588,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"], isPullRequest: false });
 
         const projectId = await createProject(app, cwd);
         const [row] = app.db
@@ -3669,7 +3716,7 @@ describe("tasks route", () => {
         const githubWrite = await import("../../src/services/github-write.js");
         const getIssueStateSpy = vi
           .spyOn(githubWrite, "getIssueState")
-          .mockResolvedValue({ state: "open", labels: ["mullion-task"] });
+          .mockResolvedValue({ state: "open", labels: ["mullion-task"], isPullRequest: false });
 
         const projectId = await createProject(app, cwd);
         const [row] = app.db

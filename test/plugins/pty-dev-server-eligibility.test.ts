@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { sql } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
@@ -37,7 +38,10 @@ describe("findEligibleDevServerSessions — the session's own host decides eligi
   beforeEach(() => {
     app.db.delete(sessions).run();
     app.db.delete(projects).run();
-    app.db.delete(hosts).where("id != 'local'").run();
+    app.db
+      .delete(hosts)
+      .where(sql`id != 'local'`)
+      .run();
   });
 
   function seedProject(hostId: string): number {

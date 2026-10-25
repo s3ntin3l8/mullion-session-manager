@@ -68,6 +68,9 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     const active = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-active" });
     expect(orphan).not.toBeNull();
     expect(active).not.toBeNull();
+    // `path` is only set when the creation actually succeeded — it did.
+    const orphanPath = orphan!.path!;
+    const activePath = active!.path!;
 
     // Inserted directly via app.db, never through app.inject(...) — inject()
     // itself triggers fastify's ready lifecycle, which would fire this
@@ -86,15 +89,15 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
         projectId: project.id,
         title: "active task",
         status: "claimed",
-        worktreePath: active!.path,
+        worktreePath: activePath,
       })
       .run();
 
     await app.ready();
-    await waitUntil(() => !fs.existsSync(orphan!.path));
+    await waitUntil(() => !fs.existsSync(orphanPath));
 
-    expect(fs.existsSync(orphan!.path)).toBe(false);
-    expect(fs.existsSync(active!.path)).toBe(true);
+    expect(fs.existsSync(orphanPath)).toBe(false);
+    expect(fs.existsSync(activePath)).toBe(true);
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
@@ -110,6 +113,10 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     expect(orphan).not.toBeNull();
     expect(freshRebase).not.toBeNull();
     expect(staleRebase).not.toBeNull();
+    // `path` is only set when the creation actually succeeded — it did.
+    const orphanPath = orphan!.path!;
+    const freshRebasePath = freshRebase!.path!;
+    const staleRebasePath = staleRebase!.path!;
 
     const app = await buildTestApp();
     const [project] = app.db
@@ -124,7 +131,7 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
           projectId: project.id,
           title: "fresh rebase attempt",
           status: "done",
-          worktreePath: freshRebase!.path,
+          worktreePath: freshRebasePath,
           mergeRequestedAt: new Date(),
           rebaseStartedAt: new Date(),
         },
@@ -132,7 +139,7 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
           projectId: project.id,
           title: "stale rebase attempt",
           status: "done",
-          worktreePath: staleRebase!.path,
+          worktreePath: staleRebasePath,
           mergeRequestedAt: new Date(),
           rebaseStartedAt: new Date(Date.now() - 31 * 60_000),
         },
@@ -144,11 +151,11 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
       // Waits for BOTH removals, not just the orphan's — pruneWorktrees may
       // process its orphan list in an order/timing where the stale rebase
       // attempt hasn't been removed yet the instant the sentinel orphan has.
-      await waitUntil(() => !fs.existsSync(orphan!.path) && !fs.existsSync(staleRebase!.path));
+      await waitUntil(() => !fs.existsSync(orphanPath) && !fs.existsSync(staleRebasePath));
 
-      expect(fs.existsSync(orphan!.path)).toBe(false);
-      expect(fs.existsSync(freshRebase!.path)).toBe(true);
-      expect(fs.existsSync(staleRebase!.path)).toBe(false);
+      expect(fs.existsSync(orphanPath)).toBe(false);
+      expect(fs.existsSync(freshRebasePath)).toBe(true);
+      expect(fs.existsSync(staleRebasePath)).toBe(false);
     } finally {
       // Unlike this file's other tests, this project's row is deleted here —
       // its default ("local") hostId otherwise lingers in the shared tmpDb
@@ -178,12 +185,14 @@ describe("taskWatcherPlugin: boot-time orphan worktree sweep (6.8/#283)", () => 
     // race that happened to pass.
     const orphan = await createWorktree({ cwd, baseRef: "main", seed: "mullion/task-sentinel" });
     expect(orphan).not.toBeNull();
+    // `path` is only set when the creation actually succeeded — it did.
+    const orphanPath = orphan!.path!;
 
     const app = await buildTestApp();
     app.db.insert(projects).values({ name: "boot-sweep-preview-p", cwd }).run();
 
     await app.ready();
-    await waitUntil(() => !fs.existsSync(orphan!.path));
+    await waitUntil(() => !fs.existsSync(orphanPath));
 
     expect(fs.existsSync(preview!.path)).toBe(true);
     fs.rmSync(cwd, { recursive: true, force: true });

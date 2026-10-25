@@ -1,5 +1,34 @@
 import { describe, it, expect, vi } from "vitest";
-import { TOOLS } from "../../src/mcp/tools.mjs";
+import { TOOLS as INFERRED_TOOLS } from "../../src/mcp/tools.mjs";
+
+/**
+ * tools.mjs is plain JS, so the registry is typed by INFERENCE: `TOOLS` is
+ * a union of the individual tool objects and every tool declares its own
+ * `inputSchema`, so `inputSchema.properties` is the union of all of them
+ * and a property only exists on the tools that declare it. This is the
+ * registry's documented contract (name / description / inputSchema /
+ * handler) with the JSON-schema fields the assertions reach for.
+ */
+type JsonSchemaProperty = {
+  type?: string;
+  enum?: unknown[];
+  description?: string;
+};
+
+type ToolInputSchema = {
+  type: string;
+  required?: string[];
+  properties: Record<string, JsonSchemaProperty>;
+};
+
+type Tool = {
+  name: string;
+  description: string;
+  inputSchema: ToolInputSchema;
+  handler(args: unknown, client: unknown): Promise<string>;
+};
+
+const TOOLS = INFERRED_TOOLS as Tool[];
 
 // Issue #271 — unit tests for the `mullion mcp` tool registry against a
 // fake MullionClient (real transport is covered by client.test.ts) — the

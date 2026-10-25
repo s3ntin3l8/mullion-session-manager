@@ -228,7 +228,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 // gated on resolveMullionBundleDir() finding nothing in a dev checkout) then
 // applies exactly as it would on a fresh, real install.
 const uninstallBundleContentMock = vi.fn(async () => ({ removed: 0, legacySwept: 0 }));
-const runBundleSyncExclusiveMock = vi.fn(async () => ({ changed: true }));
+const runBundleSyncExclusiveMock = vi.fn(async (_enabled: boolean) => ({ changed: true }));
 vi.mock("../../src/services/bundle-sync.js", () => ({
   uninstallBundleContent: () => uninstallBundleContentMock(),
   runBundleSyncExclusive: (enabled: boolean) => runBundleSyncExclusiveMock(enabled),

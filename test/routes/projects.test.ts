@@ -12,6 +12,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as HermesReview from "../../src/services/hermes-review.js";
+import type { RelayReviewState } from "../../src/shared/types.js";
 // The mocked module's own value import (see the vi.mock above) — a test
 // asserts on the run lookup with it.
 import {
@@ -2569,7 +2570,7 @@ describe("projects route", () => {
         });
 
         describe("the list routes never wait on GitHub for the relay's state (#1744)", () => {
-          const listedPr = (relayReview?: Record<string, unknown>) => ({
+          const listedPr = (relayReview?: RelayReviewState) => ({
             number: 41,
             title: "PR 41",
             htmlUrl: "https://github.com/acme/widgets/pull/41",
@@ -2594,7 +2595,7 @@ describe("projects route", () => {
             ...(relayReview ? { relayReview } : {}),
           });
 
-          async function seed(relayReview?: Record<string, unknown>) {
+          async function seed(relayReview?: RelayReviewState) {
             const { setRepoPRsStatus } = await import("../../src/services/github.js");
             setRepoPRsStatus("acme", "widgets", {
               prs: [listedPr(relayReview)],
@@ -2626,7 +2627,7 @@ describe("projects route", () => {
           it("serves the poller's annotation without a single review lookup", async () => {
             vi.mocked(getReviewRunForPr).mockReturnValue(relayRun);
             const landed = {
-              state: "landed",
+              state: "landed" as const,
               runId: "run_1",
               dispatchedAt: new Date(relayRun.dispatchedAt).toISOString(),
               landedChecked: true,

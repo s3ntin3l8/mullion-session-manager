@@ -136,8 +136,12 @@ describe("project-config", () => {
       fs.mkdirSync(path.join(tmpDir, ".crs"), { recursive: true });
       fs.writeFileSync(path.join(tmpDir, ".crs", "actions.json"), "{not valid json");
 
-      expect(() => resolveProjectActions(tmpDir)).not.toThrow();
-      expect(resolveProjectActions(tmpDir)).toEqual([]);
+      // The closure below cannot see the narrowing of `tmpDir` (a `let`
+      // captured by a callback widens back to its declared type), so the
+      // directory is captured in a const first.
+      const dir = tmpDir;
+      expect(() => resolveProjectActions(dir)).not.toThrow();
+      expect(resolveProjectActions(dir)).toEqual([]);
     });
 
     it("skips individual malformed action entries but keeps valid ones", () => {
@@ -200,7 +204,8 @@ describe("project-config", () => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "project-config-test-"));
       // No real ~/.config/crs/dock.json is expected to exist in CI/dev — just
       // confirm this doesn't throw and returns an empty/best-effort result.
-      expect(() => resolveProjectDock(tmpDir, "~/.config/crs-nonexistent-test-dir")).not.toThrow();
+      const dir = tmpDir;
+      expect(() => resolveProjectDock(dir, "~/.config/crs-nonexistent-test-dir")).not.toThrow();
     });
 
     // Issue #822 — this is the lenient READ-side counterpart to

@@ -1,4 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+  vi,
+  type MockedFunction,
+} from "vitest";
 import {
   CONTROL_SOCKET_VIA_HEADER,
   CONTROL_SOCKET_VIA_TOKEN,
@@ -19,6 +28,7 @@ import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import type { SessionBackend } from "../../src/services/session-backend.js";
 
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/services/pty-manager.test.ts,
@@ -38,7 +48,12 @@ vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 // child_process one), not the attach client's node-pty spawn, so the mock's
 // calls have to be reachable from the test. Hoisted into a variable for
 // that; the mock itself is unchanged.
-const childProcessMock = vi.hoisted(() => ({ spawn: undefined as unknown }));
+const childProcessMock = vi.hoisted(() => ({
+  // The helper's fake IS a vi.fn (mock-spawn.ts's own header says so), but
+  // it hands the fake back typed as the module's `spawn` — so `vi.mocked()`
+  // is what re-exposes the mock's `.mock.calls` to the tests below.
+  spawn: undefined as unknown as MockedFunction<typeof ChildProcess.spawn>,
+}));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   // Issue #271's worktree tests need real `git` subprocesses (git-worktree.ts's
@@ -46,9 +61,40 @@ vi.mock("node:child_process", async (importOriginal) => {
   // systemd-run/dtach bootstrap child_process.spawn call (pty-manager.ts's
   // bootstrapMaster) is faked, same reasoning as node-pty's mock above.
   const mocked = mockChildProcessSpawn(actual, { passthrough: ["git"] });
-  childProcessMock.spawn = mocked.spawn;
+  childProcessMock.spawn = vi.mocked(mocked.spawn);
   return mocked;
 });
+
+// node's `spawn` is typed as returning a ChildProcess, but the fake child
+// the spawn-failure tests below install is an EventEmitter that only ever
+// emits an event — the code under test (pty-manager.ts's bootstrapMaster)
+// reads nothing else off it. This is the ChildProcess surface, filled in
+// with the values a child that never really spawned would report: no
+// piped stdio, no pid, not connected, and the process-control methods as
+// no-ops.
+function fakeChildProcess(ee: EventEmitter): ChildProcess.ChildProcess {
+  const stdio: ChildProcess.ChildProcess["stdio"] = [null, null, null, undefined, undefined];
+  return Object.assign(ee, {
+    stdin: null,
+    stdout: null,
+    stderr: null,
+    channel: undefined,
+    stdio,
+    killed: false,
+    pid: undefined,
+    connected: false,
+    exitCode: null,
+    signalCode: null,
+    spawnargs: [],
+    spawnfile: "",
+    kill: () => true,
+    send: () => false,
+    disconnect: () => {},
+    unref: () => {},
+    ref: () => {},
+    [Symbol.dispose]: () => {},
+  });
+}
 
 // Issue #271 follow-up — opencode-session-transfer.ts's own subprocess calls
 // (`opencode export`/`import`) would otherwise hit the generic
@@ -76,6 +122,45 @@ const tmpDb = path.join(os.tmpdir(), `sessions-test-${process.pid}.db`);
 // hardening), not just the Content-Type header, so a happy-path upload test
 // needs a real signature, not an arbitrary string.
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+
+// `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
+// remote backend has to satisfy all of it — a fake missing members would
+// fail at runtime with a TypeError that reads like a product bug rather
+// than a test-double gap. The members these tests never exercise are inert
+// stubs; the ones they do are passed in as overrides.
+function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend {
+  return {
+    spawn: vi.fn().mockResolvedValue({}),
+    liveStatus: vi.fn().mockResolvedValue({}),
+    liveness: vi.fn().mockResolvedValue({}),
+    terminate: vi.fn().mockResolvedValue(undefined),
+    getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    listSessionProcesses: vi.fn().mockResolvedValue([]),
+    uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload.png" }),
+    uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
+    resolveReviewGate: vi.fn().mockResolvedValue(false),
+    acknowledgeAttention: vi.fn().mockResolvedValue(false),
+    createWorktree: vi.fn().mockResolvedValue({ created: false, reason: "not-a-repo" }),
+    checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
+    removeWorktree: vi.fn().mockResolvedValue(false),
+    syncWorktree: vi.fn().mockResolvedValue(false),
+    resumeTaskWorktree: vi.fn().mockResolvedValue(null),
+    listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
+    stashSeed: vi.fn().mockResolvedValue(undefined),
+    resolvePendingPromote: vi.fn().mockResolvedValue(false),
+    removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
+    pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
+    clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    deleteBranch: vi.fn().mockResolvedValue({ deleted: false, reason: "no-such-branch" }),
+    removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-listed" }),
+    pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
+    readTaskReviewFindings: vi.fn().mockResolvedValue(null),
+    deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
+    resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
+    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+    ...overrides,
+  };
+}
 
 async function waitUntil(check: () => boolean | Promise<boolean>) {
   for (let i = 0; i < 50; i++) {
@@ -2515,7 +2600,7 @@ describe("sessions route", () => {
 
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
         vi.mocked(spawnChildProcess).mockImplementation(
-          (command: string, args?: readonly string[], options?: object) => {
+          (command: string, args: readonly string[], options: ChildProcess.SpawnOptions) => {
             // Simulate a real local-spawn failure — missing systemd-run, a
             // scope-name collision, whatever the real cause — by making the
             // master-bootstrap subprocess exit non-zero. Everything else
@@ -2523,7 +2608,7 @@ describe("sessions route", () => {
             if (command === "systemd-run") {
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
-              return ee;
+              return fakeChildProcess(ee);
             }
             return originalSpawnImpl!(command, args, options);
           },
@@ -2589,11 +2674,11 @@ describe("sessions route", () => {
 
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
         vi.mocked(spawnChildProcess).mockImplementation(
-          (command: string, args?: readonly string[], options?: object) => {
+          (command: string, args: readonly string[], options: ChildProcess.SpawnOptions) => {
             if (command === "systemd-run") {
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
-              return ee;
+              return fakeChildProcess(ee);
             }
             return originalSpawnImpl!(command, args, options);
           },
@@ -2642,11 +2727,11 @@ describe("sessions route", () => {
 
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
         vi.mocked(spawnChildProcess).mockImplementation(
-          (command: string, args?: readonly string[], options?: object) => {
+          (command: string, args: readonly string[], options: ChildProcess.SpawnOptions) => {
             if (command === "systemd-run") {
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
-              return ee;
+              return fakeChildProcess(ee);
             }
             return originalSpawnImpl!(command, args, options);
           },
@@ -2880,12 +2965,12 @@ describe("sessions route", () => {
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
         let failNextSpawn = true;
         vi.mocked(spawnChildProcess).mockImplementation(
-          (command: string, args?: readonly string[], options?: object) => {
+          (command: string, args: readonly string[], options: ChildProcess.SpawnOptions) => {
             if (command === "systemd-run" && failNextSpawn) {
               failNextSpawn = false;
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
-              return ee;
+              return fakeChildProcess(ee);
             }
             return originalSpawnImpl!(command, args, options);
           },
@@ -3092,12 +3177,12 @@ describe("sessions route", () => {
         const originalSpawnImpl = vi.mocked(spawnChildProcess).getMockImplementation();
         let failNextSpawn = true;
         vi.mocked(spawnChildProcess).mockImplementation(
-          (command: string, args?: readonly string[], options?: object) => {
+          (command: string, args: readonly string[], options: ChildProcess.SpawnOptions) => {
             if (command === "systemd-run" && failNextSpawn) {
               failNextSpawn = false;
               const ee = new EventEmitter();
               setImmediate(() => ee.emit("exit", 1));
-              return ee;
+              return fakeChildProcess(ee);
             }
             return originalSpawnImpl!(command, args, options);
           },
@@ -3503,7 +3588,7 @@ describe("sessions route", () => {
       }
 
       function makeFakeBackend(
-        resolvePendingPromote: ReturnType<typeof vi.fn>,
+        resolvePendingPromote: SessionBackend["resolvePendingPromote"],
         // Hermes review, this PR — parameterized (default unchanged) so the
         // version-skew warning tests below can simulate a remote spawn
         // response that never echoes `initialPromptApplied` at all
@@ -3511,19 +3596,16 @@ describe("sessions route", () => {
         // the unknown field, not the same thing as it explicitly reporting
         // `false`. See resolveSeedDelivered's own doc comment.
         spawnResult: { initialPromptApplied?: boolean } = { initialPromptApplied: false },
-      ) {
-        return {
+      ): SessionBackend {
+        return fakeSessionBackend({
           createWorktree: vi.fn().mockResolvedValue({
             created: true,
             path: "/remote/project/.mullion-worktrees/mullion-session-x",
             branch: "mullion/session-x",
           }),
           spawn: vi.fn().mockResolvedValue(spawnResult),
-          stashSeed: vi.fn().mockResolvedValue(undefined),
           resolvePendingPromote,
-          terminate: vi.fn().mockResolvedValue(undefined),
-          liveStatus: vi.fn().mockResolvedValue({}),
-        };
+        });
       }
 
       it("201s with a warning (not a 500) when the host rejects the request (HostRequestError), and still kills the source", async () => {
@@ -3670,19 +3752,16 @@ describe("sessions route", () => {
         return { projectId: project.json().id as number, hostId };
       }
 
-      function makeFakeBackend(spawnResult: { initialPromptApplied?: boolean }) {
-        return {
+      function makeFakeBackend(spawnResult: { initialPromptApplied?: boolean }): SessionBackend {
+        return fakeSessionBackend({
           createWorktree: vi.fn().mockResolvedValue({
             created: true,
             path: "/remote/project/.mullion-worktrees/mullion-session-x",
             branch: "mullion/session-x",
           }),
           spawn: vi.fn().mockResolvedValue(spawnResult),
-          stashSeed: vi.fn().mockResolvedValue(undefined),
           resolvePendingPromote: vi.fn().mockResolvedValue(true),
-          terminate: vi.fn().mockResolvedValue(undefined),
-          liveStatus: vi.fn().mockResolvedValue({}),
-        };
+        });
       }
 
       it("warns when a remote spawn never echoes initialPromptApplied at all (undefined, not false — an old build silently stripping the field)", async () => {
@@ -3932,17 +4011,15 @@ describe("sessions route", () => {
           const sessionBackendModule = await import("../../src/services/session-backend.js");
           const { projectId } = await createRemotePreviewProject(app);
 
-          const fakeBackend = {
+          const fakeBackend = fakeSessionBackend({
             spawn: vi.fn().mockResolvedValue({}),
-            liveStatus: vi.fn().mockResolvedValue({}),
-            terminate: vi.fn().mockResolvedValue(undefined),
             checkoutBranchWorktree: vi.fn().mockResolvedValue({
               path: "/remote/project/.mullion-worktrees/dock-preview-main-abc123",
               branch: "main",
             }),
             removeWorktree: vi.fn().mockResolvedValue(true),
             syncWorktree: vi.fn().mockResolvedValue(true),
-          };
+          });
           const resolveBackendSpy = vi
             .spyOn(sessionBackendModule, "resolveBackend")
             .mockReturnValue(fakeBackend);
@@ -3980,16 +4057,14 @@ describe("sessions route", () => {
           const { projectId } = await createRemotePreviewProject(app);
           const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
 
-          const fakeBackend = {
+          const fakeBackend = fakeSessionBackend({
             spawn: vi.fn().mockResolvedValue({}),
-            liveStatus: vi.fn().mockResolvedValue({}),
-            terminate: vi.fn().mockResolvedValue(undefined),
             checkoutBranchWorktree: vi
               .fn()
               .mockResolvedValue({ path: worktreePath, branch: "main" }),
             removeWorktree: vi.fn().mockResolvedValue(true),
             syncWorktree: vi.fn().mockResolvedValue(true),
-          };
+          });
           const resolveBackendSpy = vi
             .spyOn(sessionBackendModule, "resolveBackend")
             .mockReturnValue(fakeBackend);
@@ -4039,16 +4114,14 @@ describe("sessions route", () => {
           const syncWorktree = vi.fn(() => {
             throw new Error("host row deleted mid-request");
           });
-          const fakeBackend = {
+          const fakeBackend = fakeSessionBackend({
             spawn: vi.fn().mockResolvedValue({}),
-            liveStatus: vi.fn().mockResolvedValue({}),
-            terminate: vi.fn().mockResolvedValue(undefined),
             checkoutBranchWorktree: vi
               .fn()
               .mockResolvedValue({ path: worktreePath, branch: "main" }),
             removeWorktree,
             syncWorktree,
-          };
+          });
           const resolveBackendSpy = vi
             .spyOn(sessionBackendModule, "resolveBackend")
             .mockReturnValue(fakeBackend);
@@ -4089,16 +4162,14 @@ describe("sessions route", () => {
           const { projectId } = await createRemotePreviewProject(app);
           const worktreePath = "/remote/project/.mullion-worktrees/dock-preview-main-abc123";
 
-          const fakeBackend = {
+          const fakeBackend = fakeSessionBackend({
             spawn: vi.fn().mockResolvedValue({}),
-            liveStatus: vi.fn().mockResolvedValue({}),
-            terminate: vi.fn().mockResolvedValue(undefined),
             checkoutBranchWorktree: vi
               .fn()
               .mockResolvedValue({ path: worktreePath, branch: "main" }),
             removeWorktree: vi.fn().mockResolvedValue(true),
             syncWorktree: vi.fn().mockResolvedValue(true),
-          };
+          });
           const resolveBackendSpy = vi
             .spyOn(sessionBackendModule, "resolveBackend")
             .mockReturnValue(fakeBackend);
@@ -4157,16 +4228,14 @@ describe("sessions route", () => {
           const removeWorktree = vi.fn(() => {
             throw new Error("host row deleted mid-request");
           });
-          const fakeBackend = {
-            liveStatus: vi.fn().mockResolvedValue({}),
-            terminate: vi.fn().mockResolvedValue(undefined),
+          const fakeBackend = fakeSessionBackend({
             checkoutBranchWorktree: vi
               .fn()
               .mockResolvedValue({ path: worktreePath, branch: "main" }),
             spawn: vi.fn().mockRejectedValue(new Error("spawn failed")),
             removeWorktree,
             syncWorktree: vi.fn().mockResolvedValue(true),
-          };
+          });
           const resolveBackendSpy = vi
             .spyOn(sessionBackendModule, "resolveBackend")
             .mockReturnValue(fakeBackend);

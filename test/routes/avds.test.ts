@@ -601,7 +601,9 @@ function collectJsonMessages(ws: WebSocket): unknown[] {
 }
 
 function waitForOpen(ws: WebSocket): Promise<void> {
-  return new Promise((resolve) => ws.on("open", () => resolve(), { once: true }));
+  // `once` — the `ws` client's `on` takes no listener options, so the
+  // `{ once: true }` form belongs on `once`.
+  return new Promise((resolve) => ws.once("open", () => resolve()));
 }
 
 async function waitUntil(check: () => boolean, timeoutMs = 5000) {
@@ -626,7 +628,14 @@ describe("WS /ws/system-image-install", () => {
 
   beforeEach(() => {
     vi.mocked(listInstalledSystemImages).mockReturnValue([
-      { packagePath: "system-images;android-35;google_apis;x86_64" },
+      // The installed image carries no parsed source.properties, so every
+      // enrichment field is null (SystemImage's own shape).
+      {
+        packagePath: "system-images;android-35;google_apis;x86_64",
+        apiLevel: null,
+        tagDisplay: null,
+        abi: null,
+      },
     ]);
     vi.mocked(listAvailableSystemImages).mockResolvedValue([
       {

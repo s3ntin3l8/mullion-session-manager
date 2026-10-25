@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { buildApp } from "../../src/app.js";
 
 // Hermes review on PR #1071 — close the Codecov gap on bridge-cleanup.ts by
@@ -22,8 +22,12 @@ function isBridgeCleanupInterval(call: readonly unknown[]): boolean {
 }
 
 describe("bridgeCleanupPlugin (PR #1071 review — Hermes)", () => {
-  let setIntervalSpy: ReturnType<typeof vi.spyOn>;
-  let clearIntervalSpy: ReturnType<typeof vi.spyOn>;
+  // `ReturnType<typeof vi.spyOn>` erases the spied signature to `any`,
+  // which leaves the recorded call tuples untyped. These two spies ARE
+  // typed after the globals they wrap, so `mock.calls` carries the real
+  // parameter tuples.
+  let setIntervalSpy: MockInstance<typeof globalThis.setInterval>;
+  let clearIntervalSpy: MockInstance<typeof globalThis.clearInterval>;
   let cleanupSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {

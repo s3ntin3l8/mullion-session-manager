@@ -204,6 +204,23 @@ function waitForClose(socket: net.Socket): Promise<void> {
 
 /** Resolves with the first complete newline-terminated line the server
  * writes back, JSON-parsed. */
+/**
+ * The options of a single `app.inject(...)` call.
+ *
+ * Fastify's `inject` is OVERLOADED (`inject(opts, cb)`, `inject(opts)`,
+ * `inject()`), and TypeScript resolves `Parameters<>` of an overloaded
+ * function to its LAST overload — `inject()`, with no arguments at all —
+ * so the spy's `.mock.calls` is typed as a tuple of length 0 and every
+ * `([opts]) => opts` destructuring of it is a type error. The calls these
+ * tests inspect are all the one-argument form, so the options are read
+ * through this helper instead of off the spy's own tuple type.
+ */
+type InjectedOptions = { method?: string; url?: string; payload?: unknown };
+
+function injectedOptions(spy: { mock: { calls: unknown[][] } }): InjectedOptions[] {
+  return spy.mock.calls.map(([opts]) => opts as InjectedOptions);
+}
+
 function waitForReply(socket: net.Socket): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
     let buffer = "";
@@ -1238,9 +1255,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         );
         const reply = await waitForReply(socket);
         expect(reply.status).toBe(412);
-        const forwarded = injectSpy.mock.calls
-          .map(([opts]) => opts as { url?: string; payload?: unknown })
-          .find((o) => o.url === `/api/sessions/${sessionId}/review-request`);
+        const forwarded = injectedOptions(injectSpy).find(
+          (o) => o.url === `/api/sessions/${sessionId}/review-request`,
+        );
         expect(forwarded).toBeDefined();
         expect(JSON.parse(String(forwarded!.payload))).toEqual({ prNumber: 5 });
         socket.destroy();
@@ -1259,9 +1276,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.write(`${JSON.stringify({ id: 1, op, body: { sessionId, ...body } })}\n`);
         await waitForReply(socket);
         socket.destroy();
-        return injectSpy.mock.calls
-          .map(([opts]) => opts as { method?: string; url?: string; payload?: unknown })
-          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/${urlPart}`));
+        return injectedOptions(injectSpy).find((o) =>
+          o.url?.startsWith(`/api/sessions/${sessionId}/${urlPart}`),
+        );
       };
 
       it("reviews.request forwards repo and branch with prNumber", async () => {
@@ -1328,9 +1345,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.write(`${JSON.stringify({ id: 1, op: "reviews.status", body: { prNumber: 5 } })}\n`);
         const reply = await waitForReply(socket);
         expect(reply.status).toBe(412); // past the reviewer gate, stops at "no GitHub remote"
-        const forwarded = injectSpy.mock.calls
-          .map(([opts]) => opts as { method?: string; url?: string })
-          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/review-request`));
+        const forwarded = injectedOptions(injectSpy).find((o) =>
+          o.url?.startsWith(`/api/sessions/${sessionId}/review-request`),
+        );
         expect(forwarded).toMatchObject({
           method: "GET",
           url: `/api/sessions/${sessionId}/review-request?prNumber=5`,
@@ -1347,9 +1364,8 @@ describe("controlSocketPlugin (issue #185)", () => {
         socket.write(`${JSON.stringify({ id: 1, op: "reviews.status", body: {} })}\n`);
         await waitForReply(socket);
         expect(
-          injectSpy.mock.calls.some(
-            ([opts]) =>
-              (opts as { url?: string }).url === `/api/sessions/${sessionId}/review-request`,
+          injectedOptions(injectSpy).some(
+            (o) => o.url === `/api/sessions/${sessionId}/review-request`,
           ),
         ).toBe(true);
         socket.destroy();
@@ -1380,9 +1396,9 @@ describe("controlSocketPlugin (issue #185)", () => {
           `${JSON.stringify({ id: 1, op: "reviews.stop", body: { runId: "run_1" } })}\n`,
         );
         await waitForReply(socket);
-        const forwarded = injectSpy.mock.calls
-          .map(([opts]) => opts as { url?: string; payload?: unknown })
-          .find((o) => o.url === `/api/sessions/${sessionId}/review-stop`);
+        const forwarded = injectedOptions(injectSpy).find(
+          (o) => o.url === `/api/sessions/${sessionId}/review-stop`,
+        );
         expect(JSON.parse(String(forwarded!.payload))).toEqual({ runId: "run_1" });
         socket.destroy();
       });
@@ -1405,9 +1421,9 @@ describe("controlSocketPlugin (issue #185)", () => {
         const reply = await waitForReply(socket);
         // Past the reviewer gate, stopped by the route's own "no GitHub remote".
         expect(reply.status).toBe(412);
-        const forwarded = injectSpy.mock.calls
-          .map(([opts]) => opts as { method?: string; url?: string; payload?: unknown })
-          .find((o) => o.url === `/api/sessions/${sessionId}/triage-request`);
+        const forwarded = injectedOptions(injectSpy).find(
+          (o) => o.url === `/api/sessions/${sessionId}/triage-request`,
+        );
         expect(forwarded).toMatchObject({ method: "POST" });
         expect(JSON.parse(String(forwarded!.payload))).toEqual({ issueNumber: 12 });
         socket.destroy();
@@ -1423,9 +1439,9 @@ describe("controlSocketPlugin (issue #185)", () => {
           `${JSON.stringify({ id: 1, op: "triage.status", body: { issueNumber: 12 } })}\n`,
         );
         await waitForReply(socket);
-        const forwarded = injectSpy.mock.calls
-          .map(([opts]) => opts as { method?: string; url?: string })
-          .find((o) => o.url?.startsWith(`/api/sessions/${sessionId}/triage-request`));
+        const forwarded = injectedOptions(injectSpy).find((o) =>
+          o.url?.startsWith(`/api/sessions/${sessionId}/triage-request`),
+        );
         expect(forwarded).toMatchObject({
           method: "GET",
           url: `/api/sessions/${sessionId}/triage-request?issueNumber=12`,
@@ -1598,10 +1614,10 @@ describe("controlSocketPlugin (issue #185)", () => {
         );
         const reply = await waitForReply(socket);
         expect(reply.ok).toBe(true);
-        const post = injectSpy.mock.calls
-          .map(([opts]) => opts as { method?: string; url?: string; payload?: string })
-          .find((o) => o.method === "POST" && o.url === "/api/sessions")!;
-        expect(Object.keys(JSON.parse(post.payload!)).sort()).toEqual(
+        const post = injectedOptions(injectSpy).find(
+          (o) => o.method === "POST" && o.url === "/api/sessions",
+        )!;
+        expect(Object.keys(JSON.parse(String(post.payload))).sort()).toEqual(
           // Issue #1733 — `skipPermissions` joins the allowlist: it is
           // capped by the parent's own value server-side, so forwarding it
           // can only narrow. `kind` does NOT join — see the "silently strips
@@ -1670,13 +1686,13 @@ describe("controlSocketPlugin (issue #185)", () => {
           "device.delete",
           "projects.set_tooling",
         ]) {
-          const replies: Array<Record<string, unknown>> = [];
+          const replies: unknown[] = [];
           await OPS[op].handler({
             app: app!,
             conn: sessionConn as never,
             id: 1,
             body: { deviceId: 1, projectId: 1, briefing: "x" },
-            reply: (r) => replies.push(r as Record<string, unknown>),
+            reply: (r) => replies.push(r),
           });
           // set_tooling nests each field's own result under its name.
           expect(replies[0]).toMatchObject(
@@ -4952,10 +4968,15 @@ describe("controlSocketPlugin (issue #185)", () => {
           const reply = await waitForReply(socket);
           expect(reply.id).toBe(1);
           expect(reply.ok).toBe(false);
-          expect(reply.briefing.ok).toBe(false);
-          expect(reply.briefing.status).toBeGreaterThanOrEqual(400);
-          expect(reply.skill.ok).toBe(false);
-          expect(reply.skill.status).toBeGreaterThanOrEqual(400);
+          // projects.set_tooling nests each field's own result under its
+          // name — the reply's shape is the op's, not the socket's generic
+          // one, so it is narrowed here.
+          const briefing = reply.briefing as { ok: boolean; status: number };
+          const skill = reply.skill as { ok: boolean; status: number };
+          expect(briefing.ok).toBe(false);
+          expect(briefing.status).toBeGreaterThanOrEqual(400);
+          expect(skill.ok).toBe(false);
+          expect(skill.status).toBeGreaterThanOrEqual(400);
           socket.destroy();
         });
 

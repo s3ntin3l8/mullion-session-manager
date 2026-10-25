@@ -3,9 +3,26 @@ import net from "node:net";
 import path from "node:path";
 import os from "node:os";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import MullionHookEmitter from "../../src/hooks/opencode-plugin.js";
+import MullionHookEmitterDefault from "../../src/hooks/opencode-plugin.js";
 import { openCodeAdapter, OPENCODE_EMITS } from "../../src/services/hook-adapters/opencode.js";
 import { createFakeCtx, flush } from "./helpers/opencode-ctx.js";
+import type {
+  AgentSessionHookMessage,
+  CompactHookMessage,
+  CwdChangedHookMessage,
+  FileChangeHookMessage,
+  GitBranchHookMessage,
+  NotificationHookMessage,
+  PermissionRequestHookMessage,
+  PermissionResolvedHookMessage,
+  ProgressHookMessage,
+  QuestionHookMessage,
+  SessionDiffHookMessage,
+  StopFailureHookMessage,
+  SubagentHookMessage,
+  ToolFailureHookMessage,
+  TurnStartHookMessage,
+} from "../../src/services/hook-protocol.js";
 
 // opencode v2 plugin (minimum 2.0.29). Unlike forwarder.mjs (a subprocess
 // entry point with a top-level `main()` that runs on load), this plugin file
@@ -16,6 +33,91 @@ import { createFakeCtx, flush } from "./helpers/opencode-ctx.js";
 // mapOpenCodeEvent/promoteRequest/etc. are read off the default export as
 // properties, not imported as their own named exports — the module must have
 // exactly one top-level `export` (see opencode-plugin.js's own comment).
+//
+// The plugin file is plain JS, and TypeScript's inference of a .js module
+// does NOT see the `MullionHookEmitter.<helper> = <helper>` assignments that
+// hang those helpers off the default export — it infers only `{ id, setup }`.
+// The helpers' shapes are therefore spelled out here, from the plugin's own
+// signatures and the hook-protocol messages it produces. (The alternative —
+// a .d.ts next to the plugin — would mean touching src/, which this test
+// tree must not do.)
+// The plugin is deliberately tolerant of malformed input — it returns null
+// for anything it can't read — and this file asserts exactly that, so the
+// event arguments are typed as "any shape at all" rather than as one
+// blessed envelope.
+type OpenCodeEventLike = {
+  type?: unknown;
+  data?: unknown;
+  location?: { directory?: unknown };
+  [key: string]: unknown;
+};
+
+/** The `tool.execute.after` payload the plugin reads (`tool`/`status`/`input`). */
+type OpenCodeToolEventLike = {
+  tool?: string;
+  status?: string;
+  input?: { command?: string; workdir?: string; [key: string]: unknown };
+};
+
+/** The plugin's per-setup mutable state (createMapState in the plugin). */
+type OpenCodeMapState = {
+  childSessions: Set<string>;
+  questionSessions: Set<string>;
+  toolCalls: Map<string, { name: string; input: unknown }>;
+};
+
+/** Every hook-protocol message kind an opencode v2 session can produce
+ * (mapOpenCodeEvent/mapToolExecuteAfter in the plugin) — the production
+ * message types themselves, so a change to one of them breaks this file. */
+type OpenCodeHookMessage =
+  | AgentSessionHookMessage
+  | CompactHookMessage
+  | CwdChangedHookMessage
+  | FileChangeHookMessage
+  | GitBranchHookMessage
+  | NotificationHookMessage
+  | PermissionRequestHookMessage
+  | PermissionResolvedHookMessage
+  | ProgressHookMessage
+  | QuestionHookMessage
+  | SessionDiffHookMessage
+  | StopFailureHookMessage
+  | SubagentHookMessage
+  | ToolFailureHookMessage
+  | TurnStartHookMessage;
+
+const MullionHookEmitter = MullionHookEmitterDefault as typeof MullionHookEmitterDefault & {
+  mapOpenCodeEvent: (
+    event: OpenCodeEventLike | null | undefined,
+    fallbackCwd?: string,
+    lastAssistantMessage?: string | null,
+    state?: OpenCodeMapState,
+  ) => OpenCodeHookMessage[] | null;
+  promoteRequest: (
+    summary: string,
+    suggestedBaseRef?: string,
+    signal?: AbortSignal,
+  ) => Promise<string>;
+  mapToolExecuteAfter: (
+    event: OpenCodeToolEventLike | null | undefined,
+    fallbackCwd?: string,
+  ) => OpenCodeHookMessage[] | null;
+  createAssistantTextTracker: () => {
+    observe: (event: OpenCodeEventLike | null | undefined, state?: OpenCodeMapState) => void;
+    current: () => string | null;
+  };
+  createMapState: () => OpenCodeMapState;
+  readInstructionTexts: () => string[];
+  parseGitWorktreeAdd: (command: string) => { branch: string; worktree: string } | null;
+  parseGitCheckout: (command: string) => { branch: string } | null;
+  splitShellSegments: (command: string) => string[];
+  reviewGateRequest: (
+    prompt: string,
+    gateId: string,
+    signal?: AbortSignal,
+  ) => Promise<string | null>;
+};
+
 const {
   mapOpenCodeEvent,
   promoteRequest,

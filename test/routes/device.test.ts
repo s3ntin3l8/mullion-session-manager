@@ -12,6 +12,7 @@ import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { attachSocketToDevice } from "../../src/routes/device.js";
+import type { AttachDeviceParams } from "../../src/routes/device.js";
 import { AndroidMotionEventAction } from "@yume-chan/scrcpy";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
 
@@ -132,6 +133,8 @@ describe("device route (/ws/device/:deviceId)", () => {
 
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -159,6 +162,8 @@ describe("device route (/ws/device/:deviceId)", () => {
 
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -187,6 +192,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -282,6 +289,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -318,6 +327,8 @@ describe("device route (/ws/device/:deviceId)", () => {
         } as any);
         await attachSocketToDevice(app, new MockWebSocket() as any, {
           deviceId: 1,
+          kind: "emulator",
+          serial: null,
           avdName: "dev35",
           label: null,
           port: null,
@@ -351,7 +362,14 @@ describe("device route (/ws/device/:deviceId)", () => {
           onClipboard: vi.fn(() => vi.fn()),
           onExit: vi.fn(() => vi.fn()),
         } as any);
-        const params = { deviceId: 1, avdName: "dev35", label: null, port: null };
+        const params: AttachDeviceParams = {
+          deviceId: 1,
+          kind: "emulator",
+          serial: null,
+          avdName: "dev35",
+          label: null,
+          port: null,
+        };
 
         const live = new MockWebSocket();
         await attachSocketToDevice(app, live as any, params);
@@ -382,6 +400,8 @@ describe("device route (/ws/device/:deviceId)", () => {
 
       await attachSocketToDevice(app, new MockWebSocket() as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -409,6 +429,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -444,6 +466,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -640,6 +664,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -663,6 +689,8 @@ describe("device route (/ws/device/:deviceId)", () => {
         const socket = new MockWebSocket();
         await attachSocketToDevice(app, socket as any, {
           deviceId: 1,
+          kind: "emulator",
+          serial: null,
           avdName: "dev35",
           label: null,
           port: null,
@@ -762,6 +790,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -790,6 +820,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -842,6 +874,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -871,6 +905,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const socket = new MockWebSocket();
       await attachSocketToDevice(app, socket as any, {
         deviceId: 1,
+        kind: "emulator",
+        serial: null,
         avdName: "dev35",
         label: null,
         port: null,
@@ -923,7 +959,10 @@ describe("device route (/ws/device/:deviceId)", () => {
       // But simulate TOCTOU by intercepting app.db.select in upgrade handler
       const origSelect = app.db.select.bind(app.db);
       let callCount = 0;
-      vi.spyOn(app.db, "select").mockImplementation((...args: any[]) => {
+      // The forwarded call needs drizzle's own `select` signature, not a loose
+      // `any[]` — a spread of an `any[]` into a fixed-arity function is not
+      // a call TypeScript can check.
+      vi.spyOn(app.db, "select").mockImplementation((...args: Parameters<typeof origSelect>) => {
         callCount++;
         // On the second select (inside the upgrade handler), return killed status
         if (callCount >= 2) {

@@ -125,7 +125,13 @@ describe("applyStoredState", () => {
       r.host,
       fullState({
         permissionState: "pending",
-        errorState: "error",
+        // "error" is deliberately NOT one of the real errorState values
+        // ("idle" | "api_error" | "tool_failure") and "todo" is not the
+        // {content, status} object a currentTodo really is — this test
+        // pins that every field reaches the host setter VERBATIM, so the
+        // values stay as they are (`as never`, like the "garbage" subagents
+        // below).
+        errorState: "error" as never,
         errorAt: 5,
         errorDetail: "boom",
         compactState: "compacting",
@@ -136,7 +142,7 @@ describe("applyStoredState", () => {
         questionHeader: "h",
         questionAt: 9,
         lastAssistantMessage: "hi",
-        currentTodo: "todo",
+        currentTodo: "todo" as never,
         promoteState: "pending",
         promoteSummary: "sum",
         promoteSuggestedBaseRef: "main",

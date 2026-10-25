@@ -789,6 +789,11 @@ describe("hermes review relay", () => {
         repo: PR.repo,
         prNumber: PR.prNumber,
       });
+      // The status is the run-status arm of the union — the other arm is the
+      // "not_found" placeholder, which carries no marker at all. A run was
+      // just requested, so it is the run status; narrow to it before reading
+      // the marker off it.
+      if (!("marker" in status)) throw new Error("expected a run status, not a not_found one");
       expect(status.marker).toMatchObject({ written: false, reason: "mint-failed" });
     });
 

@@ -953,6 +953,9 @@ describe("docker-service-detect", () => {
         composeResolvable: true,
         configFiles: [resolvableComposeFile],
         envFile: null,
+        // configHash is part of ComposeService — these doubles had drifted
+        // from the interface and were missing the field entirely.
+        configHash: "hash-sanctuary-web",
       };
       const controls = await toDockControls([svc]);
 
@@ -994,6 +997,7 @@ describe("docker-service-detect", () => {
         composeResolvable: true,
         configFiles: [path.join(resolvableDir, "docker-compose.prod.yml")],
         envFile,
+        configHash: "hash-pocket-portfolio-tracker-api",
       };
       const controls = await toDockControls([svc]);
 
@@ -1020,6 +1024,7 @@ describe("docker-service-detect", () => {
           composeResolvable: false,
           configFiles: [],
           envFile: null,
+          configHash: "hash-foo-web",
         },
       ]);
 
@@ -1043,6 +1048,7 @@ describe("docker-service-detect", () => {
           composeResolvable: true,
           configFiles: [resolvableComposeFile],
           envFile: null,
+          configHash: "hash-foo-web",
         },
       ]);
 
@@ -1067,6 +1073,7 @@ describe("docker-service-detect", () => {
           composeResolvable: false, // dangerousDir doesn't actually exist
           configFiles: [],
           envFile: null,
+          configHash: "hash-x",
         },
       ]);
       // composeResolvable: false forces the docker-logs fallback here, so
@@ -1091,6 +1098,7 @@ describe("docker-service-detect", () => {
       composeResolvable: true,
       configFiles: ["/home/user/pocket-portfolio-tracker/docker-compose.prod.yml"],
       envFile: "/home/user/pocket-portfolio-tracker/.env.prod",
+      configHash: "hash-pocket-portfolio-tracker-api",
     };
 
     it("composeContextArgs includes -p, --project-directory, --env-file, and one -f per config file", () => {
@@ -1159,6 +1167,7 @@ describe("docker-service-detect", () => {
         composeResolvable: true,
         configFiles: [],
         envFile: null,
+        configHash: "hash-sanctuary-web",
       },
       {
         composeProject: "nested",
@@ -1174,6 +1183,7 @@ describe("docker-service-detect", () => {
         composeResolvable: true,
         configFiles: [],
         envFile: null,
+        configHash: "hash-nested-api",
       },
       {
         composeProject: "unrelated",
@@ -1189,6 +1199,7 @@ describe("docker-service-detect", () => {
         composeResolvable: true,
         configFiles: [],
         envFile: null,
+        configHash: "hash-unrelated-db",
       },
     ];
 

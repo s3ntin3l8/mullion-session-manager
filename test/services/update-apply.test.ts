@@ -14,6 +14,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as ChildProcess from "node:child_process";
+import type { SpawnSelfUpdateResult } from "../../src/services/update-apply.js";
+
+/**
+ * spawnSelfUpdate's result is a discriminated union — the failure branch
+ * carries `message`, the success branch a `body` — and an
+ * `expect(...).toBe(false)` does not narrow a union. This picks the
+ * failure branch out explicitly, so the message assertions below stay
+ * exactly as they were written.
+ */
+function asFailure(result: SpawnSelfUpdateResult): Extract<SpawnSelfUpdateResult, { ok: false }> {
+  if (result.ok) throw new Error("expected the update to have failed");
+  return result;
+}
 
 const spawnCalls: Array<{ command: string; args: string[] }> = [];
 /** The exit status the fake launchctl reports (0 = success). */
@@ -198,7 +211,7 @@ describe("spawnSelfUpdate", async () => {
       });
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
-      expect(result.message).toMatch(/Bootstrap failed/);
+      expect(asFailure(result).message).toMatch(/Bootstrap failed/);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
@@ -223,7 +236,7 @@ describe("spawnSelfUpdate", async () => {
       expect(result.status).toBe(500);
       // The message states the budget the call actually had — not the
       // constant, which would misreport a call killed at ~0ms.
-      expect(result.message).toMatch(/timed out after (9\d{3}|10000)ms/);
+      expect(asFailure(result).message).toMatch(/timed out after (9\d{3}|10000)ms/);
       // The wait is bounded by the deadline, not by the test's own timeout.
       expect(elapsed).toBeLessThan(15_000);
     } finally {
@@ -256,7 +269,7 @@ describe("spawnSelfUpdate", async () => {
       // The SPECIFIC outcome: the budget was gone, so the bootstrap was never
       // even attempted. (A per-call budget would have started it and killed
       // it at once — the register-then-report-500 hazard.)
-      expect(result.message).toMatch(/already exhausted/);
+      expect(asFailure(result).message).toMatch(/already exhausted/);
       expect(
         spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
       ).toHaveLength(0);
@@ -299,7 +312,7 @@ describe("spawnSelfUpdate", async () => {
       // the bootout's own overshoot moves the number. The bounds are the
       // ones that matter: above the floor (the call WAS attempted) and
       // below the whole budget (it was a PARTIAL one).
-      const timedOut = /timed out after (\d+)ms/.exec(result.message);
+      const timedOut = /timed out after (\d+)ms/.exec(asFailure(result).message);
       expect(timedOut).not.toBeNull();
       const budget = Number(timedOut?.[1]);
       expect(budget).toBeGreaterThan(1_000);
@@ -329,12 +342,12 @@ describe("spawnSelfUpdate", async () => {
       });
       expect(result.ok).toBe(false);
       expect(result.status).toBe(500);
-      expect(result.message).toMatch(/already exhausted/);
+      expect(asFailure(result).message).toMatch(/already exhausted/);
       // The short-circuit's own wording is pinned too — it is the PR's only
       // production change, and "already exhausted" alone is satisfied by the
       // old constant form as well: what makes it true is that it says what
       // was LEFT.
-      expect(result.message).toMatch(/only \d+ms of the 10000ms budget was left/);
+      expect(asFailure(result).message).toMatch(/only \d+ms of the 10000ms budget was left/);
       // The bootstrap was never attempted.
       expect(
         spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),

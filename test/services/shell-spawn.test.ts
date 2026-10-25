@@ -23,7 +23,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-import { runShellCapture } from "../../src/services/shell-spawn.js";
+import { runShellCapture, type ShellSpawnOptions } from "../../src/services/shell-spawn.js";
 
 /** A stand-in for a spawned child, with the pieces the helper touches. */
 function fakeChild(overrides: Record<string, unknown> = {}) {
@@ -50,7 +50,10 @@ function fakeChild(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const baseOptions = {
+// Typed as the production options so that `Partial<typeof baseOptions>`
+// below really is `Partial<ShellSpawnOptions>` — the unrefEscalationTimer
+// test needs that field to exist on the partial.
+const baseOptions: ShellSpawnOptions = {
   shell: "/bin/bash",
   args: ["-lc", "echo hello"],
   env: {} as NodeJS.ProcessEnv,
@@ -310,11 +313,11 @@ describe("runShellCapture", () => {
     const timers: NodeJS.Timeout[] = [];
     const original = globalThis.setTimeout;
     const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      fn: () => void,
+      fn: (...args: unknown[]) => void,
       ms?: number,
       ...rest: unknown[]
     ) => {
-      const timer = original(fn, ms, ...rest) as NodeJS.Timeout;
+      const timer = original(fn, ms, ...rest);
       timers.push(timer);
       return timer;
     }) as unknown as typeof globalThis.setTimeout);

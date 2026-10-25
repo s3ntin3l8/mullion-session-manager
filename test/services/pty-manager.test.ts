@@ -28,12 +28,16 @@ const fakePtyChildren: FakePty[] = [];
 
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
-  exitListeners: Array<(e: { exitCode: number }) => void> = [];
+  // node-pty's exit event carries the killing signal alongside the exit
+  // code (`onExit: IEvent<{ exitCode: number, signal?: number }>`), and
+  // pty-manager.ts's own exit-attribution log reads it — so the double has
+  // to carry it too, or that log would always say "signal=none".
+  exitListeners: Array<(e: { exitCode: number; signal?: number }) => void> = [];
   cols: number;
   rows: number;
   killed = false;
-  writeSpy = vi.fn();
-  resizeSpy = vi.fn();
+  writeSpy = vi.fn((_data: string) => {});
+  resizeSpy = vi.fn((_cols: number, _rows: number) => {});
 
   constructor(cols: number, rows: number) {
     this.cols = cols;
@@ -45,7 +49,7 @@ class FakePty {
     return { dispose: () => {} };
   }
 
-  onExit(cb: (e: { exitCode: number }) => void) {
+  onExit(cb: (e: { exitCode: number; signal?: number }) => void) {
     this.exitListeners.push(cb);
     return { dispose: () => {} };
   }
@@ -7475,8 +7479,11 @@ describe("PtyManager", () => {
       session.write("y");
       expect(session.toInfo()).toMatchObject({ gateState: "waiting", attention: true });
 
-      // A real decision is still the thing that clears it.
-      session.resolveGate("approved");
+      // A real decision is still the thing that clears it. The gate has to
+      // be addressed BY ID — resolveGate(gateId, decision) — so the pending
+      // one is looked up rather than guessed at.
+      const gateId = session.toInfo().gates[0]!.gateId;
+      session.resolveGate(gateId, "approved");
     });
 
     it("a genuine keystroke DOES clear the badge when a newer immune kind has superseded reviewGate as confirmedKind, even though gateState still reads 'waiting' underneath it (Hermes review, PR #910)", async () => {

@@ -37,13 +37,20 @@ function runFor(script: string, ms: number): Promise<string> {
 describe("agentTranscriptScript", () => {
   it("prints the transcript verbatim, including shell metacharacters", async () => {
     const lines = ["Claude Code v2.1.0", "", "const key = `${req.ip}`;", "it's done"];
-    const out = await runFor(agentTranscriptScript({ lines }), 2_000);
+    // `releaseFile` is optional in the implementation (`releaseFile ? ... :
+    // ""`), but scripts/demo/seed.mjs is plain JS — its options destructuring
+    // has no default, so TypeScript infers the field as required. Pass it
+    // explicitly as undefined where the test means "no release file".
+    const out = await runFor(agentTranscriptScript({ lines, releaseFile: undefined }), 2_000);
     expect(out).toContain("Claude Code v2.1.0\n\nconst key = `${req.ip}`;\nit's done\n");
   });
 
   it("keeps writing an invisible SGR reset after the transcript", async () => {
     // Two keepalives at a 1 s cadence, with margin for a loaded host.
-    const out = await runFor(agentTranscriptScript({ lines: ["done"] }), 3_600);
+    const out = await runFor(
+      agentTranscriptScript({ lines: ["done"], releaseFile: undefined }),
+      3_600,
+    );
     const tail = out.slice(out.indexOf("done\n") + "done\n".length);
     // Nothing but keepalives after the last line, and more than one of them.
     expect(tail.replaceAll("\u001b[0m", "")).toBe("");

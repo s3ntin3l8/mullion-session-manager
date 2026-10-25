@@ -1,19 +1,60 @@
 import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
 import type * as CacheStorage from "../../src/services/cache-storage.js";
+import type * as DockerStorage from "../../src/services/docker-storage.js";
+import type * as TempStorage from "../../src/services/temp-storage.js";
 
 // Every source is mocked: a real prune here would touch the host (docker, /tmp).
-const inspectDockerStorage = vi.fn(async (..._args: unknown[]) => ({ available: true }));
+
+/**
+ * The inspection doubles answer with the PRODUCTION status shape.
+ *
+ * The route's cleanup decision reads `available` and `error` off the
+ * measured value, and the measured probe spreads the whole value into the
+ * HTTP response the frontend types as `Measured<DockerStorageStatus>` — so
+ * a double that answered with `available` alone produced a response shape
+ * the real inspector never sends.
+ */
+const dockerStatus = (
+  over: Partial<DockerStorage.DockerStorageStatus> = {},
+): DockerStorage.DockerStorageStatus => ({
+  available: true,
+  rows: [],
+  totalSizeBytes: 0,
+  reclaimableBytes: 0,
+  estimates: { safeBytes: null, aggressiveBytes: 0 },
+  ...over,
+});
+
+const tempStatus = (
+  over: Partial<TempStorage.TempStorageStatus> = {},
+): TempStorage.TempStorageStatus => ({
+  available: true,
+  root: os.tmpdir(),
+  estimates: { safeBytes: 0, aggressiveBytes: 0, npmCacheBytes: 0 },
+  candidates: { safe: 0, aggressive: 0 },
+  claudeScratch: { warnings: [] },
+  ...over,
+});
+
+const inspectDockerStorage = vi.fn(
+  async (..._args: unknown[]): Promise<DockerStorage.DockerStorageStatus> => dockerStatus(),
+);
 const pruneDockerStorage = vi.fn(async (_mode?: string) => ({ output: "", reclaimedBytes: 5 }));
 vi.mock("../../src/services/docker-storage.js", () => ({
   inspectDockerStorage: (...args: unknown[]) => inspectDockerStorage(...args),
   pruneDockerStorage: (mode?: string) => pruneDockerStorage(mode),
 }));
 
-const inspectTempStorage = vi.fn(async (..._args: unknown[]) => ({ available: true }));
-const pruneTempStorage = vi.fn(async (_mode?: string, _options?: unknown) => ({
-  output: "",
-  reclaimedBytes: 7,
-}));
+const inspectTempStorage = vi.fn(
+  async (..._args: unknown[]): Promise<TempStorage.TempStorageStatus> => tempStatus(),
+);
+const pruneTempStorage = vi.fn(
+  async (_mode?: string, _options?: unknown): Promise<TempStorage.TempPruneResult> => ({
+    output: "",
+    reclaimedBytes: 7,
+  }),
+);
 vi.mock("../../src/services/temp-storage.js", () => ({
   inspectTempStorage: (...args: unknown[]) => inspectTempStorage(...args),
   pruneTempStorage: (mode?: string, options?: unknown) => pruneTempStorage(mode, options),
@@ -254,7 +295,9 @@ describe("/api/storage/cleanup", () => {
 
   describe("skipping what was measured as unusable", () => {
     it("skips Docker, with the reason, when it was measured as unavailable", async () => {
-      inspectDockerStorage.mockResolvedValueOnce({ available: false, error: "permission denied" });
+      inspectDockerStorage.mockResolvedValueOnce(
+        dockerStatus({ available: false, error: "permission denied" }),
+      );
       const app = await buildTestApp();
       await app.inject({ method: "GET", url: "/api/storage/docker" });
       pruneDockerStorage.mockClear();
@@ -268,7 +311,9 @@ describe("/api/storage/cleanup", () => {
     it("ignores an old measurement: a Docker daemon that has since come up is not skipped", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       try {
-        inspectDockerStorage.mockResolvedValueOnce({ available: false, error: "daemon down" });
+        inspectDockerStorage.mockResolvedValueOnce(
+          dockerStatus({ available: false, error: "daemon down" }),
+        );
         const app = await buildTestApp();
         await app.inject({ method: "GET", url: "/api/storage/docker" });
         vi.setSystemTime(Date.now() + 61_000);
@@ -282,7 +327,7 @@ describe("/api/storage/cleanup", () => {
     });
 
     it("skips temp files when they were measured as unavailable", async () => {
-      inspectTempStorage.mockResolvedValueOnce({ available: false, error: "no /tmp" });
+      inspectTempStorage.mockResolvedValueOnce(tempStatus({ available: false, error: "no /tmp" }));
       const app = await buildTestApp();
       await app.inject({ method: "GET", url: "/api/storage/temp" });
       pruneTempStorage.mockClear();
@@ -292,7 +337,7 @@ describe("/api/storage/cleanup", () => {
     });
 
     it("gives the skipped temp step a reason when the scan reported none", async () => {
-      inspectTempStorage.mockResolvedValueOnce({ available: false });
+      inspectTempStorage.mockResolvedValueOnce(tempStatus({ available: false }));
       const app = await buildTestApp();
       await app.inject({ method: "GET", url: "/api/storage/temp" });
       const { job } = await runCleanup(app);

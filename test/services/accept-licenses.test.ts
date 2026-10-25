@@ -1,10 +1,11 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import { EventEmitter } from "node:events";
-import type * as ChildProcess from "node:child_process";
+import { ChildProcess } from "node:child_process";
+import type * as ChildProcessModule from "node:child_process";
+import { Readable, Writable } from "node:stream";
 
 // Mock spawn but pass through everything else (execFile, exec, etc.)
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof ChildProcess>();
+  const actual = await importOriginal<typeof ChildProcessModule>();
   const spawnMock = vi.fn();
   return { ...actual, spawn: spawnMock };
 });
@@ -17,18 +18,31 @@ vi.mock("../../src/services/session-process.js", () => ({
 import { spawn } from "node:child_process";
 import { acceptLicenses } from "../../src/services/avd-manager.js";
 
-interface MockChild extends EventEmitter {
-  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-}
+/**
+ * The fake child process. spawn's mock is typed as returning a
+ * ChildProcess, so the double IS one: a real (never spawned) ChildProcess
+ * whose three pipes are real streams, with stdin's write/end spied on —
+ * those are the calls the assertions below count.
+ */
+type MockChild = ChildProcess & {
+  stdin: Writable;
+  stdout: Readable;
+  stderr: Readable;
+};
 
 function createMockChild(): MockChild {
-  const child = new EventEmitter() as MockChild;
-  child.stdin = { write: vi.fn(), end: vi.fn() };
-  child.stdout = new EventEmitter();
-  child.stderr = new EventEmitter();
-  return child;
+  const child = new ChildProcess();
+  const stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  vi.spyOn(stdin, "write");
+  vi.spyOn(stdin, "end");
+  child.stdin = stdin;
+  child.stdout = new Readable({ read() {} });
+  child.stderr = new Readable({ read() {} });
+  return child as MockChild;
 }
 
 describe("acceptLicenses", () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { sql } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
@@ -50,7 +51,11 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
   });
 
   beforeEach(() => {
-    app.db.delete(hosts).where("id != 'local'").run();
+    // sql.raw, NOT a plain string: drizzle's where() only accepts SQL, and
+    // a raw string is bound as a PARAMETER — `where ?` with the text
+    // "id != 'local'" is false in SQLite, so the old string form silently
+    // deleted NOTHING and the per-test cleanup never happened.
+    app.db.delete(hosts).where(sql.raw("id != 'local'")).run();
     app.hostCapacityTracker?.pruneMissing(new Set());
   });
 
@@ -230,7 +235,11 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
   });
 
   beforeEach(() => {
-    app.db.delete(hosts).where("id != 'local'").run();
+    // sql.raw, NOT a plain string: drizzle's where() only accepts SQL, and
+    // a raw string is bound as a PARAMETER — `where ?` with the text
+    // "id != 'local'" is false in SQLite, so the old string form silently
+    // deleted NOTHING and the per-test cleanup never happened.
+    app.db.delete(hosts).where(sql.raw("id != 'local'")).run();
     app.hostCapacityTracker?.pruneMissing(new Set());
   });
 

@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+import type { DeviceManagerOptions as DeviceManagerOptionsType } from "../../src/services/device-manager.js";
 
 // Covers DeviceManager.getOrCreate()'s reattach path (issue #1325's own
 // task) — a scope that survived a Mullion restart, with no in-memory Device
@@ -130,6 +131,7 @@ vi.mock("@yume-chan/adb-scrcpy", () => ({
 }));
 
 const { DeviceManager } = await import("../../src/services/device-manager.js");
+type DeviceManagerOptions = DeviceManagerOptionsType;
 const { deriveInstanceId, deviceMarkerPath } = await import("../../src/services/device-process.js");
 
 const INSTANCE_ID = deriveInstanceId(SESSIONS_DIR);
@@ -144,7 +146,12 @@ function scopeAliveFor(id: string): void {
 }
 
 function buildManager(
-  overrides: { onPortAssigned?: ReturnType<typeof vi.fn>; initialPorts?: number[] } = {},
+  overrides: {
+    // DeviceManagerOptions.onPortAssigned's own signature (id, port) — the
+    // mock's generic `Mock` type says nothing about the arguments.
+    onPortAssigned?: DeviceManagerOptions["onPortAssigned"];
+    initialPorts?: number[];
+  } = {},
 ) {
   return new DeviceManager({
     enabled: true,
@@ -183,6 +190,8 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
 
     const device = await manager.getOrCreate({
       id: "7",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: 5556,
@@ -212,7 +221,14 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     // back to the WS client for a getOrCreate() REJECTION, not for a
     // fire-and-forget attach() failure it never observes.
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: 5556,
+      }),
     ).rejects.toThrow(/no longer reachable over adb/);
     // Must never have gotten as far as creating an adb connection or
     // starting scrcpy for a serial that was never confirmed live.
@@ -235,6 +251,8 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
 
     const device = await manager.getOrCreate({
       id: "7",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: 5556,
@@ -254,6 +272,8 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     mockCreateAdbShouldFail = false;
     const retried = await manager.getOrCreate({
       id: "7",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: 5556,
@@ -267,7 +287,14 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     const manager = buildManager();
 
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5556 }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: 5556,
+      }),
     ).rejects.toThrow(/adb server connection refused/);
     expect(stopCalls).toEqual([]);
     expect(manager.get("7")).toBeUndefined();
@@ -278,10 +305,24 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     const manager = buildManager();
 
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow(/persisted port to reattach with/);
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow(/systemctl --user stop/);
 
     // No Device was ever created for this id — the reject happens before
@@ -298,6 +339,8 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
 
     const device = await manager.getOrCreate({
       id: "7",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: 5556,
@@ -316,6 +359,8 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
 
     const device = await manager.getOrCreate({
       id: "8",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: null,
@@ -337,6 +382,8 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
 
     const device = await manager.getOrCreate({
       id: "9",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: null,
       port: null,
@@ -363,7 +410,14 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
       sessionsDir: SESSIONS_DIR,
     });
     await expect(
-      manager.getOrCreate({ id: "1", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "1",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow("device panel is disabled");
   });
 
@@ -375,7 +429,14 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
       allocatedPorts.add(port);
     }
     await expect(
-      manager.getOrCreate({ id: "100", avdName: "dev35", label: null, port: null }),
+      manager.getOrCreate({
+        id: "100",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      }),
     ).rejects.toThrow("no free emulator port in range");
   });
 
@@ -383,12 +444,16 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     const manager = buildManager();
     const dev1 = await manager.getOrCreate({
       id: "10",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: "Dev 1",
       port: null,
     });
     const dev2 = await manager.getOrCreate({
       id: "11",
+      kind: "emulator",
+      serial: null,
       avdName: "dev35",
       label: "Dev 2",
       port: null,
@@ -404,15 +469,15 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     expect(list.map((d) => d.id)).toContain("11");
 
     // kill on nonexistent does not throw
-    await expect(manager.kill("99")).resolves.toBeUndefined();
+    await expect(manager.kill("99", "emulator")).resolves.toBeUndefined();
 
     // kill on dev1
-    await manager.kill("10");
+    await manager.kill("10", "emulator");
     expect(dev1.toInfo().status).toBe("exited");
     expect(manager.get("10")).toBe(dev1); // still in map
 
     // terminate on dev1 removes from map
-    await manager.terminate("10");
+    await manager.terminate("10", "emulator");
     expect(manager.get("10")).toBeUndefined();
     expect(manager.list()).toHaveLength(1);
 
@@ -423,7 +488,14 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
 
   it("handles Device video listener registration and cached config replay", async () => {
     const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "20", avdName: "dev35", label: null, port: null });
+    const dev = await manager.getOrCreate({
+      id: "20",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
     const received: unknown[] = [];
     const unsubscribe = dev.onVideoPacket((pkt) => received.push(pkt));
@@ -447,7 +519,14 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
 
   it("handles Device exit listeners and handleExit", async () => {
     const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "21", avdName: "dev35", label: null, port: null });
+    const dev = await manager.getOrCreate({
+      id: "21",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
     let exitedFired = false;
     const unsubscribe = dev.onExit(() => {
@@ -463,7 +542,14 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
 
   it("handles Device pumpVideo streaming packets to listeners", async () => {
     const manager = buildManager();
-    const dev = await manager.getOrCreate({ id: "22", avdName: "dev35", label: null, port: null });
+    const dev = await manager.getOrCreate({
+      id: "22",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
     const packets = [
       { value: { type: "configuration", data: new Uint8Array([1]) }, done: false },
@@ -513,7 +599,14 @@ describe("DeviceManager — releasing an initialPorts-seeded port once it's conf
     const manager = buildManager({ initialPorts: [5554], onPortAssigned });
 
     await expect(
-      manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5554 }),
+      manager.getOrCreate({
+        id: "7",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: 5554,
+      }),
     ).rejects.toThrow(/no longer reachable over adb/);
 
     // A brand-new, unrelated device with no surviving scope of its own.
@@ -522,7 +615,14 @@ describe("DeviceManager — releasing an initialPorts-seeded port once it's conf
     // BOOT_TIMEOUT_MS in the background after this test completes.
     listUnitsReply = [];
     mockGetDevicesShouldFail = true;
-    await manager.getOrCreate({ id: "8", avdName: "dev35", label: null, port: null });
+    await manager.getOrCreate({
+      id: "8",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: null,
+    });
 
     // EMULATOR_PORT_BASE (5554) came back — released above, not
     // permanently stranded in allocatedPorts for the rest of the process.
@@ -534,7 +634,14 @@ describe("DeviceManager — releasing an initialPorts-seeded port once it's conf
     const onPortAssigned = vi.fn();
     const manager = buildManager({ initialPorts: [5554], onPortAssigned });
 
-    await manager.getOrCreate({ id: "7", avdName: "dev35", label: null, port: 5554 });
+    await manager.getOrCreate({
+      id: "7",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: 5554,
+    });
 
     // EMULATOR_PORT_BASE (5554) — the very port this row was pre-seeded
     // with — comes right back: released before allocatePort() ran, instead

@@ -851,7 +851,11 @@ describe("ssh-agent-mux", () => {
       // synchronous rejection path (the local-cap check) is under test
       // here, not its eventual outcome.
       const secondOpen = connA.openChannel();
-      let secondRejectedReason: string | null = null;
+      // Control-flow analysis cannot see the assignment inside the
+      // `.catch()` callback, so a plain `let x: string | null = null` would
+      // narrow to `null` here and make the `.includes()` check below
+      // unreachable to the type checker. Keep the declared union.
+      let secondRejectedReason = null as string | null;
       secondOpen.catch((err: Error) => {
         secondRejectedReason = err.message;
       });

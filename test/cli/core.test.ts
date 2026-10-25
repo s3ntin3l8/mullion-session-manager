@@ -8,7 +8,7 @@ import os from "node:os";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import {
-  extractFlags,
+  extractFlags as extractFlagsInferred,
   parseGlobalFlags,
   resolveCommand,
   BROWSER_ACTIONS,
@@ -25,9 +25,45 @@ import {
 } from "../../src/cli/core.mjs";
 import {
   MullionSocketError,
-  statusHookMessages,
+  statusHookMessages as statusHookMessagesInferred,
   statusTruncationNote,
 } from "../../src/cli/client.mjs";
+
+/**
+ * core.mjs is plain JS, so extractFlags' return type is inferred: `flags`
+ * starts as an empty object literal, so it comes out as `{}` and the parsed
+ * values are invisible to the type system. This is what the function
+ * actually returns — the flags it collected, keyed by flag name.
+ */
+type ExtractedFlags = {
+  flags: Record<string, string | number | boolean | string[]>;
+  rest: string[];
+};
+
+const extractFlags = extractFlagsInferred as (
+  tokens: string[],
+  spec: Record<string, "string" | "number" | "boolean" | "array">,
+  opts?: { strict?: boolean },
+) => ExtractedFlags;
+
+/**
+ * client.mjs is plain JS, so statusHookMessages' return type is inferred
+ * per branch — a union of arrays, or null — and the "done" branch's shape
+ * (a single progress message carrying the truncated text) is invisible to
+ * the type system. This is what it actually returns.
+ */
+type StatusHookMessage = {
+  kind: string;
+  phase?: string;
+  title?: string;
+  body?: string;
+  lastAssistantMessage?: string;
+};
+
+const statusHookMessages = statusHookMessagesInferred as (
+  state: string,
+  message?: string,
+) => StatusHookMessage[] | null;
 
 // ---------------------------------------------------------------------------
 // extractFlags / parseGlobalFlags
@@ -994,7 +1030,15 @@ describe("runEventsTail", () => {
 // runCommand — end-to-end dispatch with a fake client
 // ---------------------------------------------------------------------------
 
-function fakeClient(overrides: Partial<{ request: unknown }> = {}) {
+function fakeClient(overrides: Partial<{ request: unknown }> = {}): {
+  tokenSource: string;
+  /** The real client carries the socket it talks to — the `config` command
+   * prints it. */
+  socketPath?: string;
+  close: ReturnType<typeof vi.fn>;
+  request: unknown;
+  openStream: ReturnType<typeof vi.fn>;
+} {
   return {
     tokenSource: "MULLION_AUTH_TOKEN",
     close: vi.fn(),
@@ -3228,7 +3272,7 @@ describe("runCommand", () => {
     });
 
     it("with --session, every positional is the text", async () => {
-      const request = vi.fn(async () => ({ matched: true }));
+      const request = vi.fn(async (_op: string, _body: unknown) => ({ matched: true }));
       const code = await runCommand(["--session", "7", "session", "wait-output", "a", "b"], {
         client: fakeClient({ request }),
         io: fakeIo(),
@@ -3316,9 +3360,9 @@ describe("runCommand", () => {
     });
 
     it("caps the message at 200 chars and says so", () => {
-      const [msg] = statusHookMessages("done", "x".repeat(500)) as [
-        { lastAssistantMessage: string },
-      ];
+      // The "done" branch always returns an array; the `?? []` only covers
+      // the inferred "or null" (the state is a literal here).
+      const [msg] = statusHookMessages("done", "x".repeat(500)) ?? [];
       expect(msg.lastAssistantMessage).toHaveLength(200);
       expect(statusTruncationNote("x".repeat(500))).toContain("truncated to 200");
       expect(statusTruncationNote("short")).toBe("");

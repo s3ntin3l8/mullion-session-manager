@@ -1,5 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import { ChildProcess, type PromiseWithChild } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -28,6 +29,15 @@ import {
   SUN_PATH_BYTES_BY_PLATFORM as backendSunPathBytesByPlatform,
 } from "../../src/plugins/pty.js";
 
+/**
+ * The env demoEnv() actually returns: the demo's own HOME/TMPDIR plus
+ * whatever the caller passed in as `vars` (and whatever the parent env
+ * contributed). env.mjs is plain JS, so TypeScript infers the `vars`
+ * parameter as `{}` and drops the spread from the return type — the
+ * shape is spelled out here instead.
+ */
+type DemoEnv = { HOME: string; TMPDIR: string } & Record<string, string | undefined>;
+
 const demoDir = mkdtempSync(path.join(tmpdir(), "mullion-demo-test-"));
 const bin = path.join(demoDir, "bin");
 mkdirSync(bin);
@@ -35,6 +45,21 @@ writeFileSync(path.join(bin, "docker"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
 afterAll(() => rmSync(demoDir, { recursive: true, force: true }));
 
 const PATH = `${bin}:/usr/bin`;
+
+/**
+ * execFile's promise resolves to the captured output and carries the child
+ * process on `.child` — that is Node's promisify(execFile) shape, and it is
+ * what the demo's `run` seam is typed as. The demo's code reads `.stdout`
+ * off the resolved value and nothing else.
+ */
+function fakeExecFileResult(stdout: string): PromiseWithChild<{ stdout: string; stderr: string }> {
+  return Object.assign(Promise.resolve({ stdout, stderr: "" }), { child: new ChildProcess() });
+}
+
+/** The same seam, for a command that failed — a rejection, like the real one. */
+function fakeExecFileFailure(err: Error): PromiseWithChild<{ stdout: string; stderr: string }> {
+  return Object.assign(Promise.reject(err), { child: new ChildProcess() });
+}
 
 /** Runs `fn` with `process.platform` reporting as `platform`. */
 function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
@@ -60,7 +85,7 @@ describe("demoEnv", () => {
         CLAUDE_CONFIG_DIR: "/home/me/.claude",
         DB_ENCRYPTION_KEY: "k", // pragma: allowlist secret
       },
-    );
+    ) as DemoEnv;
     expect(env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
     expect(env.MULLION_SOCKET_PATH).toBeUndefined();
     expect(env.MULLION_HOOK_TOKEN).toBeUndefined();
@@ -72,7 +97,7 @@ describe("demoEnv", () => {
 });
 
 describe("assertDemoEnv refuses a poisoned environment", () => {
-  const base = demoEnv(demoDir, { PATH }, { PATH: "/usr/bin" });
+  const base = demoEnv(demoDir, { PATH }, { PATH: "/usr/bin" }) as DemoEnv;
   const problems = (vars: Record<string, string>, opts = {}) =>
     assertDemoEnv({ ...base, ...vars }, demoDir, { collect: true, ...opts });
   const refuses = (vars: Record<string, string>, opts = {}) =>
@@ -284,15 +309,26 @@ describe("stopDemoScopes", () => {
     units = [own, collision, real],
   ) => {
     const stopped: string[] = [];
-    const run = async (args: string[]) => {
+    // NOT async: the seam is promise-returning (the real `run` is
+    // promisify(execFile)), and an async wrapper would strip the `child`
+    // property the promisified shape carries.
+    const run = (args: string[]): PromiseWithChild<{ stdout: string; stderr: string }> => {
       const [verb, unit] = args;
-      if (overrides[verb]) overrides[verb]();
-      if (verb === "show-environment") return { stdout: "" };
+      if (overrides[verb]) {
+        // The override throws; a promise-returning seam turns that into a
+        // rejection, exactly like the real execFile's.
+        try {
+          overrides[verb]();
+        } catch (err) {
+          return fakeExecFileFailure(err as Error);
+        }
+      }
+      if (verb === "show-environment") return fakeExecFileResult("");
       if (verb === "list-units")
-        return { stdout: units.map((u) => `${u} loaded active running x\n`).join("") };
-      if (verb === "show") return { stdout: descriptions[unit] };
+        return fakeExecFileResult(units.map((u) => `${u} loaded active running x\n`).join(""));
+      if (verb === "show") return fakeExecFileResult(descriptions[unit]);
       stopped.push(unit);
-      return { stdout: "" };
+      return fakeExecFileResult("");
     };
     return { run, stopped };
   };

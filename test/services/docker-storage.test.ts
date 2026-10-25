@@ -20,18 +20,23 @@ function fakeSpawn(
   let child: ChildProcessWithoutNullStreams;
   const spawn: SpawnDocker = (command, args) => {
     const emitter = new EventEmitter() as ChildProcessWithoutNullStreams;
+    // The child's stdio are real PassThroughs — the fake writes the
+    // canned output into them (a `Readable` has no `write` of its own).
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const stdin = new PassThrough();
     Object.assign(emitter, {
-      stdout: new PassThrough(),
-      stderr: new PassThrough(),
-      stdin: new PassThrough(),
+      stdout,
+      stderr,
+      stdin,
       kill: vi.fn(),
     });
     child = emitter;
     calls.push({ command, args });
     if (!options.hold) {
       queueMicrotask(() => {
-        if (options.stdout) emitter.stdout.write(options.stdout);
-        if (options.stderr) emitter.stderr.write(options.stderr);
+        if (options.stdout) stdout.write(options.stdout);
+        if (options.stderr) stderr.write(options.stderr);
         emitter.emit("close", options.code ?? 0);
       });
     }

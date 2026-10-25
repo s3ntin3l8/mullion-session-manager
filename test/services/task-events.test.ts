@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// The PRODUCTION socket type — `ws`'s WebSocket, as re-exported by
+// @fastify/websocket. The DOM's global WebSocket (a different shape, and
+// the one this file used to pick up by accident) is not what
+// subscribeToTaskEvents() takes.
+import type { WebSocket } from "@fastify/websocket";
 import {
   subscribeToTaskEvents,
   broadcastTaskEvent,

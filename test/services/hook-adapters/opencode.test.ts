@@ -327,7 +327,9 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
     hookToken: string;
     controlSocketPath: string;
     forwarderPath: string;
+    injectAgentGuide: boolean;
     injectProjectBriefing: boolean;
+    injectMullionBundle: boolean;
   };
 
   beforeEach(() => {
@@ -343,6 +345,8 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
       // injectAgentGuide gate specifically; the briefing gate has its own
       // describe block below.
       injectProjectBriefing: false,
+      injectAgentGuide: false,
+      injectMullionBundle: false,
     };
   });
 
@@ -371,6 +375,11 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: true,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
       authEnabled: true,
     });
     const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
@@ -428,6 +437,10 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills (issue
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectMullionBundle: false,
     injectProjectBriefing: false,
   };
 
@@ -456,6 +469,10 @@ describe("openCodeAdapter.prepareLaunch — Mullion tooling bundle skills (issue
         hookSocketPath: path.join(sessionsDir, "hooks.sock"),
         controlSocketPath: path.join(sessionsDir, "mullion.sock"),
         injectAgentGuide: true,
+        // The interface's other spawn-time snapshots (issue #884's
+        // per-project overrides) — the double was missing them, which
+        // is exactly what the typecheck now catches.
+        injectProjectBriefing: false,
         injectMullionBundle: true,
       };
       const plan = openCodeAdapter.prepareLaunch(scopedCtx);
@@ -657,6 +674,8 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     controlSocketPath: string;
     forwarderPath: string;
     injectAgentGuide: boolean;
+    injectProjectBriefing: boolean;
+    injectMullionBundle: boolean;
   };
 
   beforeEach(() => {
@@ -669,6 +688,11 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
       injectAgentGuide: false,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
     };
   });
 
@@ -701,6 +725,10 @@ describe("openCodeAdapter.prepareLaunch — project briefing injection (agent-br
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: true,
+      // The interface's other spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectMullionBundle: false,
       injectProjectBriefing: true,
       seedPrompt: "resume the refactor",
     });
@@ -724,6 +752,8 @@ describe("openCodeAdapter.prepareLaunch — workflow-conventions injection (issu
     controlSocketPath: string;
     forwarderPath: string;
     injectAgentGuide: boolean;
+    injectProjectBriefing: boolean;
+    injectMullionBundle: boolean;
   };
 
   beforeEach(() => {
@@ -736,6 +766,11 @@ describe("openCodeAdapter.prepareLaunch — workflow-conventions injection (issu
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
       injectAgentGuide: false,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
     };
   });
 
@@ -772,6 +807,10 @@ describe("openCodeAdapter.prepareLaunch — workflow-conventions injection (issu
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: true,
+      // The interface's other spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectMullionBundle: false,
       injectProjectBriefing: true,
       seedPrompt: "resume the refactor",
     });
@@ -794,6 +833,7 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     controlSocketPath: string;
     forwarderPath: string;
     injectAgentGuide: boolean;
+    injectMullionBundle: boolean;
     injectProjectBriefing: boolean;
   };
 
@@ -807,6 +847,10 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
       controlSocketPath: path.join(sessionsDir, "mullion.sock"),
       forwarderPath: "/abs/path/forwarder.mjs",
       injectAgentGuide: false,
+      // The interface's other spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectMullionBundle: false,
       injectProjectBriefing: false,
     };
   });
@@ -821,6 +865,11 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: false,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
       seedPrompt: "resume the refactor",
     });
     const seedFile = plan.settingsFiles?.find((f) => f.path === seedPath());
@@ -841,6 +890,11 @@ describe("openCodeAdapter.prepareLaunch — promote-flow seed injection (issue #
     const plan = openCodeAdapter.prepareLaunch({
       ...baseCtx,
       injectAgentGuide: true,
+      // The interface's other two spawn-time snapshots (issue #884's
+      // per-project overrides) — the double was missing them, which
+      // is exactly what the typecheck now catches.
+      injectProjectBriefing: false,
+      injectMullionBundle: false,
       seedPrompt: "resume the refactor",
     });
     expect(instructionsEnv(plan)).toEqual([
@@ -945,7 +999,10 @@ describe("OPENCODE_EMITS parity with frontend/src/sessionStatus.test.ts", () => 
       expect(
         mirror.includes(kind),
         `the frontend's opencode mirror disagrees with the backend about "${kind}"`,
-      ).toBe(OPENCODE_EMITS.includes(kind));
+        // Widened to string[]: the membership question is about STRINGS —
+        // a kind the backend does not know is simply not in its list — so
+        // the literal union would reject the very comparison the test makes.
+      ).toBe((OPENCODE_EMITS as readonly string[]).includes(kind));
     }
   });
 });
@@ -968,6 +1025,10 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectMullionBundle: false,
     injectProjectBriefing: false,
   };
 
@@ -1024,6 +1085,11 @@ describe("openCodeAdapter.prepareLaunch — Task Master skill denials", () => {
         hookSocketPath: path.join(realSessionsDir, "hooks.sock"),
         controlSocketPath: path.join(realSessionsDir, "mullion.sock"),
         injectAgentGuide: true,
+        // The interface's other two spawn-time snapshots (issue #884's
+        // per-project overrides) — the double was missing them, which
+        // is exactly what the typecheck now catches.
+        injectProjectBriefing: false,
+        injectMullionBundle: false,
         taskId: 348423,
       });
       expect(instructionsEnv(plan)).toEqual([path.join(realSessionsDir, "42.opencode-tier0.md")]);

@@ -894,42 +894,46 @@ describe("removeWorktreeIfClean (issue #283)", () => {
   it("removes a clean worktree", async () => {
     const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-1" });
     expect(created).not.toBeNull();
+    // `path` is only set when the creation actually succeeded — it did.
+    const worktreePath = created!.path!;
 
-    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    const result = await removeWorktreeIfClean(worktreePath, tmpDir);
     expect(result).toEqual({ removed: true });
-    expect(fs.existsSync(created!.path)).toBe(false);
+    expect(fs.existsSync(worktreePath)).toBe(false);
   });
 
   it("refuses a worktree with uncommitted changes, leaving it in place", async () => {
     const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-2" });
     expect(created).not.toBeNull();
-    fs.writeFileSync(path.join(created!.path, "dirty.txt"), "uncommitted");
+    const worktreePath = created!.path!;
+    fs.writeFileSync(path.join(worktreePath, "dirty.txt"), "uncommitted");
 
-    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    const result = await removeWorktreeIfClean(worktreePath, tmpDir);
     expect(result).toEqual({ removed: false, reason: "dirty" });
-    expect(fs.existsSync(created!.path)).toBe(true);
+    expect(fs.existsSync(worktreePath)).toBe(true);
   });
 
   it("refuses a worktree with unresolved merge conflicts, leaving it in place", async () => {
     const created = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-3" });
     expect(created).not.toBeNull();
+    const worktreePath = created!.path!;
 
     // Diverge the worktree's branch and main on the same file, then merge
     // main into the worktree to produce a real, unresolved conflict.
-    fs.writeFileSync(path.join(created!.path, "a.txt"), "worktree-version");
-    git(created!.path, ["add", "-A"]);
-    git(created!.path, ["commit", "-m", "worktree change", "--no-verify"]);
+    fs.writeFileSync(path.join(worktreePath, "a.txt"), "worktree-version");
+    git(worktreePath, ["add", "-A"]);
+    git(worktreePath, ["commit", "-m", "worktree change", "--no-verify"]);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "main-version");
     commitAll(tmpDir, "main change");
     try {
-      git(created!.path, ["merge", "main"]);
+      git(worktreePath, ["merge", "main"]);
     } catch {
       // Expected — the merge conflicts and exits non-zero.
     }
 
-    const result = await removeWorktreeIfClean(created!.path, tmpDir);
+    const result = await removeWorktreeIfClean(worktreePath, tmpDir);
     expect(result).toEqual({ removed: false, reason: "conflicts" });
-    expect(fs.existsSync(created!.path)).toBe(true);
+    expect(fs.existsSync(worktreePath)).toBe(true);
   });
 
   it("returns not-a-repo for a nonexistent path", async () => {
@@ -1400,22 +1404,25 @@ describe("pruneWorktrees (issue #283)", () => {
   it("removes a clean, explicitly-named orphan", async () => {
     const orphan = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-1" });
     expect(orphan).not.toBeNull();
+    // `path` is only set when the creation actually succeeded — it did.
+    const orphanPath = orphan!.path!;
 
-    const result = await pruneWorktrees(tmpDir, [orphan!.path]);
-    expect(result.removed).toEqual([orphan!.path]);
+    const result = await pruneWorktrees(tmpDir, [orphanPath]);
+    expect(result.removed).toEqual([orphanPath]);
     expect(result.skipped).toEqual([]);
-    expect(fs.existsSync(orphan!.path)).toBe(false);
+    expect(fs.existsSync(orphanPath)).toBe(false);
   });
 
   it("skips (never destroys) a dirty orphan", async () => {
     const orphan = await createWorktree({ cwd: tmpDir, baseRef: "main", seed: "mullion/task-2" });
     expect(orphan).not.toBeNull();
-    fs.writeFileSync(path.join(orphan!.path, "dirty.txt"), "uncommitted");
+    const orphanPath = orphan!.path!;
+    fs.writeFileSync(path.join(orphanPath, "dirty.txt"), "uncommitted");
 
-    const result = await pruneWorktrees(tmpDir, [orphan!.path]);
+    const result = await pruneWorktrees(tmpDir, [orphanPath]);
     expect(result.removed).toEqual([]);
-    expect(result.skipped).toEqual([{ path: orphan!.path, reason: "dirty" }]);
-    expect(fs.existsSync(orphan!.path)).toBe(true);
+    expect(result.skipped).toEqual([{ path: orphanPath, reason: "dirty" }]);
+    expect(fs.existsSync(orphanPath)).toBe(true);
   });
 
   it("skips a path outside .mullion-worktrees even if the caller passes one — defense in depth", async () => {
@@ -1447,10 +1454,11 @@ describe("pruneWorktrees (issue #283)", () => {
       seed: "mullion/task-3",
     });
     expect(stillHere).not.toBeNull();
+    const stillHerePath = stillHere!.path!;
 
     const result = await pruneWorktrees(tmpDir, []);
     expect(result).toEqual({ removed: [], skipped: [] });
-    expect(fs.existsSync(stillHere!.path)).toBe(true);
+    expect(fs.existsSync(stillHerePath)).toBe(true);
   });
 });
 
@@ -1480,11 +1488,12 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
       branchName: "mullion/task-1",
     });
     expect(created).not.toBeNull();
+    const createdPath = created!.path!;
 
-    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, "mullion/task-1");
+    const result = await clearOrphanedTaskWorktree(tmpDir, createdPath, "mullion/task-1");
 
     expect(result).toEqual({ cleared: true });
-    expect(fs.existsSync(created!.path)).toBe(false);
+    expect(fs.existsSync(createdPath)).toBe(false);
     // Branch is gone too — re-adding at the same path/branch no longer
     // collides on the branch ref (this is what removeWorktreeIfClean alone
     // does NOT provide — see this function's own doc comment).
@@ -1540,12 +1549,13 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
       branchName: "mullion/task-4",
     });
     expect(created).not.toBeNull();
-    fs.writeFileSync(path.join(created!.path, "dirty.txt"), "uncommitted");
+    const createdPath = created!.path!;
+    fs.writeFileSync(path.join(createdPath, "dirty.txt"), "uncommitted");
 
-    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, "mullion/task-4");
+    const result = await clearOrphanedTaskWorktree(tmpDir, createdPath, "mullion/task-4");
 
     expect(result).toEqual({ cleared: false, reason: "dirty" });
-    expect(fs.existsSync(created!.path)).toBe(true);
+    expect(fs.existsSync(createdPath)).toBe(true);
     const branches = execFileSync("git", ["branch", "--list", "mullion/task-4"], {
       cwd: tmpDir,
       env: gitEnv(),
@@ -1604,8 +1614,9 @@ describe("clearOrphanedTaskWorktree (issue #283)", () => {
       branchName: branch,
     });
     expect(created).not.toBeNull();
+    const createdPath = created!.path!;
 
-    const result = await clearOrphanedTaskWorktree(tmpDir, created!.path, branch);
+    const result = await clearOrphanedTaskWorktree(tmpDir, createdPath, branch);
 
     expect(result).toEqual({ cleared: true });
     const branches = execFileSync("git", ["branch", "--list", branch], {

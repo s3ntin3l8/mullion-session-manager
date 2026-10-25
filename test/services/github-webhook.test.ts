@@ -15,12 +15,17 @@ import {
 import { setPat, getIntegration, GITHUB_PROVIDER } from "../../src/services/github-integration.js";
 import { projects, integrations, webhookRegistrations } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+import type * as GitRemoteModule from "../../src/services/git-remote.js";
 
 vi.mock("../../src/services/git-remote.js", async (importOriginal) => {
-  const actual = await importOriginal();
+  const actual = await importOriginal<typeof GitRemoteModule>();
   return {
     ...actual,
-    parseGitRemote: vi.fn().mockReturnValue({ owner: "test-owner", repo: "test-repo" }),
+    // The double keeps the real signature (`(cwd) => GitHubRepoRef | null`)
+    // so `vi.mocked(parseGitRemote)` below still accepts a `null` return.
+    parseGitRemote: vi
+      .fn<typeof GitRemoteModule.parseGitRemote>()
+      .mockReturnValue({ owner: "test-owner", repo: "test-repo" }),
   };
 });
 
@@ -106,7 +111,9 @@ describe("github-webhook service", () => {
       const secret = getWebhookSecret(app);
       expect(secret).toBeTruthy();
       expect(typeof secret).toBe("string");
-      expect(secret.length).toBeGreaterThan(0);
+      // getWebhookSecret returns `string | null`; the toBeTruthy() above is
+      // what proves it is a string here, so the assertion stays as it is.
+      expect(secret!.length).toBeGreaterThan(0);
       await app.close();
     });
 

@@ -6,7 +6,7 @@ import type { HookAdapterContext } from "../../../src/services/hook-adapters/typ
 
 const mockResolveMullionBundleDir = vi.fn((): string | null => "/opt/mullion/dist/bundle");
 const mockComposeClaudeSessionBundle = vi.fn(
-  (): Array<{ path: string; contents: string }> | null => [
+  (_destDir: string, _content: unknown): Array<{ path: string; contents: string }> | null => [
     { path: "/composed/.claude-plugin/plugin.json", contents: "{}" },
   ],
 );
@@ -162,6 +162,10 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
     injectMullionBundle: false,
   };
 
@@ -225,6 +229,10 @@ describe("claudeCodeAdapter.prepareLaunch — managedInstall bundle removal (iss
     controlSocketPath: "/tmp/mullion-sessions/mullion.sock",
     forwarderPath: "/abs/path/forwarder.mjs",
     injectAgentGuide: false,
+    // The interface's other spawn-time snapshots (issue #884's
+    // per-project overrides) — the double was missing them, which
+    // is exactly what the typecheck now catches.
+    injectProjectBriefing: false,
     injectMullionBundle: false,
   };
 

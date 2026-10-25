@@ -19,11 +19,11 @@ import {
   formatClaudeCodeSessionStartOutput,
   formatGateDecision,
   formatSessionStartOutput,
-  mapAgyEvent,
+  mapAgyEvent as mapAgyEventInferred,
   mapClaudeCodeCwdChanged,
   mapClaudeCodeElicitation,
   mapClaudeCodeElicitationResult,
-  mapClaudeCodeEvent,
+  mapClaudeCodeEvent as mapClaudeCodeEventInferred,
   mapClaudeCodeNotification,
   mapClaudeCodePermissionDenied,
   mapClaudeCodePermissionRequest,
@@ -51,6 +51,37 @@ import {
   parseHookStdin,
   siblingsFor,
 } from "../../src/hooks/forwarder-core.mjs";
+
+/**
+ * forwarder-core.mjs is plain JS, so its mappers' return types are
+ * inferred PER BRANCH — an array of mapped events, or null when the event
+ * maps to nothing — and a mapped event's own fields are only visible on
+ * the branch that declares them. These are the shapes the mappers
+ * actually produce.
+ */
+type MappedHookEvent = {
+  kind: string;
+  phase?: string;
+  cwd?: string;
+  title?: string;
+  body?: string;
+  error?: string;
+  errorDetails?: string;
+  errorType?: string;
+  terminationReason?: string;
+  fullyIdle?: boolean;
+  backgroundTasks?: Array<{ id: string; type: string; status: string; description: string }>;
+};
+
+const mapAgyEvent = mapAgyEventInferred as (
+  kind: string,
+  payload: Record<string, unknown>,
+) => MappedHookEvent[] | null;
+
+const mapClaudeCodeEvent = mapClaudeCodeEventInferred as (
+  kind: string,
+  payload: unknown,
+) => MappedHookEvent | MappedHookEvent[] | null | undefined;
 
 describe("parseHookStdin (issue #174)", () => {
   it("parses a well-formed JSON object", () => {
@@ -2156,8 +2187,10 @@ describe("mapAgyEvent (issue #253)", () => {
   });
 
   it("a fullyIdle: false Stop followed by a fullyIdle: true Stop clears back to an empty backgroundTasks", () => {
-    const busy = mapAgyEvent("Stop", { fullyIdle: false });
-    const idleAgain = mapAgyEvent("Stop", { fullyIdle: true });
+    // A Stop always maps to at least one event; `?? []` only covers the
+    // mapper's inferred "or null" (the kind is a literal here).
+    const busy = mapAgyEvent("Stop", { fullyIdle: false }) ?? [];
+    const idleAgain = mapAgyEvent("Stop", { fullyIdle: true }) ?? [];
 
     expect(busy[0].backgroundTasks).toHaveLength(1);
     // Explicit [], not an omitted field — hook-handlers.ts's "absent ≠
@@ -2201,15 +2234,16 @@ describe("mapAgyEvent (issue #253)", () => {
     // other resource-exhaustion condition) as recoverable. Only the exact,
     // confirmed gRPC status token is matched.
     it("does NOT classify a generic quota-sounding message that lacks the exact RESOURCE_EXHAUSTED token", () => {
-      const result = mapAgyEvent("Stop", {
-        terminationReason: "error",
-        error: "quota reached for this project",
-      });
+      const result =
+        mapAgyEvent("Stop", {
+          terminationReason: "error",
+          error: "quota reached for this project",
+        }) ?? [];
       expect(result[1]).not.toHaveProperty("errorType");
     });
 
     it("does NOT set errorType on an unrelated error — must not misclassify a normal failure as recoverable", () => {
-      const result = mapAgyEvent("Stop", { terminationReason: "error", error: "boom" });
+      const result = mapAgyEvent("Stop", { terminationReason: "error", error: "boom" }) ?? [];
       expect(result).toEqual([
         { kind: "progress", phase: "done", backgroundTasks: [] },
         { kind: "stop_failure", error: "boom", terminationReason: "error", fullyIdle: false },
@@ -2231,10 +2265,11 @@ describe("mapAgyEvent (issue #253)", () => {
     it("feeds isRateLimitGraceActive end-to-end: the resulting errorType makes it return true", async () => {
       const { isRateLimitGraceActive } =
         await import("../../src/services/task-rate-limit-grace.js");
-      const [, stopFailure] = mapAgyEvent("Stop", {
-        terminationReason: "error",
-        error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached.",
-      });
+      const [, stopFailure] =
+        mapAgyEvent("Stop", {
+          terminationReason: "error",
+          error: "RESOURCE_EXHAUSTED (code 429): Individual quota reached.",
+        }) ?? [];
       // Mirrors hook-handlers.ts's own stop_failure handler exactly:
       // `ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null` — the
       // one real derivation this fix has to land on, not a hand-rolled
@@ -2343,14 +2378,14 @@ describe("mapAgyEvent (issue #253)", () => {
 // always reveal one more reachable kind, but an undeclared one reaching the
 // frontend's capability-filtered UI would be a real, user-visible bug.
 describe("hook adapter emits capability parity (issue: extend surfaced session statuses)", () => {
-  function kindsOf(mapped) {
+  function kindsOf(mapped: MappedHookEvent | MappedHookEvent[] | null | undefined): string[] {
     if (mapped === null || mapped === undefined) return [];
     return Array.isArray(mapped) ? mapped.map((m) => m.kind) : [mapped.kind];
   }
 
   it("claude-code: every registered hook event's mapped kind(s) are declared in emits", () => {
     const settings = buildClaudeHookSettings("/forwarder");
-    const payloadsByEvent = {
+    const payloadsByEvent: Record<string, unknown[]> = {
       Notification: [{ message: "hi" }],
       Stop: [{}],
       SessionStart: [{ source: "startup" }],

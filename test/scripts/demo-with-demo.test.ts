@@ -1,6 +1,38 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withDemo } from "../../scripts/demo/with-demo.mjs";
+import { withDemo as withDemoImpl } from "../../scripts/demo/with-demo.mjs";
+
+/**
+ * with-demo.mjs is plain JS, so its exported function carries no declared
+ * parameter types — and `Parameters<typeof withDemoImpl>` cannot recover
+ * them either: TypeScript infers a JS function's parameter list from its
+ * BODY, and the type it lands on is not assignable to `(...args: any) =>
+ * any`, so the whole `Parameters<>` collapses to `never` (every option
+ * would then have to be `never`). The options are therefore spelled out
+ * here, which is also where the `signals` stub's honest shape lives: the
+ * demo only ever calls `.on`/`.off` on it (the module's own doc comment
+ * says: "signals is the event target for SIGINT/SIGTERM (process, or a
+ * stub in tests)"), so it does NOT have to be a whole Process.
+ */
+type SignalTarget = {
+  on(event: string | symbol, listener: (...args: unknown[]) => void): unknown;
+  off(event: string | symbol, listener: (...args: unknown[]) => void): unknown;
+};
+
+/** The demo the module tears down, and the browser it closes. */
+type DemoHandle = { stop: () => Promise<void> };
+type BrowserHandle = { close: () => Promise<void> };
+
+type WithDemoOptions = {
+  startDemo: () => Promise<DemoHandle>;
+  launchBrowser: () => Promise<BrowserHandle>;
+  run: (browser: BrowserHandle, demo: DemoHandle, signal: AbortSignal) => Promise<unknown>;
+  signals: SignalTarget;
+  lateLaunchMs?: number;
+};
+
+const withDemo = (opts: WithDemoOptions): Promise<unknown> =>
+  withDemoImpl({ ...opts, signals: opts.signals as NodeJS.Process });
 
 function fakes() {
   const demo = { stop: vi.fn(async () => {}) };
@@ -130,7 +162,7 @@ describe("withDemo", () => {
     const launchStarted = new Promise<void>((r) => (launched = r));
     const launchBrowser = () => {
       launched();
-      return new Promise(() => {});
+      return new Promise<BrowserHandle>(() => {});
     };
 
     const result = withDemo({ startDemo, launchBrowser, run: vi.fn(), signals, lateLaunchMs: 20 });
