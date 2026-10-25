@@ -12,6 +12,7 @@ import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
+import { cloneWithRemote } from "../helpers/git-clone.js";
 import type { CloneHealth } from "../../src/shared/types.js";
 import {
   SIGNATURE_HEADER,
@@ -965,38 +966,9 @@ describe("internal routes (agent role, issue #26)", () => {
   it("fetches a clone on this agent", async () => {
     const app = await buildApp();
     // Inside this agent's PROJECTS_ROOTS — the route confines the cwd there.
+    // Inside this agent's PROJECTS_ROOTS — the route confines the cwd there.
     const base = fs.mkdtempSync(path.join(projectsRoot, "internal-git-fetch-"));
-    const remote = path.join(base, "remote.git");
-    const work = path.join(base, "work");
-    const repo = path.join(base, "clone");
-    const author = {
-      ...gitEnv(),
-      GIT_AUTHOR_NAME: "Test",
-      GIT_AUTHOR_EMAIL: "test@example.com",
-      GIT_COMMITTER_NAME: "Test",
-      GIT_COMMITTER_EMAIL: "test@example.com",
-    };
-    execFileSync("git", ["init", "-q", "--bare", remote], { env: gitEnv() });
-    execFileSync("git", ["init", "-q", work], { env: gitEnv() });
-    fs.writeFileSync(path.join(work, "a.txt"), "hello\n");
-    execFileSync("git", ["-C", work, "add", "-A"], { env: gitEnv() });
-    execFileSync("git", ["-C", work, "commit", "-q", "-m", "one"], { env: author });
-    execFileSync("git", ["-C", work, "remote", "add", "origin", remote], { env: gitEnv() });
-    execFileSync("git", ["-C", work, "push", "-q", "origin", "HEAD:refs/heads/main"], {
-      env: gitEnv(),
-    });
-    execFileSync("git", ["clone", "-q", remote, repo], { env: gitEnv() });
-    // A commit on the remote the clone does not have: only a fetch brings it.
-    fs.writeFileSync(path.join(work, "b.txt"), "more\n");
-    execFileSync("git", ["-C", work, "add", "-A"], { env: gitEnv() });
-    execFileSync("git", ["-C", work, "commit", "-q", "-m", "two"], { env: author });
-    execFileSync("git", ["-C", work, "push", "-q", "origin", "HEAD:refs/heads/main"], {
-      env: gitEnv(),
-    });
-    const head = execFileSync("git", ["-C", work, "rev-parse", "HEAD"], {
-      env: gitEnv(),
-      encoding: "utf8",
-    }).trim();
+    const { repo, fetchedHead: head } = cloneWithRemote(base);
 
     try {
       const res = await app.inject({
@@ -1016,6 +988,29 @@ describe("internal routes (agent role, issue #26)", () => {
       fs.rmSync(base, { recursive: true, force: true });
       await app.close();
     }
+  });
+
+  it("skips a git-pull for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-pull-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-pull",
+        payload: { cwd: repo },
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(expect.objectContaining({ pulled: false, reason: "busy" }));
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
   });
 
   it("skips a git-fetch for a clone a git operation has claimed", async () => {

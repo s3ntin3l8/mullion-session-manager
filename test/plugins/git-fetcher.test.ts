@@ -1,12 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildTestApp } from "../helpers/app.js";
-import { gitEnv } from "../../src/services/git-env.js";
 import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 import { markCloneBusy, releaseClone } from "../../src/services/git-clone-busy.js";
+import { cloneWithRemote, hasFetched } from "../helpers/git-clone.js";
 
 // The auto-fetch sweep and the clone REPAIR (issue #1896) both run `git
 // fetch` on the same clone, and the repair also rewrites its indexes — so a
@@ -25,65 +24,6 @@ async function waitUntil(check: () => boolean, timeoutMs = 15000): Promise<void>
   throw new Error("condition never became true");
 }
 
-/**
- * A clone with a real local remote, and a commit on the remote that the clone
- * does NOT have yet — so a fetch is observable: before the fetch the clone's
- * origin/main is the first commit, after it the second.
- */
-function cloneWithRemote(): { repo: string; fetchedHead: string } {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "git-fetcher-"));
-  const remote = path.join(base, "remote.git");
-  const work = path.join(base, "work");
-  const repo = path.join(base, "clone");
-  const author = {
-    ...gitEnv(),
-    GIT_AUTHOR_NAME: "Test",
-    GIT_AUTHOR_EMAIL: "test@example.com",
-    GIT_COMMITTER_NAME: "Test",
-    GIT_COMMITTER_EMAIL: "test@example.com",
-  };
-  execFileSync("git", ["init", "-q", "--bare", remote], { env: gitEnv() });
-  execFileSync("git", ["init", "-q", work], { env: gitEnv() });
-  fs.writeFileSync(path.join(work, "a.txt"), "hello\n");
-  execFileSync("git", ["-C", work, "add", "-A"], { env: gitEnv() });
-  execFileSync("git", ["-C", work, "commit", "-q", "-m", "one"], { env: author });
-  execFileSync("git", ["-C", work, "remote", "add", "origin", remote], { env: gitEnv() });
-  execFileSync("git", ["-C", work, "push", "-q", "origin", "HEAD:refs/heads/main"], {
-    env: gitEnv(),
-  });
-  execFileSync("git", ["clone", "-q", remote, repo], { env: gitEnv() });
-
-  // A second commit on the remote, pushed AFTER the clone: the clone only
-  // learns about it through a fetch.
-  fs.writeFileSync(path.join(work, "b.txt"), "more\n");
-  execFileSync("git", ["-C", work, "add", "-A"], { env: gitEnv() });
-  execFileSync("git", ["-C", work, "commit", "-q", "-m", "two"], { env: author });
-  execFileSync("git", ["-C", work, "push", "-q", "origin", "HEAD:refs/heads/main"], {
-    env: gitEnv(),
-  });
-  const fetchedHead = execFileSync("git", ["-C", work, "rev-parse", "HEAD"], {
-    env: gitEnv(),
-    encoding: "utf8",
-  }).trim();
-  return { repo, fetchedHead };
-}
-
-/** Whether the clone has fetched the remote's newer commit. */
-const hasFetched = (repo: string, head: string): boolean => {
-  try {
-    const ref = execFileSync(
-      "git",
-      ["-C", repo, "rev-parse", "--verify", "refs/remotes/origin/main"],
-      { env: gitEnv(), stdio: ["ignore", "pipe", "ignore"] },
-    )
-      .toString()
-      .trim();
-    return ref === head;
-  } catch {
-    return false;
-  }
-};
-
 describe("gitFetcherPlugin: the clone it shares with the repair (issue #1896)", () => {
   const dirs: string[] = [];
 
@@ -94,8 +34,9 @@ describe("gitFetcherPlugin: the clone it shares with the repair (issue #1896)", 
   });
 
   it("fetches a clone that nothing else has claimed", async () => {
-    const { repo, fetchedHead } = cloneWithRemote();
-    dirs.push(path.dirname(repo));
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "git-fetcher-"));
+    const { repo, fetchedHead } = cloneWithRemote(base);
+    dirs.push(base);
     const app = await buildTestApp();
     const created = await app.inject({
       method: "POST",
@@ -114,8 +55,9 @@ describe("gitFetcherPlugin: the clone it shares with the repair (issue #1896)", 
   });
 
   it("skips a clone a git operation has already claimed", async () => {
-    const { repo, fetchedHead } = cloneWithRemote();
-    dirs.push(path.dirname(repo));
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "git-fetcher-"));
+    const { repo, fetchedHead } = cloneWithRemote(base);
+    dirs.push(base);
 
     // Stand in for a repair, which claims the clone before it fetches. The
     // claim happens BEFORE the project exists, so no sweep tick can slip in

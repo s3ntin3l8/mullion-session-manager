@@ -1364,7 +1364,18 @@ export async function internalRoutes(app: FastifyInstance) {
       const { cwd } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await runGitPull(resolvedCwd);
+      // A pull fetches AND merges, and the merge writes the index a repair
+      // rewrites — so it claims the clone, and skips it when a git operation
+      // is already working on it (issue #1896).
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        return { pulled: false, reason: "busy", detail: "a git operation is already running" };
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        return await runGitPull(resolvedCwd);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
     },
   );
 
