@@ -43,6 +43,7 @@ import {
   type GitDiffStats,
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { inspectGitClone } from "../services/git-doctor.js";
 import { runGitPull } from "../services/git-pull.js";
 import { runGitInit } from "../services/git-init.js";
 import {
@@ -3505,6 +3506,44 @@ export async function projectsRoute(app: FastifyInstance) {
       properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
     },
   };
+  // Issue #1851 — a read-only health check on this project's clone: is it
+  // whole, or has a background `git gc` damaged it? It never mutates
+  // anything; the repair stays a deliberate, operator-run action.
+  //
+  // The doctor lives in src/services/git-doctor.ts so the CLI
+  // (scripts/git-doctor.mjs) and this route share one implementation.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-health",
+    { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      if (project.hostId === LOCAL_HOST_ID) {
+        return await inspectGitClone(project.cwd);
+      }
+
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveGitHealth(project.cwd);
+      } catch (err) {
+        // An agent that REJECTED the request is alive and answering: a 400 for
+        // a cwd outside its PROJECTS_ROOTS, or a 404 from an agent that
+        // predates /internal/git-health (the mixed-version fleet case, #244
+        // and #527). "Unreachable" is a different fact, and the wrong one
+        // here — the 503 stays, but the message says which it was.
+        const message =
+          err instanceof HostRequestError
+            ? `Host ${project.hostId} rejected the health check: ${err.message}`
+            : `Host ${project.hostId} is unreachable`;
+        app.log.warn({ hostId: project.hostId, projectId, err }, message);
+        return reply.serviceUnavailable(message);
+      }
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/git-fetch",
     { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },

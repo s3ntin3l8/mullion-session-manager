@@ -155,6 +155,37 @@ git config gc.auto 0
 and run `git gc` by hand when you want it, ideally when nothing else is
 writing.
 
+### Finding out whether it happened
+
+If a repository does get damaged — by your own git, or by another tool — the
+Git panel has a **Check** button. It runs a read-only health check on the
+repository and says plainly whether it is whole, and if not, what is wrong with
+it (how many zero-byte objects, how many `git fsck` errors).
+
+It never changes anything. The repair moves files and rewrites indexes, so it
+stays a deliberate action you run yourself, on the machine that holds the
+clone:
+
+```sh
+make git-doctor APPLY=1 DIR=/path/to/the/clone
+```
+
+`DIR` is the clone to work on; it defaults to the current directory, so
+`make git-doctor` from inside a clone inspects that clone. The repair never
+deletes anything — a damaged object is MOVED into a `gc-quarantine-*`
+directory inside the clone's git directory, where it can still be recovered by
+hand.
+
+In a **release install** there is no `make` and no `tsx`; the script itself is
+in the install, and the compiled doctor sits next to it in `dist/`:
+
+```sh
+node scripts/git-doctor.mjs --apply /path/to/the/clone
+```
+
+For a clone on a remote host, run it there (the same Mullion checkout, on
+that host).
+
 ### Turning Mullion's fetches off entirely
 
 If you would rather Mullion did not fetch in a repository at all, that is

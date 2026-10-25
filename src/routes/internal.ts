@@ -96,6 +96,7 @@ import {
   searchProjectFiles,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { inspectGitClone } from "../services/git-doctor.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
@@ -1250,6 +1251,21 @@ export async function internalRoutes(app: FastifyInstance) {
       ]);
       if (!branches || !worktrees || !remoteBranches) return null;
       return { branches, worktrees, remoteBranches, defaultBranch };
+    },
+  );
+
+  // Issue #1851 — the READ-ONLY clone health check, for a remote-hosted
+  // project's clone. Like every other filesystem-touching route in this file,
+  // it goes through resolveWithinRoots. It never mutates anything.
+  app.get<{ Querystring: { cwd?: string } }>(
+    "/internal/git-health",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await inspectGitClone(resolvedCwd);
     },
   );
 

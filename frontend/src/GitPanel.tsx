@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api/index.js";
-import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api/index.js";
+import type {
+  CloneHealth,
+  GitBranchesResult,
+  GitFileStatus,
+  GitStatus,
+  Session,
+} from "./api/index.js";
 import { GitBranchIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
@@ -117,6 +123,9 @@ export function GitPanel({
   );
   const [isFetching, setIsFetching] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [health, setHealth] = useState<CloneHealth | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
   // Issue #442 — per-row refusal state for branch delete / worktree remove,
   // keyed by `branch:<name>` / `worktree:<path>`. Cleared on a successful
@@ -153,6 +162,7 @@ export function GitPanel({
   );
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
+  const checkProjectGitHealth = useDashboardStore((s) => s.checkProjectGitHealth);
   const effectiveAutoFetch = autoFetch ?? globalEnabled;
   const isInherited = autoFetch === null;
 
@@ -431,6 +441,25 @@ export function GitPanel({
     }
   }, [params.projectId, pullProjectGit, refreshAll]);
 
+  // Issue #1851 — a READ-ONLY health check on this project's clone. It never
+  // mutates anything; the repair stays an operator-run action.
+  const handleCheckHealth = useCallback(async () => {
+    setIsCheckingHealth(true);
+    setHealth(null);
+    // The previous run's error must go too, or a failed check followed by a
+    // successful one shows the stale error next to "This repository is
+    // healthy." (handlePull does the same with setPullError.)
+    setHealthError(null);
+    try {
+      setHealth(await checkProjectGitHealth(params.projectId));
+    } catch (err) {
+      console.debug("[GitPanel] checkProjectGitHealth failed", err);
+      setHealthError(describeError(err, "the health check failed"));
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  }, [params.projectId, checkProjectGitHealth]);
+
   const handleToggleAutoFetch = useCallback(async () => {
     const store = useDashboardStore.getState();
     const p = store.projects.find((p) => p.id === params.projectId);
@@ -551,6 +580,14 @@ export function GitPanel({
           >
             {isPulling ? "⟳" : "↓"} Pull
           </button>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleCheckHealth}
+            disabled={isCheckingHealth}
+            title="Check this repository for damage from a background git gc (read-only)"
+          >
+            {isCheckingHealth ? "⟳" : "✓"} Check
+          </button>
           <span className="git-panel-toggle-wrapper">
             <Toggle
               size="small"
@@ -579,7 +616,67 @@ export function GitPanel({
       </div>
 
       {pullError && (
-        <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+        // role="alert", like the health failure below: a failed pull is
+        // silent to a screen reader otherwise.
+        <div className="github-panel-empty-row github-panel-conflicts" role="alert">
+          {pullError}
+        </div>
+      )}
+
+      {healthError && (
+        // role="alert", like the git-status failure above: a failed check
+        // that only tints the panel is silent to a screen reader.
+        <div className="github-panel-empty-row github-panel-conflicts" role="alert">
+          {healthError}
+        </div>
+      )}
+
+      {health && (
+        // The danger style is for REAL damage only. "Not a git repository"
+        // and "the check did not finish" are not findings, so they get the
+        // neutral row — same reasoning as the stale-status note above. And
+        // only real damage is worth the assertive announcement.
+        <div
+          className={
+            health.healthy || health.gitDir === null || health.timedOut
+              ? "github-panel-empty-row"
+              : "github-panel-empty-row github-panel-conflicts"
+          }
+          role={
+            health.healthy
+              ? undefined
+              : health.timedOut || health.gitDir === null
+                ? "status"
+                : "alert"
+          }
+        >
+          {health.healthy ? (
+            "This repository is healthy."
+          ) : health.gitDir === null ? (
+            // Not a git checkout at all — there is no clone here to be
+            // damaged, so "looks damaged" would be the wrong story.
+            "This project is not a git repository, so there is no clone to check."
+          ) : health.timedOut ? (
+            <>
+              The health check did not finish — <code>git fsck</code> timed out. Nothing was
+              changed, and this is NOT a verdict: the clone may well be fine. Try again when the
+              machine is less busy.
+            </>
+          ) : (
+            <>
+              This repository looks damaged
+              {health.zeroByteObjects.length > 0 &&
+                `: ${health.zeroByteObjects.length} zero-byte object(s)`}
+              {health.otherZeroByteFiles.length > 0 &&
+                `: ${health.otherZeroByteFiles.length} other zero-byte file(s)`}
+              {health.fsckErrors.length > 0 && `: ${health.fsckErrors.length} fsck error(s)`}. A
+              background git gc can do this — repair it with{" "}
+              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> (or{" "}
+              <code>node scripts/git-doctor.mjs --apply &lt;path&gt;</code>) on the machine that
+              holds the clone.
+            </>
+          )}
+        </div>
       )}
 
       <div className="github-panel-section">

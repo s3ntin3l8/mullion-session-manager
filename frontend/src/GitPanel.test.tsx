@@ -29,11 +29,26 @@ function mockFetch(opts: {
   branches?: () => Response | Promise<Response>;
   pull?: () => Response | Promise<Response>;
   fetch?: () => Response | Promise<Response>;
+  health?: () => Response | Promise<Response>;
   fileDiff?: (url: string) => Response | Promise<Response>;
   log?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.includes("/git-health")) {
+      return Promise.resolve(
+        opts.health
+          ? opts.health()
+          : jsonResponse(200, {
+              healthy: true,
+              zeroByteObjects: [],
+              otherZeroByteFiles: [],
+              fsckErrors: [],
+              gitDir: "/tmp/x/.git",
+              timedOut: false,
+            }),
+      );
+    }
     if (url.includes("/git-pull")) {
       return Promise.resolve(opts.pull ? opts.pull() : jsonResponse(200, { pulled: true }));
     }
@@ -271,6 +286,162 @@ describe("GitPanel", () => {
       await screen.findByText("Changes (1)");
       expect(screen.queryByLabelText("Edit src/a.ts")).toBeNull();
     });
+  });
+
+  // Issue #1851 — the READ-ONLY clone health check.
+  it("reports a healthy repository when the check says so", async () => {
+    vi.stubGlobal("fetch", mockFetch({ status: () => jsonResponse(200, CLEAN_STATUS) }));
+    render(<GitPanel params={{ projectId: 7 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText("This repository is healthy.")).toBeInTheDocument();
+  });
+
+  it("says what is wrong when the repository is damaged", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: ["ab/cdef"],
+            otherZeroByteFiles: [],
+            fsckErrors: ["error: invalid sha1 pointer in cache-tree of .git/index"],
+            timedOut: false,
+          }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 8 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/This repository looks damaged/)).toBeInTheDocument();
+    expect(screen.getByText(/1 zero-byte object/)).toBeInTheDocument();
+    expect(screen.getByText(/1 fsck error/)).toBeInTheDocument();
+    // Real damage IS the danger style.
+    expect(screen.getByText(/This repository looks damaged/).className).toContain(
+      "github-panel-conflicts",
+    );
+  });
+
+  // A project that is not a git repository at all has no clone to be
+  // damaged — "looks damaged" would be the wrong story.
+  it("says the project is not a git repository when there is no clone", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: null,
+            zeroByteObjects: [],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: false,
+          }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 14 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/not a git repository/)).toBeInTheDocument();
+    expect(screen.queryByText(/looks damaged/)).toBeNull();
+    // Not a finding, so not the danger style either.
+    expect(screen.getByText(/not a git repository/).className).not.toContain(
+      "github-panel-conflicts",
+    );
+  });
+
+  // A check that could not finish has no verdict. Saying "looks damaged"
+  // would send the user to repair a clone that may well be fine.
+  it("says the check did not finish when it timed out, rather than that the repository is damaged", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: [],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: true,
+          }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 12 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText(/looks damaged/)).toBeNull();
+  });
+
+  // A failed check must not leave its error on screen next to a later
+  // successful one.
+  it("clears a previous failure when a later check succeeds", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () => {
+          calls++;
+          return calls === 1
+            ? jsonResponse(500, { message: "the clone could not be inspected" })
+            : jsonResponse(200, {
+                healthy: true,
+                zeroByteObjects: [],
+                otherZeroByteFiles: [],
+                fsckErrors: [],
+                gitDir: "/tmp/x/.git",
+                timedOut: false,
+              });
+        },
+      }),
+    );
+    render(<GitPanel params={{ projectId: 13 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    expect(await screen.findByText(/the clone could not be inspected/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    expect(await screen.findByText("This repository is healthy.")).toBeInTheDocument();
+    // The stale error is gone.
+    expect(screen.queryByText(/the clone could not be inspected/)).toBeNull();
+  });
+
+  // A failed check must say so. Silence here would read as "healthy" —
+  // the one thing the check exists to rule out.
+  it("reports an error when the health check itself fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () => jsonResponse(500, { message: "the clone could not be inspected" }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 9 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/the clone could not be inspected/)).toBeInTheDocument();
+    expect(screen.queryByText("This repository is healthy.")).toBeNull();
+    // A failed check is announced, not just tinted — the same role="alert"
+    // the git-status failure uses.
+    expect(screen.getByRole("alert")).toHaveTextContent(/the clone could not be inspected/);
   });
 
   it("shows ahead/behind counts when they differ from zero", async () => {

@@ -13,6 +13,7 @@ import type {
   GitStatus,
   GitStatusProblem,
   GitPullResult,
+  CloneHealth,
   Group,
   Host,
   NotificationEvent,
@@ -259,6 +260,8 @@ export interface GitSlice {
   refreshGitRefs: (projectIds?: number[]) => Promise<void>;
   fetchProjectGit: (projectId: number) => Promise<void>;
   pullProjectGit: (projectId: number) => Promise<GitPullResult>;
+  // Issue #1851 — the read-only clone health check.
+  checkProjectGitHealth: (projectId: number) => Promise<CloneHealth>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
   gitRefreshTrigger: number;
   bumpGitRefreshTrigger: () => void;
