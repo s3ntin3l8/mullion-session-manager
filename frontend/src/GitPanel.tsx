@@ -24,7 +24,12 @@ export interface GitPanelParams {
   projectId: number;
 }
 
-import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./git/gitReasons.js";
+import {
+  FORCEABLE_REASONS,
+  isDefaultBranchName,
+  pullReasonMessage,
+  reasonMessage,
+} from "./git/gitReasons.js";
 
 // Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
 // convention (same technique as Dock.tsx's own isDockPreviewPath) — a
@@ -442,7 +447,7 @@ export function GitPanel({
       if (result.pulled) {
         await refreshAll();
       } else {
-        setPullError(reasonMessage(result.reason, result.detail));
+        setPullError(pullReasonMessage(result.reason, result.detail));
       }
     } catch (err) {
       console.debug("[GitPanel] pullProjectGit failed", err);

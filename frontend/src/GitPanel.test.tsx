@@ -410,9 +410,9 @@ describe("GitPanel", () => {
   // A pull refused because a repair holds the clone is not a failure — it
   // must not read as "Action failed."
   it("says a busy clone was busy, not that the action failed", async () => {
-    const { reasonMessage } = await import("./git/gitReasons.js");
-    expect(reasonMessage("busy", undefined)).toMatch(/already running/i);
-    expect(reasonMessage("busy", undefined)).not.toMatch(/failed/i);
+    const { pullReasonMessage } = await import("./git/gitReasons.js");
+    expect(pullReasonMessage("busy", undefined)).toMatch(/already running/i);
+    expect(pullReasonMessage("busy", undefined)).not.toMatch(/failed/i);
   });
 
   // A failed check must not leave its error on screen next to a later
