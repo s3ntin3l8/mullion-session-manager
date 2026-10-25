@@ -13,7 +13,10 @@ describe("SettingsLoadingFallback", () => {
     const { container } = render(<SettingsLoadingFallback onClose={onClose} />);
 
     const dialog = screen.getByRole("dialog", { name: "Settings" });
-    expect(dialog).toHaveAttribute("aria-busy", "true");
+    expect(dialog).not.toHaveAttribute("aria-busy");
+    const body = container.querySelector(".settings-modal-body");
+    expect(body).toHaveAttribute("aria-busy", "true");
+    expect(body).toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     expect(container.querySelector(".terminal-status-spinner")).not.toBeInTheDocument();
 
@@ -22,10 +25,12 @@ describe("SettingsLoadingFallback", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    // The announcement is clipped off screen, not a second visible label.
+    // The announcement is clipped off screen, not a second visible label,
+    // and it is not inside the busy subtree.
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading settings");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "Close settings" }));
     expect(onClose).toHaveBeenCalledOnce();

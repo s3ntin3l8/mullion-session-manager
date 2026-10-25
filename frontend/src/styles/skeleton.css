@@ -12,7 +12,12 @@
    iteration — it does not remove the highlight — so `animation: none`
    here is what actually stops the sweep. `!important` is required to beat
    that reset's own !important longhands; the selector is more specific
-   than `*`, and this file is imported last. */
+   than `*`, and this file is imported last.
+
+   The highlight is a ::after overlay translated across an overflow-hidden
+   bone, not a background-position animation on the bone itself.
+   background-position is a paint property, so it would repaint every bone
+   on every frame. translateX stays on the compositor. */
 .ui-skeleton {
   display: block;
   width: 100%;
@@ -26,28 +31,37 @@
   pointer-events: none;
 }
 .ui-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.ui-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   background-image: linear-gradient(
     100deg,
     transparent 20%,
     color-mix(in srgb, var(--fg) 16%, transparent) 50%,
     transparent 80%
   );
-  background-size: 200% 100%;
-  background-repeat: no-repeat;
+  transform: translateX(-100%);
   animation: ui-skeleton-shimmer 1.35s ease-in-out infinite;
 }
 @keyframes ui-skeleton-shimmer {
   from {
-    background-position: 100% 0;
+    transform: translateX(-100%);
   }
   to {
-    background-position: -100% 0;
+    transform: translateX(100%);
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .ui-skeleton-shimmer {
+  .ui-skeleton-shimmer::after {
     animation: none !important;
-    background-image: none;
+    /* Static bone: no highlight left sitting on the fill. The initial
+       translate is already off the bone; dropping the pseudo removes it
+       outright when the media query matches before JS reads it. */
+    content: none;
   }
 }
 

@@ -63,8 +63,11 @@ describe("Settings -> Server", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveClass("visually-hidden");
+    expect(container.querySelector("[aria-busy='true']")).toHaveClass("ui-skeleton-stack");
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("visually-hidden");
+    expect(status).toHaveTextContent("Loading server status");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
   });
 
   it("shows an error instead of the loading state when the server status can't be loaded", async () => {

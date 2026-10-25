@@ -13,14 +13,16 @@ const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 function subscribeReducedMotion(onChange: () => void): () => void {
   // A non-browser host (or a test that tore matchMedia down) has nothing to
   // subscribe to. The bone then stays on the snapshot it already took.
-  if (typeof window.matchMedia !== "function") return () => {};
+  // `typeof window.matchMedia` still evaluates `window`, which throws
+  // ReferenceError when the host is undefined (SSR). Check the host first.
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
   const media = window.matchMedia(REDUCED_MOTION_QUERY);
   media.addEventListener("change", onChange);
   return () => media.removeEventListener("change", onChange);
 }
 
 function prefersReducedMotion(): boolean {
-  if (typeof window.matchMedia !== "function") return false;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
   return window.matchMedia(REDUCED_MOTION_QUERY).matches;
 }
 
@@ -53,8 +55,8 @@ export interface SkeletonProps {
  *
  * Always `aria-hidden`: a shimmering block is not content, and announcing
  * each bone would be noise. The surrounding region carries the loading
- * state (`SkeletonRegion`, or `aria-busy` plus a visually-hidden status on
- * a region that also holds real controls).
+ * state (`SkeletonRegion`: a visually-hidden status, with `aria-busy` on
+ * the bones and not on an ancestor of that status).
  *
  * The shimmer is motion for its own sake — it only says "still working".
  * When the user has asked the OS to stop moving things, the bone is a
@@ -79,11 +81,13 @@ export function Skeleton({ width, height, radius, className, style }: SkeletonPr
 
 /** The loading region around a group of bones.
  *
- * `aria-busy` marks the region as in flux. The visually-hidden status is
- * what a screen reader actually announces — `aria-busy` alone is not
- * reliably spoken, and a second visible "Loading…" would put the word this
- * primitive exists to retire back on screen. The bones sit in an
- * `aria-hidden` group so the status text is the only accessible content. */
+ * The visually-hidden status is what a screen reader actually announces —
+ * `aria-busy` alone is not reliably spoken, and a second visible "Loading…"
+ * would put the word this primitive exists to retire back on screen.
+ * `aria-busy` sits on the bones, not around the status: ARIA tells
+ * assistive technology to defer announcements inside a busy subtree, so a
+ * status nested under `aria-busy` would never be spoken. The bones are
+ * `aria-hidden` so the status text is the only accessible content. */
 export function SkeletonRegion({
   label,
   className,
@@ -94,11 +98,11 @@ export function SkeletonRegion({
   children: ReactNode;
 }) {
   return (
-    <div className={className} aria-busy="true">
+    <div className={className}>
       <span className="visually-hidden" role="status">
         {label}
       </span>
-      <div className="ui-skeleton-bones" aria-hidden="true">
+      <div className="ui-skeleton-bones" aria-hidden="true" aria-busy="true">
         {children}
       </div>
     </div>

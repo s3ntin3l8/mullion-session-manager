@@ -114,10 +114,11 @@ describe("GitPanel", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
+    expect(container.querySelector(".ui-skeleton-bones")).toHaveAttribute("aria-busy", "true");
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading git status");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
   });
 
   it("shows the branch, hash, and a clean-tree message once loaded", async () => {

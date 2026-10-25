@@ -681,19 +681,20 @@ export function UnifiedBoard({
         ref={mainRef}
         style={{ "--task-drawer-width": `${drawerWidth}px` } as CSSProperties}
       >
+        {!tasksLoaded && (
+          <span className="visually-hidden" role="status">
+            Loading tasks
+          </span>
+        )}
         <div
           className="kanban-unified-tasks"
-          // The task fetch, not the session lane below. aria-busy lives on
-          // this region; a visually-hidden status is the announcement,
-          // because the columns also hold real controls (the toolbar) and
-          // a role="status" on the whole region would read all of them out.
+          // Busy marks the columns in flux, not the announcement. The
+          // status is a sibling of this element: aria-busy tells assistive
+          // technology to defer anything inside the subtree, so nesting the
+          // status here would silence it. A role="status" on the region
+          // itself would also read the toolbar out.
           aria-busy={tasksLoaded ? undefined : true}
         >
-          {!tasksLoaded && (
-            <span className="visually-hidden" role="status">
-              Loading tasks
-            </span>
-          )}
           <TasksToolbar
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}

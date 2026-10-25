@@ -60,22 +60,28 @@ describe("ui/Skeleton", () => {
     expect(bone.style.borderRadius).toBe("8px");
   });
 
-  it("puts the loading announcement on the region, not on the bones", () => {
+  it("puts the loading announcement outside the busy bones", () => {
     const { container } = render(
       <SkeletonRegion label="Loading GitHub">
         <Skeleton />
       </SkeletonRegion>,
     );
     const region = container.firstElementChild as HTMLElement;
-    expect(region).toHaveAttribute("aria-busy", "true");
-    // The status is the announcement. It is the visually-hidden clip, not
-    // a second visible "Loading…" next to the bones.
+    const bones = region.querySelector(".ui-skeleton-bones");
+    // Busy marks the bones, not the region. A status inside aria-busy is
+    // deferred by assistive technology and never spoken.
+    expect(bones).toHaveAttribute("aria-busy", "true");
+    expect(bones).toHaveAttribute("aria-hidden", "true");
+    expect(region).not.toHaveAttribute("aria-busy");
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Loading GitHub");
     expect(status).toHaveClass("visually-hidden");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
     const bone = container.querySelector(".ui-skeleton");
     expect(bone).toHaveAttribute("aria-hidden", "true");
-    expect(bone?.closest("[aria-hidden='true']")).not.toBeNull();
+    // closest() on the bone itself matches the bone's own aria-hidden, so
+    // deleting the group's aria-hidden would still pass. Start at the parent.
+    expect(bone?.parentElement?.closest("[aria-hidden='true']")).toBe(bones);
   });
 });

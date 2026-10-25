@@ -210,10 +210,11 @@ describe("GitHubPanel", () => {
     for (const bone of bones) {
       expect(bone).toHaveAttribute("aria-hidden", "true");
     }
-    expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
+    expect(container.querySelector(".ui-skeleton-bones")).toHaveAttribute("aria-busy", "true");
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading GitHub");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
   });
 
   it("lists pull requests and issues with titles and links once loaded", async () => {

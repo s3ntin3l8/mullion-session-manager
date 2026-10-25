@@ -191,6 +191,12 @@ describe("UnifiedBoard task columns", () => {
     const status = screen.getByRole("status");
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading tasks");
+    // The status is a sibling of the busy region, not a descendant. aria-busy
+    // would otherwise defer the announcement.
+    expect(status.closest("[aria-busy='true']")).toBeNull();
+    for (const count of container.querySelectorAll(".kanban-column-count")) {
+      expect(count.textContent).toBe("");
+    }
   });
 
   it("calls refreshTasks on mount", () => {
