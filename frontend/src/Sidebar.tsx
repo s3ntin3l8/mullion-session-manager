@@ -2209,18 +2209,22 @@ function DiscoverProjects({
   // Only rendered once a remote host actually exists — same "no extra UI
   // for a single-host deployment" rule CreateProjectModal's own selector
   // follows.
+  //
+  // The picker needs no click-suppression wrapper: it is the header ROW's
+  // sibling, not a descendant of the toggle, so a click on it never
+  // reaches the toggle's handler in the first place (issue #1893). It is
+  // also not inside the empty-state branch's own tree, which has no click
+  // handler either.
   const hostPicker = remoteHosts.length > 0 && (
-    <span onClick={(e) => e.stopPropagation()}>
-      <Dropdown
-        small
-        value={selectedHostId}
-        onChange={setHostId}
-        options={[
-          { value: LOCAL_HOST_ID, label: "This machine" },
-          ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
-        ]}
-      />
-    </span>
+    <Dropdown
+      small
+      value={selectedHostId}
+      onChange={setHostId}
+      options={[
+        { value: LOCAL_HOST_ID, label: "This machine" },
+        ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
+      ]}
+    />
   );
 
   if (remaining.length === 0) {

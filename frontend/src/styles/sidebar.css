@@ -1605,15 +1605,12 @@ button.discover-header {
   min-width: 0;
   cursor: pointer;
 }
-/* The hover feedback follows the hit area, not the row: for the toggle row
+/* The hover feedback follows the hit area, not the row. For the toggle row
    that is the toggle, so the inert padding strip does not light up; for a
    native <button> styled as a discover header the whole row IS the target.
    The `:has()` form is the codebase's existing idiom for exactly this
    (see styles/terminal.css). */
-.discover-header:has(.discover-header-toggle:hover) {
-  border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
-  color: var(--fg);
-}
+.discover-header:has(.discover-header-toggle:hover),
 button.discover-header:hover {
   border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
   color: var(--fg);
