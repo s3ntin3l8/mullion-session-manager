@@ -638,14 +638,14 @@ describe("Settings -> Devices (issue #1326)", () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     await user.click(await screen.findByText("Create an emulator"));
-    expect(await screen.findByText(/No virtual devices on this host yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No virtual devices on this machine yet/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
   });
 
   // Hermes review (round 1) — a load failure used to leave `avds` empty
   // while `avdsLoaded` was still set true, so the empty-state text ("No
-  // AVDs on this host yet") rendered ALONGSIDE the actual error, telling
-  // the user to "create one below" when the real problem is a
+  // virtual devices on this machine yet") rendered ALONGSIDE the actual
+  // error, telling the user to "create one below" when the real problem is a
   // misconfigured DEVICE_AVDMANAGER_PATH.
   it("shows only the error, not the empty-AVDs message, when GET /api/avds fails", async () => {
     avdsShouldFail = true;
@@ -656,7 +656,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(
       await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/No virtual devices on this host yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No virtual devices on this machine yet/)).not.toBeInTheDocument();
   });
 
   it("+ New AVD reveals the system image and device profile pickers", async () => {

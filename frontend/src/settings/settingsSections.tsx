@@ -56,7 +56,7 @@ export function resolveSettingsSection(id: SettingsSectionLink): SettingsSection
     : (id as SettingsSection);
 }
 
-type SettingsGroup = "Personal" | "Sessions & agents" | "Workspace" | "Connections" | "System";
+type SettingsGroup = "Personal" | "Sessions & agents" | "Local" | "Connections" | "System";
 
 // Nav order is this array's order; a group heading is rendered before the
 // first section of each group.
@@ -139,28 +139,28 @@ export const SECTIONS: Array<{
   },
   {
     id: "projects",
-    group: "Workspace",
+    group: "Local",
     title: "Projects",
     desc: "Where Mullion finds repositories, and how often it fetches them.",
     icon: (size) => <FolderIcon size={size} />,
   },
   {
     id: "dock",
-    group: "Workspace",
+    group: "Local",
     title: "Dock & previews",
     desc: "Preview worktrees, dev-server detection, and Docker services.",
     icon: (size) => <DockIcon size={size} />,
   },
   {
     id: "browser",
-    group: "Workspace",
+    group: "Local",
     title: "Browser",
     desc: "Stream quality and sign-in cookies for a project's browser pane.",
     icon: (size) => <GlobeIcon size={size} />,
   },
   {
     id: "devices",
-    group: "Workspace",
+    group: "Local",
     title: "Devices",
     desc: "Android emulators and phones streamed into the dashboard.",
     icon: (size) => <DeviceIcon size={size} />,

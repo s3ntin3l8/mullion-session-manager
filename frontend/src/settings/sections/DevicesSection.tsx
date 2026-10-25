@@ -864,7 +864,7 @@ export function DevicesSection() {
             </div>
           )}
           {avdsLoaded && avds.length > 0 && (
-            <Row label="Virtual device" desc="An Android virtual device (AVD) on this host.">
+            <Row label="Virtual device" desc="An Android virtual device (AVD) on this machine.">
               <Dropdown
                 options={avds.map((n) => ({ value: n, label: n }))}
                 value={avdName}
@@ -874,7 +874,7 @@ export function DevicesSection() {
           )}
           {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
             <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
-              No virtual devices on this host yet. Create one below.
+              No virtual devices on this machine yet. Create one below.
             </div>
           )}
           {avdsError && <ErrorText style={{ marginTop: 8 }}>{avdsError}</ErrorText>}
@@ -918,7 +918,7 @@ export function DevicesSection() {
                 </div>
               )}
               {provisioningLoaded && systemImages.length > 0 && (
-                <Row label="System image" desc="An Android system image installed on this host.">
+                <Row label="System image" desc="An Android system image installed on this machine.">
                   <Dropdown
                     options={systemImages.map((img) => ({
                       value: img.packagePath,
@@ -1129,7 +1129,7 @@ export function DevicesSection() {
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         {img.installed ? (
                           <ConfirmButton
-                            title={`Uninstall ${img.packagePath} — removes this system image from the host`}
+                            title={`Uninstall ${img.packagePath} — removes this system image from this machine`}
                             onConfirm={() => installOp.uninstall(img.packagePath)}
                             disabled={installOp.status === "running"}
                           >
@@ -1180,7 +1180,7 @@ export function DevicesSection() {
         <Modal onClose={() => setShowLicenseModal(false)} title="Accept SDK licenses">
           <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 12 }}>
             Some Android SDK packages require accepting Google's license agreements before they can
-            be installed. This accepts all pending SDK licenses on the host.
+            be installed. This accepts all pending SDK licenses on this machine.
           </div>
           {licenseOp.status === "running" && (
             <div style={{ marginTop: 10 }}>
