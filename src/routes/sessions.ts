@@ -496,6 +496,14 @@ export async function sessionsRoute(app: FastifyInstance) {
     "/api/sessions",
     { schema: createSessionSchema },
     async (request, reply) => {
+      // Issue #1951 — the one targeting check that only exists on the wire:
+      // `targetHostId` + `targetPlatform` collapse into a single `target`
+      // below, so the service never sees the pair. The other contradictory
+      // options (hostId+target, isolate+worktree, isolate+cwd) are enforced
+      // in createSessionRecord and surface here as `invalid-options` (400).
+      if (request.body.targetHostId !== undefined && request.body.targetPlatform !== undefined) {
+        return reply.badRequest("targetHostId and targetPlatform are mutually exclusive");
+      }
       // Issue #957 — when the caller doesn't supply a model, resolve the
       // install-wide default so manual opencode spawns also pick it up (same
       // as Task Master spawns do via task-claim/task-reconciler). Gated to
@@ -503,12 +511,6 @@ export async function sessionsRoute(app: FastifyInstance) {
       // is meaningless for a non-opencode command, and an unguarded stamp
       // renders a misleading model badge on a row whose agent will never
       // read it (Hermes review warning, PR #961 round 2).
-      // Issue #1951 — the targeting/isolation options are validated before
-      // anything else: they are cheap, and a contradictory request should not
-      // spend a model-resolution pass.
-      if (request.body.targetHostId !== undefined && request.body.targetPlatform !== undefined) {
-        return reply.badRequest("targetHostId and targetPlatform are mutually exclusive");
-      }
       const isOpencode = commandIsOpencode(request.body.command);
       // Claude Code / Codex / agy: same default resolution (no parent
       // inheritance — see the issue's out-of-scope note), landing as
