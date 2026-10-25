@@ -1,7 +1,7 @@
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 
-import { CloseIcon, ChevronRightIcon } from "./ui/icons.js";
-import { phoneSections } from "./settings/settingsSections.js";
+import { CloseIcon, ChevronRightIcon, SearchIcon } from "./ui/icons.js";
+import { filterSettingsSections, phoneSections } from "./settings/settingsSections.js";
 import type { SettingsSection } from "./settings/settingsSections.js";
 import { useDashboardStore } from "./store/index.js";
 import { KanbanBoardOverlay } from "./panels/registry.js";
@@ -70,10 +70,26 @@ export function PhoneNavigatorHeader({
 // The Settings tab: the same grouped section list Settings.tsx's own nav
 // rail is built from (SECTIONS), as full-width 44px rows. Picking one opens
 // Settings straight into that section.
+//
+// The list is filterable (issue #1880): the phone showed every section
+// unfiltered, so finding one of the 18 meant scrolling past all of them.
+// The filter is the desktop rail's own — filterSettingsSections, shared with
+// Settings.tsx so the two agree on what a query finds.
 export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSection) => void }) {
-  const sections = phoneSections();
+  const [query, setQuery] = useState("");
+  const sections = filterSettingsSections(phoneSections(), query);
   return (
     <div className="phone-nav-settings">
+      <div className="phone-nav-settings-search">
+        <SearchIcon size={15} strokeWidth={1.9} />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search settings…"
+          aria-label="Search settings"
+        />
+      </div>
       {sections.map((s, i) => (
         <Fragment key={s.id}>
           {sections[i - 1]?.group !== s.group && (
@@ -86,6 +102,9 @@ export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSe
           </button>
         </Fragment>
       ))}
+      {sections.length === 0 && (
+        <div className="phone-nav-settings-empty">No matching settings.</div>
+      )}
     </div>
   );
 }

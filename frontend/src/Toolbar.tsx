@@ -174,11 +174,19 @@ export function Toolbar({
       {mobileSessionSlot && <div className="toolbar-mobile-session">{mobileSessionSlot}</div>}
       <div className="toolbar-actions">
         <button
-          className="run-cmd-btn"
+          className={`run-cmd-btn${phone ? " toolbar-icon-btn" : ""}`}
           onClick={onOpenLauncher}
           title={
             viewMode === "kanban" ? "Command palette (unavailable in Task view)" : "Command palette"
           }
+          // Phone shows this button icon-only (mobile.css drops the
+          // "Run command…" label and the ⌘K hint), so the visible text that
+          // names it on desktop is not there to name it here (issue #1880).
+          // The phone has no keyboard to speak of, so the palette's own name
+          // is the honest one — and it is the name the tooltip already uses.
+          // Desktop keeps the visible label as its accessible name: an
+          // aria-label there would override the visible text (WCAG 2.5.3).
+          aria-label={phone ? "Command palette" : undefined}
           disabled={viewMode === "kanban"}
         >
           <SearchIcon size={14} strokeWidth={1.9} />

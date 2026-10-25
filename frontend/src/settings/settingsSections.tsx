@@ -204,6 +204,29 @@ export function phoneSections(): typeof SECTIONS {
   return SECTIONS.filter((s) => !HIDDEN_ON_PHONE.has(s.id));
 }
 
+// The settings filter, shared by the desktop nav rail (Settings.tsx) and the
+// phone's navigator list (PhoneNavigator.tsx) so the two agree on what a
+// query finds (issue #1880). The phone's list had no filter at all, so
+// finding one of the sections meant scrolling; the desktop's had one.
+//
+// A query matches the section's NAME, its DESCRIPTION, and the control text
+// the section holds (SEARCH_INDEX). The description is new for the desktop
+// rail: searching "cleanup" now finds Storage ("Disk usage and cleanup")
+// rather than relying on the control index alone.
+export function filterSettingsSections(
+  sections: ReadonlyArray<(typeof SECTIONS)[number]>,
+  query: string,
+): Array<(typeof SECTIONS)[number]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [...sections];
+  return sections.filter(
+    (s) =>
+      s.title.toLowerCase().includes(q) ||
+      s.desc.toLowerCase().includes(q) ||
+      SEARCH_INDEX.some((entry) => entry.section === s.id && entry.text.includes(q)),
+  );
+}
+
 // A real (not cosmetic) filter over control labels — the nav rail's search
 // box (ported from the reference's 1a nav) narrows to sections that
 // actually contain a matching control, not just a section whose title

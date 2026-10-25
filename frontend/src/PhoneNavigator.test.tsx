@@ -63,6 +63,59 @@ describe("PhoneSettingsList", () => {
     await userEvent.click(screen.getByRole("button", { name: /Terminal/ }));
     expect(onSelect).toHaveBeenCalledWith("terminal");
   });
+
+  // Issue #1880 — the phone's list showed every section unfiltered, so
+  // finding one of the 18 meant scrolling past all of them, while the
+  // desktop's rail has filtered since the search index landed.
+  it("filters the list by section name", async () => {
+    render(<PhoneSettingsList onSelect={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Search settings"), "terminal");
+
+    expect(screen.getByRole("button", { name: /Terminal/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Storage/ })).toBeNull();
+  });
+
+  it("filters the list by section description, not just by name", async () => {
+    // The description is what the desktop's rail did NOT match, so this is
+    // the part that is new to the phone: "sign-in cookies" is in Browser's
+    // description and in no section's title.
+    render(<PhoneSettingsList onSelect={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Search settings"), "sign-in cookies");
+
+    expect(screen.getByRole("button", { name: /Browser/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Storage/ })).toBeNull();
+  });
+
+  it("drops the group headings of the sections the filter removed", async () => {
+    const { container } = render(<PhoneSettingsList onSelect={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Search settings"), "terminal");
+
+    const groups = Array.from(container.querySelectorAll(".phone-nav-settings-group")).map(
+      (el) => el.textContent,
+    );
+    // "Terminal" is a Personal section; the other four groups go away with
+    // the sections the filter removed.
+    expect(groups).toEqual(["Personal"]);
+  });
+
+  it("says so when nothing matches", async () => {
+    render(<PhoneSettingsList onSelect={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText("Search settings"), "zzzz");
+
+    expect(screen.getByText("No matching settings.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Terminal/ })).toBeNull();
+  });
+
+  it("clearing the query brings every section back", async () => {
+    render(<PhoneSettingsList onSelect={vi.fn()} />);
+    const input = screen.getByLabelText("Search settings");
+    await userEvent.type(input, "terminal");
+    await userEvent.clear(input);
+
+    for (const s of SECTIONS.filter((x) => x.id !== "dock")) {
+      expect(screen.getByRole("button", { name: new RegExp(s.title) })).toBeInTheDocument();
+    }
+  });
 });
 
 vi.mock("./panels/registry.js", () => ({
