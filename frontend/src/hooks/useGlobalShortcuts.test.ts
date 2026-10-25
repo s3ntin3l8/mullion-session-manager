@@ -288,11 +288,11 @@ describe("useGlobalShortcuts", () => {
     expect(clearSplitRequest).not.toHaveBeenCalled();
   });
 
-  // Issue #1887 — the cheat sheet and this listener share shortcutCatalog.
-  // Dispatching each app entry's own representative event (and requiring
-  // that event to match the catalog) fails if the hook stops consulting
-  // the catalog, or if a new app shortcut is added there without a branch
-  // here. The cases above pin the chords themselves.
+  // Issue #1887 — the id-list assertion is what fails when APP_SHORTCUTS
+  // grows without a representative keydown here. matchShortcut only checks
+  // that each representative is a chord the catalog accepts; it does not
+  // prove the hook consults the catalog (inline matchers for these same
+  // events still pass). The cases above pin the chords themselves.
   it("fires every app shortcut the catalog defines (issue #1887)", () => {
     const { openGlobalLauncher, openSettings } = renderShortcuts();
     const representative: Record<string, KeyboardEventInit> = {

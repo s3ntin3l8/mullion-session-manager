@@ -13,7 +13,7 @@ const GROUPS: Array<{ scope: ShortcutScope; title: string; desc: string }> = [
   {
     scope: "app",
     title: "Keyboard shortcuts",
-    desc: "These work anywhere, including while a terminal is focused.",
+    desc: "These work anywhere, including a focused terminal, except Ctrl + K. On macOS, ⌘ + K still opens the palette; Ctrl + K is the shell's kill-line. Key-conflict handling → Ctrl + K (“Reserved for command palette”), when on, gives that chord to the terminal instead of the browser and does not open the palette.",
   },
   {
     scope: "terminal",
