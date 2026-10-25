@@ -376,6 +376,22 @@ test && make format-check` before pushing.
 
 ## By design, not a gap
 
+- **`main` does not require an approving review yet**
+  (`required_approving_review_count` is unset; tracked in #1912). The bot's
+  review still runs and its findings are still addressed, but an approval is
+  not a merge gate, and turning it on is deliberately deferred, not rejected.
+  Two things have to be true first. (1) `s3ntin3l8/.github#129`: the
+  review-request guard compares the head SHA against a review's `commit_id`,
+  which GitHub re-points at the current head, so a stale-approval dismissal
+  plus a skipped re-review can deadlock a PR. (2) Task Master's own PRs need
+  an approver that is not their author. They are opened by the Mullion GitHub
+  App, and GitHub refuses an author's own approval, so today the App can only
+  comment. The opt-in **reviewer App** (#737; see
+  [GitHub integration](github-integration.md#reviewer-app-opt-in-a-second-identity--737))
+  posts a real `APPROVE` from a separate identity, but none is configured for
+  this repo. Hermes's `auto-review` skips `mullion/task-*` branches on
+  purpose, and release-please PRs get no reviewer at all — they would need
+  a review approval by hand.
 - **Release-please PRs are approval-gated.** The workflows on a
   release-please pull request sit at `action_required` with no jobs
   executed until the maintainer approves them, which happens as part of
