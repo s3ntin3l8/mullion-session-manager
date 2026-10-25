@@ -14,11 +14,15 @@
 // stylesheet that stops hiding the Dock, or starts hiding it under a
 // condition the predicate does not know.
 //
-// This script is that guard. It reads the stylesheets, finds the conditions
-// under which `.dock` is hidden, and fails when that set is not exactly the
-// predicate's own reason set. Change tablet.css's query to
-// `(any-pointer: coarse)`, or drop either `.dock { display: none }` rule, and
-// this fails.
+// This script is that guard. It finds EVERY rule in EVERY stylesheet that
+// hides `.dock`, works out the condition each one hangs under, and fails
+// unless that set of conditions is exactly the predicate's own reason set.
+// Two ways it can fail:
+//
+//   - a hiding rule under a condition the predicate does not know (a new
+//     media query, say) — the palette would promise a Dock the CSS hides;
+//   - a known condition with no hiding rule — the palette would warn about
+//     a Dock that is actually there.
 //
 // It lives here rather than in a vitest file for one concrete reason: Vitest
 // stubs CSS imports (`css: false` in frontend/vitest.config.ts), so a test
@@ -36,7 +40,7 @@
 // but a type, so it pulls neither React nor the store into this script's
 // typecheck or its runtime.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -51,8 +55,8 @@ const STYLES_DIR = path.join(ROOT, "frontend", "src", "styles");
 
 const TIERS: LayoutTier[] = ["phone", "tablet", "desktop"];
 
-// CSS comments are stripped before anything is matched. Both stylesheets
-// explain their rule in a comment that quotes the very query the rule uses
+// CSS comments are stripped before anything is matched. The stylesheets
+// explain their rules in comments that quote the very query the rule uses
 // (`gated on `(pointer: coarse)``), and a scanner that read comments would
 // find the comment's occurrence first, take the NEXT `{` as its block — which
 // is the real rule's block — and pass even when the rule itself had been
@@ -62,52 +66,125 @@ function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-// The text inside the block whose opening brace is at `open`.
-function blockAt(css: string, open: number): string {
-  let depth = 0;
-  for (let i = open; i < css.length; i++) {
-    if (css[i] === "{") depth++;
-    else if (css[i] === "}") {
-      depth--;
-      if (depth === 0) return css.slice(open, i);
-    }
-  }
-  return css.slice(open);
-}
-
-// The rules that hide the Dock, and the condition each one hangs under.
+// The conditions the predicate knows, and the query each one is written as.
 //
 // The leading paren is part of the pattern on purpose: `(pointer: coarse)`
 // and `(any-pointer: coarse)` are DIFFERENT queries — the first is the
 // primary pointer, the second includes a touch screen on a device whose
 // primary pointer is a mouse — and a guard that matched both would not be a
 // guard.
-const HIDING_RULES: Array<{ file: string; pattern: RegExp; reason: DockUnavailableReason }> = [
-  {
-    file: "tablet.css",
-    pattern: /\(pointer:\s*coarse\)/,
-    reason: "coarse-pointer",
-  },
-  {
-    file: "mobile.css",
-    pattern: /\[data-tier="phone"\]/,
-    reason: "phone-tier",
-  },
+const KNOWN_CONDITIONS: Array<{ pattern: RegExp; reason: DockUnavailableReason }> = [
+  { pattern: /\(pointer:\s*coarse\)/, reason: "coarse-pointer" },
+  { pattern: /\[data-tier="phone"\]/, reason: "phone-tier" },
 ];
 
-function dockHidingConditions(): DockUnavailableReason[] {
-  const found: DockUnavailableReason[] = [];
-  for (const { file, pattern, reason } of HIDING_RULES) {
-    const css = stripComments(readFileSync(path.join(STYLES_DIR, file), "utf8"));
-    // Every occurrence of the condition, and the Dock has to be hidden
-    // INSIDE one of their blocks — not merely somewhere below them.
-    for (const match of css.matchAll(new RegExp(pattern.source, "g"))) {
-      const open = css.indexOf("{", match.index);
-      if (open < 0) continue;
-      if (/\.dock\s*\{[^}]*display:\s*none/.test(blockAt(css, open))) {
-        found.push(reason);
-        break;
+interface LeafRule {
+  // The blocks this rule hangs under, outermost first: an at-rule's prelude
+  // (`@media (pointer: coarse)`), then any nested selector's own prelude.
+  // The rule's own selector is NOT one of them — the selector says WHAT the
+  // rule matches, the conditions say WHEN.
+  conditions: string[];
+  selector: string;
+  body: string;
+}
+
+// The index of the `}` that closes the `{` at `open`.
+function matchBrace(css: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < css.length; i++) {
+    if (css[i] === "{") depth++;
+    else if (css[i] === "}") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return css.length;
+}
+
+/**
+ * The leaf rules of a stylesheet, each with the conditions it hangs under.
+ *
+ * A leaf rule is one whose body holds declarations rather than nested
+ * rules — so a `@media` block, and this repo's
+ * `:where(.app[data-tier="phone"])` block, are not rules themselves; the
+ * rules inside them are, carrying those blocks as their conditions.
+ */
+function leafRules(css: string, conditions: string[] = []): LeafRule[] {
+  const found: LeafRule[] = [];
+  let i = 0;
+  while (i < css.length) {
+    const brace = css.indexOf("{", i);
+    if (brace === -1) break;
+    const head = css.slice(i, brace);
+    // What comes before this rule's selector may be the parent block's own
+    // trailing declarations, so the selector starts after the last `;` or
+    // `}` in the head.
+    const cut = Math.max(head.lastIndexOf(";"), head.lastIndexOf("}"));
+    const selector = (cut >= 0 ? head.slice(cut + 1) : head).trim();
+    const close = matchBrace(css, brace);
+    const body = css.slice(brace + 1, close);
+    if (selector) {
+      if (body.includes("{")) {
+        found.push(...leafRules(body, [...conditions, selector]));
+      } else {
+        found.push({ conditions, selector, body });
       }
+    }
+    i = close + 1;
+  }
+  return found;
+}
+
+// Whether a selector's SUBJECT is the Dock element itself — `.dock`, not
+// `.dock-header` or `.dock-group`.
+function targetsDock(selector: string): boolean {
+  return selector
+    .split(",")
+    .map((part) => part.trim().split(/\s+/).pop() ?? "")
+    .some((compound) => compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "") === ".dock");
+}
+
+// The `!important` is part of the pattern on purpose: the rules this script
+// guards against are literally `display: none !important`.
+const HIDES = /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
+
+interface HidingRule {
+  file: string;
+  condition: string;
+  reasons: DockUnavailableReason[];
+  unknown: boolean;
+}
+
+/**
+ * Every rule in every stylesheet that hides the Dock.
+ *
+ * `unknown` marks a hiding rule whose condition the predicate does not know
+ * — that is the case where the CSS hides the Dock somewhere the app's
+ * wording says it is available, and the script has to fail.
+ */
+function dockHidingRules(): HidingRule[] {
+  const found: HidingRule[] = [];
+  for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
+    const css = stripComments(readFileSync(path.join(STYLES_DIR, file), "utf8"));
+    for (const rule of leafRules(css)) {
+      if (!targetsDock(rule.selector)) continue;
+      if (!HIDES.test(rule.body)) continue;
+      const reasons: DockUnavailableReason[] = [];
+      let unknown = false;
+      for (const condition of rule.conditions) {
+        const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(condition));
+        if (known) {
+          if (!reasons.includes(known.reason)) reasons.push(known.reason);
+        } else {
+          unknown = true;
+        }
+      }
+      found.push({
+        file,
+        condition: rule.conditions.length ? rule.conditions.join(" → ") : "(no condition)",
+        reasons,
+        unknown,
+      });
     }
   }
   return found;
@@ -131,17 +208,29 @@ function predicateReasons(): DockUnavailableReason[] {
 }
 
 const predicate = predicateReasons();
-const css = [...new Set(dockHidingConditions())].sort();
+const hiding = dockHidingRules();
 
-// The two sets have to be the same. Either one alone is a lie: the
-// predicate's set is what the UI says, and the CSS's set is what the
-// browser does.
-if (JSON.stringify(predicate) !== JSON.stringify(css)) {
+// A hiding rule under a condition the predicate does not know: the CSS
+// hides the Dock somewhere the app's wording says it is available.
+const unknown = hiding.filter((h) => h.unknown);
+if (unknown.length > 0) {
   fail(
-    `the Dock's availability and the CSS that hides it disagree.\n` +
+    "the Dock is hidden under a condition the availability predicate does not know:\n" +
+      unknown.map((h) => `  ${h.file}: ${h.condition}`).join("\n") +
+      "\n  The predicate would promise a Dock the CSS hides. Add the condition to " +
+      "lib/dockAvailability.ts (a new reason, and its wording), or narrow the rule.",
+  );
+}
+
+// Every reason the predicate knows needs a hiding rule, and every hiding
+// rule needs a reason.
+const cssReasons = [...new Set(hiding.flatMap((h) => h.reasons))].sort();
+if (JSON.stringify(predicate) !== JSON.stringify(cssReasons)) {
+  fail(
+    "the Dock's availability and the CSS that hides it disagree.\n" +
       `  the predicate says the Dock is unavailable for: ${predicate.join(", ") || "(nothing)"}\n` +
-      `  the stylesheets hide it under:              ${css.join(", ") || "(nothing)"}\n` +
-      `  every reason needs a hiding rule, and every hiding rule needs a reason.`,
+      `  the stylesheets hide it under:              ${cssReasons.join(", ") || "(nothing)"}\n` +
+      "  every reason needs a hiding rule, and every hiding rule needs a reason.",
   );
 }
 

@@ -198,6 +198,16 @@ export function Dock({
   // Settings section state their reason from — rather than testing the
   // pointer alone. Without that, the phone tier mounted the very
   // DockProjectGroups this gate exists to suppress.
+  //
+  // A BEHAVIOUR CHANGE, deliberately: a fine-pointer phone-tier window used
+  // to mount its dock monitors — invisibly (mobile.css hides `.dock`), but
+  // mounted, and every one of them registered its TerminalPane with the
+  // terminal input registry. They no longer mount. That is the same
+  // invisible-Dock hazard this gate was written for (the comment above
+  // spells out why the gate exists at all), and the same ambiguity
+  // tablet.css documents: hiding the element is not the same as unmounting
+  // it. Nothing visible changes — the Dock is `display: none` on the phone
+  // tier either way — and Dock.test.tsx pins it.
   const dockUnavailable = useDockUnavailableReason();
   const [collapsed, setCollapsed] = useState(() => readBool(STORAGE_KEYS.dockCollapsed, false));
   const [height, setHeight] = useState(() => {
