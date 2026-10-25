@@ -61,7 +61,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
   // killed pane, a failed favourites fetch) — so a toast that expires
   // while it is being read is a message that cannot be read at all
   // (WCAG 2.2.1).
-  const [paused, setPaused] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  // Hover and focus are INDEPENDENT reasons to hold the toast open. One
+  // boolean for both would let either event clear the other's pause: a
+  // toast that is still focused would expire the moment the pointer left
+  // it, and a toast under the pointer would expire when focus moved away.
+  const paused = hovered || focused;
   // The time left when the timer was last (re)started. A plain
   // `setTimeout` restarted from scratch on every pause would give a
   // hovered toast an unbounded lifetime; this keeps the ORIGINAL
@@ -87,10 +93,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
     <div
       className={`toast toast--${toast.kind}`}
       role={toast.kind === "error" ? "alert" : undefined}
-      onMouseEnter={() => setPaused(true)}
-      onMouseLeave={() => setPaused(false)}
-      onFocus={() => setPaused(true)}
-      onBlur={() => setPaused(false)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
     >
       {/* The error variant's icon is the NON-COLOUR cue: the background is
           tinted with --r, but the message itself must never be carried by

@@ -285,4 +285,36 @@ describe("ToastHost", () => {
     });
     expect(screen.queryByText("it broke")).toBeNull();
   });
+
+  // Hover and focus are INDEPENDENT reasons to hold the toast open. With
+  // one boolean for both, either event would clear the other's pause: a
+  // toast that is still focused would expire the moment the pointer left
+  // it, and a toast under the pointer would expire when focus moved away.
+  it("stays paused when the pointer leaves but the toast still has focus", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const toast = screen.getByRole("alert");
+    fireEvent.mouseEnter(toast);
+    fireEvent.focus(toast);
+    // The pointer leaves; the toast is still focused.
+    fireEvent.mouseLeave(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByText("it broke")).toBeInTheDocument();
+  });
+
+  it("stays paused when focus leaves but the pointer is still over the toast", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const toast = screen.getByRole("alert");
+    fireEvent.mouseEnter(toast);
+    fireEvent.focus(toast);
+    // Focus leaves; the pointer is still over the toast.
+    fireEvent.blur(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByText("it broke")).toBeInTheDocument();
+  });
 });
