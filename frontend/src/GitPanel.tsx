@@ -616,7 +616,11 @@ export function GitPanel({
       </div>
 
       {pullError && (
-        <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+        // role="alert", like the health failure below: a failed pull is
+        // silent to a screen reader otherwise.
+        <div className="github-panel-empty-row github-panel-conflicts" role="alert">
+          {pullError}
+        </div>
       )}
 
       {healthError && (
