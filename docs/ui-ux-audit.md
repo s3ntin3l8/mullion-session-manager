@@ -103,13 +103,17 @@ publishes it through a React context. The controls point `aria-labelledby` at
 that id, so the browser computes the accessible name from the label as it is
 actually rendered. An explicit `ariaLabel` prop still wins at every level.
 
-`aria-labelledby` rather than a copied-in `aria-label` on purpose. The first
-cut of this fix derived the label's text in JS and handed it down as an
-`aria-label` — which works for a plain string label, but only ever
-approximates what is rendered: a label whose text comes from a child
-component's own render (rather than from a literal prop) walked to the empty
-string and named the control nothing at all. Letting the browser resolve the
-reference makes that case correct by construction.
+`aria-labelledby` rather than a copied-in `aria-label` on purpose. The
+browser computes the accessible name from the label as it is actually
+rendered; deriving the text in JS would have to re-implement that render,
+so it can only ever be an approximation of it.
+
+The first cut of this fix did derive the label's text and hand it down as
+an `aria-label` — and fell back to `aria-labelledby` when the derivation
+came out empty, so a label whose text comes from a child component's own
+render was named correctly then too. The change is a simplification rather
+than a bug fix: there is one way of naming a control now instead of two,
+and no JS re-implementation of the render to keep in step with it.
 
 A `<label for>` was rejected, but for a different reason than
 `aria-labelledby`: the control lives in a sibling subtree

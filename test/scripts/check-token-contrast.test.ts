@@ -68,6 +68,7 @@ describe("check-token-contrast.mjs", () => {
   // regression the role split exists to prevent.
   for (const [description, value] of [
     ["the 3-digit hex", "#fff"],
+    ["the 4-digit hex", "#ffff"],
     ["the 6-digit hex", "#ffffff"],
     ["an uppercase 3-digit hex", "#FFF"],
     ["an uppercase 6-digit hex", "#FFFFFF"],
@@ -88,6 +89,10 @@ describe("check-token-contrast.mjs", () => {
 
   // A colour that is NOT white must not trip the guard — a false positive
   // here would fail `npm run lint` on a legal rule.
+  //
+  // `#fff0` is the interesting one: 4-digit hex is #RGBA, so `#ffff` is
+  // opaque white and `#fff0` is the same white at zero alpha — which is
+  // not white text on anything. Both are pinned, one on each side.
   for (const [description, value] of [
     ["yellow", "#ffff00"],
     ["a near-white grey", "#f8f8f8"],

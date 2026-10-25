@@ -30,12 +30,15 @@ import type { ReactNode } from "react";
  * `aria-labelledby` references the same visible text and is valid for every
  * control type.
  *
- * `aria-labelledby` rather than a copied-in `aria-label` on purpose: the
- * browser computes the name from what is actually RENDERED, so a label
- * whose text comes from a child component's own render (rather than from a
- * literal prop) is still named correctly. Deriving the text in JS and
- * copying it into `aria-label` would have to re-implement that walk, and
- * it can only ever be an approximation of the rendered result.
+ * `aria-labelledby` rather than a copied-in `aria-label`: the browser
+ * computes the name from what is actually RENDERED, and deriving the text
+ * in JS would have to re-implement that render, so it can only ever be an
+ * approximation of it. An earlier cut of this did derive the text and
+ * hand it down as an `aria-label`, falling back to `aria-labelledby` when
+ * the derivation came out empty — so a label whose text comes from a
+ * child component's own render was named correctly then too. There is one
+ * way of naming a control now, rather than two, and no JS
+ * re-implementation of the render to keep in step with it.
  */
 type RowLabelContextValue = {
   labelId: string;
