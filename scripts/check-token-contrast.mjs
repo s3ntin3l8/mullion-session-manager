@@ -35,9 +35,21 @@
 //      next to `color: #fff` and the fill-role rule is violated again.
 //      It reads the stylesheets only — a colour written inline in a TSX
 //      `style={{ ... }}` object is out of its reach.
+//
+//   3. FADED GRAPHICS — a graphical object that is deliberately de-emphasised
+//      with `opacity` still has to clear 3:1 (WCAG 1.4.11) as the COMPOSITE
+//      it paints, against the surface it sits on. Checks 1 and 2 compare a
+//      token against a token, so neither of them can see an opacity fade:
+//      `.ws-drag-handle` painted `--dim` — which clears 4.5:1 on every
+//      surface on its own — at `opacity: 0.4`, and the composite over
+//      `--sidebar` was 1.88:1 (dark) / 1.74:1 (light) (issue #1908).
+//      The browser harness in `scripts/verify-ui-runtime.mjs` measures this
+//      in a real browser, but it is a MANUAL gate, so the regression it
+//      catches would not fail CI on its own.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseColor, renderSample } from "./lib/color-math.mjs";
 
 const ROOT = path.resolve(
   process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
@@ -244,6 +256,204 @@ for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
       failures.push(
         `${file}: "${selector}" puts white text on var(--${token}), which is not a fill-role ` +
           `token (${FILL_ROLE_TOKENS.join(", ")} are) — use one of those instead`,
+      );
+    }
+  }
+}
+
+// Faded graphics: a graphical object that is deliberately de-emphasised with
+// `opacity` still has to clear 3:1 (WCAG 1.4.11) as the COMPOSITE it paints.
+//
+// The two checks above cannot see this class of defect: they compare a token
+// against a token, so an `opacity` fade — which is what turns a legible token
+// into an illegible pixel — is invisible to them. The workspace row's drag
+// handle was the shipped example (issue #1908): `--dim` at `opacity: 0.4`
+// composited over `--sidebar` to 1.88:1 (dark) / 1.74:1 (light), and the
+// handle was a graphical object.
+//
+// Each entry names the rule that paints the object at REST, the surface it is
+// painted on, the minimum the composite has to clear, and the rule that lifts
+// the de-emphasis when the user engages with it.
+//
+// SCOPE: this reads the AUTHORED rules, and matches the selector EXACTLY.
+// `.ws-drag-handle` is the resting rule; `.workspace-item:hover
+// .ws-drag-handle` and `.workspace-item.active .ws-drag-handle` are
+// different selectors and are deliberately not merged into it. A rule that
+// reaches the same element through a compound selector — or inside an
+// `@media` block — would not be seen here;
+// `scripts/verify-ui-runtime.mjs` measures the real thing in a browser, and
+// says as much in its own report.
+const FADED_GRAPHICS = [
+  {
+    file: "sidebar.css",
+    selector: ".ws-drag-handle",
+    liftSelector: ".workspace-item:hover .ws-drag-handle",
+    surface: "sidebar",
+    minRatio: 3,
+    what: "the workspace row's drag handle at rest",
+  },
+];
+
+/**
+ * The stylesheet's top-level rules, with its comments stripped.
+ *
+ * Rules inside an at-rule block (`@media`, `@supports`) are skipped: this
+ * guard judges the rule as authored, and a conditional override is a
+ * different question — the browser harness in
+ * `scripts/verify-ui-runtime.mjs` measures the real thing, viewport and all.
+ */
+function rulesIn(css) {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [];
+  let cursor = 0;
+  while (cursor < stripped.length) {
+    const open = stripped.indexOf("{", cursor);
+    if (open === -1) break;
+    const header = stripped.slice(cursor, open).trim();
+    // The matching close brace, so a nested block is not read as a rule.
+    let depth = 1;
+    let end = open + 1;
+    while (end < stripped.length && depth > 0) {
+      const ch = stripped[end];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      end++;
+    }
+    if (!header.startsWith("@")) {
+      rules.push({
+        selectors: header.split(",").map((s) => s.replace(/\s+/g, " ").trim()),
+        body: stripped.slice(open + 1, end - 1),
+      });
+    }
+    cursor = end;
+  }
+  return rules;
+}
+
+/**
+ * The declarations that apply to one exact selector, merged in source order.
+ *
+ * Later declarations win, as they do in the cascade for rules of equal
+ * specificity — which is what makes this a faithful reading of the
+ * stylesheet rather than a search for one declaration.
+ */
+function declarationsFor(rules, selector) {
+  const declarations = new Map();
+  for (const rule of rules) {
+    if (!rule.selectors.includes(selector)) continue;
+    for (const declaration of rule.body.split(";")) {
+      const colon = declaration.indexOf(":");
+      if (colon === -1) continue;
+      const property = declaration.slice(0, colon).trim().toLowerCase();
+      const value = declaration.slice(colon + 1).trim();
+      if (property) declarations.set(property, value);
+    }
+  }
+  return declarations;
+}
+
+/** A declaration's colour, resolved to a hex for the theme at hand. */
+function resolvePainted(value, theme) {
+  const token = /^var\(\s*--([\w-]+)\s*\)$/.exec(value);
+  if (token) return theme[token[1]] ?? null;
+  if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value;
+  return null;
+}
+
+for (const faded of FADED_GRAPHICS) {
+  const file = path.join(STYLES_DIR, faded.file);
+  let css;
+  try {
+    css = readFileSync(file, "utf8");
+  } catch {
+    failures.push(
+      `${faded.file}: cannot be read, so "${faded.selector}" (${faded.what}) cannot be checked`,
+    );
+    continue;
+  }
+  const rules = rulesIn(css);
+  const resting = declarationsFor(rules, faded.selector);
+  if (resting.size === 0) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" (${faded.what}) is gone — nothing paints it any more`,
+    );
+    continue;
+  }
+
+  // The de-emphasis itself: the object must still be quieter than full
+  // strength at rest, and must still come to full strength when the user
+  // engages with it. A handle that is dim at rest AND dim when hovered is a
+  // permanent fade, which is the state the browser harness judges hardest.
+  const opacity = resting.has("opacity") ? Number(resting.get("opacity")) : 1;
+  if (!Number.isFinite(opacity)) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" has an opacity this check cannot read ` +
+        `(${resting.get("opacity")})`,
+    );
+    continue;
+  }
+  if (opacity >= 1) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" (${faded.what}) must stay de-emphasised at rest ` +
+        `(an opacity below 1) — it is at ${opacity}`,
+    );
+  }
+
+  const lift = declarationsFor(rules, faded.liftSelector);
+  const liftOpacity = lift.has("opacity") ? Number(lift.get("opacity")) : null;
+  if (!lift.size) {
+    failures.push(
+      `${faded.file}: "${faded.liftSelector}" is gone, so "${faded.selector}" ` +
+        `(${faded.what}) never lifts — the de-emphasis has to lift when the user engages with it`,
+    );
+  } else if (liftOpacity !== 1) {
+    failures.push(
+      `${faded.file}: "${faded.liftSelector}" must lift "${faded.selector}" to full strength ` +
+        `(opacity: 1) — it is at ${lift.get("opacity")}`,
+    );
+  }
+
+  const painted = resting.get("color");
+  if (!painted) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour — ` +
+        `nothing paints it any more`,
+    );
+    continue;
+  }
+
+  for (const [themeName, theme] of [
+    ["dark", dark],
+    ["light", light],
+  ]) {
+    const surface = theme[faded.surface];
+    const color = resolvePainted(painted, theme);
+    if (!color || !surface) {
+      failures.push(
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} on ` +
+          `--${faded.surface}, which cannot be resolved in the ${themeName} theme`,
+      );
+      continue;
+    }
+    const rendered = renderSample({
+      color,
+      layers: [parseColor(surface)],
+      opacity,
+    });
+    if (!rendered.resolved || rendered.ratio === null) {
+      failures.push(
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} at ` +
+          `opacity ${opacity} on --${faded.surface} (${surface}) in the ${themeName} theme, ` +
+          `which cannot be measured`,
+      );
+      continue;
+    }
+    if (rendered.ratio < faded.minRatio) {
+      failures.push(
+        `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted} at ` +
+          `opacity ${opacity} on --${faded.surface} (${surface}) — ${rendered.ratio.toFixed(2)}:1 ` +
+          `in the ${themeName} theme, below the ${faded.minRatio}:1 WCAG 1.4.11 asks of a ` +
+          `graphical object`,
       );
     }
   }

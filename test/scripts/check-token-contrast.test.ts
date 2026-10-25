@@ -17,6 +17,14 @@
 // through execFile the same way) and pins every spelling of white it must
 // catch — and the ones it must NOT catch, because a false positive here
 // would fail the lint step on a perfectly legal rule.
+//
+// The script's THIRD half is the faded-graphics check: a graphical object
+// that is deliberately de-emphasised with `opacity` has to clear 3:1 as
+// the COMPOSITE it paints. The other two halves compare a token against a
+// token, so an opacity fade is invisible to them — which is how the
+// workspace row's drag handle shipped at 1.88:1 (dark) / 1.74:1 (light)
+// at rest (#1908). The cases at the end of this file pin that half: the
+// real stylesheets pass, and each way the fix can regress fails loudly.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +38,7 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCRIPT = path.join(REPO_ROOT, "scripts", "check-token-contrast.mjs");
 const REAL_TOKENS = path.join(REPO_ROOT, "frontend", "src", "styles", "tokens.css");
+const REAL_SIDEBAR = path.join(REPO_ROOT, "frontend", "src", "styles", "sidebar.css");
 
 describe("check-token-contrast.mjs", () => {
   let root: string;
@@ -43,6 +52,10 @@ describe("check-token-contrast.mjs", () => {
     // STYLESHEET, and using the real tokens means the token-contrast half
     // of the check is genuinely exercised rather than stubbed.
     fs.copyFileSync(REAL_TOKENS, path.join(stylesDir, "tokens.css"));
+    // The real sidebar, for the same reason: the faded-graphics half of the
+    // check reads the stylesheet's AUTHORED rules, so the fixture has to
+    // carry the real ones for the check to have anything to read.
+    fs.copyFileSync(REAL_SIDEBAR, path.join(stylesDir, "sidebar.css"));
   });
 
   afterEach(() => {
@@ -132,5 +145,68 @@ describe("check-token-contrast.mjs", () => {
     const result = await run();
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("--dim");
+  });
+
+  /* ---------------------------------------------------------- faded graphics -- */
+
+  // The third half of the check: a graphical object that is deliberately
+  // de-emphasised with `opacity` has to clear 3:1 (WCAG 1.4.11) as the
+  // COMPOSITE it paints. The token check cannot see this class of defect —
+  // it compares a token against a token — which is exactly how the drag
+  // handle shipped at 1.88:1 (dark) / 1.74:1 (light) at rest (#1908).
+
+  /** Write a variant of the real sidebar stylesheet. */
+  function writeSidebar(transform: (css: string) => string): void {
+    const css = fs.readFileSync(REAL_SIDEBAR, "utf8");
+    fs.writeFileSync(path.join(stylesDir, "sidebar.css"), transform(css));
+  }
+
+  it("passes on the real stylesheets", async () => {
+    const result = await run();
+    expect(result.code).toBe(0);
+  });
+
+  it("fails when the drag handle's resting opacity drops below 3:1", async () => {
+    // 0.4 is the value the handle shipped with: `--dim` composited over
+    // `--sidebar` at 40 % strength was 1.88:1 (dark) / 1.74:1 (light).
+    writeSidebar((css) =>
+      css.replace(/(\.ws-drag-handle \{[^}]*?)opacity: 0\.75;/, "$1opacity: 0.4;"),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".ws-drag-handle");
+    expect(result.stderr).toContain("below the 3:1 WCAG 1.4.11");
+    // Both themes are reported: the light one binds, but the dark one has
+    // to be reported too, or a regression that only shows up there is silent.
+    expect(result.stderr).toContain("in the dark theme");
+    expect(result.stderr).toContain("in the light theme");
+  });
+
+  it("fails when the de-emphasis stops lifting on hover", async () => {
+    // The handle is meant to be quiet at rest and full strength once the
+    // row is engaged. A lift that stops at 95 % is a de-emphasis that never
+    // really lifts.
+    writeSidebar((css) =>
+      css.replace(
+        /(\.workspace-item:hover \.ws-drag-handle \{[^}]*?)opacity: 1;/,
+        "$1opacity: 0.95;",
+      ),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(".workspace-item:hover .ws-drag-handle");
+    expect(result.stderr).toContain("full strength");
+  });
+
+  it("fails when the handle stops being de-emphasised at rest", async () => {
+    // Full strength at rest is legible, so it is not a contrast failure —
+    // but it is the loss of a deliberate presentation state, and the guard
+    // says so rather than letting it happen quietly.
+    writeSidebar((css) =>
+      css.replace(/(\.ws-drag-handle \{[^}]*?)opacity: 0\.75;/, "$1opacity: 1;"),
+    );
+    const result = await run();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("must stay de-emphasised at rest");
   });
 });

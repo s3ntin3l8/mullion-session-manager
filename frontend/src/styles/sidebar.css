@@ -606,7 +606,19 @@
   color: var(--dim);
   cursor: grab;
   flex-shrink: 0;
-  opacity: 0.4;
+  /* The grip is a GRAPHICAL OBJECT, so WCAG 1.4.11 asks 3:1 of it — and
+     `--dim` on its own clears that easily. What did not clear it was the
+     fade: at `opacity: 0.4` the handle composited over `--sidebar` to
+     1.88:1 (dark) / 1.74:1 (light), under the threshold (issue #1908).
+     The shipped token guard could not see it — it compares a token against
+     a token, never against a faded composite.
+
+     0.75 is the resting opacity that clears 3:1 in BOTH themes (3.52:1
+     dark, 3.16:1 light as `make verify-ui` measures them — the light theme
+     binds) while keeping the grip visibly secondary to the row's own text.
+     The hover lift below still brings it to full strength, so the
+     de-emphasis survives: the handle is quiet until the row is engaged. */
+  opacity: 0.75;
   transition: opacity 0.1s;
   user-select: none;
 }
