@@ -1,6 +1,13 @@
 import type { Terminal } from "@xterm/xterm";
 import type { AppSettings } from "../api/index.js";
-import { matchesChord, type KeyChord } from "./keyChord.js";
+import type { KeyChord } from "./keyChord.js";
+import {
+  COPY_SHORTCUT,
+  FIND_SHORTCUT,
+  matchShortcut,
+  RIGHT_SIDEBAR_SHORTCUT,
+  VOICE_SHORTCUT,
+} from "./shortcutCatalog.js";
 
 // Extracted verbatim from TerminalPane.tsx (PR 35, Wave 6 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the key-conflict handler,
@@ -160,34 +167,33 @@ export function attachKeyConflictHandler(opts: {
         onPaste?.();
         return false;
       }
-      // Toggle right sidebar (Ctrl/Cmd+Alt+B, handled by useGlobalShortcuts).
-      // Left to xterm it would be sent to the PTY as ESC ^B and its
-      // propagation stopped, so the window listener never sees it; returning
-      // false makes xterm skip the event and let it bubble. Matched on `code`
-      // since Option+B types a different `key` on macOS.
-      if (
-        (event.ctrlKey || event.metaKey) &&
-        event.altKey &&
-        !event.shiftKey &&
-        event.code === "KeyB"
-      ) {
+      // Toggle right sidebar (Ctrl/Cmd+Alt+B). The chord itself is
+      // RIGHT_SIDEBAR_SHORTCUT — the same definition useGlobalShortcuts
+      // matches, so xterm and the window listener can't disagree about
+      // which keydown this is. Left to xterm it would be sent to the PTY
+      // as ESC ^B and its propagation stopped, so the window listener
+      // never sees it; returning false makes xterm skip the event and let
+      // it bubble. The phone gate lives on the window listener, not here:
+      // this branch only has to get out of the way.
+      if (matchShortcut(RIGHT_SIDEBAR_SHORTCUT, event)) {
         return false;
       }
       // Voice dictation push-to-talk. The chord is user-configurable
       // (#1119 — the shipped default, Ctrl+Shift+Space, turned out to
       // collide with 1Password's Quick Access default on Windows/Linux),
-      // via keyChord.ts's matchesChord using exact modifier equality —
-      // matching how every other chord in this file spells out its negated
-      // modifiers rather than accepting "at least these". event.repeat is
-      // excluded so a physically-held key doesn't call onVoicePress on
-      // every OS key-repeat tick — TerminalPane's own idempotent
-      // press-while-already-held guard would no-op those anyway, but
-      // filtering here keeps the intent explicit at the source. getVoiceChord
-      // returning null (voice or the hotkey toggle off) is the enablement
-      // gate; not folded into the shared `reservedKeys` set above — see that
-      // param's own doc comment for why.
+      // via the catalog's voice entry, which delegates to matchesChord's
+      // exact modifier equality — matching how every other chord in this
+      // file spells out its negated modifiers rather than accepting "at
+      // least these". event.repeat is excluded so a physically-held key
+      // doesn't call onVoicePress on every OS key-repeat tick —
+      // TerminalPane's own idempotent press-while-already-held guard
+      // would no-op those anyway, but filtering here keeps the intent
+      // explicit at the source. getVoiceChord returning null (voice or
+      // the hotkey toggle off) is the enablement gate; not folded into
+      // the shared `reservedKeys` set above — see that param's own doc
+      // comment for why.
       const voiceChord = getVoiceChord?.();
-      if (voiceChord && !event.repeat && matchesChord(event, voiceChord)) {
+      if (voiceChord && !event.repeat && matchShortcut(VOICE_SHORTCUT, event, voiceChord)) {
         event.preventDefault();
         onVoicePress?.();
         return false;
@@ -204,8 +210,9 @@ export function attachKeyConflictHandler(opts: {
       // does). Always active, unlike Ctrl+R/L/K above: no shell or TUI binds
       // Ctrl+Shift+F, so there's no existing terminal-program convention for
       // it to shadow, and thus no need to gate it behind a
-      // settings.terminal.keyCapture toggle.
-      if (event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey && key === "f") {
+      // settings.terminal.keyCapture toggle. The binding is FIND_SHORTCUT
+      // so the cheat sheet can't advertise a different chord.
+      if (matchShortcut(FIND_SHORTCUT, event)) {
         event.preventDefault();
         onToggleFind?.();
         return false;
@@ -219,7 +226,7 @@ export function attachKeyConflictHandler(opts: {
       // Cmd+C (macOS) needs no handling here: meta-only chords are never
       // translated to PTY control bytes by xterm, so it already only
       // triggers the browser's native copy.
-      if (event.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey && key === "insert") {
+      if (matchShortcut(COPY_SHORTCUT, event)) {
         event.preventDefault();
         onCopy?.();
         return false;

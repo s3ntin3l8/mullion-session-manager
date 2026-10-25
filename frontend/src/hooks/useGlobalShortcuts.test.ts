@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useGlobalShortcuts } from "./useGlobalShortcuts.js";
 import { canLaunchTerminal } from "../panelUtils.js";
+import { APP_SHORTCUTS, matchShortcut } from "../lib/shortcutCatalog.js";
 
 // Mirrors useDockviewDrop.test.ts's own store-mock shape: a `storeState()`
 // factory serving `useDashboardStore.getState()`, the only call form this
@@ -285,5 +286,43 @@ describe("useGlobalShortcuts", () => {
 
     expect(openGlobalLauncher).not.toHaveBeenCalled();
     expect(clearSplitRequest).not.toHaveBeenCalled();
+  });
+
+  // Issue #1887 — the cheat sheet and this listener share shortcutCatalog.
+  // Dispatching each app entry's own representative event (and requiring
+  // that event to match the catalog) fails if the hook stops consulting
+  // the catalog, or if a new app shortcut is added there without a branch
+  // here. The cases above pin the chords themselves.
+  it("fires every app shortcut the catalog defines (issue #1887)", () => {
+    const { openGlobalLauncher, openSettings } = renderShortcuts();
+    const representative: Record<string, KeyboardEventInit> = {
+      "command-palette": { key: "k", ctrlKey: true },
+      settings: { key: ",", metaKey: true },
+      "right-sidebar": { key: "∫", code: "KeyB", metaKey: true, altKey: true },
+      dismiss: { key: "Escape" },
+    };
+    expect(APP_SHORTCUTS.map((shortcut) => shortcut.id).sort()).toEqual(
+      Object.keys(representative).sort(),
+    );
+
+    for (const shortcut of APP_SHORTCUTS) {
+      const event = dispatchKeyDown(representative[shortcut.id]);
+      expect(matchShortcut(shortcut, event), shortcut.id).toBe(true);
+    }
+
+    expect(openGlobalLauncher).toHaveBeenCalledTimes(1);
+    expect(openSettings).toHaveBeenCalledTimes(1);
+    expect(toggleRightSidebar).toHaveBeenCalledTimes(1);
+    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not tighten Ctrl+K or Ctrl+, against Shift or Alt (issue #1887)", () => {
+    const { openGlobalLauncher, openSettings } = renderShortcuts();
+
+    dispatchKeyDown({ key: "k", ctrlKey: true, shiftKey: true });
+    dispatchKeyDown({ key: ",", ctrlKey: true, altKey: true });
+
+    expect(openGlobalLauncher).toHaveBeenCalledTimes(1);
+    expect(openSettings).toHaveBeenCalledTimes(1);
   });
 });

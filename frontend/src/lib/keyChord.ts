@@ -1,12 +1,12 @@
 // Generic keyboard-chord descriptor: parse/format a human-readable string
 // (the form stored in settings and shown in the UI) and match it against a
 // live KeyboardEvent. Nothing in this codebase did this generically before
-// voice dictation's hotkey became configurable (#1119) — every chord in
-// terminalKeys.ts is a hand-written boolean conjunction, and
-// useGlobalShortcuts.ts hand-rolls a second, incompatible convention
-// (event.key rather than event.code). This module is the one piece the
-// terminal handler and the settings UI both build on; don't reintroduce a
-// third hand-rolled matcher elsewhere.
+// voice dictation's hotkey became configurable (#1119). Global shortcuts
+// and the terminal find/copy chords do not use this shape — they match
+// event.key, and Ctrl or Cmd interchangeably — and those bindings live in
+// shortcutCatalog.ts so the cheat sheet and the listeners share them.
+// Don't add another hand-rolled matcher beside that catalog. This module
+// stays the one the voice hotkey and the settings capture field build on.
 
 export interface KeyChord {
   ctrl: boolean;

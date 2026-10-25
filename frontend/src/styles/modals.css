@@ -1105,6 +1105,16 @@
   flex-shrink: 0;
 }
 
+/* A shortcut row can show two chips. They are the same binding accepted
+   with either Ctrl or ⌘ (shortcutCatalog.ts), not two actions, so they
+   sit on one line and wrap only when the row is narrow. */
+.shortcut-chord-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 /* ---------------------------------------------------------------- */
 /* Color-scheme swatch grid + live terminal preview                  */
 /* ---------------------------------------------------------------- */

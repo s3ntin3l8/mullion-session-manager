@@ -93,7 +93,11 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     render(<Settings onClose={vi.fn()} initialSection="input" />);
 
     await screen.findByText("Hotkey");
-    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+    // The cheat sheet prints this chord too (same source). The field under
+    // test is the record button, not every chip on the page.
+    expect(screen.getByRole("button", { name: "Record dictation hotkey" })).toHaveTextContent(
+      "Ctrl + Shift + Space",
+    );
 
     await user.click(screen.getByRole("button", { name: "Record dictation hotkey" }));
     expect(screen.getByText("Press a combo…")).toBeInTheDocument();
@@ -125,7 +129,9 @@ describe("Settings -> Terminal -> Voice dictation", () => {
     await user.click(screen.getByRole("button", { name: "Enable dictation" }));
 
     expect(screen.queryByText("Press a combo…")).not.toBeInTheDocument();
-    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record dictation hotkey" })).toHaveTextContent(
+      "Ctrl + Shift + Space",
+    );
 
     // A keydown fired after the blur-cancel must not be captured — without
     // the fix, the capture-phase window listener stayed armed and would
@@ -176,7 +182,9 @@ describe("Settings -> Terminal -> Voice dictation", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     // Back to showing the unchanged stored chord, not stuck on "Press a combo…".
-    expect(screen.getByText("Ctrl + Shift + Space")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Record dictation hotkey" })).toHaveTextContent(
+      "Ctrl + Shift + Space",
+    );
   });
 
   it("turning off the hotkey toggle mid-error clears the stale error under the now-disabled field", async () => {

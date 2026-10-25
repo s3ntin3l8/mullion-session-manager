@@ -11,7 +11,7 @@ import { ImageIcon, KillIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { useDashboardStore } from "./store/index.js";
 import { buildXtermTheme, getSchemeBackground } from "./terminalTheme.js";
-import { api, ApiError, DEFAULT_VOICE_CHORD } from "./api/index.js";
+import { api, ApiError } from "./api/index.js";
 import {
   registerTerminalRepaint,
   repaintAllTerminals,
@@ -32,7 +32,8 @@ import {
 } from "./lib/terminalKeys.js";
 import { attachTerminalTouchScroll } from "./lib/terminalTouchScroll.js";
 import { attachImeInput } from "./lib/imeInput.js";
-import { parseChord, type KeyChord } from "./lib/keyChord.js";
+import type { KeyChord } from "./lib/keyChord.js";
+import { resolveVoiceChord } from "./lib/shortcutCatalog.js";
 import { computeFitFontSize } from "./lib/terminalFontFit.js";
 import { clampTerminalGridSize } from "./lib/terminalGridSize.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
@@ -510,9 +511,7 @@ export function TerminalPane(props: {
   // every key typed into every terminal pane). Re-parsed only where
   // prefsRef.current itself is reassigned — see the settings-sync effect
   // below.
-  const voiceChordRef = useRef<KeyChord>(
-    parseChord(terminalSettings.voice.hotkey) ?? DEFAULT_VOICE_CHORD,
-  );
+  const voiceChordRef = useRef<KeyChord>(resolveVoiceChord(terminalSettings.voice.hotkey));
   const pasteHandlerRef = useRef<() => void>(() => {});
   const copyHandlerRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
   // Implementation lives in the mount effect (it owns the window
@@ -2120,7 +2119,7 @@ export function TerminalPane(props: {
     // Re-parsed here, not in getVoiceChord itself — see voiceChordRef's own
     // comment on why that getter must stay a cheap ref read on xterm's
     // per-keystroke hot path.
-    voiceChordRef.current = parseChord(terminalSettings.voice.hotkey) ?? DEFAULT_VOICE_CHORD;
+    voiceChordRef.current = resolveVoiceChord(terminalSettings.voice.hotkey);
     const term = termRef.current;
     if (!term) return;
 
