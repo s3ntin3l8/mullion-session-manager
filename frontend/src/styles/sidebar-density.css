@@ -512,12 +512,6 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--accent-solid) 8%, transparent);
 }
-.file-drop-hint {
-  padding: 4px 8px;
-  font-size: 11px;
-  color: var(--dim);
-  text-align: center;
-}
 
 .files-sidebar-view {
   min-height: 100%; /* the whole pane is a drop-to-upload target, empty space included */

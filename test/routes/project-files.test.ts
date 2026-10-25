@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import http from "node:http";
+import { Readable } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
 import { sessions } from "../../src/db/schema.js";
@@ -21,6 +23,45 @@ function uniqueSessionsDir(): string {
 }
 
 const { buildApp } = await import("../../src/app.js");
+
+// A client still sending a large body must SEE the refusal, not a reset.
+async function postMidUpload(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  urlPath: string,
+  declaredLength: number,
+): Promise<{ status?: number; error?: string }> {
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  const address = app.server.address();
+  if (address === null || typeof address === "string") throw new Error("no address");
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: address.port,
+        path: urlPath,
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(declaredLength),
+        },
+      },
+      (res) => {
+        res.resume();
+        resolve({ status: res.statusCode });
+        req.destroy();
+      },
+    );
+    req.on("error", (err) => resolve({ error: (err as NodeJS.ErrnoException).code }));
+    // keep the body coming well after the server has made up its mind
+    let sent = 0;
+    const pump = setInterval(() => {
+      if (sent >= declaredLength || req.destroyed) return clearInterval(pump);
+      const chunk = Buffer.alloc(Math.min(64 * 1024, declaredLength - sent));
+      sent += chunk.length;
+      req.write(chunk);
+    }, 5);
+  });
+}
 
 describe("project-files routes", () => {
   let projectCwd: string;
@@ -615,6 +656,32 @@ describe("project-files routes", () => {
       await app.close();
     });
 
+    it("answers an over-cap upload with 413 while the client is still sending", async () => {
+      const { app, projectId } = await createProject();
+      const max = app.config.FILE_TRANSFER_MAX_BYTES;
+      const out = await postMidUpload(
+        app,
+        `/api/projects/${projectId}/files/upload?path=big.bin`,
+        max + 1_000_000,
+      );
+      expect(out).toEqual({ status: 413 });
+      await app.close();
+    });
+
+    it("answers a name clash with 409 while the client is still sending", async () => {
+      fs.writeFileSync(path.join(projectCwd, "taken.bin"), "keep");
+      const { app, projectId } = await createProject();
+      const out = await postMidUpload(
+        app,
+        `/api/projects/${projectId}/files/upload?path=taken.bin`,
+        4 * 1024 * 1024,
+      );
+      expect(out).toEqual({ status: 409 });
+      expect(fs.readFileSync(path.join(projectCwd, "taken.bin"), "utf8")).toBe("keep");
+      expect(fs.readdirSync(projectCwd).filter((n) => n.startsWith(".mullion-part-"))).toEqual([]);
+      await app.close();
+    });
+
     it("refuses to download a folder, a missing file and an escape", async () => {
       fs.mkdirSync(path.join(projectCwd, "dir"));
       const { app, projectId } = await createProject();
@@ -897,6 +964,42 @@ describe("project-files routes", () => {
       expect(missing.statusCode).toBe(404);
       expect(missing.json().code).toBe("not_found");
 
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("serves a download whose agent omitted Content-Length without sending 0", async () => {
+      const bare = (await import("fastify")).default();
+      bare.post("/internal/project-files/download", (_req, reply) =>
+        reply
+          .header("content-type", "application/octet-stream")
+          .send(Readable.from(["hello ", "world"])),
+      );
+      await bare.listen({ port: 0, host: "127.0.0.1" });
+      const address = bare.server.address();
+      if (address === null || typeof address === "string") throw new Error("no address");
+      const { primary, projectId } = await remoteProject(address.port, "any", projectCwd);
+      const down = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=greeting.txt`,
+      });
+      expect(down.statusCode).toBe(200);
+      expect(down.body).toBe("hello world");
+      expect(down.headers["content-length"]).not.toBe("0");
+      await primary.close();
+      await bare.close();
+    });
+
+    it("answers a remote name clash while the client is still sending", async () => {
+      fs.writeFileSync(path.join(projectCwd, "taken.bin"), "keep");
+      const { agentApp, port } = await startAgent("pf-token-early");
+      const { primary, projectId } = await remoteProject(port, "pf-token-early", projectCwd);
+      const out = await postMidUpload(
+        primary,
+        `/api/projects/${projectId}/files/upload?path=taken.bin`,
+        4 * 1024 * 1024,
+      );
+      expect(out).toEqual({ status: 409 });
       await primary.close();
       await agentApp.close();
     });

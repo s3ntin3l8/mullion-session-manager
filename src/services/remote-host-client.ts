@@ -1270,6 +1270,12 @@ export class RemoteHostClient {
       throw new HostUnreachableError(this.hostId, err);
     } finally {
       idle.clear();
+      // The agent may have answered (a 409, a 413) while the body was still
+      // arriving: discard the rest, so the primary can reply to its own client
+      // instead of resetting the connection under it.
+      body.unpipe(metered);
+      metered.destroy();
+      body.resume();
     }
     return this.readJsonResponse<{ path: string; size: number }>(res);
   }
@@ -1284,7 +1290,7 @@ export class RemoteHostClient {
   async downloadProjectFile(
     cwd: string,
     relPath: string,
-  ): Promise<{ stream: Readable; size: number; path: string; name: string }> {
+  ): Promise<{ stream: Readable; size: number | null; path: string; name: string }> {
     const open = async () => {
       const requestTarget = "/internal/project-files/download";
       const payload = JSON.stringify({ cwd, path: relPath });
@@ -1323,7 +1329,10 @@ export class RemoteHostClient {
       idle.clear();
       return this.readJsonResponse(res);
     }
-    const size = Number(res.headers.get("content-length"));
+    // Null-safe: Number(null) and Number("") are 0, which would read as "an
+    // empty file" and truncate the download the primary then serves.
+    const rawLength = res.headers.get("content-length");
+    const size = rawLength !== null && /^\d+$/.test(rawLength) ? Number(rawLength) : null;
     const stream = Readable.fromWeb(res.body as WebReadableStream).pipe(
       new Transform({
         transform(chunk, _enc, cb) {
@@ -1340,7 +1349,7 @@ export class RemoteHostClient {
     stream.on("close", () => idle.clear());
     return {
       stream,
-      size: Number.isFinite(size) ? size : 0,
+      size,
       path: relPath,
       name: path.basename(relPath),
     };

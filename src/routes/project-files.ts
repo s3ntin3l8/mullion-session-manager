@@ -32,9 +32,12 @@ import {
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
-// A folder upload is one request per file, so the transfer routes get a
-// ceiling well above the editor's own.
-const TRANSFER_RATE_LIMIT = { config: { rateLimit: { max: 600, timeWindow: "1 minute" } } };
+// A folder upload is one request per file (up to the drop walker's 5000-entry
+// cap, three at a time, a few ms each on loopback), so the transfer routes get
+// a ceiling far above the editor's own. The client also honours Retry-After
+// (useProjectUploads), so a lower app-wide ceiling slows a batch down instead
+// of failing it.
+const TRANSFER_RATE_LIMIT = { config: { rateLimit: { max: 6000, timeWindow: "1 minute" } } };
 
 const idParams = {
   type: "object",
@@ -214,25 +217,37 @@ export async function projectFilesRoute(app: FastifyInstance) {
   }
 
   // The hostId-branching every route shares: run `local` against the
-  // primary's filesystem, or `remote` against the project's host.
+  // primary's filesystem, or `remote` against the project's host. A failure is
+  // already answered (the reply is handed back so the caller can return it).
+  async function attempt<T>(
+    reply: FastifyReply,
+    ctx: Ctx,
+    local: (cwd: string) => T | Promise<T>,
+    remote: (client: ReturnType<typeof getRemoteHostClient>, cwd: string) => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; reply: FastifyReply }> {
+    if (ctx.hostId === LOCAL_HOST_ID) {
+      try {
+        return { ok: true, value: await local(ctx.cwd) };
+      } catch (err) {
+        return { ok: false, reply: localErrorReply(reply, err) };
+      }
+    }
+    try {
+      return { ok: true, value: await remote(getRemoteHostClient(app, ctx.hostId), ctx.cwd) };
+    } catch (err) {
+      return { ok: false, reply: remoteErrorReply(reply, ctx.hostId, err) };
+    }
+  }
+
+  // The usual shape: the result IS the response body (or the error reply).
   async function dispatch<T>(
     reply: FastifyReply,
     ctx: Ctx,
     local: (cwd: string) => T | Promise<T>,
     remote: (client: ReturnType<typeof getRemoteHostClient>, cwd: string) => Promise<T>,
   ) {
-    if (ctx.hostId === LOCAL_HOST_ID) {
-      try {
-        return await local(ctx.cwd);
-      } catch (err) {
-        return localErrorReply(reply, err);
-      }
-    }
-    try {
-      return await remote(getRemoteHostClient(app, ctx.hostId), ctx.cwd);
-    } catch (err) {
-      return remoteErrorReply(reply, ctx.hostId, err);
-    }
+    const result = await attempt(reply, ctx, local, remote);
+    return result.ok ? result.value : result.reply;
   }
 
   app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
@@ -442,14 +457,21 @@ export async function projectFilesRoute(app: FastifyInstance) {
       const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
       if (!ctx) return;
       const relPath = request.query.path;
-      if (!relPath) return reply.badRequest("path is required");
+      if (!relPath) {
+        request.raw.resume();
+        return reply.badRequest("path is required");
+      }
       const body = request.body as Readable | undefined;
       if (!body || typeof body.pipe !== "function") {
+        request.raw.resume();
         return reply.badRequest("expected a raw file body");
       }
       const max = maxTransferBytes();
       const declared = Number(request.headers["content-length"]);
       if (Number.isFinite(declared) && declared > max) {
+        // Answer an over-cap upload without leaving its body unread (a reset
+        // would hide the 413 from a client that is still sending).
+        request.raw.resume();
         return reply.code(413).send({
           message: `"${relPath}" is over the ${max} byte transfer limit`,
           code: "too_large",
@@ -483,23 +505,25 @@ export async function projectFilesRoute(app: FastifyInstance) {
       const relPath = request.query.path;
       if (!relPath) return reply.badRequest("path is required");
       const max = maxTransferBytes();
-      const dl = await dispatch(
+      const result = await attempt(
         reply,
         ctx,
         (cwd) => openProjectFileReadStream(cwd, relPath, max),
         (client, cwd) => client.downloadProjectFile(cwd, relPath),
       );
-      // dispatch already answered an error.
-      if (reply.sent || !dl || dl === (reply as unknown)) return reply;
+      if (!result.ok) return result.reply;
+      const dl = result.value;
       // Always an attachment with an opaque type: a project file (an .html, an
       // .svg) must never render as a same-origin document.
-      return reply
+      reply
         .header("content-type", "application/octet-stream")
         .header("content-disposition", contentDisposition(dl.name))
-        .header("content-length", String(dl.size))
         .header("x-content-type-options", "nosniff")
-        .header("cache-control", "no-store")
-        .send(dl.stream);
+        .header("cache-control", "no-store");
+      // A size the agent didn't report is left off (chunked) rather than sent
+      // as 0, which would truncate the download.
+      if (dl.size !== null) reply.header("content-length", String(dl.size));
+      return reply.send(dl.stream);
     },
   );
 

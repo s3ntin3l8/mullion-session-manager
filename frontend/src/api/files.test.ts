@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { filesApi } from "./files.js";
-import { ApiError } from "./client.js";
+import { ApiError, RateLimitedError } from "./client.js";
 
 class FakeXhr {
   static last: FakeXhr;
@@ -11,6 +11,10 @@ class FakeXhr {
   sent: unknown;
   status = 0;
   responseText = "";
+  responseHeaders: Record<string, string> = {};
+  getResponseHeader(name: string) {
+    return this.responseHeaders[name.toLowerCase()] ?? null;
+  }
   aborted = false;
   upload: {
     onprogress?: (e: { lengthComputable: boolean; loaded: number; total: number }) => void;
@@ -90,6 +94,19 @@ describe("filesApi transfer", () => {
       expect(err).toMatchObject({ statusCode: 409, code: "conflict", message: "exists" });
     });
 
+    it("reports a 429 as a rate limit carrying Retry-After, defaulting to a minute", async () => {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr);
+      const p = filesApi.uploadProjectFile(3, "a.bin", file);
+      FakeXhr.last.responseHeaders["retry-after"] = "7";
+      FakeXhr.last.finish(429, "{}");
+      const err = (await p.catch((e: unknown) => e)) as RateLimitedError;
+      expect(err).toBeInstanceOf(RateLimitedError);
+      expect(err.retryAfterMs).toBe(7000);
+      const q = filesApi.uploadProjectFile(3, "b.bin", file);
+      FakeXhr.last.finish(429, "{}");
+      expect(((await q.catch((e: unknown) => e)) as RateLimitedError).retryAfterMs).toBe(60_000);
+    });
+
     it("falls back to a generic message for a non-JSON error body", async () => {
       vi.stubGlobal("XMLHttpRequest", FakeXhr);
       const p = filesApi.uploadProjectFile(3, "a.bin", file);
@@ -144,6 +161,45 @@ describe("filesApi transfer", () => {
       expect(fetchMock.mock.calls[0]![0]).toBe(
         "/api/projects/3/files/download?path=i.svg&sessionId=2",
       );
+      expect(blob.type).toBe("image/svg+xml");
+      expect(await blob.text()).toBe("<svg/>");
+    });
+
+    it("refuses a body past the cap even when Content-Length is missing", async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new Uint8Array(600));
+          c.enqueue(new Uint8Array(600));
+          c.close();
+        },
+      });
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(stream, { status: 200 })));
+      await expect(
+        filesApi.fetchProjectFileBlob(3, "big", { maxBytes: 1000 }),
+      ).rejects.toMatchObject({
+        statusCode: 413,
+        code: "too_large",
+      });
+    });
+
+    it("refuses on a declared length without reading the body", async () => {
+      const res = new Response("x", { status: 200, headers: { "content-length": "5000" } });
+      const cancel = vi.spyOn(res.body!, "cancel");
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(res));
+      await expect(
+        filesApi.fetchProjectFileBlob(3, "big", { maxBytes: 1000 }),
+      ).rejects.toMatchObject({
+        code: "too_large",
+      });
+      expect(cancel).toHaveBeenCalled();
+    });
+
+    it("returns a body under the cap in full, retyped", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<svg/>", { status: 200 })));
+      const blob = await filesApi.fetchProjectFileBlob(3, "i.svg", {
+        maxBytes: 1000,
+        type: "image/svg+xml",
+      });
       expect(blob.type).toBe("image/svg+xml");
       expect(await blob.text()).toBe("<svg/>");
     });

@@ -550,6 +550,37 @@ describe("project-files raw transfer", () => {
       expect(leftovers(root)).toEqual([]);
     });
 
+    it("refuses an existing name BEFORE writing anything, and discards the unread body", async () => {
+      fs.writeFileSync(path.join(root, "taken.txt"), "keep");
+      const source = new Readable({ read() {} });
+      const ended = new Promise<void>((resolve) => source.on("end", resolve));
+      const result = writeProjectFileFromStream(root, "taken.txt", source, { maxBytes: LIMIT });
+      await expect(result).rejects.toMatchObject({ code: "conflict" });
+      // no temp file was ever created for the doomed upload
+      expect(leftovers(root)).toEqual([]);
+      // ...and the rest of the body is drained, not left to reset the connection
+      source.push("late bytes");
+      source.push(null);
+      await ended;
+    });
+
+    it("discards the unread body for every early refusal (escape, missing parent, mkdirs conflict)", async () => {
+      fs.writeFileSync(path.join(root, "file"), "x");
+      for (const [rel, mkdirs] of [
+        ["../x", false],
+        ["no/such/x.txt", false],
+        ["file/x.txt", true],
+      ] as const) {
+        const source = new Readable({ read() {} });
+        const ended = new Promise<void>((resolve) => source.on("end", resolve));
+        await expect(
+          writeProjectFileFromStream(root, rel, source, { maxBytes: LIMIT, mkdirs }),
+        ).rejects.toBeInstanceOf(ProjectFileError);
+        source.push(null);
+        await ended;
+      }
+    });
+
     it("refuses a target that is an existing directory", async () => {
       fs.mkdirSync(path.join(root, "d"));
       expect(

@@ -117,7 +117,18 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
     },
     [projectId, loadDir],
   );
-  const uploads = useProjectUploads({ projectId, onUploaded: afterUpload });
+  // Names already listed in a folder we have loaded: an upload onto one is
+  // refused without sending its body (the server still decides).
+  const dirsRef = useRef(dirs);
+  useEffect(() => {
+    dirsRef.current = dirs;
+  });
+  const existsHint = useCallback((path: string) => {
+    const slash = path.lastIndexOf("/");
+    const entries = dirsRef.current[slash < 0 ? "" : path.slice(0, slash)]?.entries;
+    return entries?.some((e) => e.name === path.slice(slash + 1)) ?? false;
+  }, []);
+  const uploads = useProjectUploads({ projectId, onUploaded: afterUpload, existsHint });
   const startUpload = uploads.upload;
   const truncatedNote = useCallback(
     () => setError("That folder is too large to upload in one go — some files were left out"),

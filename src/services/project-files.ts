@@ -619,7 +619,8 @@ export async function searchProjectFiles(
 
 export interface ProjectFileDownload {
   stream: Readable;
-  size: number;
+  /** Bytes the stream will deliver; null when a remote host didn't say. */
+  size: number | null;
   /** Project-relative path the request resolved to. */
   path: string;
   /** Basename, for Content-Disposition. */
@@ -714,21 +715,55 @@ export async function writeProjectFileFromStream(
   source: Readable,
   opts: { maxBytes: number; mkdirs?: boolean },
 ): Promise<{ path: string; size: number }> {
-  if (opts.mkdirs) {
-    const dir = path.dirname(relPath);
-    ensureProjectDirs(root, dir === "." ? "" : dir);
-  }
-  const entry = resolveEntry(root, relPath);
-  const tmpAbs = path.join(path.dirname(entry.abs), `.mullion-part-${randomUUID()}`);
+  // Everything up to the temp file being open refuses WITHOUT having read the
+  // body. The route is about to answer, and replying to a request whose body is
+  // still arriving resets the connection under a client that is mid-upload — it
+  // would see a network error instead of the 409/404 it earned. So an early
+  // refusal discards the rest of the body first (same as preview-proxy.ts).
+  let entry: EntryRef;
+  let tmpAbs: string;
   let fd: number;
   try {
-    fd = openSync(
-      tmpAbs,
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
-      0o644,
-    );
+    if (opts.mkdirs) {
+      const dir = path.dirname(relPath);
+      ensureProjectDirs(root, dir === "." ? "" : dir);
+    }
+    entry = resolveEntry(root, relPath);
+    // A free pre-check so a name that is already taken is refused before any
+    // byte is written (link(2) below stays the authority — this only saves the
+    // common case from writing a temp file first).
+    try {
+      lstatSync(entry.abs);
+      throw new ProjectFileError("conflict", `"${entry.rel}" already exists`);
+    } catch (err) {
+      if (err instanceof ProjectFileError) throw err;
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, entry.rel);
+    }
+    tmpAbs = path.join(path.dirname(entry.abs), `.mullion-part-${randomUUID()}`);
+    try {
+      fd = openSync(
+        tmpAbs,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        0o644,
+      );
+    } catch (err) {
+      return mapFsError(err, entry.rel);
+    }
+    try {
+      assertFdInside(fd, entry.realRoot, entry.rel);
+    } catch (err) {
+      // Not yet handed to a stream, so nothing else will close it.
+      closeSync(fd);
+      try {
+        unlinkSync(tmpAbs);
+      } catch {
+        // already gone
+      }
+      throw err;
+    }
   } catch (err) {
-    return mapFsError(err, entry.rel);
+    source.resume();
+    throw err;
   }
   let received = 0;
   const cleanup = () => {
@@ -739,13 +774,6 @@ export async function writeProjectFileFromStream(
     }
   };
   try {
-    try {
-      assertFdInside(fd, entry.realRoot, entry.rel);
-    } catch (err) {
-      // Not yet handed to a stream, so nothing else will close it.
-      closeSync(fd);
-      throw err;
-    }
     const counter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
         received += chunk.length;

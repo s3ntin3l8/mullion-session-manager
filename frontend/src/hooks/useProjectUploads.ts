@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api/index.js";
+import { api, ApiError, RateLimitedError } from "../api/index.js";
 import type { UploadItem } from "../lib/dropped-files.js";
 
 // A few files in flight at once: enough to keep a link busy with small files,
@@ -19,7 +19,29 @@ function joinPath(dir: string, rel: string): string {
   return dir === "" ? rel : `${dir}/${rel}`;
 }
 
+// A throttled upload waits out Retry-After and tries again — a big folder drop
+// outruns a modest app-wide limit, and that should slow it down, not fail it.
+const MAX_RATE_LIMIT_RETRIES = 5;
+const MAX_RATE_LIMIT_WAIT_MS = 65_000;
+
+// Resolves after `ms`, or as soon as `signal` aborts.
+function waitOrAbort(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
 function describeFailure(relativePath: string, err: unknown): string {
+  if (err instanceof RateLimitedError) {
+    return `${relativePath}: the server is rate-limiting uploads — try again in a minute`;
+  }
   if (err instanceof ApiError) {
     if (err.code === "conflict") return `${relativePath} already exists`;
     if (err.code === "too_large") return `${relativePath} is too large`;
@@ -36,11 +58,17 @@ export function useProjectUploads(opts: {
   sessionId?: number;
   /** Fired once a batch has finished (even partly), with the folder it went to. */
   onUploaded?: (targetDir: string) => void;
+  /** A hint that `path` (project-relative) is already taken, from a listing the
+   * caller already has: such a file is refused without sending its bytes. The
+   * server stays the authority — a stale hint only costs a skipped upload. */
+  existsHint?: (path: string) => boolean;
 }) {
   const { projectId, sessionId } = opts;
   const onUploadedRef = useRef(opts.onUploaded);
+  const existsHintRef = useRef(opts.existsHint);
   useEffect(() => {
     onUploadedRef.current = opts.onUploaded;
+    existsHintRef.current = opts.existsHint;
   });
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -88,22 +116,42 @@ export function useProjectUploads(opts: {
           if (!item) return;
           current = item.relativePath;
           publish();
-          try {
-            await api.uploadProjectFile(
-              projectId,
-              joinPath(targetDir, item.relativePath),
-              item.file,
-              {
-                sessionId,
-                mkdirs: item.relativePath.includes("/"),
-                signal: controller.signal,
-                onProgress: (done) => {
-                  loaded[index] = done;
-                  publish();
-                },
-              },
-            );
+          const target = joinPath(targetDir, item.relativePath);
+          if (existsHintRef.current?.(target)) {
+            // Taken already: don't push a (possibly huge) body to learn that.
+            failures.push(`${item.relativePath} already exists`);
             loaded[index] = item.file.size;
+            filesDone++;
+            publish();
+            continue;
+          }
+          try {
+            for (let attempt = 0; ; attempt++) {
+              try {
+                await api.uploadProjectFile(projectId, target, item.file, {
+                  sessionId,
+                  mkdirs: item.relativePath.includes("/"),
+                  signal: controller.signal,
+                  onProgress: (done) => {
+                    loaded[index] = done;
+                    publish();
+                  },
+                });
+                loaded[index] = item.file.size;
+                break;
+              } catch (err) {
+                if (!(err instanceof RateLimitedError) || attempt >= MAX_RATE_LIMIT_RETRIES) {
+                  throw err;
+                }
+                loaded[index] = 0;
+                publish();
+                await waitOrAbort(
+                  Math.min(err.retryAfterMs, MAX_RATE_LIMIT_WAIT_MS),
+                  controller.signal,
+                );
+                if (controller.signal.aborted) return;
+              }
+            }
           } catch (err) {
             if (controller.signal.aborted) return;
             failures.push(describeFailure(item.relativePath, err));
@@ -121,8 +169,10 @@ export function useProjectUploads(opts: {
         if (alive.current) {
           setProgress(null);
           if (failures.length > 0) setErrors(failures);
+          // Not after the host component is gone: re-listing then is wasted
+          // (and, for a tree that was re-targeted, aimed at the wrong place).
+          onUploadedRef.current?.(targetDir);
         }
-        onUploadedRef.current?.(targetDir);
       }
     },
     [projectId, sessionId],

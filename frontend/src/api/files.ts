@@ -1,7 +1,13 @@
 // FileEditorPanel.tsx's backend surface: list a project directory, read one
 // text file, write one text file (routes/project-files.ts). Paths are always
 // project-relative; the backend contains them to the project root.
-import { ApiError, request } from "./client.js";
+import {
+  ApiError,
+  DEFAULT_RETRY_AFTER_MS,
+  RateLimitedError,
+  parseRetryAfterMs,
+  request,
+} from "./client.js";
 import type {
   ProjectDirListing,
   ProjectFileContent,
@@ -96,13 +102,7 @@ export const filesApi = {
       signal: opts.signal,
     });
     if (!res.ok) throw await apiErrorFromResponse(res.status, await res.text().catch(() => ""));
-    // Refuse before reading the body: a preview must not pull a huge file into memory.
-    const length = Number(res.headers.get("content-length"));
-    if (opts.maxBytes !== undefined && Number.isFinite(length) && length > opts.maxBytes) {
-      await res.body?.cancel().catch(() => undefined);
-      throw new ApiError("Too large to preview", 413, "too_large");
-    }
-    const blob = await res.blob();
+    const blob = await readCapped(res, opts.maxBytes);
     // The server serves everything as an opaque attachment; the caller picks
     // the type it is willing to render.
     return opts.type ? blob.slice(0, blob.size, opts.type) : blob;
@@ -143,6 +143,15 @@ export const filesApi = {
           }
           return;
         }
+        if (xhr.status === 429) {
+          // Not a failure to report: the caller waits this long and retries.
+          const retryAfterMs = parseRetryAfterMs(
+            xhr.getResponseHeader("retry-after"),
+            DEFAULT_RETRY_AFTER_MS,
+          );
+          reject(new RateLimitedError(429, retryAfterMs));
+          return;
+        }
         void apiErrorFromResponse(xhr.status, xhr.responseText).then(reject);
       };
       xhr.onerror = () => reject(new ApiError("Network error during upload", 0));
@@ -169,4 +178,32 @@ async function apiErrorFromResponse(status: number, bodyText: string): Promise<A
     // non-JSON body (a gateway page, ...) — keep the generic message
   }
   return new ApiError(message, status, code);
+}
+
+// Reads a response body into a Blob, refusing — as soon as the count says so,
+// not after the whole thing is in memory — once it passes `maxBytes`. Counted
+// while reading rather than trusting Content-Length, which a response may omit
+// (or lie about).
+async function readCapped(res: Response, maxBytes: number | undefined): Promise<Blob> {
+  const tooLarge = () => new ApiError("Too large to preview", 413, "too_large");
+  if (maxBytes === undefined || !res.body) return res.blob();
+  const declared = res.headers.get("content-length");
+  if (declared !== null && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
+    await res.body.cancel().catch(() => undefined);
+    throw tooLarge();
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw tooLarge();
+    }
+    chunks.push(value as Uint8Array<ArrayBuffer>);
+  }
+  return new Blob(chunks, { type: res.headers.get("content-type") ?? "" });
 }

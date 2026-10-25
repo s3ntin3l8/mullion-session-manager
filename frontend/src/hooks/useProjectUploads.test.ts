@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useProjectUploads } from "./useProjectUploads.js";
-import { api, ApiError } from "../api/index.js";
+import { api, ApiError, RateLimitedError } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
@@ -188,5 +188,107 @@ describe("useProjectUploads", () => {
     await waitFor(() => expect(pending).toHaveLength(1));
     unmount();
     expect(pending[0]!.signal?.aborted).toBe(true);
+  });
+
+  describe("an existing-name hint", () => {
+    it("refuses a hinted name without sending its body, and uploads the rest", async () => {
+      vi.mocked(api.uploadProjectFile).mockResolvedValue({ path: "x", size: 1 });
+      const { result } = renderHook(() =>
+        useProjectUploads({ projectId: 4, existsHint: (p) => p === "src/a.txt" }),
+      );
+      await act(() => result.current.upload([item("a.txt"), item("b.txt")], "src"));
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(api.uploadProjectFile).mock.calls[0]![1]).toBe("src/b.txt");
+      expect(result.current.errors).toEqual(["a.txt already exists"]);
+      expect(result.current.progress).toBeNull();
+    });
+  });
+
+  describe("rate limiting", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("waits out Retry-After and retries the same file", async () => {
+      vi.mocked(api.uploadProjectFile)
+        .mockRejectedValueOnce(new RateLimitedError(429, 2000))
+        .mockResolvedValueOnce({ path: "x", size: 1 });
+      const { result } = renderHook(() => useProjectUploads({ projectId: 4 }));
+      let done!: Promise<void>;
+      act(() => {
+        done = result.current.upload([item("a.txt")], "");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1999);
+      });
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(1); // still waiting
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2);
+      });
+      await act(() => done);
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(2);
+      expect(result.current.errors).toEqual([]);
+    });
+
+    it("gives up after a few attempts with an actionable message", async () => {
+      vi.mocked(api.uploadProjectFile).mockRejectedValue(new RateLimitedError(429, 10));
+      const { result } = renderHook(() => useProjectUploads({ projectId: 4 }));
+      let done!: Promise<void>;
+      act(() => {
+        done = result.current.upload([item("a.txt")], "");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      await act(() => done);
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(6); // first try + 5 retries
+      expect(result.current.errors).toEqual([
+        "a.txt: the server is rate-limiting uploads — try again in a minute",
+      ]);
+    });
+
+    it("never waits longer than a minute-ish, whatever Retry-After says", async () => {
+      vi.mocked(api.uploadProjectFile)
+        .mockRejectedValueOnce(new RateLimitedError(429, 3_600_000))
+        .mockResolvedValueOnce({ path: "x", size: 1 });
+      const { result } = renderHook(() => useProjectUploads({ projectId: 4 }));
+      let done!: Promise<void>;
+      act(() => {
+        done = result.current.upload([item("a.txt")], "");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(65_000);
+      });
+      await act(() => done);
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("cancel ends the wait and does not retry", async () => {
+      vi.mocked(api.uploadProjectFile).mockRejectedValue(new RateLimitedError(429, 30_000));
+      const { result } = renderHook(() => useProjectUploads({ projectId: 4 }));
+      let done!: Promise<void>;
+      act(() => {
+        done = result.current.upload([item("a.txt")], "");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      act(() => result.current.cancel());
+      await act(() => done);
+      expect(api.uploadProjectFile).toHaveBeenCalledTimes(1);
+      expect(result.current.errors).toEqual([]);
+    });
+  });
+
+  it("does not report a finished batch to a host that has unmounted", async () => {
+    const pending = deferredUploads();
+    const onUploaded = vi.fn();
+    const { result, unmount } = renderHook(() => useProjectUploads({ projectId: 4, onUploaded }));
+    act(() => {
+      void result.current.upload([item("a")], "");
+    });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    unmount();
+    await act(async () => pending[0]!.resolve());
+    expect(onUploaded).not.toHaveBeenCalled();
   });
 });
