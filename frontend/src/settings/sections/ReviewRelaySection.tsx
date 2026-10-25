@@ -391,7 +391,7 @@ export function ReviewRelaySection() {
           />
           <TextSettingRow
             label="Ledger check-run name"
-            desc="The check run that records which commit a review round covered. It must match the shared Hermes workflow's hermes-review-ledger-name (default “Hermes review”); leave it empty if the workflow runs with hermes-review-ledger: off. If the two differ, the relay and the workflow derive different bases for the same pull request."
+            desc="The check run that records which commit a review round covered. It must match the shared Hermes workflow's hermes-review-ledger-name (default “Hermes review”); leave it empty if the workflow runs with hermes-review-ledger: off. If the two differ, the relay and the workflow derive different bases for the same pull request and silently stop deduplicating (the same range can be reviewed twice); nothing detects it."
             key={`relay-ledgerName:${relay.ledgerName}`}
             value={relay.ledgerName}
             placeholder="Hermes review (empty = off)"

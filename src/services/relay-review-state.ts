@@ -50,9 +50,16 @@ const MARKER_PAIRING_SLACK_MS = 60_000;
  * whoever sees the run finish (a status read, a later request), possibly hours
  * after it ended, so its close time alone does not bound a SILENT run: an
  * unrelated review long after it would pair it, giving a base that is too new
- * (s3ntin3l8/.github#133). The job timeout is 60 minutes, so 90 caps a run; a
- * genuine run past the cap just falls back to the `commit_id` rule or a full
- * review, which is the safe direction. The shared workflow uses the same cap.
+ * (s3ntin3l8/.github#133). 90 minutes is a deliberate bound, not a measured one:
+ * the workflow's job timeout is 60 minutes, but that bounds the JOB, not the run
+ * (under `hermes-use-runs` a review can outlive the 45-minute poll window, and a
+ * relay dispatch has no job at all). So a genuine run past the cap loses its own
+ * pairing and falls back to the `commit_id` rule or a full review: it over-reviews,
+ * never under-reviews, which is the safe direction.
+ *
+ * The shared workflow MUST apply the same cap (s3ntin3l8/.github#137): until that
+ * lands, the two derive different bases, and so different idempotency keys, for a
+ * late-closed marker.
  */
 const MARKER_MAX_RUN_MS = 90 * 60_000;
 
@@ -67,7 +74,8 @@ const MARKER_MAX_RUN_MS = 90 * 60_000;
  * GitHub re-points an approval's `commit_id` at the PR's current head when the
  * branch tip is rewritten (a force-push, "Update branch"), so that field stops
  * recording what was reviewed. The record that stays put is the ledger — the
- * "Hermes review" check run sits on the commit it reviewed. So R is:
+ * ledger check run (`reviewRelay.ledgerName`, default "Hermes review") sits on
+ * the commit it reviewed. So R is:
  *
  *  1. the commit of the newest ledger marker that ended SUCCESS and is PAIRED
  *     with a landed review by the reviewer submitted WHILE THE RUN RAN, i.e.

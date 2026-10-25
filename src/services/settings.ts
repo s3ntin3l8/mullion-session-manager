@@ -517,7 +517,8 @@ export interface AppSettings {
      * (default "Hermes review"), and EMPTY means the ledger is off, like
      * `hermes-review-ledger: off`. The two must be set together: a relay that
      * keeps a ledger the workflow does not (or under another name) derives a
-     * different base, and the two stop deduplicating against each other. With
+     * different base, and the two SILENTLY stop deduplicating against each other
+     * (nothing detects it; the same range can be reviewed twice). With
      * the ledger off the delta base falls back to the review's `commit_id`,
      * which GitHub re-points when the branch is rewritten, and is trusted only
      * while it provably predates the review.
