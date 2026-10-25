@@ -240,23 +240,53 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
       }));
       throw err;
     }
-    await get().refreshSessions();
+    // The re-sync is NOT part of the mutation. The server has already
+    // accepted the rename, so a failure of the follow-up GET must not
+    // reject the call: the caller would report "Could not rename the
+    // session." for a rename the server accepted, PaneTab and
+    // MobileSessionBar would roll the tab title back to a name the server
+    // no longer has, and the store's own rollback (above) would not run —
+    // so the row kept the new name while the tab showed the old one.
+    //
+    // The re-sync's own failure modes are surfaced elsewhere, and
+    // separately: the backend-outage banner (transport), the sign-in
+    // banner (AuthExpiredError) and the live-poll backoff (429). See
+    // refreshSessions' own catch for how each is recorded.
+    await get()
+      .refreshSessions()
+      .catch(() => {});
   },
 
   deleteSession: async (id) => {
     await api.deleteSession(id);
-    await get().refreshSessions();
+    // Same reason as renameSession above: the delete already happened on
+    // the server, so a failed re-sync must not be reported as a failed
+    // kill. Without this, a 429 on the follow-up GET turned a successful
+    // kill into "Failed to kill — try again".
+    await get()
+      .refreshSessions()
+      .catch(() => {});
   },
 
   promoteSession: async (id, opts) => {
     const session = await api.promoteSession(id, opts);
-    await get().refreshSessions();
+    // Same reason as renameSession above. PromoteDialog calls this with
+    // `void ...then(...)` and no catch, so a rejected re-sync left the
+    // dialog stuck on its submitting state even though the promotion had
+    // succeeded.
+    await get()
+      .refreshSessions()
+      .catch(() => {});
     return session;
   },
 
   declinePromote: async (id, reason) => {
     await api.declinePromote(id, reason);
-    await get().refreshSessions();
+    // Same reason as promoteSession above: PromoteDialog closes the
+    // dialog in the `.then()`, so a rejected re-sync left it open.
+    await get()
+      .refreshSessions()
+      .catch(() => {});
   },
 
   startLiveRefresh: () => {
