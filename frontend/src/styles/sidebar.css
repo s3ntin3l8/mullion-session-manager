@@ -928,17 +928,17 @@
    whole row used to have — so an ended session still reads as quieter than
    a live one. The host badge shares the group, so it keeps its own
    `opacity: 0.75` instead of being multiplied by the row fade a second time.
-   That extra multiply was the same failure the label had. */
+   That extra multiply was the same failure the label had.
+
+   Only `.status-exited`. `rowClassNameForSeverity` never returns
+   `.status-killed` — a killed session is filtered out before a row is
+   built — so a killed half of this rule could not match. */
 .session-item.status-exited > :not(.session-item-row),
-.session-item.status-killed > :not(.session-item-row),
-.session-item.status-exited .session-item-row > :not(.session-status-group),
-.session-item.status-killed .session-item-row > :not(.session-status-group) {
+.session-item.status-exited .session-item-row > :not(.session-status-group) {
   opacity: 0.5;
 }
 .session-item.status-exited:hover > :not(.session-item-row),
-.session-item.status-killed:hover > :not(.session-item-row),
-.session-item.status-exited:hover .session-item-row > :not(.session-status-group),
-.session-item.status-killed:hover .session-item-row > :not(.session-status-group) {
+.session-item.status-exited:hover .session-item-row > :not(.session-status-group) {
   opacity: 0.7;
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's

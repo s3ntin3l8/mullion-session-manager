@@ -165,6 +165,37 @@ describe("SessionRow row 1 — header: status label", () => {
     expect(await findByText("exited: clear")).toBeInTheDocument();
   });
 
+  // Issue #1886 — the ended-row fade stops short of `.session-status-group`.
+  // The contrast guard models that chain by hand; this render is what makes
+  // moving the label out of the group fail a test. Direct parents, matching
+  // the `>` combinators in sidebar.css: a wrapper inserted between any two
+  // of these is the same break.
+  it("nests the status label in the group, inside the row, inside the session item", () => {
+    const { container } = render(
+      <SessionRow
+        session={makeSession({
+          status: "exited",
+          endedReason: "clear",
+          sessionStatus: "exited",
+          sessionStatusSeverity: "gone",
+          sessionStatusDetail: "clear",
+        })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+    const label = container.querySelector(".session-status-label");
+    expect(label).not.toBeNull();
+    const group = label!.parentElement;
+    expect(group).toHaveClass("session-status-group");
+    const row = group!.parentElement;
+    expect(row).toHaveClass("session-item-row");
+    const item = row!.parentElement;
+    expect(item).toHaveClass("session-item");
+    expect(item).toHaveClass("status-exited");
+  });
+
   it("shows 'Finished' label when sessionStatus is finished", async () => {
     const session = makeSession({
       lastTurnEndedAt: Date.now(),

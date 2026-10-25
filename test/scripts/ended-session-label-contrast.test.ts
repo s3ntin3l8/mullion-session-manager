@@ -5,7 +5,8 @@
 //
 // The fix moves that fade onto the row's other children and leaves
 // `.session-status-label` alone. This file pins both halves against the
-// stylesheet as written, and measures the composite with
+// stylesheets as written — sidebar.css and the later files that also
+// style `.session-item` — and measures the composite with
 // scripts/lib/color-math.mjs rather than a hand-computed ratio. A full
 // CSS engine is deliberately not involved: the selectors in play are
 // class compounds, `:hover`, `:not(.class)`, and the two combinators, and
@@ -18,8 +19,28 @@ import { fileURLToPath } from "node:url";
 import { parseColor, renderSample } from "../../scripts/lib/color-math.mjs";
 
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const SIDEBAR_CSS = path.join(REPO_ROOT, "frontend", "src", "styles", "sidebar.css");
-const TOKENS_CSS = path.join(REPO_ROOT, "frontend", "src", "styles", "tokens.css");
+const STYLES_DIR = path.join(REPO_ROOT, "frontend", "src", "styles");
+// styles/index.css import order. sidebar.css owns the ended-row fade.
+// compact.css, tablet.css and sidebar-density.css come later; the last
+// two already style `.session-item`. An opacity added to any of the three
+// multiplies with the label the same way one in sidebar.css does.
+const ENDED_ROW_STYLESHEETS = [
+  "sidebar.css",
+  "compact.css",
+  "tablet.css",
+  "sidebar-density.css",
+] as const;
+const TOKENS_CSS = path.join(STYLES_DIR, "tokens.css");
+
+function endedRowStylesheetCss(extra?: {
+  file: (typeof ENDED_ROW_STYLESHEETS)[number];
+  css: string;
+}): string {
+  return ENDED_ROW_STYLESHEETS.map((name) => {
+    const text = fs.readFileSync(path.join(STYLES_DIR, name), "utf8");
+    return extra?.file === name ? `${text}\n${extra.css}\n` : text;
+  }).join("\n");
+}
 
 /** The floor the issue asks of the label. Not WCAG AA's 4.5:1 for text. */
 const LABEL_MIN_RATIO = 3;
@@ -61,8 +82,10 @@ function endedRow(rowClass: string): {
   const row = ["session-item", rowClass];
   return {
     // Sidebar.tsx wraps the label in `.session-status-group`, inside
-    // Header.tsx's `.session-item-row`. The exited tone is the one an
-    // ended session actually paints (sessionStatus.ts).
+    // Header.tsx's `.session-item-row`, inside `.session-item`. Header.test.tsx
+    // renders that nesting; this chain is the same shape. The exited tone is
+    // the one an ended session actually paints (sessionStatus.ts).
+    // `.status-killed` is not a row class `rowClassNameForSeverity` returns.
     label: chain([
       row,
       ["session-item-row"],
@@ -312,7 +335,7 @@ function mightTouchEndedRow(selector: string): boolean {
 }
 
 describe("ended session status label contrast (#1886)", () => {
-  const rules = extractRules(fs.readFileSync(SIDEBAR_CSS, "utf8"));
+  const rules = extractRules(endedRowStylesheetCss());
   const tokensCss = fs.readFileSync(TOKENS_CSS, "utf8");
   const darkBlock = themeBlock(tokensCss, ".cmux-root {");
   const lightBlock = themeBlock(tokensCss, ".cmux-root.light {");
@@ -352,32 +375,52 @@ describe("ended session status label contrast (#1886)", () => {
     expect(offenders.map((rule) => rule.selector)).toEqual([]);
   });
 
-  for (const rowClass of ["status-exited", "status-killed"] as const) {
-    const { label, name, nowLine } = endedRow(rowClass);
-
-    describe(`.session-item.${rowClass}`, () => {
-      it("does not let a row opacity cover the status label, at rest or hovered", () => {
-        // Any opacity on the label OR an ancestor fails this. That is the
-        // regression: `.session-item.status-exited { opacity: 0.5 }` matches
-        // the row, which is an ancestor, and the label cannot paint above it.
-        for (const hovered of [false, true]) {
-          let current: ElementNode | null = label;
-          while (current) {
-            expect(winningValue(rules, current, "opacity", hovered)).toBeNull();
-            current = current.parent;
-          }
-          expect(effectiveOpacity(rules, label, hovered)).toBe(1);
-        }
-      });
-
-      it("still fades the name and the meta line relative to a live row", () => {
-        expect(effectiveOpacity(rules, name, false)).toBe(0.5);
-        expect(effectiveOpacity(rules, name, true)).toBe(0.7);
-        expect(effectiveOpacity(rules, nowLine, false)).toBe(0.5);
-        expect(effectiveOpacity(rules, nowLine, true)).toBe(0.7);
-      });
+  // The same check the real stylesheets pass, pointed at a copy of one of
+  // the sibling files with the old row fade appended. Not written back:
+  // the files on disk stay as they are, and this is what fails if the
+  // scanner goes back to reading sidebar.css alone.
+  for (const file of ["compact.css", "tablet.css", "sidebar-density.css"] as const) {
+    it(`sees an ended-row opacity appended to ${file} cover the label`, () => {
+      const mutated = extractRules(
+        endedRowStylesheetCss({
+          file,
+          css: ".session-item.status-exited { opacity: .5 }",
+        }),
+      );
+      const { label } = endedRow("status-exited");
+      let row = label;
+      while (row.parent) {
+        row = row.parent;
+      }
+      expect(winningValue(mutated, row, "opacity", false)).toBe(".5");
+      expect(effectiveOpacity(mutated, label, false)).toBe(0.5);
     });
   }
+
+  describe(".session-item.status-exited", () => {
+    const { label, name, nowLine } = endedRow("status-exited");
+
+    it("does not let a row opacity cover the status label, at rest or hovered", () => {
+      // Any opacity on the label OR an ancestor fails this. That is the
+      // regression: `.session-item.status-exited { opacity: 0.5 }` matches
+      // the row, which is an ancestor, and the label cannot paint above it.
+      for (const hovered of [false, true]) {
+        let current: ElementNode | null = label;
+        while (current) {
+          expect(winningValue(rules, current, "opacity", hovered)).toBeNull();
+          current = current.parent;
+        }
+        expect(effectiveOpacity(rules, label, hovered)).toBe(1);
+      }
+    });
+
+    it("still fades the name and the meta line relative to a live row", () => {
+      expect(effectiveOpacity(rules, name, false)).toBe(0.5);
+      expect(effectiveOpacity(rules, name, true)).toBe(0.7);
+      expect(effectiveOpacity(rules, nowLine, false)).toBe(0.5);
+      expect(effectiveOpacity(rules, nowLine, true)).toBe(0.7);
+    });
+  });
 
   it("paints the exited label in --dim", () => {
     const { label } = endedRow("status-exited");
