@@ -496,9 +496,14 @@ takes a run id and does not look at the project.
   actually landed on the issue after the request — including the comment's
   own text and a link to it. The comment is matched by the marker Mullion's
   own triage prompt asks for ("## Triage"); with a custom prompt that does
-  not use the marker, the newest bot comment after the request is reported
-  instead, and the output says so — that comment may be another bot's (the
-  issue-comment counterpart of a review has no head commit to pin it to).
+  not use the marker, the newest comment after the request by the reviewer
+  bot (`reviewRelay.reviewerBotLogin`; any bot if it is empty) is reported
+  instead, and the output says so — it may be another comment of that bot's
+  rather than the triage (the issue-comment counterpart of a review has no
+  head commit to pin it to). Another bot's comment is never reported when a
+  reviewer bot login is set; when such a comment is why nothing shows up, the
+  output names its author ("ignored a comment by …"), which is also how a
+  mistyped login shows.
   `not_found` means this Mullion has no run for the issue (nothing was
   requested here, or the server restarted).
 - `triage stop <runId>` — stops a run **this session** dispatched (the same

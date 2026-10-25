@@ -1759,10 +1759,17 @@ function formatTriageStatus(r) {
     }
     // The attribution says how the comment was matched to the triage: the
     // marker Mullion's own prompt asks for, or merely the newest bot comment
-    // after the dispatch (a custom prompt may not use the marker) — which
-    // may be another bot's comment.
+    // after the dispatch (by the reviewer bot when one is configured; a custom
+    // prompt may not use the marker) — which may not be the triage.
     if (r.github.comment?.attribution === "fallback") {
-      lines.push("(newest bot comment, marker missing — may not be ours)");
+      lines.push("(newest bot comment, marker missing — may not be the triage)");
+    }
+    // Comments by other bots are skipped; when that is why nothing shows up,
+    // say whose they were, so a mistyped reviewer bot login is visible.
+    if (r.github.ignoredAuthors?.length) {
+      lines.push(
+        `(ignored a comment by ${r.github.ignoredAuthors.join(", ")} — not the configured reviewer bot)`,
+      );
     }
     if (r.github.comment?.htmlUrl) lines.push(`comment: ${r.github.comment.htmlUrl}`);
   }
