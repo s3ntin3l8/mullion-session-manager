@@ -33,24 +33,32 @@ const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
 const declinePromoteMock = vi.fn().mockResolvedValue(undefined);
 const renameSessionMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../store/index.js", () => ({
-  useDashboardStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      settings: { sessions: { confirmBeforeKill: false } },
-      theme: "dark",
-      events,
-      sessionGitStatuses,
-      gitDiffStats,
-      gitBranchesByProject,
-      prsByProject,
-      tasks: [],
-      openRightSidebarPr: vi.fn(),
-      sessions,
-      promoteSession: promoteSessionMock,
-      declinePromote: declinePromoteMock,
-      renameSession: renameSessionMock,
-      mutedSessionIds: [],
-      toggleSessionMute: vi.fn(),
-    }),
+  // Issue #1852 — the store is also read NON-reactively (getState) by the
+  // session's host badge, so the mock has to answer that too: without it,
+  // a test here that renders a session on a REMOTE host would hit "getState
+  // is not a function". The empty fleet list means such a session simply
+  // has no host badge.
+  useDashboardStore: Object.assign(
+    (selector: (s: unknown) => unknown) =>
+      selector({
+        settings: { sessions: { confirmBeforeKill: false } },
+        theme: "dark",
+        events,
+        sessionGitStatuses,
+        gitDiffStats,
+        gitBranchesByProject,
+        prsByProject,
+        tasks: [],
+        openRightSidebarPr: vi.fn(),
+        sessions,
+        promoteSession: promoteSessionMock,
+        declinePromote: declinePromoteMock,
+        renameSession: renameSessionMock,
+        mutedSessionIds: [],
+        toggleSessionMute: vi.fn(),
+      }),
+    { getState: () => ({ hosts: [] }) },
+  ),
 }));
 
 const PROJECT: Project = makeProject();

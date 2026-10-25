@@ -120,6 +120,9 @@ const BASE_SESSION_FIELDS = {
   // project's) and the resolved one the host badge shows.
   hostId: null,
   resolvedHostId: "local",
+  // Issue #1852 — the placement decision's own words; null when
+  // nothing was decided here (a test session's default).
+  placementReason: null,
   sessionStatusSeverity: "dormant" as const,
   sessionStatusDetail: null,
   hookEmits: [],

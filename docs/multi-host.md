@@ -273,9 +273,24 @@ create-project dialog asks with the host and mode it would save, before
 the project exists.
 
 The reason for a session that was _already_ placed is a different thing —
-that decision is made at spawn time, so it is
-[#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724)'s
-to record. Until then the server log holds it.
+that decision is made at spawn time, so it is recorded with the row
+(`sessions.placementReason`, issue
+[#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724)).
+**The session's host badge carries it in its tooltip** — the same place that
+answers _which_ host, so _why_ is one hover away rather than a log file:
+
+> least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)
+
+A session with no recorded reason — a row written before placement existed —
+keeps the older tooltip, _"Runs on host: mac-mini"_. A **pinned** session
+does have one: the pinned path short-circuits the policy but does not skip
+the record, so its reason reads _"pinned to the project's host mac-mini"_.
+
+The reason is the placement decision's own words, so it says what was
+actually decided rather than a summary of it. It names the host by its
+**id** — the policy knows ids, not names, and a remote host's id is a
+UUID — so the badge's friendly name replaces it in the tooltip: the
+operator knows _"mac-mini"_, not _"3f2a9c1e-…"_.
 
 ## Treat agent credentials like credentials
 

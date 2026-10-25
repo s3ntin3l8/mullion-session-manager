@@ -2,15 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
-// LOCAL_HOST_ID from its shared home rather than from ./api/index.js — this
-// file's own test mocks that module wholesale (only `api` is provided), and
-// TerminalPane.tsx already imports shared constants the same way.
-import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { formatBranchLabel } from "./paneTitle.js";
 import { BellIcon, CheckIcon, CloseIcon, HostsIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
+import { describeHostBadge } from "./lib/hostBadge.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
@@ -343,12 +340,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // for the case that matters, one project's sessions on DIFFERENT hosts.
   // The host's name comes from the store's hosts list, read non-reactively
   // so the tab does not re-render on every fleet refresh.
-  const remoteHostName = (() => {
-    const hostId = session?.resolvedHostId;
-    if (!hostId || hostId === LOCAL_HOST_ID) return null;
-    const hosts = useDashboardStore.getState().hosts ?? [];
-    return hosts.find((h) => h.id === hostId)?.name ?? hostId;
-  })();
+  // Issue #1852 — the host badge AND its tooltip (the placement
+  // decision's own words) are computed together, in one place, so the two
+  // surfaces cannot disagree: see lib/hostBadge.ts.
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
 
   return (
     <div
@@ -390,10 +385,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         )}
         {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
         {!narrow && badge}
-        {!narrow && remoteHostName && (
-          <span className="pane-tab-host-badge" title={`Runs on host: ${remoteHostName}`}>
+        {!narrow && hostBadge && (
+          <span className="pane-tab-host-badge" title={hostBadge.title}>
             <HostsIcon size={9} />
-            <span className="pane-tab-host-badge-name">{remoteHostName}</span>
+            <span className="pane-tab-host-badge-name">{hostBadge.name}</span>
           </span>
         )}
         {unreadCount > 0 && unreadIconKind && (

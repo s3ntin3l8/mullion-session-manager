@@ -143,6 +143,9 @@ const SESSION: Session = {
   // its project's) and the resolved one the host badge shows.
   hostId: null,
   resolvedHostId: "local",
+  // Issue #1852 — the placement decision's own words; null when
+  // nothing was decided here (a test session's default).
+  placementReason: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastAttachedAt: "2026-01-01T00:00:00.000Z",
   alive: true,
@@ -250,6 +253,47 @@ describe("SessionRow", () => {
       expect(badge).not.toBeNull();
       expect(badge?.closest(".session-status-label")).toBeNull();
       expect(badge?.closest(".session-status-group")).not.toBeNull();
+    });
+
+    // Issue #1852 — the placement decision's own words are the answer to
+    // "why is this session on that machine?", so the badge's tooltip carries
+    // them instead of the bare "which host".
+    it("shows the placement REASON in its tooltip when there is one", () => {
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            resolvedHostId: "mac-mini",
+            placementReason: "least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)",
+          }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      const badge = document.querySelector(".session-host-badge");
+      expect(badge?.getAttribute("title")).toBe(
+        "least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)",
+      );
+    });
+
+    it("falls back to 'Runs on host: X' when nothing was decided", () => {
+      // A row written BEFORE placement existed is the only session without
+      // a recorded reason — a pinned project records one too ("pinned to
+      // the project's host X"), because the pinned path short-circuits the
+      // policy but does not skip the record.
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini", placementReason: null }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      const badge = document.querySelector(".session-host-badge");
+      expect(badge?.getAttribute("title")).toBe("Runs on host: mac-mini");
     });
 
     it("falls back to the host id when the fleet does not know that host", () => {
