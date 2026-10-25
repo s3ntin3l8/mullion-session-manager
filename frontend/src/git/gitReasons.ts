@@ -70,6 +70,8 @@ export function reasonMessage(reason: string | undefined, detail: string | undef
       return "Already up to date.";
     case "pull-failed":
       return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
+    case "busy":
+      return "A git operation is already running for this repository — try again in a moment.";
     default:
       return "Action failed.";
   }

@@ -232,7 +232,10 @@ export type GitPullReason =
   | "dirty-tree"
   | "not-fast-forward"
   | "already-up-to-date"
-  | "pull-failed";
+  | "pull-failed"
+  // Issue #1896 — a git operation (a clone repair) already holds the clone.
+  // Not a failure: the pull was refused, and trying again in a moment works.
+  | "busy";
 
 export interface GitPullResult {
   pulled: boolean;

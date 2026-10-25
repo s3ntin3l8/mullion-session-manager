@@ -664,14 +664,16 @@ export function GitPanel({
           <button
             className="git-panel-fetch-btn"
             onClick={handleFetch}
-            disabled={isFetching || isPulling}
+            // A repair holds the clone: a fetch or a pull during it would
+            // race the repair's own fetch and its index rebuild.
+            disabled={isFetching || isPulling || isRepairing}
           >
             {isFetching ? "⟳" : "↻"} Fetch
           </button>
           <button
             className="git-panel-fetch-btn"
             onClick={handlePull}
-            disabled={isPulling || isFetching || status.behind === 0}
+            disabled={isPulling || isFetching || isRepairing || status.behind === 0}
             title={
               status.behind === 0
                 ? "Already up to date with tracking branch"

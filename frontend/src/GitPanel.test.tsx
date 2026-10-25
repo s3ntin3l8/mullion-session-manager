@@ -407,6 +407,14 @@ describe("GitPanel", () => {
     expect(screen.queryByText(/looks damaged/)).toBeNull();
   });
 
+  // A pull refused because a repair holds the clone is not a failure — it
+  // must not read as "Action failed."
+  it("says a busy clone was busy, not that the action failed", async () => {
+    const { reasonMessage } = await import("./git/gitReasons.js");
+    expect(reasonMessage("busy", undefined)).toMatch(/already running/i);
+    expect(reasonMessage("busy", undefined)).not.toMatch(/failed/i);
+  });
+
   // A failed check must not leave its error on screen next to a later
   // successful one.
   // Issue #1896 — the clone REPAIR. The plan is on screen BEFORE the
