@@ -41,6 +41,7 @@ import {
   shouldAutoOpenChildPanels,
   extractSessionIds,
   findSessionWorkspaces,
+  buildSessionWorkspaceIndex,
   canLaunchTerminal,
   resolveActiveProjectId,
   parseDeepLinkSessionId,
@@ -1087,6 +1088,32 @@ describe("findSessionWorkspaces", () => {
       }),
     ];
     expect(findSessionWorkspaces(7, workspaces)).toEqual([4]);
+  });
+});
+
+// Issue #1882 — the picker asks "which workspaces claim this session" for
+// every session it lists. The index answers it for all of them in one pass
+// over the layouts, which is what the picker uses; this wrapper is the
+// single-session form.
+describe("buildSessionWorkspaceIndex", () => {
+  const claiming = (id: number, sessionId: number) =>
+    makeWorkspace({ id, layout: { sessionId } as Record<string, unknown> });
+
+  it("maps each session to every workspace whose layout holds it", () => {
+    const index = buildSessionWorkspaceIndex([claiming(1, 7), claiming(2, 7), claiming(3, 8)]);
+    expect([...(index.get(7) ?? [])].sort((a, b) => a - b)).toEqual([1, 2]);
+    expect(index.get(8)).toEqual([3]);
+  });
+
+  it("has no entry for a session no workspace holds", () => {
+    const index = buildSessionWorkspaceIndex([claiming(1, 7)]);
+    expect(index.get(99)).toBeUndefined();
+  });
+
+  it("agrees with the single-session wrapper", () => {
+    const workspaces = [claiming(1, 7), claiming(2, 7)];
+    const index = buildSessionWorkspaceIndex(workspaces);
+    expect(index.get(7)).toEqual(findSessionWorkspaces(7, workspaces));
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeProject, makeSession } from "../test/fixtures.js";
+import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
 import type { NotificationEvent } from "../api/index.js";
 import { buildPickerSections } from "./mobileSessionPicker.js";
 import type { PickerInput } from "./mobileSessionPicker.js";
@@ -24,6 +24,8 @@ function input(overrides: Partial<PickerInput> = {}): PickerInput {
     hideEndedSessions: false,
     showTaskSessions: true,
     taskSessionIds: new Set(),
+    workspaces: [],
+    activeWorkspaceId: null,
     ...overrides,
   };
 }
@@ -197,5 +199,127 @@ describe("buildPickerSections", () => {
     );
     expect(section.rows[0]).toMatchObject({ title: "renamed tab" });
     expect(section.rows[0].searchFields).toEqual(["locked name", "codex", "renamed tab", "runway"]);
+  });
+
+  // Issue #1882 — the phone tier has no workspace switcher, so a row has to
+  // say which workspace its session lives in. The swap the audit called
+  // invisible was a session whose panel lived in another workspace's saved
+  // layout: opening it replaced the whole layout with nothing on screen
+  // saying so, and there was no way back.
+  describe("the workspace a session lives in (issue #1882)", () => {
+    const layout = (sessionId: number) => ({ sessionId }) as Record<string, unknown>;
+
+    it("names the current workspace for a session tiled in it", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: layout(7) }),
+            makeWorkspace({ id: 2, name: "Work", layout: null }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      expect(sections[0].rows[0].workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
+    });
+
+    it("names the other workspace for a session tiled only in it", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: null }),
+            makeWorkspace({ id: 2, name: "Work", layout: layout(7) }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      expect(sections[0].rows[0].workspace).toEqual({ id: 2, name: "Work", isCurrent: false });
+    });
+
+    // The current workspace wins over any other claimant: the user is
+    // looking at it, so a session tiled there is here — and "here" is the
+    // answer that tells the user the swap left the session where they are.
+    it("prefers the current workspace when several workspaces claim the session", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: layout(7) }),
+            makeWorkspace({ id: 2, name: "Work", layout: layout(7) }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      expect(sections[0].rows[0].workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
+    });
+
+    // With several other claimants and no current one there is no home to
+    // name. Picking one would be the arbitrary pick issue #1883 removed, and
+    // the opener opens such a session locally anyway rather than swapping.
+    it("names no workspace when several other workspaces claim the session", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: null }),
+            makeWorkspace({ id: 2, name: "Work", layout: layout(7) }),
+            makeWorkspace({ id: 3, name: "Side", layout: layout(7) }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      expect(sections[0].rows[0].workspace).toBeNull();
+    });
+
+    // The phone tier never writes its layout back (issue #1426), so a
+    // session open in the live layout is routinely in NO workspace's saved
+    // layout. It is still here, so it carries the current workspace.
+    it("names the current workspace for a session open in the live layout", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          panels: [{ id: "session-7", title: "open", sessionId: 7 }],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: null }),
+            makeWorkspace({ id: 2, name: "Work", layout: null }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      const row = sections.flatMap((s) => s.rows).find((r) => r.session?.id === 7);
+      expect(row?.workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
+    });
+
+    it("names no workspace for a session in no workspace and not open", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          workspaces: [makeWorkspace({ id: 1, name: "Default", layout: null })],
+          activeWorkspaceId: 1,
+        }),
+      );
+      expect(sections[0].rows[0].workspace).toBeNull();
+    });
+
+    // The live grid wins over a stale saved layout. A session open in the
+    // current layout is here — the opener focuses that panel, it never
+    // swaps — so naming another workspace would promise a swap that never
+    // happens.
+    it("names the current workspace for a session open in the live grid even when another workspace claims it", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          panels: [{ id: "session-7", title: "open", sessionId: 7 }],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: null }),
+            makeWorkspace({ id: 2, name: "Work", layout: layout(7) }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      const row = sections.flatMap((s) => s.rows).find((r) => r.session?.id === 7);
+      expect(row?.workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
+    });
   });
 });

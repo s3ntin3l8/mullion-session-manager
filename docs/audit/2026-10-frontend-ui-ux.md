@@ -4,11 +4,11 @@
 accessibility, interaction-feedback and information-architecture defects. The backend
 (`src/`) and the CLI were not audited.
 
-**Status.** Every blocker is fixed, and so are 18 of the 21 major and 7 of the 24 minor
-findings, in four pull requests: #1895 (accessibility and contrast), #1897 (surfacing
-failures instead of swallowing them), #1898 (guards on destructive actions) and #1923
-(the first of a series that closes the deferred backlog one finding per pull
-request). The other 20 findings are deferred and tracked as issues; see
+**Status.** Every blocker is fixed, and so are 19 of the 21 major and 7 of the 24 minor
+findings, in five pull requests: #1895 (accessibility and contrast), #1897 (surfacing
+failures instead of swallowing them), #1898 (guards on destructive actions), #1923
+and #1926 (the first two of a series that closes the deferred backlog one finding
+per pull request). The other 19 findings are deferred and tracked as issues; see
 [Deferred backlog](#deferred-backlog).
 
 ---
@@ -76,14 +76,14 @@ inventing new ones.
 
 ## Findings
 
-Forty-eight findings: 28 fixed and 20 deferred.
+Forty-eight findings: 29 fixed and 19 deferred.
 
 | Severity  | Findings | Fixed  | Deferred |
 | --------- | -------- | ------ | -------- |
 | Blocker   | 3        | 3      | 0        |
-| Major     | 21       | 18     | 3        |
+| Major     | 21       | 19     | 2        |
 | Minor     | 24       | 7      | 17       |
-| **Total** | **48**   | **28** | **20**   |
+| **Total** | **48**   | **29** | **19**   |
 
 The defects are ordered by severity, not by screen. The recurring theme is
 that most of them are **divergences from patterns the codebase had already
@@ -94,10 +94,10 @@ sites. The fixes are therefore mostly consolidation rather than invention.
 
 The table lists the findings that were fixed, with the pull request that fixed each:
 #1895 fixed 12 (the accessibility and contrast pass), #1897 fixed 11 (failures surfaced
-instead of swallowed), #1898 fixed 4 (guards on destructive actions) and #1923 fixed 1
-(the first of the series that closes the deferred backlog, one finding per pull
-request). The deferred ones are in the [Deferred backlog](#deferred-backlog), under the
-same numbers.
+instead of swallowed), #1898 fixed 4 (guards on destructive actions), #1923 fixed 1 and
+#1926 fixed 1 (the first two of the series that closes the deferred backlog, one
+finding per pull request). The deferred ones are in the
+[Deferred backlog](#deferred-backlog), under the same numbers.
 
 | #   | Severity | PR    | Finding                                                                                                                         | Where                                                                                                                                       | What changed                                                                                                                                                                                                                                                                                                    |
 | --- | -------- | ----- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -121,6 +121,7 @@ same numbers.
 | 18  | Major    | #1898 | "Add host" could be submitted twice with Enter — no re-entry guard                                                              | `CreateHostModal.tsx:41-61`                                                                                                                 | The submit is guarded against re-entry, the same shape `CreateProjectModal` already had                                                                                                                                                                                                                         |
 | 19  | Major    | #1895 | `Segmented` conveyed its selection by CSS class alone — no `aria-pressed`/`aria-checked`, no group name                         | `ui/primitives.tsx:99-112`                                                                                                                  | `role="radiogroup"` + `role="radio"` + `aria-checked`, with arrow-key/Home/End selection and a roving tab stop                                                                                                                                                                                                  |
 | 20  | Major    | #1895 | `TerminalToasts` had no live region — copy and upload feedback was silent to assistive technology                               | `terminal-pane/TerminalToasts.tsx`                                                                                                          | A permanent `role="status"` region, with the failure variants raised to `role="alert"`                                                                                                                                                                                                                          |
+| 23  | Major    | #1926 | The phone tier's cross-workspace session swap has no visible signal and no way back                                             | `lib/mobileSessionPicker.ts:88-109`; `MobileSessionSwitcher.tsx:357-388`                                                                    | Every row of the phone's session picker names the workspace its session lives in — plain text when that is the workspace the user is looking at, a button naming the other one when it is not — and that button switches to that workspace, so the swap is visible before it happens and reversible after it    |
 | 24  | Major    | #1923 | `findSessionWorkspace` returns the first match, so "which workspace is this session in?" has an arbitrary answer                | `panelUtils.ts:102-108`; `hooks/usePanelOpener.ts:261-268`                                                                                  | `findSessionWorkspaces` returns **every** workspace that claims the session, and the one caller switches workspace only when the answer is unique and is not the workspace the user is already in — otherwise it opens the session where the user is, rather than picking a workspace by the server's row order |
 | 25  | Minor    | #1895 | `aria-current` existed in exactly one place app-wide                                                                            | `MobileSessionBar.tsx:320` only                                                                                                             | Added to the active workspace item, the active Settings nav item, and the active sidebar session row — which also gained the `.session-item.active` visual state it never had                                                                                                                                   |
 | 27  | Minor    | #1895 | No `<h1>`/heading structure in the app shell                                                                                    | `App.tsx:1522-1528`, `Sidebar.tsx:441-453`                                                                                                  | A visually-hidden `<h1>`, `.settings-modal-title` promoted to `<h2>`, `.sidebar-section-title` to `<h3>` (both with explicit margin resets — nothing in this codebase resets the UA's heading margins)                                                                                                          |
@@ -298,6 +299,20 @@ This one is a **unit-test** guard, not a lint-time script, because the defect wa
 _decision_ — which workspace wins — and not a value that a script could read out of the
 source. A script could only check that the old first-match lookup is gone; the
 behaviour that replaces it is what actually needs pinning.
+
+### The phone tier's session picker (finding 23)
+
+`frontend/src/lib/mobileSessionPicker.test.ts` and
+`frontend/src/MobileSessionSwitcher.test.tsx` are the guard for finding 23: the first
+pins which workspace a row names — and, just as importantly, that it names **none**
+when the answer is ambiguous — and the second pins that the chip is a button that
+switches workspace when the session lives elsewhere, and plain text when it lives
+here.
+
+Like finding 24's, this is a **unit-test** guard: the defect was that the phone tier
+had no way to see or reach a workspace at all, and that is a matter of what the
+picker renders. A script could only check that a chip exists, not that it names the
+right workspace or that the button switches to it.
 
 ---
 
@@ -540,7 +555,6 @@ implying more:
 | --- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | 21  | Major    | The command palette was hidden on the phone tier, and the navigator had no Commands tab (`styles/mobile.css:31-33`; `PhoneNavigator.tsx:17`)          | [#1880](https://github.com/s3ntin3l8/mullion-session-manager/issues/1880) |
 | 22  | Major    | The Dock is hidden on every coarse-pointer tier, but the command palette still offers the Dock's configuration commands (`styles/tablet.css:113-120`) | [#1881](https://github.com/s3ntin3l8/mullion-session-manager/issues/1881) |
-| 23  | Major    | The phone tier's cross-workspace session swap has no visible signal and no way back (`hooks/usePanelOpener.ts:246-253`)                               | [#1882](https://github.com/s3ntin3l8/mullion-session-manager/issues/1882) |
 | 26  | Minor    | Two collapsible headers are `<div onClick>` with no keyboard path (`SourceControlSection.tsx:277`, `Sidebar.tsx:2139`)                                | [#1893](https://github.com/s3ntin3l8/mullion-session-manager/issues/1893) |
 | 33  | Minor    | "host" names two things: a remote agent, and a local Android device (`HostsSection.tsx:280` vs `DevicesSection.tsx`)                                  | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |
 | 34  | Minor    | "Workspace" names two things: a saved layout, and a Settings section group (`WorkspaceSwitcher.tsx:266` vs `settingsSections.tsx:141-167`)            | [#1878](https://github.com/s3ntin3l8/mullion-session-manager/issues/1878) |

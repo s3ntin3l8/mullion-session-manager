@@ -1517,6 +1517,9 @@ export function App() {
       dockviewApi={dockviewApi}
       onNewSession={openGlobalLauncher}
       onOpenSession={onOpenSession}
+      // Issue #1882 — the phone tier has no workspace switcher, so a picker
+      // row that names another workspace is the way back to it.
+      onSelectWorkspace={handleSelectWorkspace}
     />
   ) : null;
 

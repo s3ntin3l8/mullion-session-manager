@@ -35,6 +35,7 @@ export function MobileSessionBar({
   dockviewApi,
   onNewSession,
   onOpenSession,
+  onSelectWorkspace,
   tier = "phone",
   contextLabel,
 }: {
@@ -51,6 +52,10 @@ export function MobileSessionBar({
   // App's usePanelOpener onOpenSession: opens the session's panel, or
   // switches to the workspace that already has it.
   onOpenSession: (session: Session) => void;
+  // Issue #1882 — switch workspace without opening the session, from the row
+  // that names the workspace. Absent on tablet, which has a workspace
+  // switcher of its own.
+  onSelectWorkspace?: (workspaceId: number) => void;
 }) {
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
@@ -62,6 +67,10 @@ export function MobileSessionBar({
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
   const theme = useDashboardStore((s) => s.theme);
+  // Issue #1882 — the workspaces whose saved layouts hold the sessions, so a
+  // row can name the one its session lives in.
+  const workspaces = useDashboardStore((s) => s.workspaces);
+  const activeWorkspaceId = useDashboardStore((s) => s.activeWorkspaceId);
   const taskSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -109,6 +118,8 @@ export function MobileSessionBar({
         hideEndedSessions,
         showTaskSessions,
         taskSessionIds,
+        workspaces,
+        activeWorkspaceId,
       }),
     [
       sessions,
@@ -121,6 +132,8 @@ export function MobileSessionBar({
       hideEndedSessions,
       showTaskSessions,
       taskSessionIds,
+      workspaces,
+      activeWorkspaceId,
     ],
   );
 
@@ -136,6 +149,7 @@ export function MobileSessionBar({
       agentLogo: row.session ? resolveAgentLogo(row.session.command, theme) : null,
       unreadCount: row.unreadCount,
       needsYou: row.needsYou,
+      workspace: row.workspace,
       searchFields: row.searchFields,
     })),
   }));
@@ -221,6 +235,11 @@ export function MobileSessionBar({
       sections={sections}
       contextLabel={contextLabel}
       sheetClassName={tier === "tablet" ? "mobile-session-sheet--tablet" : undefined}
+      // Issue #1882 — the phone tier is the one without a workspace
+      // switcher, so it is the one whose rows have to say where a session
+      // lives. Tablet has the switcher in its navigator's Projects tab.
+      showWorkspaceChip={tier === "phone"}
+      onSelectWorkspace={onSelectWorkspace}
       unreadElsewhere={unreadElsewhere}
       activeId={activePanelId}
       onSelect={selectPanel}

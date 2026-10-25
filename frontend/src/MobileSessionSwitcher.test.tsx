@@ -10,6 +10,7 @@ import type {
   MobileSessionRow,
   MobileSessionSection,
 } from "./MobileSessionSwitcher.js";
+import type { PickerWorkspace } from "./lib/mobileSessionPicker.js";
 
 vi.mock("./store/index.js", () => {
   const state = { theme: "dark" };
@@ -33,6 +34,7 @@ function rowFor(item: MobileSessionItem, extra: Partial<MobileSessionRow> = {}):
     agentLogo: item.agentLogo,
     unreadCount: item.unreadCount,
     needsYou: false,
+    workspace: null,
     searchFields: [item.title],
     ...extra,
   };
@@ -383,5 +385,52 @@ describe("MobileSessionSwitcher", () => {
       resetPhoneBackStackForTests();
       vi.restoreAllMocks();
     }
+  });
+
+  // Issue #1882 — the phone tier has no workspace switcher, so a row names
+  // the workspace its session lives in. Without it, opening a session from
+  // another workspace swapped the whole layout with nothing on screen saying
+  // so, and there was no way back.
+  describe("the workspace chip (issue #1882)", () => {
+    const HERE = { id: 1, name: "Default", isCurrent: true };
+    const ELSEWHERE = { id: 2, name: "Work", isCurrent: false };
+
+    const sectionsWith = (workspace: PickerWorkspace | null): MobileSessionSection[] => [
+      {
+        key: "project-1",
+        label: "runway",
+        kind: "project",
+        rows: ITEMS.map((i) => rowFor(i, { workspace })),
+      },
+    ];
+
+    it("names the current workspace on the row", async () => {
+      renderSwitcher({ sections: sectionsWith(HERE), showWorkspaceChip: true });
+      await userEvent.setup().click(trigger());
+      expect(screen.getAllByText("Default")).toHaveLength(ITEMS.length);
+    });
+
+    it("offers the other workspace as a button that switches to it", async () => {
+      const props = renderSwitcher({
+        sections: sectionsWith(ELSEWHERE),
+        showWorkspaceChip: true,
+        onSelectWorkspace: vi.fn(),
+      });
+      const user = userEvent.setup();
+      await user.click(trigger());
+      const buttons = screen.getAllByRole("button", { name: "Go to workspace Work" });
+      expect(buttons).toHaveLength(ITEMS.length);
+      await user.click(buttons[0]);
+      expect(props.onSelectWorkspace).toHaveBeenCalledWith(2);
+      // The sheet closes — the workspace switch replaces it.
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("shows no chip when the tier has a workspace switcher of its own", async () => {
+      renderSwitcher({ sections: sectionsWith(ELSEWHERE) });
+      await userEvent.setup().click(trigger());
+      expect(screen.queryByText("Work")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Go to workspace Work" })).toBeNull();
+    });
   });
 });
