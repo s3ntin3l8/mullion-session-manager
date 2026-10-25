@@ -14,9 +14,11 @@ evidence is local. Structure, naming and rules: the `audit` skill
   node <path to ai-agent-skills>/plugins/audit/skills/audit/scripts/capture.mjs <slug>
   ```
 
-  It starts an isolated demo (`make demo`) and reads `docs/audit/capture.<slug>.json` if
-  present, else [`capture.json`](capture.json), the repo's usual config. An audit whose routes
-  or ports differ adds its own `capture.<slug>.json` instead of editing the shared one.
+  It starts an isolated demo (`make demo`) and reads [`capture.json`](capture.json), the
+  repo's usual config. An audit whose routes or ports differ adds its own
+  `capture.<slug>.json`, which the script prefers; that lookup is added by
+  [ai-agent-skills#4](https://github.com/s3ntin3l8/ai-agent-skills/pull/4), so until it
+  merges, pass `--config docs/audit/capture.<slug>.json` instead.
   Captures go to `docs/audit/assets/<slug>/`, which is gitignored. Record the
   `ai-agent-skills` commit you ran in the report's Evidence section, so the capture can be
   reproduced after the script changes.

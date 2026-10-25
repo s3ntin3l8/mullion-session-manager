@@ -273,7 +273,14 @@ The audit recorded no structural guard for the remaining fixes beyond these.
 
 ### Rendered contrast (the translucent-layer limit)
 
-The guard's other limit is structural: it compares a token against a token, so it cannot see a **translucent** layer painted under the text. The runtime verification below found two places where that mattered — a keycap chip and the active workspace row — both of which sat under 4.5:1 once their real painted background was composited. `scripts/verify-ui-runtime.mjs` (`make verify-ui`) is the guard for that layer: it measures the composited, hovered result in a real browser, and asserts the two fixed targets **by name**, so a partial revert of either fix fails it. Neither guard subsumes the other, and the token guard stays the one that runs on every push.
+The guard's other limit is structural: it compares a token against a token, so it cannot
+see a **translucent** layer painted under the text. The runtime verification below found
+two places where that mattered — a keycap chip and the active workspace row — both of
+which sat under 4.5:1 once their real painted background was composited.
+`scripts/verify-ui-runtime.mjs` (`make verify-ui`) is the guard for that layer: it
+measures the composited, hovered result in a real browser, and asserts the two fixed
+targets **by name**, so a partial revert of either fix fails it. Neither guard subsumes
+the other, and the token guard stays the one that runs on every push.
 
 ---
 
@@ -290,7 +297,8 @@ they are local only and gitignored:
 node <path to ai-agent-skills>/plugins/audit/skills/audit/scripts/capture.mjs 2026-10-frontend-ui-ux
 ```
 
-This reads [`capture.json`](capture.json) and writes into
+This reads `docs/audit/capture.2026-10-frontend-ui-ux.json` if it exists, else
+[`capture.json`](capture.json) (see the [index](README.md)), and writes into
 `docs/audit/assets/2026-10-frontend-ui-ux/`. Nothing outside that folder is touched. The
 script is from the `audit` plugin in `s3ntin3l8/ai-agent-skills`; the commit used for a
 capture should be noted here when one is taken.
