@@ -223,8 +223,8 @@ every pull request to `main` with no paths filter, finishes in seconds, and
 its job-level `if:` only skips it on a private repository, which this one is
 not. Its trigger is `pull_request` only, so this licence/vulnerability review
 never re-runs on `main`: it gates the PR, and nothing repeats it after the
-merge. (Dependabot and CodeQL's scheduled `main` scan still watch merged
-dependencies for known vulnerabilities.)
+merge. (Dependabot still watches merged dependencies for known
+vulnerabilities; CodeQL here is source analysis only and does not.)
 
 Both workspaces shard their test run, so **both** `test-merge` contexts are
 required — see the "Test sharding" note above for why dropping one is not
