@@ -4990,6 +4990,365 @@ describe("projects route", () => {
 
   // Issue #1851 — the READ-ONLY clone health check. It never mutates
   // anything: a damaged clone is reported, not repaired.
+  // Issue #1896 — the clone REPAIR. Two phases in one endpoint: without
+  // `confirm` it returns the PLAN (a read), with `confirm: true` it runs the
+  // repair and reports what it did.
+  describe("POST /api/projects/:id/git-repair (issue #1896)", () => {
+    /** A clone carrying the #1836 damage: a zero-byte file where a loose
+     * object should be. */
+    const damagedClone = async () => {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-repair-"));
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd, stdio: "pipe", env: gitEnv() });
+      fs.writeFileSync(path.join(cwd, "a.txt"), "hello\n");
+      execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+      execFileSync("git", ["commit", "-q", "-m", "one"], {
+        cwd,
+        stdio: "pipe",
+        env: {
+          ...gitEnv(),
+          GIT_AUTHOR_NAME: "Test",
+          GIT_AUTHOR_EMAIL: "test@example.com",
+          GIT_COMMITTER_NAME: "Test",
+          GIT_COMMITTER_EMAIL: "test@example.com",
+        },
+      });
+      // Stage a change and damage the TREE the index names — the #1836 case,
+      // where the index's cache-tree points at an object that went missing.
+      // HEAD's own tree is left intact: a damaged HEAD tree would fail
+      // `git read-tree HEAD` and the index rebuild with it, which is a
+      // different scenario.
+      fs.writeFileSync(path.join(cwd, "a.txt"), "changed\n");
+      execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe", env: gitEnv() });
+      const tree = execFileSync("git", ["write-tree"], {
+        cwd,
+        encoding: "utf8",
+        env: gitEnv(),
+      }).trim();
+      const objectPath = path.join(cwd, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+      // A loose object is written read-only, so remove it and put the empty
+      // file in its place — the #1836 damage.
+      fs.rmSync(objectPath, { force: true });
+      fs.writeFileSync(objectPath, "");
+      return { cwd, tree, objectPath };
+    };
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      const res = await app.inject({ method: "POST", url: "/api/projects/999999/git-repair" });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("returns a plan without changing anything", async () => {
+      const { cwd, tree, objectPath } = await damagedClone();
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "repair-plan-repo", cwd },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${created.json().id}/git-repair`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.quarantine).toEqual([tree]);
+      expect(body.actionable).toBe(true);
+      expect(body.indexesToRebuild).toHaveLength(1);
+
+      // The plan is a READ: the damaged object is still exactly where it was.
+      expect(fs.existsSync(objectPath)).toBe(true);
+      expect(fs.statSync(objectPath).size).toBe(0);
+      expect(
+        fs.readdirSync(path.join(cwd, ".git")).some((n) => n.startsWith("gc-quarantine-")),
+      ).toBe(false);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("repairs the clone when confirmed, and reports what it did", async () => {
+      const { cwd, tree, objectPath } = await damagedClone();
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "repair-run-repo", cwd },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${created.json().id}/git-repair`,
+        payload: { confirm: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.quarantined).toEqual([tree]);
+      expect(body.quarantine).toContain("gc-quarantine-");
+      expect(body.indexesRebuilt).toHaveLength(1);
+
+      // The damaged object was MOVED out of objects/ — never deleted.
+      expect(fs.existsSync(objectPath)).toBe(false);
+      const quarantine = body.quarantine as string;
+      expect(fs.existsSync(path.join(quarantine, tree.slice(0, 2), tree.slice(2)))).toBe(true);
+      expect(fs.statSync(path.join(quarantine, tree.slice(0, 2), tree.slice(2))).size).toBe(0);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    // The CLONE is the resource, not the project: two project rows can point
+    // at the same directory, and the background auto-fetch sweep runs
+    // `git fetch` on the same clone — a fetch landing inside the repair's own
+    // fetch window would fail its ref update and make a healthy clone look
+    // broken.
+    it("refuses a repair while a git operation is already running on that clone", async () => {
+      const { cwd } = await damagedClone();
+      const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+      const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "repair-busy-repo", cwd },
+      });
+
+      // Stand in for the auto-fetch sweep, which claims the same clone.
+      markCloneBusy(LOCAL_HOST_ID, cwd);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-repair`,
+          payload: { confirm: true },
+        });
+        expect(res.statusCode).toBe(409);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, cwd);
+      }
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    // The manual Fetch and Pull write to the same clone the repair does, so
+    // they claim it too — a manual Fetch landing inside a repair's fetch
+    // window is the exact failure the registry exists to prevent.
+    it("refuses a manual fetch or pull while a git operation is running on that clone", async () => {
+      const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+      const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+      const app = await buildApp();
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-busy-"));
+      execFileSync("git", ["init", "-q", projectCwd], { env: gitEnv() });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "busy-repo", cwd: projectCwd },
+      });
+
+      markCloneBusy(LOCAL_HOST_ID, projectCwd);
+      try {
+        const fetchRes = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-fetch`,
+        });
+        expect(fetchRes.statusCode).toBe(409);
+
+        const pullRes = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-pull`,
+        });
+        expect(pullRes.statusCode).toBe(409);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, projectCwd);
+      }
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("refuses a second repair for the same project while one is running", async () => {
+      const { cwd } = await damagedClone();
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "repair-concurrent-repo", cwd },
+      });
+      const url = `/api/projects/${created.json().id}/git-repair`;
+
+      const [first, second] = await Promise.all([
+        app.inject({ method: "POST", url, payload: { confirm: true } }),
+        app.inject({ method: "POST", url, payload: { confirm: true } }),
+      ]);
+
+      // Two repairs for one clone would mean two quarantine directories and
+      // two index rebuilds over the same tree, so exactly one of them is
+      // refused.
+      const statuses = [first.statusCode, second.statusCode].sort();
+      expect(statuses).toEqual([200, 409]);
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-repair-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-repair", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-repair`,
+        payload: { confirm: true },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toContain("is unreachable");
+
+      await app.close();
+    });
+
+    // The remote PLAN: the plan is computed by the agent that owns the
+    // clone, exactly like the check.
+    it("asks a remote host for the plan, without confirming anything", async () => {
+      const { createServer } = await import("node:http");
+      const bodies: unknown[] = [];
+      const server = createServer((req, res) => {
+        let raw = "";
+        req.on("data", (chunk) => {
+          raw += chunk;
+        });
+        req.on("end", () => {
+          bodies.push(JSON.parse(raw || "{}"));
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              gitDir: "/remote/.git",
+              quarantine: ["abcdef"],
+              willFetch: true,
+              indexesToRebuild: ["/remote"],
+              indexesToSkip: [],
+              actionable: true,
+            }),
+          );
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const app = await buildApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "git-repair-plan-host",
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
+          },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-git-repair-plan", cwd: "/x", hostId: host.json().id },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${project.json().id}/git-repair`,
+          payload: {},
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(
+          expect.objectContaining({ quarantine: ["abcdef"], actionable: true }),
+        );
+        // The agent was asked for the PLAN — nothing was confirmed.
+        expect(bodies).toContainEqual({ cwd: "/x", confirm: false });
+        expect(bodies.every((b) => (b as { confirm?: boolean }).confirm !== true)).toBe(true);
+
+        await app.close();
+      } finally {
+        server.close();
+      }
+    });
+
+    it("503s when the plan for a remote host cannot be fetched", async () => {
+      const app = await buildApp();
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "git-repair-plan-dead-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-git-repair-plan-dead", cwd: "/x", hostId: host.json().id },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${project.json().id}/git-repair`,
+        payload: {},
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.body).toContain("is unreachable");
+
+      await app.close();
+    });
+
+    it("says the host REJECTED the repair when the agent answers with an error", async () => {
+      const { createServer } = await import("node:http");
+      const server = createServer((_req, res) => {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "no such route" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const app = await buildApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "git-repair-old-host",
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
+          },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-git-repair-404", cwd: "/x", hostId: host.json().id },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${project.json().id}/git-repair`,
+          payload: { confirm: true },
+        });
+        expect(res.statusCode).toBe(503);
+        expect(res.body).toContain("rejected the repair");
+        expect(res.body).not.toContain("is unreachable");
+
+        await app.close();
+      } finally {
+        server.close();
+      }
+    });
+  });
+
   describe("POST /api/projects/:id/git-health (issue #1851)", () => {
     it("404s for an unknown project", async () => {
       const app = await buildApp();

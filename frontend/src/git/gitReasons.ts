@@ -1,3 +1,5 @@
+import type { GitPullReason } from "../api/types.js";
+
 // Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
 // offering a Force retry for. Every other reason (invalid-name, no-such-
 // branch, not-a-repo, current-branch, checked-out, is-main, not-listed,
@@ -56,21 +58,58 @@ export function reasonMessage(reason: string | undefined, detail: string | undef
       return `Active session${detail?.includes(",") ? "s" : ""}: ${detail ?? "?"}.`;
     case "directory-gone":
       return "This worktree's directory no longer exists — use Prune stale instead.";
-    case "dirty-tree":
-      return "Working tree has uncommitted changes or conflicts.";
-    case "detached-head":
-      return "Cannot pull in a detached HEAD state.";
+    default:
+      return "Action failed.";
+  }
+}
+
+/**
+ * The PULL refusal's message.
+ *
+ * Typed to GitPullReason and EXHAUSTIVE by type: a new member of the union
+ * with no case here is a COMPILE error, not a silent fall-through to
+ * "Action failed." That guard is not theoretical — issue #1896's "busy" (a
+ * refusal, not a failure) reached one renderer's default branch and told the
+ * user the pull had FAILED.
+ *
+ * The default branch is the forward-compatibility path, not the
+ * exhaustiveness path: a NEWER backend can send a reason this build has
+ * never heard of, and that must still say something sensible.
+ */
+export function pullReasonMessage(reason: GitPullReason | undefined, detail?: string): string {
+  switch (reason) {
+    case undefined:
+      // A refusal with no reason at all: the pull did not run and nothing
+      // says why. The same words the sidebar uses for the same case.
+      return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
+    case "not-a-repo":
+      // Shared with the branch/worktree refusals — one copy of that copy.
+      return reasonMessage(reason, detail);
     case "unborn-head":
       return "The current branch has no commits.";
+    case "detached-head":
+      return "Cannot pull in a detached HEAD state.";
     case "no-upstream":
       return "No upstream tracking branch configured.";
+    case "dirty-tree":
+      return "Working tree has uncommitted changes or conflicts.";
     case "not-fast-forward":
       return "Branch has diverged from upstream (cannot fast-forward).";
     case "already-up-to-date":
       return "Already up to date.";
     case "pull-failed":
       return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
-    default:
-      return "Action failed.";
+    case "busy":
+      return "A git operation is already running for this repository — try again in a moment.";
+    default: {
+      // Compile-time exhaustiveness: a new member of GitPullReason with no
+      // case above is an error here. At runtime this is where a reason from
+      // a newer backend lands.
+      assertNever(reason);
+      return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
+    }
   }
 }
+
+/** Compile-time exhaustiveness: passing anything but `never` is an error. */
+function assertNever(_value: never): void {}

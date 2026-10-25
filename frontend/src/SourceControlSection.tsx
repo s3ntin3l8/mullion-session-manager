@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { api, LOCAL_HOST_ID } from "./api/index.js";
 import type { GitFileStatus, GitStatus } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
+import { pullReasonMessage } from "./git/gitReasons.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -244,23 +245,12 @@ function SourceControlView({
         }));
         void useDashboardStore.getState().refreshGitRefs([effectiveProjectId]);
       } else {
-        const msg =
-          result.reason === "dirty-tree"
-            ? "Working tree has uncommitted changes or conflicts."
-            : result.reason === "detached-head"
-              ? "Cannot pull in a detached HEAD state."
-              : result.reason === "unborn-head"
-                ? "The current branch has no commits."
-                : result.reason === "no-upstream"
-                  ? "No upstream tracking branch configured."
-                  : result.reason === "not-fast-forward"
-                    ? "Branch has diverged from upstream (cannot fast-forward)."
-                    : result.reason === "already-up-to-date"
-                      ? "Already up to date."
-                      : result.detail
-                        ? `Pull failed: ${result.detail}`
-                        : "The pull operation failed.";
-        setPullError(msg);
+        // The same words the Git panel and the sidebar use — from ONE place.
+        // This chain was the third copy of the pull refusals, and it knew
+        // neither "not-a-repo" nor "busy" (issue #1896), so a clone the
+        // repair was holding read as "Pull failed: a git operation is
+        // already running".
+        setPullError(pullReasonMessage(result.reason, result.detail));
       }
     } catch (err) {
       console.debug("[SourceControlSection] pull failed", err);

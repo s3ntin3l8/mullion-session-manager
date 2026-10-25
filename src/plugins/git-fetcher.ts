@@ -6,9 +6,9 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { getStoredSettings } from "../services/settings.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
 
 let fetchTimer: ReturnType<typeof setInterval> | undefined;
-const inFlight: Set<string> = new Set();
 
 async function sweep(app: FastifyInstance) {
   const settings = getStoredSettings(app.db);
@@ -25,10 +25,12 @@ async function sweep(app: FastifyInstance) {
       project.autoFetch === true || (project.autoFetch === null && intervalSeconds > 0);
     if (!shouldFetch) continue;
 
-    const key = `${project.hostId}:${project.cwd}`;
-    if (inFlight.has(key)) continue;
+    // The clone is the resource, not the project — and the repair (issue
+    // #1896) claims the same clone through the same registry, so a sweep
+    // can never land inside a repair's fetch window.
+    if (isCloneBusy(project.hostId, project.cwd)) continue;
 
-    inFlight.add(key);
+    markCloneBusy(project.hostId, project.cwd);
     try {
       if (project.hostId === LOCAL_HOST_ID) {
         const result = await runGitFetch(project.cwd);
@@ -45,7 +47,7 @@ async function sweep(app: FastifyInstance) {
     } catch (err) {
       app.log.warn({ err, projectId: project.id, hostId: project.hostId }, "git fetch failed");
     } finally {
-      inFlight.delete(key);
+      releaseClone(project.hostId, project.cwd);
     }
   }
 }

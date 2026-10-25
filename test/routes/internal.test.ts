@@ -12,6 +12,7 @@ import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
+import { cloneWithRemote } from "../helpers/git-clone.js";
 import type { CloneHealth } from "../../src/shared/types.js";
 import {
   SIGNATURE_HEADER,
@@ -862,6 +863,200 @@ describe("internal routes (agent role, issue #26)", () => {
     const res = await app.inject({
       method: "GET",
       url: `/internal/git-health?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
+  // Issue #1896 — the clone REPAIR on this agent's own filesystem, and the
+  // read-only PLAN of what it would do.
+  it("returns a plan for a git-repair request, and changes nothing", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "repair-plan-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+    // A zero-byte loose object — the #1836 damage.
+    const tree = execFileSync("git", ["-C", repo, "rev-parse", "HEAD^{tree}"], {
+      env: gitEnv(),
+      encoding: "utf8",
+    }).trim();
+    const loose = path.join(repo, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+    fs.rmSync(loose, { force: true });
+    fs.writeFileSync(loose, "");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: repo },
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.quarantine).toEqual([tree]);
+    expect(body.actionable).toBe(true);
+    // The plan is a READ: the damaged object is still exactly where it was.
+    expect(fs.statSync(loose).size).toBe(0);
+    expect(
+      fs.readdirSync(path.join(repo, ".git")).some((n) => n.startsWith("gc-quarantine-")),
+    ).toBe(false);
+    await app.close();
+  });
+
+  it("repairs the clone when a git-repair request confirms it", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "repair-run-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+    const tree = execFileSync("git", ["-C", repo, "rev-parse", "HEAD^{tree}"], {
+      env: gitEnv(),
+      encoding: "utf8",
+    }).trim();
+    const loose = path.join(repo, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+    fs.rmSync(loose, { force: true });
+    fs.writeFileSync(loose, "");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: repo, confirm: true },
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.quarantined).toEqual([tree]);
+    expect(body.quarantine).toContain("gc-quarantine-");
+    // The damaged object was MOVED out of objects/ — never deleted.
+    expect(fs.existsSync(loose)).toBe(false);
+    await app.close();
+  });
+
+  // The clone is the resource: a repair and a fetch on the same clone would
+  // fight over the refs (issue #1896).
+  it("refuses a git-repair request for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-repair",
+        payload: { cwd: repo, confirm: true },
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(409);
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
+  });
+
+  // The agent-side fetch the primary's auto-fetch sweep calls on every remote
+  // project. It had no test at all.
+  it("fetches a clone on this agent", async () => {
+    const app = await buildApp();
+    // Inside this agent's PROJECTS_ROOTS — the route confines the cwd there.
+    // Inside this agent's PROJECTS_ROOTS — the route confines the cwd there.
+    const base = fs.mkdtempSync(path.join(projectsRoot, "internal-git-fetch-"));
+    const { repo, fetchedHead: head } = cloneWithRemote(base);
+
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-fetch?cwd=${encodeURIComponent(repo)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(expect.objectContaining({ success: true }));
+      const ref = execFileSync(
+        "git",
+        ["-C", repo, "rev-parse", "--verify", "refs/remotes/origin/main"],
+        { env: gitEnv(), encoding: "utf8" },
+      ).trim();
+      expect(ref).toBe(head);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
+  it("skips a git-pull for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-pull-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-pull",
+        payload: { cwd: repo },
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual(expect.objectContaining({ pulled: false, reason: "busy" }));
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
+  });
+
+  it("skips a git-fetch for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-fetch-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-fetch?cwd=${encodeURIComponent(repo)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      // A busy clone is SKIPPED, not failed: the primary must not log this
+      // as "git fetch failed" or surface it as an error on the Fetch button.
+      expect(res.json()).toEqual(expect.objectContaining({ success: false, skipped: true }));
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
+  });
+
+  it("rejects a git-repair request with no cwd", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: {},
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects a git-repair request for a cwd outside this agent's PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-repair-outside-"));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: outsideRoots },
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(400);

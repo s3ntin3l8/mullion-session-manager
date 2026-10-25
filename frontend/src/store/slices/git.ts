@@ -1,6 +1,11 @@
 import type { StateCreator } from "zustand";
 import { api } from "../../api/index.js";
-import type { GitBranchesResult, GitHubPRsStatus } from "../../api/index.js";
+import type {
+  GitBranchesResult,
+  GitHubPRsStatus,
+  RepairOutcome,
+  RepairPlan,
+} from "../../api/index.js";
 import type { DashboardState, GitSlice } from "../types.js";
 
 // Dedups overlapping refreshGitStatuses() calls — mirrors git-status.ts's own
@@ -249,6 +254,20 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   // background `git gc` damaged it? Never mutates anything.
   checkProjectGitHealth: async (projectId: number) => {
     return await api.postProjectGitHealth(projectId);
+  },
+
+  // Issue #1896 — the PLAN of what the repair would do. Read-only: the
+  // server computes it from reads and touches nothing, so the panel can
+  // show it before the user confirms anything.
+  planProjectGitRepair: async (projectId: number) => {
+    return (await api.postProjectGitRepair(projectId)) as RepairPlan;
+  },
+
+  // Issue #1896 — the repair itself. It moves files inside .git/objects and
+  // rewrites the worktree indexes, so it only ever runs behind the panel's
+  // explicit confirmation.
+  repairProjectGitRepair: async (projectId: number) => {
+    return (await api.postProjectGitRepair(projectId, { confirm: true })) as RepairOutcome;
   },
 
   // Issue #745 — Manual fast-forward git pull for a project.

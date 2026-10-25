@@ -341,6 +341,11 @@ const GIT_FIELD_DEFS = {
   // `cwd` via `git add -A` after writing (host-files.ts's own doc comment
   // on why this is a named, explicit flag rather than baked in unconditionally).
   stage: { type: "boolean" },
+  // Issue #1896 — the clone REPAIR's explicit opt-in. Without it the agent
+  // returns the read-only PLAN of what the repair would do; with it the
+  // repair runs (it moves files inside .git/objects and rewrites the
+  // worktree indexes), so it must never be implied.
+  confirm: { type: "boolean" },
 } satisfies Record<string, FieldSchema>;
 
 type GitFieldName = keyof typeof GIT_FIELD_DEFS;
@@ -510,6 +515,19 @@ export interface GitPushBody {
   branch: string;
   token: string;
 }
+
+export interface GitRepairBody {
+  cwd: string;
+  /** Absent or false: return the plan, touch nothing. True: run the repair. */
+  confirm?: boolean;
+}
+
+// Issue #1896 — the agent-side counterpart of the clone repair, for a
+// remote-hosted project's clone.
+export const gitRepairSchema = schemaFor({
+  required: ["cwd"],
+  optional: ["confirm"],
+});
 
 // #484 — the agent-side counterpart of pushBranch, for a remote-hosted
 // task's promotion. `token` is never logged (see the route's own comment)

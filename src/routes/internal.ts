@@ -96,7 +96,9 @@ import {
   searchProjectFiles,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
-import { inspectGitClone } from "../services/git-doctor.js";
+import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
+import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
@@ -170,6 +172,7 @@ import {
   gitWorktreePruneMetadataSchema,
   gitPullSchema,
   gitPushSchema,
+  gitRepairSchema,
   gitWorktreeResumeSchema,
   readFilesSchema,
   writeFilesSchema,
@@ -205,6 +208,7 @@ import type {
   GitWorktreePruneMetadataBody,
   GitPullBody,
   GitPushBody,
+  GitRepairBody,
   GitWorktreeResumeBody,
   ReadFilesBody,
   WriteFilesBody,
@@ -1269,6 +1273,48 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  // Issue #1896 — the clone REPAIR on this agent's own filesystem, and the
+  // read-only PLAN of what it would do.
+  //
+  // Without `confirm` this returns the plan, computed from reads only —
+  // nothing is touched. With `confirm: true` the repair runs: it moves the
+  // damaged objects into a quarantine directory inside the git dir (nothing
+  // is ever deleted), fetches from origin and rebuilds the worktree
+  // indexes. The primary asks for that only after the user confirmed it.
+  //
+  // Like every other filesystem-touching route in this file, it goes through
+  // requireWithinRoots — the repair's cwd must be inside this agent's
+  // PROJECTS_ROOTS, exactly like the check's.
+  //
+  // The request body is NOT logged: it names a path, and this file's other
+  // routes keep their bodies out of the log for the same reason.
+  app.post<{ Body: GitRepairBody }>(
+    "/internal/git-repair",
+    { ...INTERNAL_RATE_LIMIT, schema: gitRepairSchema },
+    async (request, reply) => {
+      const { cwd, confirm } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      if (confirm !== true) {
+        return await planRepair(resolvedCwd);
+      }
+      // The clone is the resource: a fetch in flight on it (the primary's
+      // auto-fetch sweep, say) would fail this repair's ref update.
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        return reply.conflict("A git operation is already running for this repository.");
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        const lines: string[] = [];
+        const outcome = await repairGitClone(resolvedCwd, { log: (line) => lines.push(line) });
+        app.log.info({ lines }, "git repair finished");
+        return outcome;
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
+    },
+  );
+
   // Runs `git fetch origin` on the given cwd — for a remote-hosted project's
   // background auto-fetch (src/plugins/git-fetcher.ts) and manual Fetch
   // button (POST /api/projects/:id/git-fetch). Like every other filesystem-
@@ -1284,7 +1330,26 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await runGitFetch(resolvedCwd);
+      // A repair is running on this clone (issue #1896): it fetches and
+      // rewrites the indexes itself, and a second fetch in that window would
+      // fail its ref update and make a healthy clone look broken. Skip it —
+      // the next tick will fetch.
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        // `skipped`, not `success: false`: the clone was busy, which is not a
+        // failure — the next tick will fetch. The primary must not log this
+        // as "git fetch failed" or surface it as an error on the Fetch button.
+        return {
+          success: false,
+          skipped: true,
+          error: "a git operation is already running for this clone",
+        };
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        return await runGitFetch(resolvedCwd);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
     },
   );
 
@@ -1299,7 +1364,18 @@ export async function internalRoutes(app: FastifyInstance) {
       const { cwd } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await runGitPull(resolvedCwd);
+      // A pull fetches AND merges, and the merge writes the index a repair
+      // rewrites — so it claims the clone, and skips it when a git operation
+      // is already working on it (issue #1896).
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        return { pulled: false, reason: "busy", detail: "a git operation is already running" };
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        return await runGitPull(resolvedCwd);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
     },
   );
 

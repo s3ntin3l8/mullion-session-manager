@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api/index.js";
 import type {
   CloneHealth,
+  RepairOutcome,
+  RepairPlan,
   GitBranchesResult,
   GitFileStatus,
   GitStatus,
@@ -22,7 +24,12 @@ export interface GitPanelParams {
   projectId: number;
 }
 
-import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./git/gitReasons.js";
+import {
+  FORCEABLE_REASONS,
+  isDefaultBranchName,
+  pullReasonMessage,
+  reasonMessage,
+} from "./git/gitReasons.js";
 
 // Client-side mirror of git-worktree.ts's DOCK_PREVIEW_PREFIX naming
 // convention (same technique as Dock.tsx's own isDockPreviewPath) — a
@@ -126,6 +133,13 @@ export function GitPanel({
   const [isCheckingHealth, setIsCheckingHealth] = useState(false);
   const [health, setHealth] = useState<CloneHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
+  // Issue #1896 — the clone REPAIR. `repairPlan` is what the repair WOULD do
+  // (a read: asking for it changes nothing), `repairOutcome` is what it
+  // DID.
+  const [repairPlan, setRepairPlan] = useState<RepairPlan | null>(null);
+  const [repairOutcome, setRepairOutcome] = useState<RepairOutcome | null>(null);
+  const [repairError, setRepairError] = useState<string | null>(null);
+  const [isRepairing, setIsRepairing] = useState(false);
   const [pullError, setPullError] = useState<string | null>(null);
   // Issue #442 — per-row refusal state for branch delete / worktree remove,
   // keyed by `branch:<name>` / `worktree:<path>`. Cleared on a successful
@@ -163,6 +177,8 @@ export function GitPanel({
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
   const checkProjectGitHealth = useDashboardStore((s) => s.checkProjectGitHealth);
+  const planProjectGitRepair = useDashboardStore((s) => s.planProjectGitRepair);
+  const repairProjectGitRepair = useDashboardStore((s) => s.repairProjectGitRepair);
   const effectiveAutoFetch = autoFetch ?? globalEnabled;
   const isInherited = autoFetch === null;
 
@@ -431,7 +447,7 @@ export function GitPanel({
       if (result.pulled) {
         await refreshAll();
       } else {
-        setPullError(reasonMessage(result.reason, result.detail));
+        setPullError(pullReasonMessage(result.reason, result.detail));
       }
     } catch (err) {
       console.debug("[GitPanel] pullProjectGit failed", err);
@@ -450,15 +466,104 @@ export function GitPanel({
     // successful one shows the stale error next to "This repository is
     // healthy." (handlePull does the same with setPullError.)
     setHealthError(null);
+    setRepairPlan(null);
+    setRepairOutcome(null);
+    setRepairError(null);
     try {
-      setHealth(await checkProjectGitHealth(params.projectId));
+      const result = await checkProjectGitHealth(params.projectId);
+      setHealth(result);
+      // A damaged clone gets a PLAN for the repair, so the user can see what
+      // the repair would do BEFORE deciding whether to run it. Asking for the
+      // plan is a READ — the server computes it without touching the clone.
+      if (!result.healthy && result.gitDir !== null && !result.timedOut) {
+        try {
+          setRepairPlan(await planProjectGitRepair(params.projectId));
+        } catch (err) {
+          console.debug("[GitPanel] planProjectGitRepair failed", err);
+          setRepairError(describeError(err, "the repair plan could not be computed"));
+        }
+      }
     } catch (err) {
       console.debug("[GitPanel] checkProjectGitHealth failed", err);
       setHealthError(describeError(err, "the health check failed"));
     } finally {
       setIsCheckingHealth(false);
     }
-  }, [params.projectId, checkProjectGitHealth]);
+  }, [params.projectId, checkProjectGitHealth, planProjectGitRepair]);
+
+  // Issue #1896 — the repair itself. It moves files inside .git/objects and
+  // rewrites the worktree indexes, so it only ever runs from the panel's
+  // explicit confirmation (the ConfirmButton below arms first).
+  const handleRepair = useCallback(async () => {
+    setIsRepairing(true);
+    setRepairError(null);
+    try {
+      const outcome = await repairProjectGitRepair(params.projectId);
+      setRepairOutcome(outcome);
+      setRepairPlan(null);
+      // The outcome REPLACES the health banner: the banner still holds the
+      // pre-repair snapshot, and leaving it up would say "this repository
+      // looks damaged … the Repair button below fixes it" directly above
+      // "the clone is whole again" — with no Repair button left to click.
+      setHealth(null);
+      // The repair rewrites the index, so the staged/unstaged state on
+      // screen may no longer be true. The outcome is what is reported — a
+      // stale plan is not a correctness problem — but the status is worth
+      // re-reading.
+      await refreshAll();
+    } catch (err) {
+      console.debug("[GitPanel] repairProjectGitRepair failed", err);
+      setRepairError(describeError(err, "the repair failed"));
+    } finally {
+      setIsRepairing(false);
+    }
+  }, [params.projectId, repairProjectGitRepair, refreshAll]);
+
+  // What the repair WOULD do, in one line. The ConfirmButton's title carries
+  // the same sentence, so the user reads it BEFORE the button is armed.
+  const repairPlanText = useMemo(() => {
+    if (!repairPlan) return "";
+    const parts: string[] = [];
+    parts.push(
+      repairPlan.actionable
+        ? `quarantine ${repairPlan.quarantine.length} damaged object(s)`
+        : "quarantine nothing — there is no damaged object to move aside, so the fetch is what helps this clone",
+    );
+    if (repairPlan.willFetch) parts.push("fetch from origin");
+    if (repairPlan.indexesToRebuild.length > 0) {
+      parts.push(`rebuild ${repairPlan.indexesToRebuild.length} index(es)`);
+    }
+    if (repairPlan.indexesToSkip.length > 0) {
+      parts.push(
+        `leave ${repairPlan.indexesToSkip.length} index(es) alone (the staged content is not in the working tree)`,
+      );
+    }
+    return parts.join(", ");
+  }, [repairPlan]);
+
+  // What the repair DID.
+  const repairOutcomeText = useMemo(() => {
+    if (!repairOutcome) return "";
+    const parts: string[] = [];
+    if (repairOutcome.quarantined.length > 0) {
+      parts.push(
+        `${repairOutcome.quarantined.length} damaged object(s) moved into ${repairOutcome.quarantine}`,
+      );
+    }
+    if (repairOutcome.refsRestored) parts.push("refs restored from origin");
+    if (repairOutcome.indexesRebuilt.length > 0) {
+      parts.push(`${repairOutcome.indexesRebuilt.length} index(es) rebuilt`);
+    }
+    if (repairOutcome.recovered.length > 0) {
+      parts.push(`${repairOutcome.recovered.length} object(s) read fine again`);
+    }
+    if (repairOutcome.unrecovered.length > 0) {
+      parts.push(
+        `${repairOutcome.unrecovered.length} object(s) could not be recovered — restore them from the remote`,
+      );
+    }
+    return parts.join("; ");
+  }, [repairOutcome]);
 
   const handleToggleAutoFetch = useCallback(async () => {
     const store = useDashboardStore.getState();
@@ -564,14 +669,16 @@ export function GitPanel({
           <button
             className="git-panel-fetch-btn"
             onClick={handleFetch}
-            disabled={isFetching || isPulling}
+            // A repair holds the clone: a fetch or a pull during it would
+            // race the repair's own fetch and its index rebuild.
+            disabled={isFetching || isPulling || isRepairing}
           >
             {isFetching ? "⟳" : "↻"} Fetch
           </button>
           <button
             className="git-panel-fetch-btn"
             onClick={handlePull}
-            disabled={isPulling || isFetching || status.behind === 0}
+            disabled={isPulling || isFetching || isRepairing || status.behind === 0}
             title={
               status.behind === 0
                 ? "Already up to date with tracking branch"
@@ -670,12 +777,68 @@ export function GitPanel({
               {health.otherZeroByteFiles.length > 0 &&
                 `: ${health.otherZeroByteFiles.length} other zero-byte file(s)`}
               {health.fsckErrors.length > 0 && `: ${health.fsckErrors.length} fsck error(s)`}. A
-              background git gc can do this — repair it with{" "}
-              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> (or{" "}
-              <code>node scripts/git-doctor.mjs --apply &lt;path&gt;</code>) on the machine that
-              holds the clone.
+              background git gc can do this — the Repair button below fixes it, or run{" "}
+              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> on the machine that holds the
+              clone.
             </>
           )}
+        </div>
+      )}
+
+      {/* Issue #1896 — the REPAIR: what it will do, and the confirmed action
+          that does it. The plan is on screen before the button is armed, so
+          nobody triggers it without having read it. */}
+      {repairPlan && !repairOutcome && (
+        <div className="github-panel-empty-row">
+          <div>
+            Repair will {repairPlanText}. Damaged objects are MOVED into a quarantine directory
+            inside the git directory — nothing is deleted.
+          </div>
+          {repairPlan.indexesToSkip.map((skip) => (
+            <div key={skip.path}>
+              {skip.path}: left alone — staged content not in the working tree (
+              {skip.paths.join(", ")})
+            </div>
+          ))}
+          <div className="git-panel-row-actions">
+            <ConfirmButton
+              title={`Repair this clone: ${repairPlanText}. Damaged objects are moved into a quarantine directory inside the git directory — nothing is deleted.`}
+              onConfirm={handleRepair}
+              disabled={isRepairing || isFetching || isPulling}
+              armedLabel="Repair now"
+            >
+              Repair
+            </ConfirmButton>
+          </div>
+        </div>
+      )}
+
+      {repairOutcome && (
+        <div
+          className={
+            repairOutcome.whole
+              ? "github-panel-empty-row"
+              : "github-panel-empty-row github-panel-conflicts"
+          }
+          role={repairOutcome.whole ? "status" : "alert"}
+        >
+          {repairOutcome.whole
+            ? "Repair finished — the clone is whole again."
+            : "Repair finished, but the clone is NOT whole."}{" "}
+          {repairOutcomeText}.
+          {repairOutcome.indexesSkipped.length > 0 && (
+            <div>
+              {repairOutcome.indexesSkipped.map((skipped) => (
+                <div key={skipped}>{skipped}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {repairError && (
+        <div className="github-panel-empty-row github-panel-conflicts" role="alert">
+          {repairError}
         </div>
       )}
 

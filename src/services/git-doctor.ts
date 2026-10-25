@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
-import type { CloneHealth } from "../shared/types.js";
+import type { CloneHealth, RepairOutcome, RepairPlan } from "../shared/types.js";
 
 /**
  * Reports — and, with `apply`, repairs — git object damage in a clone.
@@ -42,29 +42,9 @@ const KILL_ESCALATION_MS = 2_000;
 /** How the caller wants progress reported. */
 export type DoctorLog = (line: string) => void;
 
-/** What a read-only inspection found. The shape is shared with the frontend
- * (src/shared/types.ts), so it lives there and is re-exported from here. */
-export type { CloneHealth };
-
-/** What a repair did. */
-export interface RepairOutcome extends CloneHealth {
-  /** Where the moved-aside files went. */
-  quarantine: string | null;
-  /** The shas that were quarantined. */
-  quarantined: string[];
-  /** The shas that read fine again (they were only shadowed). */
-  recovered: string[];
-  /** The shas that are genuinely gone — never committed, not on the remote. */
-  unrecovered: string[];
-  /** Whether the remote refs were restored. */
-  refsRestored: boolean;
-  /** The worktrees whose index was rebuilt. */
-  indexesRebuilt: string[];
-  /** The worktrees whose index was left alone, and why. */
-  indexesSkipped: string[];
-  /** True when the clone is consistent again. */
-  whole: boolean;
-}
+/** The shapes are shared with the frontend (src/shared/types.ts), so they
+ * live there and are re-exported from here. */
+export type { CloneHealth, RepairOutcome, RepairPlan };
 
 /** What one git invocation produced. */
 interface GitOutcome {
@@ -354,6 +334,29 @@ async function worktrees(cwd: string): Promise<string[]> {
 }
 
 /**
+ * The staged paths that are ALSO changed in the working tree.
+ *
+ * Re-staging those from the working tree would discard the staged content, so
+ * the rebuild refuses them. `readable: false` means the index could not be
+ * read at all — the rebuild then proceeds without the check (and says so).
+ *
+ * ONE helper, called by BOTH the plan and the repair: what the user is shown
+ * before confirming is then the same decision the repair makes.
+ */
+async function lostStagedPaths(
+  worktreePath: string,
+): Promise<{ staged: string[]; lost: string[]; readable: boolean }> {
+  const stagedRaw = await gitRaw(["-C", worktreePath, "diff", "--cached", "--name-only", "-z"]);
+  const dirtyRaw = await gitRaw(["-C", worktreePath, "diff", "--name-only", "-z"]);
+  const staged = stagedRaw === null ? [] : nulSplit(stagedRaw);
+  if (stagedRaw === null || dirtyRaw === null) {
+    return { staged, lost: [], readable: false };
+  }
+  const dirty = new Set(nulSplit(dirtyRaw));
+  return { staged, lost: staged.filter((p) => dirty.has(p)), readable: true };
+}
+
+/**
  * Rebuild one worktree's index.
  *
  * The index is rebuilt from HEAD — which drops the stale cache-tree that names
@@ -371,31 +374,23 @@ async function rebuildIndex(
   force: boolean,
   log: DoctorLog,
 ): Promise<{ rebuilt: boolean; reason?: string; skippedPaths?: string[] }> {
-  const stagedRaw = await gitRaw(["-C", worktreePath, "diff", "--cached", "--name-only", "-z"]);
-  const dirtyRaw = await gitRaw(["-C", worktreePath, "diff", "--name-only", "-z"]);
-  const stagedPaths = stagedRaw === null ? [] : nulSplit(stagedRaw);
+  const { staged, lost, readable } = await lostStagedPaths(worktreePath);
 
-  if (stagedRaw === null || dirtyRaw === null) {
+  if (!readable) {
     log(`  ${worktreePath}: could not read the index — rebuilding without a check`);
-  } else {
-    const dirty = new Set(nulSplit(dirtyRaw));
-    // Staged AND changed again in the working tree: the staged content is
-    // not in the working tree, so re-staging would discard it.
-    const lost = stagedPaths.filter((p) => dirty.has(p));
-    if (lost.length > 0 && !force) {
-      log(
-        `  ${worktreePath}: SKIPPED — these paths are staged and have changed again in the` +
-          ` working tree, so re-staging them would discard what you staged:`,
-      );
-      for (const p of lost) log(`    ${p}`);
-      log("    --force overrides");
-      return { rebuilt: false, reason: "staged content would be lost", skippedPaths: lost };
-    }
+  } else if (lost.length > 0 && !force) {
+    log(
+      `  ${worktreePath}: SKIPPED — these paths are staged and have changed again in the` +
+        ` working tree, so re-staging them would discard what you staged:`,
+    );
+    for (const p of lost) log(`    ${p}`);
+    log("    --force overrides");
+    return { rebuilt: false, reason: "staged content would be lost", skippedPaths: lost };
   }
 
   try {
     await git(["-C", worktreePath, "read-tree", "HEAD"]);
-    if (stagedPaths.length > 0) {
+    if (staged.length > 0) {
       // An explicit pathspec: only the paths that were staged are touched,
       // and `git add -A` with a pathspec stages a deletion too. The pathspec
       // has to come in on stdin, so this call's stdin is a pipe — the
@@ -416,7 +411,7 @@ async function rebuildIndex(
           "--pathspec-from-file=-",
           "--pathspec-file-nul",
         ],
-        { input: stagedPaths.map((p) => `${p}\0`).join("") },
+        { input: staged.map((p) => `${p}\0`).join("") },
       );
     }
     log(`  ${worktreePath}: index rebuilt`);
@@ -468,11 +463,72 @@ export async function inspectGitClone(
 }
 
 /**
+ * What the repair WOULD do — computed from reads only.
+ *
+ * The app shows this before it asks for the confirmation, because the repair
+ * moves files inside `.git/objects` and rewrites worktree indexes: whoever is
+ * about to trigger that is entitled to see what it will do first. Nothing
+ * here touches the clone — no quarantine directory is created, nothing is
+ * renamed, nothing is fetched.
+ *
+ * The decisions are the SAME ones `repairGitClone` makes — both call
+ * `lostStagedPaths` — so the plan and the repair cannot disagree about the
+ * one thing they both decide: which staged content would be lost.
+ *
+ * They can differ in ONE case: an index that cannot be read at all is
+ * counted here as "to rebuild", while the repair re-reads it after the
+ * quarantine and the fetch and may find it readable, and skip it. The
+ * divergence is in the safe direction — the plan over-promises, the repair
+ * is more conservative — and the repair's outcome is what is reported.
+ */
+export async function planRepair(cwd: string): Promise<RepairPlan> {
+  const common = await commonDir(cwd);
+  if (!common) {
+    return {
+      gitDir: null,
+      quarantine: [],
+      willFetch: false,
+      indexesToRebuild: [],
+      indexesToSkip: [],
+      actionable: false,
+    };
+  }
+  const objectsDir = path.join(common, "objects");
+  const zeroByte = findZeroByteFiles(objectsDir);
+  const loose = zeroByte.filter(isLooseObjectPath);
+
+  // A clone with no origin has no remote refs to restore, so there is
+  // nothing for the fetch to do.
+  const willFetch = (await gitTry(["-C", cwd, "remote", "get-url", "origin"])) !== null;
+
+  const indexesToRebuild: string[] = [];
+  const indexesToSkip: { path: string; paths: string[] }[] = [];
+  for (const worktreePath of await worktrees(cwd)) {
+    const { lost, readable } = await lostStagedPaths(worktreePath);
+    if (readable && lost.length > 0) {
+      indexesToSkip.push({ path: worktreePath, paths: lost });
+    } else {
+      indexesToRebuild.push(worktreePath);
+    }
+  }
+
+  return {
+    gitDir: common,
+    quarantine: loose.map(shaOfLoosePath),
+    willFetch,
+    indexesToRebuild,
+    indexesToSkip,
+    actionable: loose.length > 0,
+  };
+}
+
+/**
  * The repair half — quarantines the zero-byte objects, restores the refs and
  * rebuilds the affected worktree indexes.
  *
- * Only the CLI calls this: it moves files and rewrites indexes in someone's
- * repository, which belongs behind a deliberate, operator-run confirmation.
+ * The CLI calls this, and so does the app — but the app only ever calls it
+ * behind a confirmed action, because it moves files and rewrites indexes in
+ * someone's repository.
  */
 export async function repairGitClone(
   cwd: string,
@@ -511,6 +567,11 @@ export async function repairGitClone(
   const quarantine = path.join(common, `gc-quarantine-${stamp}`);
   const quarantined: string[] = [];
   for (const rel of loose) {
+    // `loose` holds only paths that passed `isLooseObjectPath()` — two hex
+    // segments — and a readdir entry name can never contain a separator, so
+    // neither join below can leave the directory it is rooted at. The object
+    // is MOVED into the quarantine (never deleted), and the quarantine lives
+    // inside the same git dir.
     const from = path.join(objectsDir, rel);
     const to = path.join(quarantine, rel);
     try {

@@ -14,6 +14,8 @@ import type {
   GitStatusProblem,
   GitPullResult,
   CloneHealth,
+  RepairOutcome,
+  RepairPlan,
   Group,
   Host,
   NotificationEvent,
@@ -262,6 +264,12 @@ export interface GitSlice {
   pullProjectGit: (projectId: number) => Promise<GitPullResult>;
   // Issue #1851 — the read-only clone health check.
   checkProjectGitHealth: (projectId: number) => Promise<CloneHealth>;
+  // Issue #1896 — the read-only PLAN of what the repair would do, and the
+  // repair itself. The plan touches nothing; the repair moves files inside
+  // .git/objects and rewrites the worktree indexes, so it is a separate,
+  // explicitly-confirmed call.
+  planProjectGitRepair: (projectId: number) => Promise<RepairPlan>;
+  repairProjectGitRepair: (projectId: number) => Promise<RepairOutcome>;
   toggleAutoFetch: (projectId: number, value: boolean | null) => Promise<void>;
   gitRefreshTrigger: number;
   bumpGitRefreshTrigger: () => void;

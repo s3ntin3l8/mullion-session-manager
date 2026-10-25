@@ -766,6 +766,11 @@ function formatPullReasonMessage(reason: string | undefined, detail?: string): s
       return "Already up to date with tracking branch.";
     case "pull-failed":
       return detail ? `Pull failed: ${detail}` : "The pull operation failed.";
+    // Issue #1896 — a git operation (a clone repair) holds the clone. Not a
+    // failure: the pull was refused, and trying again in a moment works. The
+    // default branch would say "Pull failed: …", which is the wrong story.
+    case "busy":
+      return "A git operation is already running for this repository — try again in a moment.";
     default:
       return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
   }
