@@ -176,6 +176,13 @@ deletes anything — a damaged object is MOVED into a `gc-quarantine-*`
 directory inside the clone's git directory, where it can still be recovered by
 hand.
 
+In a **release install** there is no `make` and no `tsx`; the script itself is
+in the install, and the compiled doctor sits next to it in `dist/`:
+
+```sh
+node scripts/git-doctor.mjs --apply /path/to/the/clone
+```
+
 For a clone on a remote host, run it there (the same Mullion checkout, on
 that host).
 

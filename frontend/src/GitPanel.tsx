@@ -413,6 +413,10 @@ export function GitPanel({
   const handleCheckHealth = useCallback(async () => {
     setIsCheckingHealth(true);
     setHealth(null);
+    // The previous run's error must go too, or a failed check followed by a
+    // successful one shows the stale error next to "This repository is
+    // healthy." (handlePull does the same with setPullError.)
+    setHealthError(null);
     try {
       setHealth(await checkProjectGitHealth(params.projectId));
     } catch (err) {
@@ -539,6 +543,12 @@ export function GitPanel({
         >
           {health.healthy ? (
             "This repository is healthy."
+          ) : health.timedOut ? (
+            <>
+              The health check did not finish — <code>git fsck</code> timed out. Nothing was
+              changed, and this is NOT a verdict: the clone may well be fine. Try again when the
+              machine is less busy.
+            </>
           ) : (
             <>
               This repository looks damaged
@@ -548,8 +558,9 @@ export function GitPanel({
                 `: ${health.otherZeroByteFiles.length} other zero-byte file(s)`}
               {health.fsckErrors.length > 0 && `: ${health.fsckErrors.length} fsck error(s)`}. A
               background git gc can do this — repair it with{" "}
-              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> on the machine that holds the
-              clone.
+              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> (or{" "}
+              <code>node scripts/git-doctor.mjs --apply &lt;path&gt;</code>) on the machine that
+              holds the clone.
             </>
           )}
         </div>

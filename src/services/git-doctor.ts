@@ -85,7 +85,10 @@ interface GitOutcome {
  * line on stderr, so a check that could not finish says so rather than
  * reporting an empty (and therefore "healthy") result.
  */
-function runGit(args: string[], opts: { input?: string } = {}): Promise<GitOutcome> {
+function runGit(
+  args: string[],
+  opts: { input?: string; timeoutMs?: number } = {},
+): Promise<GitOutcome> {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -94,6 +97,7 @@ function runGit(args: string[], opts: { input?: string } = {}): Promise<GitOutco
     // The whole argv, for the messages: args[0] is usually "-C", which would
     // make a diagnostic read "git -C timed out".
     const what = args.join(" ");
+    const budgetMs = opts.timeoutMs ?? GIT_TIMEOUT_MS;
 
     const child = spawn("git", [...GIT_NO_AUTO_GC, ...args], {
       stdio: opts.input === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
@@ -132,7 +136,7 @@ function runGit(args: string[], opts: { input?: string } = {}): Promise<GitOutco
 
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      stderr += `fatal: git ${what} timed out after ${GIT_TIMEOUT_MS}ms\n`;
+      stderr += `fatal: git ${what} timed out after ${budgetMs}ms\n`;
       // SIGKILL if it ignores SIGTERM: `child.killed` only says the signal
       // was sent, not that the process died.
       killTimer = setTimeout(() => {
@@ -141,7 +145,7 @@ function runGit(args: string[], opts: { input?: string } = {}): Promise<GitOutco
         }
       }, KILL_ESCALATION_MS);
       killTimer.unref?.();
-    }, GIT_TIMEOUT_MS);
+    }, budgetMs);
     timer.unref?.();
 
     child.on("error", (err) => {
@@ -160,7 +164,10 @@ function runGit(args: string[], opts: { input?: string } = {}): Promise<GitOutco
 }
 
 /** Runs git, returning trimmed stdout. Throws when git exits non-zero. */
-async function git(args: string[], opts: { input?: string } = {}): Promise<string> {
+async function git(
+  args: string[],
+  opts: { input?: string; timeoutMs?: number } = {},
+): Promise<string> {
   const result = await runGit(args, opts);
   if (result.code !== 0) {
     const err = new Error(`git ${args.join(" ")} exited with ${result.code}`) as Error & {
@@ -175,7 +182,10 @@ async function git(args: string[], opts: { input?: string } = {}): Promise<strin
 }
 
 /** Runs git, returning its raw stdout (no trimming — for NUL-separated output). */
-async function gitRaw(args: string[], opts: { input?: string } = {}): Promise<string | null> {
+async function gitRaw(
+  args: string[],
+  opts: { input?: string; timeoutMs?: number } = {},
+): Promise<string | null> {
   try {
     const result = await runGit(args, opts);
     return result.code === 0 ? result.stdout : null;
@@ -209,6 +219,28 @@ async function commonDir(cwd: string): Promise<string | null> {
  * #1836 damage. A zero-byte file elsewhere under `objects/` (a pack, an idx) is
  * a different and riskier kind of damage — reported, but never quarantined
  * automatically.
+ *
+ * CodeQL's js/path-injection flags the two fs calls below: `dir` and `abs`
+ * derive from the clone's objects directory, which derives from the cwd the
+ * caller asked about. It is a false positive here, for three reasons:
+ *
+ *   - the walk cannot leave its root. `entry.name` is a single path component
+ *     as readdir returns it — never a separator — so `path.join` of a root
+ *     with one stays inside the root;
+ *   - symlinks are not followed. `withFileTypes` reports a symlink as neither
+ *     a file nor a directory, so a symlinked directory is never descended
+ *     into and a symlinked file is never reported;
+ *   - the root is not attacker-chosen. It is `<git dir>/objects`, and the git
+ *     dir comes from `git rev-parse --git-common-dir`, which fails outside a
+ *     real checkout — so the walk is confined to a git dir that git itself
+ *     created. On the internal route the cwd is additionally confined to
+ *     PROJECTS_ROOTS by requireWithinRoots.
+ *
+ * Same dismissal posture as src/services/project-dir.ts and
+ * src/services/dock-config.ts: acknowledged and dismissed as a false
+ * positive via the Security tab, not suppressed in-line (this repo's
+ * codeql.yml has no step that turns a SARIF suppression annotation into an
+ * actual alert dismissal).
  */
 function findZeroByteFiles(root: string, maxDepth = 3): string[] {
   const found: string[] = [];
@@ -254,20 +286,47 @@ export function shaOfLoosePath(rel: string): string {
   return rel.split(/[/\\]/).join("");
 }
 
+/** The marker runGit puts on stderr when a git call outruns its budget. */
+const TIMEOUT_MARKER = /timed out after \d+ms/;
+
+/** What `git fsck` found — and whether it finished at all. */
+interface FsckResult {
+  /** The error lines, without the `dangling …` noise that is normal. */
+  errors: string[];
+  /**
+   * True when fsck was abandoned at its timeout.
+   *
+   * A check that could not finish is NOT a finding. "We could not tell" and
+   * "we found damage" are different answers, and telling a user their clone
+   * is damaged — and offering to repair it — when the check simply ran out
+   * of time is the wrong answer in the worst possible direction.
+   */
+  timedOut: boolean;
+}
+
 /** git fsck's error lines, without the `dangling …` noise that is normal. */
-async function fsckErrors(cwd: string): Promise<string[]> {
+async function fsckErrors(cwd: string, timeoutMs?: number): Promise<FsckResult> {
   let output: string;
   try {
-    output = await git(["-C", cwd, "fsck", "--connectivity-only", "--no-progress"]);
+    output = await git(["-C", cwd, "fsck", "--connectivity-only", "--no-progress"], {
+      timeoutMs,
+    });
   } catch (err) {
     // fsck exits non-zero when it finds problems — that is the interesting case.
     const e = err as { stdout?: string; stderr?: string };
     output = `${e.stdout ?? ""}${e.stderr ?? ""}`;
   }
-  return output
+  const lines = output
     .split("\n")
-    .filter((line) => /^(error|fatal|missing|invalid sha1 pointer)/i.test(line.trim()))
-    .map((line) => line.trim());
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const timedOut = lines.some((line) => TIMEOUT_MARKER.test(line));
+  const errors = lines
+    // The timeout line is not a finding about the clone — it is the reason
+    // there is no verdict. It is reported as `timedOut` instead.
+    .filter((line) => !TIMEOUT_MARKER.test(line))
+    .filter((line) => /^(error|fatal|missing|invalid sha1 pointer)/i.test(line));
+  return { errors, timedOut };
 }
 
 /** Can git still read this object? */
@@ -308,7 +367,6 @@ async function worktrees(cwd: string): Promise<string[]> {
  *   working tree would discard that content, so the rebuild refuses.
  */
 async function rebuildIndex(
-  cwd: string,
   worktreePath: string,
   force: boolean,
   log: DoctorLog,
@@ -375,7 +433,10 @@ async function rebuildIndex(
  * Never mutates anything — the app offers this as a project action, and it
  * has to be safe to run against a repository the user is working in.
  */
-export async function inspectGitClone(cwd: string): Promise<CloneHealth> {
+export async function inspectGitClone(
+  cwd: string,
+  opts: { fsckTimeoutMs?: number } = {},
+): Promise<CloneHealth> {
   const common = await commonDir(cwd);
   if (!common) {
     return {
@@ -384,19 +445,25 @@ export async function inspectGitClone(cwd: string): Promise<CloneHealth> {
       otherZeroByteFiles: [],
       fsckErrors: [],
       healthy: false,
+      timedOut: false,
     };
   }
   const objectsDir = path.join(common, "objects");
   const zeroByte = findZeroByteFiles(objectsDir);
   const zeroByteObjects = zeroByte.filter(isLooseObjectPath);
   const otherZeroByteFiles = zeroByte.filter((rel) => !isLooseObjectPath(rel));
-  const fsck = await fsckErrors(cwd);
+  const fsck = await fsckErrors(cwd, opts.fsckTimeoutMs);
   return {
     gitDir: common,
     zeroByteObjects,
     otherZeroByteFiles,
-    fsckErrors: fsck,
-    healthy: zeroByteObjects.length === 0 && otherZeroByteFiles.length === 0 && fsck.length === 0,
+    fsckErrors: fsck.errors,
+    healthy:
+      zeroByteObjects.length === 0 &&
+      otherZeroByteFiles.length === 0 &&
+      fsck.errors.length === 0 &&
+      !fsck.timedOut,
+    timedOut: fsck.timedOut,
   };
 }
 
@@ -421,6 +488,7 @@ export async function repairGitClone(
       otherZeroByteFiles: [],
       fsckErrors: [],
       healthy: false,
+      timedOut: false,
       quarantine: null,
       quarantined: [],
       recovered: [],
@@ -521,7 +589,7 @@ export async function repairGitClone(
     // A rebuild that fails is reported, but it does not by itself condemn the
     // clone: whether anything is actually still broken is settled by the fsck
     // below, which sees the index as it is.
-    const result = await rebuildIndex(cwd, worktreePath, force, log);
+    const result = await rebuildIndex(worktreePath, force, log);
     if (result.rebuilt) indexesRebuilt.push(worktreePath);
     else indexesSkipped.push(`${worktreePath}: ${result.reason ?? "skipped"}`);
   }
@@ -530,17 +598,22 @@ export async function repairGitClone(
   // whole, and it has to run LAST: it sees the restored refs, the rebuilt
   // indexes and the objects that came back with the fetch.
   const remaining = await fsckErrors(cwd);
-  if (remaining.length > 0) {
-    log(`  ${remaining.length} fsck error(s) remain:`);
-    for (const line of remaining) log(`    ${line}`);
+  if (remaining.timedOut) {
+    log(`  git fsck did not finish (timed out after ${GIT_TIMEOUT_MS}ms) — health is UNKNOWN.`);
+  } else if (remaining.errors.length > 0) {
+    log(`  ${remaining.errors.length} fsck error(s) remain:`);
+    for (const line of remaining.errors) log(`    ${line}`);
   }
+
+  const whole = remaining.errors.length === 0 && !remaining.timedOut;
 
   return {
     gitDir: common,
     zeroByteObjects: loose,
     otherZeroByteFiles: zeroByte.filter((rel) => !isLooseObjectPath(rel)),
-    fsckErrors: remaining,
-    healthy: remaining.length === 0,
+    fsckErrors: remaining.errors,
+    healthy: whole,
+    timedOut: remaining.timedOut,
     quarantine,
     quarantined,
     recovered: quarantined.filter((sha) => !unrecovered.includes(sha)),
@@ -548,7 +621,7 @@ export async function repairGitClone(
     refsRestored,
     indexesRebuilt,
     indexesSkipped,
-    whole: remaining.length === 0,
+    whole,
   };
 }
 
@@ -592,10 +665,23 @@ export async function runGitDoctor(
     log(`  OTHER         ${rel}  — not a loose object; this is a different kind of damage`);
   }
   log("");
-  log(`git fsck errors: ${fsck.length}`);
-  for (const line of fsck) log(`  ${line}`);
+  if (fsck.timedOut) {
+    log(`git fsck: did not finish (timed out after ${GIT_TIMEOUT_MS}ms)`);
+  } else {
+    log(`git fsck errors: ${fsck.errors.length}`);
+    for (const line of fsck.errors) log(`  ${line}`);
+  }
 
-  const damaged = loose.length > 0 || fsck.length > 0;
+  // A check that timed out has no verdict. Saying "damage found" (or
+  // "healthy") about a clone we did not finish examining would be a guess
+  // dressed up as an answer, so the run says UNKNOWN and stops there.
+  if (fsck.timedOut && loose.length === 0) {
+    log("");
+    log("git-doctor: the health check did not finish — this clone's state is UNKNOWN.");
+    return 1;
+  }
+
+  const damaged = loose.length > 0 || fsck.errors.length > 0;
   if (!damaged) {
     log("");
     log("git-doctor: this clone looks healthy.");

@@ -3528,8 +3528,18 @@ export async function projectsRoute(app: FastifyInstance) {
 
       try {
         return await getRemoteHostClient(app, project.hostId).resolveGitHealth(project.cwd);
-      } catch {
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      } catch (err) {
+        // An agent that REJECTED the request is alive and answering: a 400 for
+        // a cwd outside its PROJECTS_ROOTS, or a 404 from an agent that
+        // predates /internal/git-health (the mixed-version fleet case, #244
+        // and #527). "Unreachable" is a different fact, and the wrong one
+        // here — the 503 stays, but the message says which it was.
+        const message =
+          err instanceof HostRequestError
+            ? `Host ${project.hostId} rejected the health check: ${err.message}`
+            : `Host ${project.hostId} is unreachable`;
+        app.log.warn({ hostId: project.hostId, projectId, err }, message);
+        return reply.serviceUnavailable(message);
       }
     },
   );

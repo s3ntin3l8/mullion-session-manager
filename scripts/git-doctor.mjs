@@ -37,7 +37,31 @@
 //       references them any more and fsck has nothing to complain about.
 
 import path from "node:path";
-import { runGitDoctor } from "../src/services/git-doctor.ts";
+
+// The doctor's logic lives in src/services/git-doctor.ts. A checkout has that
+// source and runs this script through tsx (`node --import tsx`); a RELEASE
+// install does not — the payload ships dist/ but not src/, and tsx is a
+// devDependency that `npm ci --omit=dev` never installs. There, the compiled
+// module in dist/ is the one that exists, so it is the fallback.
+//
+// The source is tried FIRST: in a checkout it is the truth, and a stale
+// dist/ would silently be an older doctor.
+let runGitDoctor;
+try {
+  ({ runGitDoctor } = await import("../src/services/git-doctor.ts"));
+} catch {
+  try {
+    ({ runGitDoctor } = await import("../dist/services/git-doctor.js"));
+  } catch {
+    console.error(
+      "git-doctor: the doctor's module could not be loaded.\n" +
+        "  In a checkout:  node --import tsx scripts/git-doctor.mjs   (or: make git-doctor)\n" +
+        "  In a release install: the compiled module is dist/services/git-doctor.js —\n" +
+        "  this install has neither.",
+    );
+    process.exit(1);
+  }
+}
 
 const args = process.argv.slice(2);
 const apply = args.includes("--apply");
@@ -45,12 +69,14 @@ const force = args.includes("--force");
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(
-    "Usage: node --import tsx scripts/git-doctor.mjs [--apply] [--force] [path]\n\n" +
+    "Usage: node scripts/git-doctor.mjs [--apply] [--force] [path]\n\n" +
       "  (no flags)  report damage; never mutates anything\n" +
       "  --apply     repair: quarantine the zero-byte objects, restore the refs,\n" +
       "              rebuild the affected worktree indexes\n" +
       "  --force     rebuild the indexes even when there is staged work\n" +
       "  path        the clone to work on (default: the current directory)\n\n" +
+      "In a checkout, run it through tsx: `node --import tsx scripts/git-doctor.mjs`\n" +
+      "(or `make git-doctor`). In a release install, plain `node` is enough.\n\n" +
       "Exit codes: 0 whole, 1 not whole, 2 whole again but objects were lost.",
   );
   process.exit(0);

@@ -186,9 +186,25 @@ describe("git-doctor — the read-only inspection", () => {
       const health = await inspectGitClone(outside);
       expect(health.gitDir).toBeNull();
       expect(health.healthy).toBe(false);
+      expect(health.timedOut).toBe(false);
     } finally {
       fs.rmSync(outside, { recursive: true, force: true });
     }
+  });
+
+  // A check that could not finish has NO verdict. Reporting it as damage
+  // would send an operator to repair a clone that may well be perfectly
+  // fine — and "we could not tell" is a different answer from "we found
+  // damage", so it gets its own field.
+  it("says the verdict is unknown when the fsck does not finish", async () => {
+    const health = await inspectGitClone(repo, { fsckTimeoutMs: 1 });
+    expect(health.timedOut).toBe(true);
+    expect(health.healthy).toBe(false);
+    // The timeout is not a finding about the clone — it is the reason there
+    // is no finding.
+    expect(health.fsckErrors).toEqual([]);
+    expect(health.zeroByteObjects).toEqual([]);
+    expect(health.gitDir).toBe(path.join(repo, ".git"));
   });
 });
 

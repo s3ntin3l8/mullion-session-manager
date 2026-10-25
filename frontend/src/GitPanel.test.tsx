@@ -45,6 +45,7 @@ function mockFetch(opts: {
               otherZeroByteFiles: [],
               fsckErrors: [],
               gitDir: "/tmp/x/.git",
+              timedOut: false,
             }),
       );
     }
@@ -239,6 +240,7 @@ describe("GitPanel", () => {
             zeroByteObjects: ["ab/cdef"],
             otherZeroByteFiles: [],
             fsckErrors: ["error: invalid sha1 pointer in cache-tree of .git/index"],
+            timedOut: false,
           }),
       }),
     );
@@ -250,6 +252,68 @@ describe("GitPanel", () => {
     expect(await screen.findByText(/This repository looks damaged/)).toBeInTheDocument();
     expect(screen.getByText(/1 zero-byte object/)).toBeInTheDocument();
     expect(screen.getByText(/1 fsck error/)).toBeInTheDocument();
+  });
+
+  // A check that could not finish has no verdict. Saying "looks damaged"
+  // would send the user to repair a clone that may well be fine.
+  it("says the check did not finish when it timed out, rather than that the repository is damaged", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () =>
+          jsonResponse(200, {
+            healthy: false,
+            gitDir: "/tmp/x/.git",
+            zeroByteObjects: [],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            timedOut: true,
+          }),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 12 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText(/did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText(/looks damaged/)).toBeNull();
+  });
+
+  // A failed check must not leave its error on screen next to a later
+  // successful one.
+  it("clears a previous failure when a later check succeeds", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () => {
+          calls++;
+          return calls === 1
+            ? jsonResponse(500, { message: "the clone could not be inspected" })
+            : jsonResponse(200, {
+                healthy: true,
+                zeroByteObjects: [],
+                otherZeroByteFiles: [],
+                fsckErrors: [],
+                gitDir: "/tmp/x/.git",
+                timedOut: false,
+              });
+        },
+      }),
+    );
+    render(<GitPanel params={{ projectId: 13 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    expect(await screen.findByText(/the clone could not be inspected/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    expect(await screen.findByText("This repository is healthy.")).toBeInTheDocument();
+    // The stale error is gone.
+    expect(screen.queryByText(/the clone could not be inspected/)).toBeNull();
   });
 
   // A failed check must say so. Silence here would read as "healthy" —

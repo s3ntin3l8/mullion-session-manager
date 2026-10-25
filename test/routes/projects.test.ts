@@ -5110,6 +5110,107 @@ describe("projects route", () => {
 
       await app.close();
     });
+
+    // The happy path for a REMOTE project: the clone is checked on the host
+    // that owns it, and the answer comes back from there. The 503 case above
+    // alone would not have caught a proxy timeout or a wrong URL.
+    it("reports a remote project's clone health, from that host", async () => {
+      const { createServer } = await import("node:http");
+      const seen: string[] = [];
+      const server = createServer((req, res) => {
+        seen.push(req.url ?? "");
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            gitDir: "/remote/.git",
+            zeroByteObjects: [],
+            otherZeroByteFiles: [],
+            fsckErrors: [],
+            healthy: true,
+            timedOut: false,
+          }),
+        );
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const app = await buildApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "git-health-live-host",
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
+          },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-git-health-ok", cwd: "/x", hostId: host.json().id },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${project.json().id}/git-health`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual(
+          expect.objectContaining({ healthy: true, gitDir: "/remote/.git" }),
+        );
+        // It really went to that host, for that clone.
+        expect(seen.some((url) => url.includes("/internal/git-health"))).toBe(true);
+        expect(seen.some((url) => url.includes("%2Fx"))).toBe(true);
+
+        await app.close();
+      } finally {
+        server.close();
+      }
+    });
+
+    // An agent that REJECTED the request is alive and answering — a 404 from
+    // an agent that predates /internal/git-health, say. Calling that host
+    // "unreachable" is a different (and wrong) fact.
+    it("says the host REJECTED the check when the agent answers with an error", async () => {
+      const { createServer } = await import("node:http");
+      const server = createServer((_req, res) => {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ message: "no such route" }));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as { port: number }).port;
+
+      try {
+        const app = await buildApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "git-health-old-host",
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
+          },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-git-health-404", cwd: "/x", hostId: host.json().id },
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${project.json().id}/git-health`,
+        });
+        expect(res.statusCode).toBe(503);
+        expect(res.body).toContain("rejected the health check");
+        expect(res.body).not.toContain("is unreachable");
+
+        await app.close();
+      } finally {
+        server.close();
+      }
+    });
   });
 
   describe("POST /api/projects/:id/git-fetch (issue #442 — previously untested)", () => {

@@ -259,6 +259,9 @@ export interface CloneHealth {
   fsckErrors: string[];
   /** True when nothing is wrong. */
   healthy: boolean;
+  /** True when `git fsck` did not finish — the check's verdict is UNKNOWN,
+   * which is NOT the same as "damaged". */
+  timedOut: boolean;
 }
 
 // ---------------------------------------------------------------------------
