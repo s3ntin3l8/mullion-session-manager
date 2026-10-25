@@ -13,6 +13,7 @@ import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
+import { describeError } from "./lib/describeError.js";
 
 // Below this tab width the status badge ("Working"/"Idle"/"Attention") no
 // longer fits alongside the dot, name, and the two action buttons, and would
@@ -267,8 +268,18 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     const value = draftName.trim();
     setRenaming(false);
     if (!value || !session) return;
+    // The tab title is set optimistically, before the server has accepted
+    // the rename — so a rejected rename has to put it back. The STORE's
+    // own rollback restores the session's name in the list, but the
+    // dockview tab title is this component's, and the title-sync effect
+    // above only fires for a nameLocked session, which a rolled-back
+    // rename is not.
+    const previousTitle = props.api.title ?? "";
     props.api.setTitle(value);
-    void renameSession(session.id, value);
+    void renameSession(session.id, value).catch((err) => {
+      props.api.setTitle(previousTitle);
+      useDashboardStore.getState().reportError("Could not rename the session.", describeError(err));
+    });
   };
 
   // Both the tab title's double-click and PaneActionsMenu's "Rename" item

@@ -2427,3 +2427,35 @@
   min-height: 44px;
   font-size: 13px;
 }
+
+/* ============================================================ */
+/* Device rows — the sidebar's inline failure line              */
+/* ============================================================ */
+/* A device row (SidebarDevices.tsx) is `.sidebar-tasks-entry`: a flex ROW of
+   icon / label / status dot / Start-Stop actions. A failed start/stop now
+   renders INLINE under that row instead of only in its `title` tooltip, so
+   the row has to be allowed to give the error a line of its own.
+
+   `row-gap` (not `gap`) is what tightens the vertical spacing between the
+   two lines — the horizontal gap between the first line's own items is left
+   exactly as it was. Both declarations are scoped to the compound selector
+   so they win over `.sidebar-tasks-entry`'s own `gap: 8px` (empty-states.css,
+   which is imported LATER than this file) without that file having to
+   change. The class is only added to a row that HAS an error, so every
+   other row keeps the layout it always had. */
+.sidebar-tasks-entry.sidebar-device-row-wrap {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+/* The error line itself: the full width of the row's content box, so it sits
+   UNDER the row rather than squeezing the label. ErrorText's own inline
+   styles carry the size and the red; this only shapes the box. */
+.sidebar-device-error {
+  flex: 0 0 100%;
+  min-width: 0;
+  /* Never let a long message overflow the row: the sidebar wrapper scrolls
+     horizontally once its content is wider than the wrapper is (see the
+     .sidebar-resize-handle comment above), and a long unbreakable token
+     (a path, a URL) would otherwise do exactly that. */
+  overflow-wrap: anywhere;
+}
