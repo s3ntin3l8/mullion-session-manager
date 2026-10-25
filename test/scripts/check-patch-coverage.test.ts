@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -362,6 +363,109 @@ diff --git a/docs/README.md b/docs/README.md
   it("loadCoverageReports reads coverage data if available", () => {
     const data = loadCoverageReports();
     expect(typeof data).toBe("object");
+  });
+
+  it("loadCoverageReports sums hit counts for a file present in several reports", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    try {
+      const file = path.join(root, "src/shared.ts");
+      const stmt = { start: { line: 1, column: 0 }, end: { line: 1, column: 5 } };
+      const shard = (s: number, f: number, b: number[]) => ({
+        [file]: {
+          path: file,
+          statementMap: { "0": stmt },
+          s: { "0": s },
+          f: { "0": f },
+          b: { "0": b },
+        },
+      });
+      writeFileSync(path.join(dir, "a.json"), JSON.stringify(shard(1, 0, [1, 0])));
+      writeFileSync(path.join(dir, "b.json"), JSON.stringify(shard(0, 2, [0, 3])));
+      const merged = loadCoverageReports([
+        path.join(dir, "a.json"),
+        path.join(dir, "b.json"),
+      ]) as unknown as Record<string, { s: unknown; f: unknown; b: unknown }>;
+      expect(merged["src/shared.ts"].s).toEqual({ "0": 1 });
+      expect(merged["src/shared.ts"].f).toEqual({ "0": 2 });
+      expect(merged["src/shared.ts"].b).toEqual({ "0": [1, 3] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cli --coverage reads the given report instead of the defaults", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    try {
+      const rel = "src/services/task-reconciler.ts";
+      const stmt = { start: { line: 11, column: 0 }, end: { line: 11, column: 5 } };
+      const report = path.join(dir, "cov.json");
+      writeFileSync(
+        report,
+        JSON.stringify({ [rel]: { statementMap: { "0": stmt }, s: { "0": 1 }, f: {}, b: {} } }),
+      );
+      const mockDiff = `
+diff --git a/${rel} b/${rel}
+--- a/${rel}
++++ b/${rel}
+@@ -10,0 +11,1 @@
++const a = 1;
+`;
+      expect(cli(["--coverage", report, "--no-run"], { diffText: mockDiff })).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("loadCoverageReports warns for a missing explicit path, and does not sum a repeated one twice", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const file = path.join(root, "src/shared.ts");
+      const stmt = { start: { line: 1, column: 0 }, end: { line: 1, column: 5 } };
+      const report = path.join(dir, "a.json");
+      writeFileSync(
+        report,
+        JSON.stringify({ [file]: { statementMap: { "0": stmt }, s: { "0": 1 }, f: {}, b: {} } }),
+      );
+      const merged = loadCoverageReports([
+        report,
+        report,
+        path.join(dir, "missing.json"),
+        path.join(root, "coverage/coverage-final.json.absent"),
+      ]) as unknown as Record<string, { s: unknown }>;
+      expect(merged["src/shared.ts"].s).toEqual({ "0": 1 });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("cli --annotations emits a ::warning with the file and line of each uncovered line", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const rel = "src/services/task-reconciler.ts";
+      const stmt = { start: { line: 11, column: 0 }, end: { line: 11, column: 5 } };
+      const report = path.join(dir, "cov.json");
+      writeFileSync(
+        report,
+        JSON.stringify({ [rel]: { statementMap: { "0": stmt }, s: { "0": 0 }, f: {}, b: {} } }),
+      );
+      const mockDiff = `
+diff --git a/${rel} b/${rel}
+--- a/${rel}
++++ b/${rel}
+@@ -10,0 +11,1 @@
++const a = 1;
+`;
+      cli(["--annotations", "--no-run", "--coverage", report], { diffText: mockDiff });
+      const out = log.mock.calls.map((c) => String(c[0]));
+      expect(out).toContain(`::warning file=${rel},line=11::not covered by tests`);
+    } finally {
+      log.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("runPatchCoverageCheck executes cleanly with no-run option against HEAD", () => {

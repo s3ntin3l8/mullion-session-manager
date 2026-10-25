@@ -159,6 +159,60 @@ jobs:
       detect-secrets: false
     secrets: inherit # pragma: allowlist secret
 
+  # Advisory, NOT a required check (#1920). Runs our own
+  # scripts/check-patch-coverage.mjs -- the same check the pre-push hook runs --
+  # over the union of the shard coverage reports the two jobs above upload, so
+  # it can be compared with Codecov's `codecov/patch` (which counts lines
+  # differently). Once the two agree, Codecov can be opted out of; see
+  # docs/ci-cd.md. `continue-on-error` keeps a red result from failing the run.
+  patch-coverage:
+    if: github.event_name == 'pull_request'
+    needs: [test-node, test-frontend]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26"
+          cache: "npm"
+      # The script parses sources with the TypeScript compiler.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      # Names come from the `artifact-prefix` inputs above; the shared
+      # ci-node.yml uploads `coverage-shard<prefix>-<n>`.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: coverage-shard-*
+          path: .shard-artifacts
+      - name: Patch coverage (own check)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -o pipefail
+          args=()
+          while IFS= read -r f; do args+=(--coverage "$f"); done \
+            < <(find .shard-artifacts -name coverage-final.json | sort)
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::warning::no shard coverage reports were downloaded"
+            exit 0
+          fi
+          status=0
+          node scripts/check-patch-coverage.mjs --no-run --annotations \
+            --base "origin/${BASE_REF}" "${args[@]}" | tee patch-coverage.txt || status=$?
+          {
+            echo '### Patch coverage (own check, advisory; threshold 75%)'
+            echo '```'
+            grep -v '^::warning' patch-coverage.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
   # Issue #407 (B3 of the audit remediation plan) — runs the opt-in e2e
   # suite (vitest.e2e.config.ts / `make test-e2e`, see test/e2e/README.md)
   # in CI. A real, multi-step job rather than a `with:` tweak to test-node

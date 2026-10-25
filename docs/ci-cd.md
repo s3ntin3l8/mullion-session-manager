@@ -121,6 +121,15 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   reported on the PR but is not one of `main`'s required status checks, so a
   red patch status does not block a merge by itself. The same floor is
   enforced _locally_ by the `pre-push` hook (see "Local hooks" below).
+- **`patch-coverage` (own check, advisory)**: a `ci-cd.yml` job on pull
+  requests that runs `scripts/check-patch-coverage.mjs` -- the same script the
+  pre-push hook runs -- over the union of the shard `coverage-final.json`
+  artifacts (`--coverage <file>` per report; hit counts of a file present in
+  several shards are summed). It is not a required check and is
+  `continue-on-error`: its percentage lands in the job's step summary and
+  uncovered lines become `::warning` annotations. It runs alongside
+  `codecov/patch` so the two numbers can be compared before Codecov is opted
+  out of (#1920).
 - **Test sharding**:
   - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests
     shard into 2×`test-shard` → `test-merge`.

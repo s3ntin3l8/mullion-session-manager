@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Calculates patch test coverage for modified/added lines against base branch (origin/main).
-// Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend).
+// Reads coverage/coverage-final.json (backend) and frontend/coverage/coverage-final.json (frontend),
+// or each report passed with a repeatable `--coverage <file>` (CI shards; overlapping files are merged).
 // Enforces minimum threshold (default 75%).
 
 import { execFileSync } from "node:child_process";
@@ -22,9 +23,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 //
 // The degradation is in the SAFE direction: the heuristic counts a type
 // declaration's body as executable, so the reported percentage goes DOWN and
-// the gate gets stricter, never looser. Nothing in the release path or in CI
-// runs this script (CI uses Codecov's advisory `codecov/patch` status), so
-// the degraded path is a safety net, not a working configuration.
+// the gate gets stricter, never looser. Nothing in the release path runs this
+// script, and CI runs it only as the advisory `patch-coverage` job (after
+// `npm ci`, so TypeScript is present), so the degraded path is a safety net,
+// not a working configuration.
 const requireFromHere = createRequire(import.meta.url);
 let tsModule;
 let tsLoaded = false;
@@ -261,22 +263,56 @@ export function deletedFiles(diffText) {
   return deleted;
 }
 
-export function loadCoverageReports() {
+// Adds `src`'s hit counts into `dst` (both istanbul `s`/`f`/`b` maps keyed by
+// statement/function/branch id). Branch counters are arrays, one per arm.
+function addHits(dst = {}, src = {}) {
+  for (const [id, hits] of Object.entries(src)) {
+    dst[id] = Array.isArray(hits)
+      ? hits.map((n, i) => n + (dst[id]?.[i] ?? 0))
+      : hits + (dst[id] ?? 0);
+  }
+  return dst;
+}
+
+// `files` overrides the two default report paths (the CI job feeds it every
+// downloaded shard report). A file that appears in several reports has its hit
+// counts summed: CI shards cover overlapping files, so overwriting would keep
+// only the last shard's hits. The maps are keyed by id, which is stable across
+// shards of the same source.
+const DEFAULT_COVERAGE_FILES = [
+  path.join(root, "coverage/coverage-final.json"),
+  path.join(root, "frontend/coverage/coverage-final.json"),
+];
+
+export function loadCoverageReports(files) {
   const coverageData = {};
 
-  const paths = [
-    path.join(root, "coverage/coverage-final.json"),
-    path.join(root, "frontend/coverage/coverage-final.json"),
-  ];
+  // De-duplicated, so a default report that was also passed with --coverage is
+  // not summed twice.
+  const paths = [...new Set(files ?? DEFAULT_COVERAGE_FILES)];
 
   for (const p of paths) {
-    if (existsSync(p)) {
+    if (!existsSync(p)) {
+      // Only an explicit --coverage path is worth a diagnostic: the default
+      // reports are routinely absent when one workspace was not tested.
+      if (!DEFAULT_COVERAGE_FILES.includes(p)) {
+        console.warn(`Warning: coverage file ${p} does not exist; skipping it.`);
+      }
+    } else {
       try {
         const content = JSON.parse(readFileSync(p, "utf8"));
         for (const [key, val] of Object.entries(content)) {
           // Normalize to path relative to root
           const relPath = path.isAbsolute(key) ? path.relative(root, key) : key;
-          coverageData[relPath] = val;
+          const prev = coverageData[relPath];
+          coverageData[relPath] = prev
+            ? {
+                ...prev,
+                s: addHits(prev.s, val.s),
+                f: addHits(prev.f, val.f),
+                b: addHits(prev.b, val.b),
+              }
+            : val;
         }
       } catch (err) {
         console.warn(`Warning: failed to parse coverage file ${p}:`, err);
@@ -496,7 +532,7 @@ export function runPatchCoverageCheck(options = {}) {
     return { ok: true, overallPercent: 100 };
   }
 
-  let coverageData = loadCoverageReports();
+  let coverageData = loadCoverageReports(options.coverageFiles);
   if (!options.noRun) {
     const hasBackend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("src/"));
     const hasFrontend = Array.from(modifiedFiles.keys()).some((f) => f.startsWith("frontend/src/"));
@@ -534,7 +570,10 @@ export function runPatchCoverageCheck(options = {}) {
           return { ok: false, overallPercent: 0, error: "coverage-run-failed" };
         }
       }
-      coverageData = loadCoverageReports();
+      // The run above wrote the default reports; keep the supplied ones too.
+      coverageData = loadCoverageReports(
+        options.coverageFiles ? [...options.coverageFiles, ...DEFAULT_COVERAGE_FILES] : undefined,
+      );
     }
   }
 
@@ -554,6 +593,14 @@ export function runPatchCoverageCheck(options = {}) {
     }
   }
   console.log("----------------------------------------------------------------------");
+  if (options.annotations) {
+    // GitHub Actions workflow commands: they attach to the PR diff.
+    for (const r of summary.results) {
+      for (const line of r.uncoveredLines) {
+        console.log(`::warning file=${r.file},line=${line}::not covered by tests`);
+      }
+    }
+  }
   console.log(
     `Overall Patch Coverage: ${summary.overallPercent.toFixed(1)}% ` +
       `(${summary.totalCoveredLines}/${summary.totalExecutableLines} lines, threshold: ${threshold.toFixed(1)}%)\n`,
@@ -570,6 +617,8 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
   let threshold = 75.0;
   let baseRef = undefined;
   let noRun = false;
+  const coverageFiles = [];
+  let annotations = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--threshold" && args[i + 1]) {
@@ -578,12 +627,24 @@ export function cli(args = process.argv.slice(2), testOptions = {}) {
     } else if (args[i] === "--base" && args[i + 1]) {
       baseRef = args[i + 1];
       i++;
+    } else if (args[i] === "--coverage" && args[i + 1]) {
+      coverageFiles.push(path.resolve(args[i + 1]));
+      i++;
+    } else if (args[i] === "--annotations") {
+      annotations = true;
     } else if (args[i] === "--no-run") {
       noRun = true;
     }
   }
 
-  const res = runPatchCoverageCheck({ threshold, baseRef, noRun, ...testOptions });
+  const res = runPatchCoverageCheck({
+    threshold,
+    baseRef,
+    noRun,
+    annotations,
+    coverageFiles: coverageFiles.length ? coverageFiles : undefined,
+    ...testOptions,
+  });
   if (!res.ok) {
     console.error(
       `ERROR: Patch coverage ${res.overallPercent.toFixed(1)}% is below required ${threshold.toFixed(1)}% threshold.`,

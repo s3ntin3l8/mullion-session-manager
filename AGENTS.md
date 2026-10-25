@@ -116,7 +116,8 @@ How this repo applies the conventions above — facts and commands, not rules.
   `scripts/check-patch-coverage.mjs`). In CI the same floor is **advisory**:
   Codecov posts a `codecov/patch` status on the PR, but it is not one of
   `main`'s required status checks, so a red patch status does not block a
-  merge on its own.
+  merge on its own. A `patch-coverage` job in `ci-cd.yml` runs the same
+  script over the CI shard reports alongside it (also advisory, #1920).
 - **Reviews:** this repo reviews every pull request automatically when it
   opens (`.github/workflows/hermes.yml`'s `auto-review` job), except Task
   Master's own `mullion/task-*` branches — see `docs/tasks-internals.md`'s
