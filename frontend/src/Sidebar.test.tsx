@@ -1225,7 +1225,9 @@ describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
     ]);
     const user = userEvent.setup();
     renderSidebar();
-    const header = (await screen.findByText("Discover projects")).closest(".discover-header");
+    const header = (await screen.findByText("Discover projects")).closest(
+      ".discover-header-toggle",
+    );
     return { user, header: header as HTMLElement };
   };
 
@@ -1249,13 +1251,42 @@ describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
     expect(header).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("does not toggle when the nested host picker is used", async () => {
-    // The guard the four sibling sites use: `e.target !== e.currentTarget`.
-    // The header nests the host picker, and a nested control's own
-    // Enter/Space activation dispatches a raw keydown that bubbles here
-    // independently of the click's stopped propagation — so without the
-    // guard, picking a host with the keyboard would also collapse the
-    // section.
+  // Only Enter and Space activate a button — any other key must leave the
+  // section alone.
+  it("does not toggle on any other key", async () => {
+    const { user, header } = await renderWithCandidate();
+    header.focus();
+
+    await user.keyboard("a");
+    await user.keyboard("{Escape}");
+    await user.keyboard("{ArrowDown}");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // The body renders only when the header is expanded, so `aria-controls`
+  // names an id that is absent while the header is collapsed — the house
+  // pattern the sibling disclosure sites also follow.
+  it("names a body id that exists only while it is expanded", async () => {
+    const { user, header } = await renderWithCandidate();
+    const controlledId = header.getAttribute("aria-controls");
+    expect(controlledId).toBe("discover-projects-body");
+
+    expect(document.getElementById(controlledId!)).toBeNull();
+
+    header.focus();
+    await user.keyboard("{Enter}");
+    expect(document.getElementById(controlledId!)).not.toBeNull();
+  });
+
+  it("does not toggle when the host picker is used", async () => {
+    // The guard the sibling sites use: `e.target !== e.currentTarget`.
+    //
+    // The host picker is a SIBLING of the toggle, not a descendant of it:
+    // `role="button"` makes its descendants presentational (ARIA 1.2), so a
+    // `<select>` nested inside the button would lose its combobox role
+    // and stop being exposed as a control at all. Keeping it outside means
+    // the picker stays a combobox AND its key events never reach the
+    // toggle's handler.
     hosts = [
       makeHost({
         id: "remote-1",
@@ -1267,8 +1298,11 @@ describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
       }),
     ];
     const { header } = await renderWithCandidate();
-    const select = header.querySelector("select") as HTMLSelectElement;
+    const select = header.parentElement!.querySelector("select") as HTMLSelectElement;
     expect(select).not.toBeNull();
+
+    // The picker is outside the button, so it is still a combobox.
+    expect(select.closest('[role="button"]')).toBeNull();
 
     fireEvent.keyDown(select, { key: "Enter" });
     expect(header).toHaveAttribute("aria-expanded", "false");

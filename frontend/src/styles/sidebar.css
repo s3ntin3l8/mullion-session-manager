@@ -1584,6 +1584,19 @@
   border: 1px dashed var(--border);
   color: var(--muted);
 }
+/* The toggle is an inner element, not the header row itself: `role="button"`
+   makes its descendants presentational (ARIA 1.2), so the host picker has
+   to be a SIBLING of the toggle rather than nested inside it — otherwise
+   the picker loses its combobox role and stops being exposed as a control.
+   Issue #1893. */
+.discover-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
 .discover-header:hover {
   border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
   color: var(--fg);

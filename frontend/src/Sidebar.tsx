@@ -2256,40 +2256,50 @@ function DiscoverProjects({
 
   return (
     <div className="discover-block">
-      <div
-        className="discover-header"
-        onClick={onToggleCollapsed}
-        // Issue #1893 — this header was a plain <div onClick>: a keyboard
-        // user could not reach it at all, and a screen reader announced it
-        // as unlabelled text. The disclosure pattern the four sibling sites
-        // already use (the project header, the session row, the workspace
-        // group's header and the task board's lane header): role="button",
-        // tabIndex, aria-expanded, aria-controls, and Enter/Space to toggle.
-        role="button"
-        tabIndex={0}
-        aria-expanded={!collapsed}
-        aria-controls="discover-projects-body"
-        onKeyDown={(e) => {
-          // The `e.target !== e.currentTarget` guard the siblings use, and
-          // what it is FOR here: the header nests the host picker (the
-          // `stopPropagation` span below), and a nested control's own
-          // Enter/Space activation dispatches a raw keydown that bubbles
-          // here independently of the click's stopped propagation — so
-          // without the guard, picking a host with the keyboard would also
-          // collapse the section.
-          if (e.target !== e.currentTarget) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onToggleCollapsed();
-          }
-        }}
-      >
-        <ChevronDownIcon
-          size={14}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
-        <span className="discover-title">Discover projects</span>
-        <span className="discover-count">{remaining.length} found</span>
+      <div className="discover-header">
+        {/* Issue #1893 — this header was a plain <div onClick>: a keyboard
+          user could not reach it at all, and a screen reader announced it
+          as unlabelled text. It now uses the disclosure pattern the
+          codebase had already established in three sibling sites (the
+          project header, the workspace group's header and the task board's
+          lane header): role="button", tabIndex, aria-expanded,
+          aria-controls, and Enter/Space to toggle.
+
+          The toggle is this INNER element, not the header row itself, and
+          that is deliberate: `role="button"` makes its descendants
+          presentational (ARIA 1.2), so a `<select>` nested inside the
+          button would lose its combobox role entirely and stop being
+          exposed as a control at all — the host picker used to be a
+          perfectly good combobox here. Keeping the toggle and the picker
+          as SIBLINGS inside the header row preserves both: the picker
+          stays a combobox, and the header stays a button.
+
+          The `e.target !== e.currentTarget` guard the siblings use is
+          kept: only treat Enter/Space as "toggle" when the KEYDOWN's own
+          target is the toggle itself, so a key event that bubbles up from
+          a descendant cannot toggle the section a second time. */}
+        <div
+          className="discover-header-toggle"
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
+          aria-controls="discover-projects-body"
+          onClick={onToggleCollapsed}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggleCollapsed();
+            }
+          }}
+        >
+          <ChevronDownIcon
+            size={14}
+            className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+          />
+          <span className="discover-title">Discover projects</span>
+          <span className="discover-count">{remaining.length} found</span>
+        </div>
         {hostPicker}
       </div>
       {!collapsed && (
