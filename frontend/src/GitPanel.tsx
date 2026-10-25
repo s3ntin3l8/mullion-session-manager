@@ -454,7 +454,7 @@ export function GitPanel({
       setHealth(await checkProjectGitHealth(params.projectId));
     } catch (err) {
       console.debug("[GitPanel] checkProjectGitHealth failed", err);
-      setHealthError(err instanceof Error ? err.message : "Health check failed — try again.");
+      setHealthError(describeError(err, "the health check failed"));
     } finally {
       setIsCheckingHealth(false);
     }
@@ -620,15 +620,30 @@ export function GitPanel({
       )}
 
       {healthError && (
-        <div className="github-panel-empty-row github-panel-conflicts">{healthError}</div>
+        // role="alert", like the git-status failure above: a failed check
+        // that only tints the panel is silent to a screen reader.
+        <div className="github-panel-empty-row github-panel-conflicts" role="alert">
+          {healthError}
+        </div>
       )}
 
       {health && (
+        // The danger style is for REAL damage only. "Not a git repository"
+        // and "the check did not finish" are not findings, so they get the
+        // neutral row — same reasoning as the stale-status note above. And
+        // only real damage is worth the assertive announcement.
         <div
           className={
-            health.healthy
+            health.healthy || health.gitDir === null || health.timedOut
               ? "github-panel-empty-row"
               : "github-panel-empty-row github-panel-conflicts"
+          }
+          role={
+            health.healthy
+              ? undefined
+              : health.timedOut || health.gitDir === null
+                ? "status"
+                : "alert"
           }
         >
           {health.healthy ? (

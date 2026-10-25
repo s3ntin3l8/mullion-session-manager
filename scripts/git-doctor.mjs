@@ -62,8 +62,8 @@ try {
     console.error(
       "git-doctor: the doctor's source module could not be loaded:\n" +
         `  ${err?.message ?? err}\n` +
-        "  This is not a missing module, so the compiled copy in dist/ is NOT used here —" +
-        " it could be an older doctor.",
+        "  The compiled copy in dist/ is deliberately NOT used as a fallback here: it may be\n" +
+        "  an older doctor, and silently running that would be worse than stopping.",
     );
     process.exit(1);
   }
@@ -78,6 +78,13 @@ try {
     );
     process.exit(1);
   }
+  // Say that the compiled copy is what is running. It is the right one in a
+  // release install, but in a checkout it may be older than the source — and
+  // an operator who is about to REPAIR a clone deserves to know which doctor
+  // is doing it.
+  console.error(
+    "git-doctor: using the compiled copy in dist/, which may be older than the source.",
+  );
 }
 
 const args = process.argv.slice(2);

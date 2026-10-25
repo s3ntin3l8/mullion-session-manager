@@ -323,6 +323,10 @@ describe("GitPanel", () => {
     expect(await screen.findByText(/This repository looks damaged/)).toBeInTheDocument();
     expect(screen.getByText(/1 zero-byte object/)).toBeInTheDocument();
     expect(screen.getByText(/1 fsck error/)).toBeInTheDocument();
+    // Real damage IS the danger style.
+    expect(screen.getByText(/This repository looks damaged/).className).toContain(
+      "github-panel-conflicts",
+    );
   });
 
   // A project that is not a git repository at all has no clone to be
@@ -350,6 +354,10 @@ describe("GitPanel", () => {
 
     expect(await screen.findByText(/not a git repository/)).toBeInTheDocument();
     expect(screen.queryByText(/looks damaged/)).toBeNull();
+    // Not a finding, so not the danger style either.
+    expect(screen.getByText(/not a git repository/).className).not.toContain(
+      "github-panel-conflicts",
+    );
   });
 
   // A check that could not finish has no verdict. Saying "looks damaged"
@@ -431,6 +439,9 @@ describe("GitPanel", () => {
 
     expect(await screen.findByText(/the clone could not be inspected/)).toBeInTheDocument();
     expect(screen.queryByText("This repository is healthy.")).toBeNull();
+    // A failed check is announced, not just tinted — the same role="alert"
+    // the git-status failure uses.
+    expect(screen.getByRole("alert")).toHaveTextContent(/the clone could not be inspected/);
   });
 
   it("shows ahead/behind counts when they differ from zero", async () => {
