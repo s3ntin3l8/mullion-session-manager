@@ -573,6 +573,11 @@ export async function repairGitClone(
   const quarantine = path.join(common, `gc-quarantine-${stamp}`);
   const quarantined: string[] = [];
   for (const rel of loose) {
+    // `loose` holds only paths that passed `isLooseObjectPath()` — two hex
+    // segments — and a readdir entry name can never contain a separator, so
+    // neither join below can leave the directory it is rooted at. The object
+    // is MOVED into the quarantine (never deleted), and the quarantine lives
+    // inside the same git dir.
     const from = path.join(objectsDir, rel);
     const to = path.join(quarantine, rel);
     try {
