@@ -242,6 +242,130 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // Issue #1724 / roadmap 8.10 — the per-host cwd map. It is what makes a
+  // remote host a placement CANDIDATE at all: a session runs in a
+  // directory, and this says where the project is on each host.
+  it("round-trips the per-host cwd map, and clears it with null", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    // A REAL host: the map's keys must name hosts we know about, so the
+    // test registers one rather than inventing an id.
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "remote-a", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = host.json().id as string;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "mapped-project",
+        cwd,
+        placement: "auto",
+        hostCwds: { [hostId]: "/srv/repo" },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    // The API speaks the shape it accepts: an object, not the column's
+    // JSON encoding.
+    expect(created.json().hostCwds).toEqual({ [hostId]: "/srv/repo" });
+
+    const { id } = created.json();
+    const listed = await app.inject({ method: "GET", url: "/api/projects" });
+    // The list holds every project in this file's shared DB, so find ours
+    // by id rather than by position.
+    expect(listed.json().find((p: { id: number }) => p.id === id).hostCwds).toEqual({
+      [hostId]: "/srv/repo",
+    });
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { hostCwds: { [hostId]: "/opt/repo" } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().hostCwds).toEqual({ [hostId]: "/opt/repo" });
+
+    // null clears the map: the project lives on its own host and nowhere
+    // else, which is what an absent map means.
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { hostCwds: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().hostCwds).toEqual({});
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a hostCwds path that is not absolute", async () => {
+    // The paths become a session's working directory on THAT host, so a
+    // relative one would resolve against whatever the agent's cwd
+    // happened to be.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "relative-map",
+        cwd,
+        hostCwds: { "remote-a": "relative/path" },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a hostCwds key that names no known host", async () => {
+    // A typo in a host id would sit in the map forever — the host it
+    // names would never become a placement candidate, so the map would
+    // look like it had done nothing.
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "typo-map",
+        cwd,
+        hostCwds: { "remtoe-a": "/srv/repo" },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().message).toMatch(/unknown host/i);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a hostCwds value that is not a path", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    // An object cannot be coerced into a path (Fastify coerces a NUMBER to
+    // a string, so the value has to be a shape no coercion can rescue).
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        createDir: true,
+        name: "bad-map",
+        cwd,
+        hostCwds: { "remote-a": { nested: "not a path" } },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("rejects an unknown placement mode", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-placement-"));

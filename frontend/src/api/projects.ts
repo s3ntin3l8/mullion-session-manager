@@ -85,6 +85,8 @@ export const projectsApi = {
         | "suppressConventionsInjectionAfterScaffold"
         // Issue #1723 / roadmap 8.9 — the placement mode is writable too.
         | "placement"
+        // Issue #1724 / roadmap 8.10 — the per-host cwd map is writable too.
+        | "hostCwds"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>
