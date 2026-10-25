@@ -320,6 +320,18 @@ test && make format-check` before pushing.
 
 ## By design, not a gap
 
+- **`main` does not require an approving review**
+  (`required_approving_review_count` is unset, #1912). The bot's review
+  still runs and its findings are still addressed, but an approval is not a
+  merge gate, because not every PR has someone who can give one. Task
+  Master's PRs are authored by the Mullion GitHub App, and GitHub does not
+  let an author approve its own PR — so the App can only comment on them.
+  Hermes's `auto-review` skips `mullion/task-*` branches on purpose, and
+  release-please PRs get no reviewer at all. With `enforce_admins: true`,
+  there is no bypass either, so a required approval would stall every Task
+  Master auto-merge until a human approved it by hand. Revisit only if Task
+  Master gains a reviewing identity separate from the one that opens its
+  PRs.
 - **Release-please PRs are approval-gated.** The workflows on a
   release-please pull request sit at `action_required` with no jobs
   executed until the maintainer approves them, which happens as part of
