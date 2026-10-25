@@ -335,6 +335,37 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     });
   });
 
+  describe("contradictory options are refused by the service itself", () => {
+    it("hostId together with target", async () => {
+      const { projectId, hostId } = await setup();
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        hostId,
+        target: { platform: "darwin" },
+      });
+      expect(res).toMatchObject({ ok: false, reason: "invalid-options" });
+    });
+
+    it("isolate together with worktree, or with cwd", async () => {
+      const { projectId } = await setup();
+      const withWorktree = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        isolate: true,
+        worktree: { baseRef: "main" },
+      });
+      expect(withWorktree).toMatchObject({ ok: false, reason: "invalid-options" });
+      const withCwd = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        isolate: true,
+        cwd: "/etc",
+      });
+      expect(withCwd).toMatchObject({ ok: false, reason: "invalid-options" });
+    });
+  });
+
   describe("POST /api/sessions", () => {
     it("rejects targetHostId together with targetPlatform", async () => {
       const { projectId, hostId } = await setup();
@@ -367,6 +398,16 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toMatch(/isolate and worktree/);
+    });
+
+    it("answers 400, not 409, for a platform no host can report (a typo)", async () => {
+      const { projectId } = await setup();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash", targetPlatform: "macos" },
+      });
+      expect(res.statusCode).toBe(400);
     });
 
     it("answers 409 when no eligible host matches the target", async () => {

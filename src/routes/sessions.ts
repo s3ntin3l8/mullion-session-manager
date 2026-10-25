@@ -81,6 +81,21 @@ const worktreeIntentSchema = {
 // Field-for-field mirror of services/session-lifecycle.ts's `CreateSessionBody`
 // TS interface — see that interface's own doc comment for why the two live
 // in different files and why nothing but code review keeps them in sync.
+/** Node's `process.platform` values — what a host can report as its platform. */
+const NODE_PLATFORMS = [
+  "aix",
+  "android",
+  "darwin",
+  "freebsd",
+  "haiku",
+  "linux",
+  "openbsd",
+  "sunos",
+  "win32",
+  "cygwin",
+  "netbsd",
+] as const;
+
 const createSessionSchema = {
   body: {
     type: "object",
@@ -98,7 +113,11 @@ const createSessionSchema = {
       // Issue #1951 — run on a chosen host (an id) or platform; refused with
       // a 409 when no eligible host matches. See CreateSessionBody.
       targetHostId: { type: "string", minLength: 1, maxLength: 128 },
-      targetPlatform: { type: "string", minLength: 1, maxLength: 32 },
+      // An enum, not a free string: a typo ("macos") would otherwise surface
+      // as a 409 "no eligible host matches", which reads as a fleet problem
+      // instead of the bad request it is. 409 stays for a KNOWN platform no
+      // eligible host has. These are Node's own `process.platform` values.
+      targetPlatform: { type: "string", enum: [...NODE_PLATFORMS] },
       // Issue #1951 — a server-chosen fresh worktree on the placement host.
       isolate: { type: "boolean" },
       skipPermissions: { type: "boolean" },
@@ -490,14 +509,6 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (request.body.targetHostId !== undefined && request.body.targetPlatform !== undefined) {
         return reply.badRequest("targetHostId and targetPlatform are mutually exclusive");
       }
-      if (request.body.isolate) {
-        if (request.body.worktree !== undefined) {
-          return reply.badRequest("isolate and worktree are mutually exclusive");
-        }
-        if (request.body.cwd !== undefined) {
-          return reply.badRequest("isolate and cwd are mutually exclusive");
-        }
-      }
       const isOpencode = commandIsOpencode(request.body.command);
       // Claude Code / Codex / agy: same default resolution (no parent
       // inheritance — see the issue's out-of-scope note), landing as
@@ -666,6 +677,7 @@ export async function sessionsRoute(app: FastifyInstance) {
             result.detail ?? "The host this session was pinned to has no path for this project",
           );
         }
+        if (result.reason === "invalid-options") return reply.badRequest(result.detail);
         if (result.reason === "no-target-host") {
           // Issue #1951 — the caller named a host/platform nothing eligible
           // matches. A conflict with the fleet's current state, not a

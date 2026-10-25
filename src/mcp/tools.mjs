@@ -260,6 +260,19 @@ const spawnChildSession = {
       },
       platform: {
         type: "string",
+        enum: [
+          "darwin",
+          "linux",
+          "win32",
+          "freebsd",
+          "openbsd",
+          "netbsd",
+          "sunos",
+          "aix",
+          "android",
+          "haiku",
+          "cygwin",
+        ],
         description:
           "Run the child on any eligible host of this platform ('darwin', 'linux' or " +
           "'win32') — e.g. 'darwin' for Xcode/iOS work. Same rules as 'host': refused (409) " +

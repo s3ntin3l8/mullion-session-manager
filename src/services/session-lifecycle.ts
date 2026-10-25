@@ -458,6 +458,11 @@ export type CreateSessionResult =
   // session-env-keys.ts's own comment for why this is the required second
   // enforcement point, not a redundant one.
   | { ok: false; reason: "reserved-env-key"; detail: string }
+  // Issue #1951 — contradictory placement/worktree options. Re-validated
+  // HERE, not just in POST /api/sessions, for the same reason `env` and
+  // `parentSessionId` are: createSessionRecord has non-HTTP callers (Task
+  // Master) and would otherwise silently prefer one option over the other.
+  | { ok: false; reason: "invalid-options"; detail: string }
   // Issue #1223 — the insert below hit `sessions_stack_identity_unique`
   // (schema.ts), the DB-level partial-unique-index guard for a
   // `docker-stack:<composeProject>` session's identity. This is the ONLY
@@ -1069,6 +1074,36 @@ async function createSessionRecordInner(
     const reservedKey = Object.keys(env).find(isReservedSessionEnvKey);
     if (reservedKey !== undefined) {
       return { ok: false, reason: "reserved-env-key", detail: reservedKey };
+    }
+  }
+
+  // Issue #1951 — options that contradict each other are refused, never
+  // resolved by silently preferring one: `hostId` ("run exactly here") vs
+  // `target` ("run on a host matching this"), and `isolate` (a server-chosen
+  // worktree) vs `worktree` (a caller-chosen one) or `cwd` (which would be
+  // the repo that worktree is cut FROM, and the child-cwd containment check
+  // does not run for a worktree).
+  if (params.hostId !== undefined && params.target !== undefined) {
+    return {
+      ok: false,
+      reason: "invalid-options",
+      detail: "hostId and target are mutually exclusive",
+    };
+  }
+  if (params.isolate) {
+    if (params.worktree !== undefined) {
+      return {
+        ok: false,
+        reason: "invalid-options",
+        detail: "isolate and worktree are mutually exclusive",
+      };
+    }
+    if (params.cwd !== undefined) {
+      return {
+        ok: false,
+        reason: "invalid-options",
+        detail: "isolate and cwd are mutually exclusive",
+      };
     }
   }
 

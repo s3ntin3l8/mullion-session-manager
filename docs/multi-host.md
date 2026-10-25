@@ -268,7 +268,10 @@ chooses among the hosts that match.
 host it runs on: a new `mullion/child-…` branch cut from the default base
 ref, **resolved on that host**. The remote child commits and pushes that
 branch; the coordinator fetches and reviews it. `--isolate` cannot be
-combined with `--cwd`.
+combined with `--cwd`. The worktree is **kept** after the child ends — it
+holds the child's commits and any unpushed work, exactly like the launcher's
+"isolate" toggle — so remove it yourself with `git worktree remove` once the
+branch is merged; automatic reclamation is tracked in #1964.
 
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),
