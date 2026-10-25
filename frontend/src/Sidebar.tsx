@@ -2209,18 +2209,22 @@ function DiscoverProjects({
   // Only rendered once a remote host actually exists — same "no extra UI
   // for a single-host deployment" rule CreateProjectModal's own selector
   // follows.
+  //
+  // The picker needs no click-suppression wrapper: it is the header ROW's
+  // sibling, not a descendant of the toggle, so a click on it never
+  // reaches the toggle's handler in the first place (issue #1893). It is
+  // also not inside the empty-state branch's own tree, which has no click
+  // handler either.
   const hostPicker = remoteHosts.length > 0 && (
-    <span onClick={(e) => e.stopPropagation()}>
-      <Dropdown
-        small
-        value={selectedHostId}
-        onChange={setHostId}
-        options={[
-          { value: LOCAL_HOST_ID, label: "This machine" },
-          ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
-        ]}
-      />
-    </span>
+    <Dropdown
+      small
+      value={selectedHostId}
+      onChange={setHostId}
+      options={[
+        { value: LOCAL_HOST_ID, label: "This machine" },
+        ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
+      ]}
+    />
   );
 
   if (remaining.length === 0) {
@@ -2256,17 +2260,54 @@ function DiscoverProjects({
 
   return (
     <div className="discover-block">
-      <div className="discover-header" onClick={onToggleCollapsed}>
-        <ChevronDownIcon
-          size={14}
-          className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
-        />
-        <span className="discover-title">Discover projects</span>
-        <span className="discover-count">{remaining.length} found</span>
+      <div className="discover-header">
+        {/* Issue #1893 — this header was a plain <div onClick>: a keyboard
+          user could not reach it at all, and a screen reader announced it
+          as unlabelled text. It now uses the disclosure pattern the
+          codebase had already established in three sibling sites (the
+          project header, the workspace group's header and the task board's
+          lane header): role="button", tabIndex, aria-expanded,
+          aria-controls, and Enter/Space to toggle.
+
+          The toggle is this INNER element, not the header row itself, and
+          that is deliberate: `role="button"` makes its descendants
+          presentational (ARIA 1.2), so a `<select>` nested inside the
+          button would lose its combobox role entirely and stop being
+          exposed as a control at all — the host picker used to be a
+          perfectly good combobox here. Keeping the toggle and the picker
+          as SIBLINGS inside the header row preserves both: the picker
+          stays a combobox, and the header stays a button.
+
+          The `e.target !== e.currentTarget` guard the siblings use is
+          kept: only treat Enter/Space as "toggle" when the KEYDOWN's own
+          target is the toggle itself, so a key event that bubbles up from
+          a descendant cannot toggle the section a second time. */}
+        <div
+          className="discover-header-toggle"
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
+          aria-controls="discover-projects-body"
+          onClick={onToggleCollapsed}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onToggleCollapsed();
+            }
+          }}
+        >
+          <ChevronDownIcon
+            size={14}
+            className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
+          />
+          <span className="discover-title">Discover projects</span>
+          <span className="discover-count">{remaining.length} found</span>
+        </div>
         {hostPicker}
       </div>
       {!collapsed && (
-        <div className="discover-body">
+        <div id="discover-projects-body" className="discover-body">
           {remaining.map((c) => (
             <div key={c.cwd} className="discover-item">
               <FolderIcon size={14} style={{ color: "var(--muted)" }} />

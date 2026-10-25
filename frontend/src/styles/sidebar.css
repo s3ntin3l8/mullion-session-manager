@@ -1580,11 +1580,38 @@
   gap: 8px;
   padding: 7px 9px;
   border-radius: 8px;
-  cursor: pointer;
   border: 1px dashed var(--border);
   color: var(--muted);
 }
-.discover-header:hover {
+/* The toggle is an inner element, not the header row itself: `role="button"`
+   makes its descendants presentational (ARIA 1.2), so the host picker has
+   to be a SIBLING of the toggle rather than nested inside it — otherwise
+   the picker loses its combobox role and stops being exposed as a control.
+   Issue #1893.
+
+   The row is therefore a container, not a click target, and carries no
+   pointer cursor of its own: the toggle's hit area is the text and the
+   chevron, and the row's padding strip around them is inert. A native
+   <button> styled as a discover header (WorkspaceSwitcher's "New
+   workspace") IS the click target, so it keeps the pointer. */
+button.discover-header {
+  cursor: pointer;
+}
+.discover-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+/* The hover feedback follows the hit area, not the row. For the toggle row
+   that is the toggle, so the inert padding strip does not light up; for a
+   native <button> styled as a discover header the whole row IS the target.
+   The `:has()` form is the codebase's existing idiom for exactly this
+   (see styles/terminal.css). */
+.discover-header:has(.discover-header-toggle:hover),
+button.discover-header:hover {
   border-color: color-mix(in srgb, var(--accent-solid) 45%, var(--border));
   color: var(--fg);
 }

@@ -205,6 +205,104 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     expect(screen.queryByText("Working tree clean")).toBeNull();
   });
 
+  // Issue #1893 — the header was a plain <div onClick>: a keyboard user
+  // could not reach it at all, and a screen reader announced it as
+  // unlabelled text. These pin the disclosure pattern the codebase had
+  // already established.
+  it("exposes the disclosure pattern on its header", () => {
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen.getByText("Source Control").closest(".source-control-header");
+    expect(header).toHaveAttribute("role", "button");
+    expect(header).toHaveAttribute("tabindex", "0");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAttribute("aria-controls", "source-control-body");
+  });
+
+  it("toggles on Enter and on Space", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen
+      .getByText("Source Control")
+      .closest(".source-control-header") as HTMLElement;
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Working tree clean")).toBeTruthy();
+
+    await user.keyboard(" ");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Working tree clean")).toBeNull();
+  });
+
+  // Only Enter and Space activate a button — any other key must leave the
+  // section alone, or a user typing in the search box elsewhere on the
+  // page would collapse it.
+  it("does not toggle on any other key", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen
+      .getByText("Source Control")
+      .closest(".source-control-header") as HTMLElement;
+    header.focus();
+
+    await user.keyboard("a");
+    await user.keyboard("{Escape}");
+    await user.keyboard("{ArrowDown}");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Working tree clean")).toBeNull();
+  });
+
+  // The body renders only when the header is expanded, so `aria-controls`
+  // names an id that is absent while the header is collapsed — the house
+  // pattern the sibling disclosure sites also follow. Pinning it means a
+  // future change that always renders the body (or never does) has to
+  // update this test on purpose.
+  it("names a body id that exists only while it is expanded", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+
+    const header = screen
+      .getByText("Source Control")
+      .closest(".source-control-header") as HTMLElement;
+    const controlledId = header.getAttribute("aria-controls");
+    expect(controlledId).toBe("source-control-body");
+
+    // Collapsed: the id the header points at is not in the document.
+    expect(document.getElementById(controlledId!)).toBeNull();
+
+    header.focus();
+    await user.keyboard("{Enter}");
+    expect(document.getElementById(controlledId!)).not.toBeNull();
+  });
+
   it("renders nothing when there are no projects", () => {
     useDashboardStore.setState({ projects: [], sessions: [], activePanelId: null });
     const { container } = render(<SourceControlSection onOpenGit={vi.fn()} />);

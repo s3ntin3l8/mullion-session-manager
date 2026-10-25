@@ -275,7 +275,34 @@ function SourceControlView({
   return (
     <div className="source-control-section">
       {!embedded && (
-        <div className="sidebar-section-header source-control-header" onClick={toggleCollapsed}>
+        <div
+          className="sidebar-section-header source-control-header"
+          onClick={toggleCollapsed}
+          // Issue #1893 — this header was a plain <div onClick>: a keyboard
+          // user could not reach it at all, and a screen reader announced it
+          // as unlabelled text. The disclosure pattern the codebase had
+          // already established: role="button", tabIndex, aria-expanded,
+          // aria-controls, and Enter/Space to toggle. Two sibling sites
+          // use exactly this shape — the project header and the workspace
+          // group's header, both in Sidebar.tsx/WorkspaceSwitcher.tsx — and
+          // the task board's lane header is the same disclosure expressed
+          // with a native <button> instead.
+          role="button"
+          tabIndex={0}
+          aria-expanded={!collapsed}
+          aria-controls="source-control-body"
+          onKeyDown={(e) => {
+            // The `e.target !== e.currentTarget` guard the siblings use:
+            // only treat Enter/Space as "toggle" when the KEYDOWN's own
+            // target is the header itself, so a focused descendant cannot
+            // toggle it a second time through the key event.
+            if (e.target !== e.currentTarget) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleCollapsed();
+            }
+          }}
+        >
           <ChevronDownIcon
             size={12}
             className={collapsed ? "ws-group-chevron collapsed" : "ws-group-chevron"}
@@ -293,7 +320,13 @@ function SourceControlView({
         </div>
       )}
       {(embedded || !collapsed) && effectiveProjectId != null && (
-        <div className={`source-control-body${embedded ? " embedded" : ""}`}>
+        <div
+          // The id is the header's `aria-controls` target — and the header
+          // only exists in the non-embedded form, so the embedded one leaves
+          // the id off rather than claim a target nothing points at.
+          id={embedded ? undefined : "source-control-body"}
+          className={`source-control-body${embedded ? " embedded" : ""}`}
+        >
           {followed && (
             <div onClick={(e) => e.stopPropagation()}>
               <Dropdown

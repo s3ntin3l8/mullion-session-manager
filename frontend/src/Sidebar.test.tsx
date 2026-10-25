@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
@@ -1212,6 +1212,103 @@ describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
     expect(await screen.findByText(/does not exist/i)).toBeInTheDocument();
     // Not marked as added on failure.
     expect(screen.getByText("Add")).toBeInTheDocument();
+  });
+});
+
+describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
+  // The header was a plain <div onClick>: a keyboard user could not reach
+  // it at all, and a screen reader announced it as unlabelled text.
+  const renderWithCandidate = async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([
+      { name: "widgets", cwd: "/repos/widgets", isGitRepo: true, isRegistered: false },
+    ]);
+    const user = userEvent.setup();
+    renderSidebar();
+    const header = (await screen.findByText("Discover projects")).closest(
+      ".discover-header-toggle",
+    );
+    return { user, header: header as HTMLElement };
+  };
+
+  it("exposes the disclosure pattern on its header", async () => {
+    const { header } = await renderWithCandidate();
+
+    expect(header).toHaveAttribute("role", "button");
+    expect(header).toHaveAttribute("tabindex", "0");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+    expect(header).toHaveAttribute("aria-controls", "discover-projects-body");
+  });
+
+  it("toggles on Enter and on Space", async () => {
+    const { user, header } = await renderWithCandidate();
+    header.focus();
+
+    await user.keyboard("{Enter}");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard(" ");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // Only Enter and Space activate a button — any other key must leave the
+  // section alone.
+  it("does not toggle on any other key", async () => {
+    const { user, header } = await renderWithCandidate();
+    header.focus();
+
+    await user.keyboard("a");
+    await user.keyboard("{Escape}");
+    await user.keyboard("{ArrowDown}");
+    expect(header).toHaveAttribute("aria-expanded", "false");
+  });
+
+  // The body renders only when the header is expanded, so `aria-controls`
+  // names an id that is absent while the header is collapsed — the house
+  // pattern the sibling disclosure sites also follow.
+  it("names a body id that exists only while it is expanded", async () => {
+    const { user, header } = await renderWithCandidate();
+    const controlledId = header.getAttribute("aria-controls");
+    expect(controlledId).toBe("discover-projects-body");
+
+    expect(document.getElementById(controlledId!)).toBeNull();
+
+    header.focus();
+    await user.keyboard("{Enter}");
+    expect(document.getElementById(controlledId!)).not.toBeNull();
+  });
+
+  it("does not toggle when the host picker is used", async () => {
+    // The guard the sibling sites use: `e.target !== e.currentTarget`.
+    //
+    // The host picker is a SIBLING of the toggle, not a descendant of it:
+    // `role="button"` makes its descendants presentational (ARIA 1.2), so a
+    // `<select>` nested inside the button would lose its combobox role
+    // and stop being exposed as a control at all. Keeping it outside means
+    // the picker stays a combobox AND its key events never reach the
+    // toggle's handler.
+    hosts = [
+      makeHost({
+        id: "remote-1",
+        name: "build-box",
+        baseUrl: null,
+        isLocal: false,
+        hasToken: true,
+        health: "online",
+      }),
+    ];
+    const { header } = await renderWithCandidate();
+    const select = header.parentElement!.querySelector("select") as HTMLSelectElement;
+    expect(select).not.toBeNull();
+
+    // The picker is outside the button, so it is still a combobox.
+    expect(select.closest('[role="button"]')).toBeNull();
+
+    fireEvent.keyDown(select, { key: "Enter" });
+    expect(header).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.keyDown(select, { key: " " });
+    expect(header).toHaveAttribute("aria-expanded", "false");
   });
 });
 
