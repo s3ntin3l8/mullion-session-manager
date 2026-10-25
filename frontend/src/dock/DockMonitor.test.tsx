@@ -957,6 +957,9 @@ describe("Dock", () => {
             // its project's) and the resolved one the host badge shows.
             hostId: null,
             resolvedHostId: "local",
+            // Issue #1852 — the placement decision's own words; null when
+            // nothing was decided here (a test session's default).
+            placementReason: null,
           }),
           makeSession({
             id: 30,
@@ -968,6 +971,9 @@ describe("Dock", () => {
             // its project's) and the resolved one the host badge shows.
             hostId: null,
             resolvedHostId: "local",
+            // Issue #1852 — the placement decision's own words; null when
+            // nothing was decided here (a test session's default).
+            placementReason: null,
           }),
         ];
         localStorage.setItem("crs.dockPaneSplitRatio", JSON.stringify({ "3": 0.6 }));
@@ -2318,6 +2324,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2359,6 +2368,9 @@ describe("Dock", () => {
             // its project's) and the resolved one the host badge shows.
             hostId: null,
             resolvedHostId: "local",
+            // Issue #1852 — the placement decision's own words; null when
+            // nothing was decided here (a test session's default).
+            placementReason: null,
           });
           useDashboardStore.setState({
             projects: [PROJECT],
@@ -2396,6 +2408,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         const deleteSession = vi.fn().mockResolvedValue(undefined);
         useDashboardStore.setState({
@@ -2442,6 +2457,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2469,6 +2487,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2498,6 +2519,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2532,6 +2556,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2582,6 +2609,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         });
         useDashboardStore.setState({
           projects: [PROJECT],
@@ -2860,6 +2890,9 @@ describe("Dock", () => {
         // its project's) and the resolved one the host badge shows.
         hostId: null,
         resolvedHostId: "local",
+        // Issue #1852 — the placement decision's own words; null when
+        // nothing was decided here (a test session's default).
+        placementReason: null,
         createdAt: "2026-01-01T00:00:00.000Z",
         lastAttachedAt: null,
         alive: true,
@@ -3285,6 +3318,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
           createdAt: "2026-01-01T00:00:00.000Z",
           lastAttachedAt: null,
           alive: true,
@@ -3727,6 +3763,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         }),
         makeSession({
           id: 30,
@@ -3738,6 +3777,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         }),
       ];
       useDashboardStore.setState({
@@ -3793,6 +3835,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         }),
         makeSession({
           id: 30,
@@ -3804,6 +3849,9 @@ describe("Dock", () => {
           // its project's) and the resolved one the host badge shows.
           hostId: null,
           resolvedHostId: "local",
+          // Issue #1852 — the placement decision's own words; null when
+          // nothing was decided here (a test session's default).
+          placementReason: null,
         }),
       ];
       useDashboardStore.setState({

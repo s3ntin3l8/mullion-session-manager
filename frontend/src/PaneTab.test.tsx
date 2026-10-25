@@ -171,6 +171,9 @@ const BASE_SESSION: Session = {
   // its project's) and the resolved one the host badge shows.
   hostId: null,
   resolvedHostId: "local",
+  // Issue #1852 — the placement decision's own words; null when
+  // nothing was decided here (a test session's default).
+  placementReason: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastAttachedAt: "2026-01-01T00:00:00.000Z",
   alive: true,
@@ -333,6 +336,30 @@ describe("PaneTab", () => {
 
       expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
       expect(document.querySelector(".pane-tab-host-badge")).toBeNull();
+    });
+
+    // Issue #1852 — the same tooltip the sidebar's host badge carries, so
+    // the two surfaces cannot disagree about why a session is where it is.
+    it("shows the placement REASON in its tooltip when there is one", () => {
+      session = {
+        ...BASE_SESSION,
+        resolvedHostId: "mac-mini",
+        placementReason: "least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)",
+      };
+      render(<PaneTab {...makeProps()} />);
+
+      const badge = document.querySelector(".pane-tab-host-badge");
+      expect(badge?.getAttribute("title")).toBe(
+        "least loaded: mac-mini at 1.20 load on 12 cores (0.10 per core)",
+      );
+    });
+
+    it("falls back to 'Runs on host: X' when nothing was decided", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "mac-mini", placementReason: null };
+      render(<PaneTab {...makeProps()} />);
+
+      const badge = document.querySelector(".pane-tab-host-badge");
+      expect(badge?.getAttribute("title")).toBe("Runs on host: mac-mini");
     });
 
     it("falls back to the host id when the fleet does not know that host", () => {

@@ -391,7 +391,13 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
         {!narrow && badge}
         {!narrow && remoteHostName && (
-          <span className="pane-tab-host-badge" title={`Runs on host: ${remoteHostName}`}>
+          <span
+            className="pane-tab-host-badge"
+            // Issue #1852 — the placement decision's own words, the same
+            // tooltip the sidebar's host badge carries: the two surfaces
+            // must not disagree about why a session is where it is.
+            title={session?.placementReason ?? `Runs on host: ${remoteHostName}`}
+          >
             <HostsIcon size={9} />
             <span className="pane-tab-host-badge-name">{remoteHostName}</span>
           </span>

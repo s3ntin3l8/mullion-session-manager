@@ -1928,7 +1928,15 @@ export function SessionRow({
           the label ellipsis-overflows its own box (overflow: hidden), so a
           badge inside it would be clipped by a long status detail. */}
       {remoteHostName && (
-        <span className="session-host-badge" title={`Runs on host: ${remoteHostName}`}>
+        <span
+          className="session-host-badge"
+          // Issue #1852 — the placement decision's OWN words when there are
+          // any ("least loaded: mac-mini at 1.2 load on 12 cores"), because
+          // that is the answer to "why is this session on that machine?".
+          // The reason usually names the host itself, so it replaces the
+          // text rather than being appended to it.
+          title={session.placementReason ?? `Runs on host: ${remoteHostName}`}
+        >
           <HostsIcon size={10} />
           <span className="session-host-badge-name">{remoteHostName}</span>
         </span>
