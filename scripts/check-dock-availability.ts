@@ -249,28 +249,32 @@ function dockHidingRules(): HidingRule[] {
       const reasons: DockUnavailableReason[] = [];
       let unknown = conditions.length === 0;
       for (const condition of conditions) {
-        // A media query can be a LIST — `@media (pointer: coarse), (max-width:
-        // 700px)` — and every arm of the list is a condition of its own. One
-        // matching arm is not enough: the other arm hides the Dock somewhere
-        // the predicate says nothing about.
+        // A media query is read the way the browser reads it, one level at a
+        // time:
+        //   - a LIST (`@media a, b`) — every arm is a condition of its own;
+        //   - MQ4's `or` — a comma list spelled out, so each side is a
+        //     condition of its own too;
+        //   - MQ4's `and` — every feature of the conjunction is a condition.
+        // One matching part is not enough at any level: the others hide the
+        // Dock somewhere the predicate says nothing about.
         for (const arm of condition.split(",")) {
-          // …and an arm can CONJUNCTION several features — `@media (pointer:
-          // coarse) and (orientation: portrait)`. Every feature of the
-          // conjunction is a condition too, so each one is checked.
-          for (const feature of arm.split(/\s+and\s+/i)) {
-            // `not` inverts a feature: `@media not (pointer: coarse)` hides
-            // the Dock when the pointer is FINE, which is the opposite of
-            // what the coarse-pointer reason says. The predicate has no
-            // reason for an inverted condition, so such an arm is unknown.
-            if (/\bnot\b/i.test(feature)) {
-              unknown = true;
-              continue;
-            }
-            const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(feature));
-            if (known) {
-              if (!reasons.includes(known.reason)) reasons.push(known.reason);
-            } else {
-              unknown = true;
+          for (const term of arm.split(/\s+or\s+/i)) {
+            for (const feature of term.split(/\s+and\s+/i)) {
+              // `not` inverts a feature: `@media not (pointer: coarse)` hides
+              // the Dock when the pointer is FINE, which is the opposite of
+              // what the coarse-pointer reason says. The predicate has no
+              // reason for an inverted condition, so such a feature is
+              // unknown.
+              if (/\bnot\b/i.test(feature)) {
+                unknown = true;
+                continue;
+              }
+              const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(feature));
+              if (known) {
+                if (!reasons.includes(known.reason)) reasons.push(known.reason);
+              } else {
+                unknown = true;
+              }
             }
           }
         }
