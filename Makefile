@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-dockview-restore lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -38,6 +38,9 @@ test-patch-coverage: ## Verify >=75% patch coverage on changes against origin/ma
 
 test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, not part of `make test`)
 	npm run test:e2e
+
+verify-dockview-restore: ## Verify the dockview workspace-restore path in a real browser (issue #1903; needs Playwright's Chromium)
+	node scripts/verify-dockview-restore.mjs
 
 check-scope-leaks: ## Scan crs-session-* systemd scopes for leaks (issue #1137; standalone, not part of `make test`/lint)
 	npm run check:scope-leaks
