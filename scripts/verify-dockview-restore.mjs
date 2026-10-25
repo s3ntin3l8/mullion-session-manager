@@ -96,16 +96,19 @@ function captureAutosavedLayout(page) {
 }
 
 /** Resolves true once a layout PATCH newer than `since` has been captured. */
-async function waitForPatch(autosaved, since, timeoutMs = 15_000) {
+async function waitForPatch(autosaved, since, timeoutMs = 15_000, signal) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // withDemo's header asks a polling step to stop on the abort signal — an
+    // abandoned poll would keep the process alive after teardown.
+    if (signal?.aborted) return false;
     if (autosaved.count > since) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return false;
 }
 
-async function run(browser, demo) {
+async function run(browser, demo, signal) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
     const page = await context.newPage();
@@ -306,13 +309,22 @@ async function run(browser, demo) {
     // patch that is NEWER than the one captured before the reload — without
     // that, the previous (already-clean) payload would satisfy the assertion
     // on its own.
-    const resaved = await waitForPatch(autosaved, patchesBeforeRestore);
+    const resaved = await waitForPatch(autosaved, patchesBeforeRestore, 15_000, signal);
+    const resavedPanels = Object.keys(autosaved.body?.panels ?? {});
+    const resavedGroups = autosaved.body?.grid?.root?.data ?? [];
     check(
-      "the sweep re-saves the cleaned layout without the legacy panel",
+      "the sweep re-saves the cleaned layout without the legacy panel or its group",
       resaved &&
         !("tasks" in (autosaved.body?.panels ?? {})) &&
-        Object.keys(autosaved.body?.panels ?? {}).length === 1,
-      JSON.stringify(autosaved.body?.panels ? Object.keys(autosaved.body.panels) : null),
+        resavedPanels.length === 1 &&
+        // The grid half matters as much as the panels half: it is the emptied
+        // GROUP that #1903 is about, and a blob can drop the panel while
+        // keeping an empty group behind it.
+        resavedGroups.length === 1 &&
+        resavedGroups[0]?.data?.id === "kept-group",
+      `panels=${JSON.stringify(resavedPanels)} groups=${JSON.stringify(
+        resavedGroups.map((g) => g?.data?.id),
+      )}`,
     );
   } finally {
     // The browser context leaks on the failure path otherwise; the demo still
@@ -325,8 +337,8 @@ async function main() {
   await withDemo({
     startDemo: () => startDemo({ quiet: true }),
     launchBrowser: () => chromium.launch(),
-    run: async (browser, demo) => {
-      await run(browser, demo);
+    run: async (browser, demo, signal) => {
+      await run(browser, demo, signal);
     },
   });
 }
