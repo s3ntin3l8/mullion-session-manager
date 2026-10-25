@@ -584,4 +584,26 @@ describe("failed fetch (audit finding 29)", () => {
       expect(screen.queryByText(/the remote said no/)).not.toBeInTheDocument();
     });
   });
+
+  // The failure must be ANNOUNCED, not just drawn. The same class of
+  // failure goes through ErrorText (role="alert") everywhere else in the
+  // app — a bare <div> is silent to a screen reader, so the user only
+  // finds out if they happen to be looking at that panel.
+  it("announces the failure to assistive technology", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitFetch).mockRejectedValue(new Error("the remote said no"));
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+    await user.click(screen.getByText(/Fetch/));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("the remote said no");
+    });
+  });
 });

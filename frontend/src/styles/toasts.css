@@ -65,6 +65,16 @@
   overflow-wrap: anywhere;
 }
 
+/* The error variant's icon — the NON-COLOUR cue that says "this is a
+   failure", so the message never depends on the red alone (WCAG 1.4.1).
+   It is aria-hidden in the markup: the live region announces the message,
+   not the shape. */
+.toast-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--r);
+}
+
 .toast-dismiss {
   display: flex;
   align-items: center;

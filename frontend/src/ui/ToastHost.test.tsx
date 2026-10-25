@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { useDashboardStore } from "../store/index.js";
 import { resetStore } from "../test/resetStore.js";
 import { ToastHost } from "./ToastHost.js";
@@ -78,6 +78,47 @@ describe("toast slice", () => {
   it("reportError does not repeat a detail identical to the headline", () => {
     useDashboardStore.getState().reportError("Failed.", "Failed.");
     expect(useDashboardStore.getState().toasts[0].message).toBe("Failed.");
+  });
+
+  // A failure that repeats (a poll that fails every few seconds) must
+  // not stack a row per failure — a wall of identical text that buries
+  // everything else on screen.
+  it("does not stack two toasts with the same message", () => {
+    const first = useDashboardStore.getState().pushToast({ message: "Could not refresh." });
+    const second = useDashboardStore.getState().pushToast({ message: "Could not refresh." });
+    const { toasts } = useDashboardStore.getState();
+    expect(toasts).toHaveLength(1);
+    // The id of the toast that is already on screen comes back, so a
+    // caller that dismisses by id still dismisses the visible row.
+    expect(second).toBe(first);
+  });
+
+  it("still stacks two toasts with the same message but different kinds", () => {
+    useDashboardStore.getState().pushToast({ message: "Could not refresh." });
+    useDashboardStore.getState().pushToast({ message: "Could not refresh.", kind: "error" });
+    expect(useDashboardStore.getState().toasts).toHaveLength(2);
+  });
+
+  it("reportError does not stack a duplicate of the same failure", () => {
+    useDashboardStore.getState().reportError("Could not kill the session.", "boom");
+    useDashboardStore.getState().reportError("Could not kill the session.", "boom");
+    expect(useDashboardStore.getState().toasts).toHaveLength(1);
+  });
+
+  it("caps the list, dropping the oldest past the cap", () => {
+    for (let i = 0; i < 8; i += 1) {
+      useDashboardStore.getState().pushToast({ message: `message ${i}` });
+    }
+    const { toasts } = useDashboardStore.getState();
+    expect(toasts).toHaveLength(5);
+    // The NEWEST survive; the oldest are the ones dropped.
+    expect(toasts.map((t) => t.message)).toEqual([
+      "message 3",
+      "message 4",
+      "message 5",
+      "message 6",
+      "message 7",
+    ]);
   });
 });
 
@@ -161,5 +202,87 @@ describe("ToastHost", () => {
     useDashboardStore.getState().pushToast({ message: "x" });
     render(<ToastHost />);
     expect(screen.getByRole("button", { name: "Dismiss notification" })).toBeInTheDocument();
+  });
+
+  // The error variant's icon is the NON-COLOUR cue: the message must
+  // never depend on the red alone (WCAG 1.4.1). The icon itself is
+  // aria-hidden — the live region announces the message, not the shape.
+  it("gives an error toast a non-colour icon cue", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const alert = screen.getByRole("alert");
+    expect(alert.querySelector(".toast-icon")).not.toBeNull();
+    expect(alert.querySelector(".toast-icon")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("gives an info toast no error icon", () => {
+    useDashboardStore.getState().pushToast({ message: "just info" });
+    render(<ToastHost />);
+    expect(document.querySelector(".toast-icon")).toBeNull();
+  });
+
+  // A toast that expires while it is being read is a message that cannot
+  // be read at all (WCAG 2.2.1). For a few failures the toast is the ONLY
+  // record of what happened, so the pointer being over it must hold it
+  // open.
+  it("pauses the auto-dismiss while the pointer is over the toast", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const toast = screen.getByRole("alert");
+    fireEvent.mouseEnter(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByText("it broke")).toBeInTheDocument();
+    fireEvent.mouseLeave(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.queryByText("it broke")).toBeNull();
+  });
+
+  it("pauses the auto-dismiss while the toast has focus", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const toast = screen.getByRole("alert");
+    fireEvent.focus(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.getByText("it broke")).toBeInTheDocument();
+    fireEvent.blur(toast);
+    act(() => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(screen.queryByText("it broke")).toBeNull();
+  });
+
+  // Resuming continues the ORIGINAL countdown rather than restarting it: a
+  // toast that is hovered for a minute must not live for a minute more.
+  // Five seconds are read, then it is hovered for five more, so only the
+  // five seconds it never got to show are still owed.
+  it("resumes with the time that was left, not a fresh lifetime", () => {
+    useDashboardStore.getState().pushToast({ message: "it broke", kind: "error" });
+    render(<ToastHost />);
+    const toast = screen.getByRole("alert");
+    // Read for five seconds of its ten.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    fireEvent.mouseEnter(toast);
+    // Hovered for five seconds — that time is NOT taken off the clock.
+    act(() => {
+      vi.advanceTimersByTime(5000);
+    });
+    fireEvent.mouseLeave(toast);
+    // Five seconds of the original ten were still owed.
+    act(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    expect(screen.getByText("it broke")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(screen.queryByText("it broke")).toBeNull();
   });
 });

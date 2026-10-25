@@ -136,7 +136,32 @@ describe("SidebarDevices (issue #1326)", () => {
     expect(onOpenDevice).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
   });
 
-  it("shows the warn dot while a device is booting", async () => {
+  // A device whose name, AVD name AND serial are all empty strings is
+  // possible in the type. `?? "device"` could not catch that — an empty
+  // string is not null — so the row's accessible name came out EMPTY,
+  // which is the exact case the generic name exists to prevent.
+  it("names a device with no name, no AVD name and no serial", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "",
+        kind: "emulator",
+        avdName: "",
+        serial: "",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const row = await screen.findByTestId("device-row-1");
+    expect(row).toHaveAttribute("aria-label", "Open device device");
+  });
+
+  it("says the warn dot while a device is booting", async () => {
     devicesDb = [
       {
         id: 1,

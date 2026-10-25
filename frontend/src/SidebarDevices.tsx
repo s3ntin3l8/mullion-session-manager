@@ -31,7 +31,12 @@ function deviceLabel(device: Device): string | null {
 // message. A device with no name, no AVD name and no serial is possible in
 // the type, and "null" is not a word anyone can hear.
 function deviceSpokenName(device: Device): string {
-  return deviceLabel(device) ?? "device";
+  // `||`, not `??`: deviceLabel's own `||` chain can still return an EMPTY
+  // string — a device whose name, AVD name and serial are all empty
+  // strings falls through the chain to the last one — and an empty
+  // accessible name is worse than the generic one, not better. It is the
+  // exact case this helper exists to prevent.
+  return deviceLabel(device) || "device";
 }
 
 export function SidebarDevices({ onOpenDevice }: { onOpenDevice: (device: Device) => void }) {

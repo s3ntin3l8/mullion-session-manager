@@ -78,6 +78,18 @@ export function ServerInfoSection() {
       setStatsError(null);
     },
     (err: unknown) => {
+      // The figures are CLEARED, not kept: this section says the stats
+      // failed "in place" rather than going blank, so the error and the
+      // CPU/RAM cards are mutually exclusive by construction. Leaving the
+      // old figures in state would make "the probe failed" and "these are
+      // the last known figures" indistinguishable — and no trigger can
+      // produce that state today (the only way to re-run this probe is
+      // the Retry button, which exists only once the error is set), so it
+      // would be a distinction nothing could ever reach. The surfaces
+      // where the stale case IS reachable — the sidebar's project list and
+      // the git panel's status — keep the last-known-good data and mark it
+      // stale instead.
+      setStats(null);
       setStatsError(failureMessage(SYSTEM_STATS_ERROR, err));
     },
     [statsReloadToken],

@@ -749,8 +749,24 @@ export function UnifiedBoard({
           {tasksError && (
             <EmptyStateNote>
               <LayersIcon size={20} />
-              <div>Couldn't load tasks.</div>
-              <div className="tasks-panel-empty-hint">{tasksError}</div>
+              {tasks.length > 0 ? (
+                // The tasks ARE on screen — the columns below are the last
+                // known good ones, not nothing. Saying "Couldn't load
+                // tasks." here would read as if there were no tasks at
+                // all, and the board's real state (a populated board that
+                // could not be re-synced) would be a lie. Same split
+                // Sidebar ("showing the last known list") and GitPanel
+                // (its stale marker) already make.
+                <>
+                  <div>Could not refresh tasks — showing the last known list.</div>
+                  <div className="tasks-panel-empty-hint">{tasksError}</div>
+                </>
+              ) : (
+                <>
+                  <div>Couldn't load tasks.</div>
+                  <div className="tasks-panel-empty-hint">{tasksError}</div>
+                </>
+              )}
               <button
                 type="button"
                 className="git-panel-fetch-btn"

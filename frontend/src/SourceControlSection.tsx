@@ -5,6 +5,7 @@ import { useDashboardStore } from "./store/index.js";
 import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
+import { ErrorText } from "./ui/ErrorText.js";
 import {
   ChevronDownIcon,
   ExternalLinkIcon,
@@ -412,11 +413,15 @@ function SourceControlView({
               )}
 
               {pullError && (
-                <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+                <ErrorText className="github-panel-empty-row github-panel-conflicts">
+                  {pullError}
+                </ErrorText>
               )}
 
               {fetchError && (
-                <div className="github-panel-empty-row github-panel-conflicts">{fetchError}</div>
+                <ErrorText className="github-panel-empty-row github-panel-conflicts">
+                  {fetchError}
+                </ErrorText>
               )}
 
               {gitStatus.isClean ? (

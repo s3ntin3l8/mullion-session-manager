@@ -1012,6 +1012,33 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
     ).toHaveLength(7);
   });
 
+  // The board keeps the last-known-good list on a failed refresh, so the
+  // columns below the note are REAL tasks — saying "Couldn't load tasks."
+  // next to them would read as if there were no tasks at all. This is the
+  // same split Sidebar and GitPanel already make.
+  it("says the tasks on screen are the last known ones when the refresh fails", () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Still here" })];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(
+      screen.getByText("Could not refresh tasks — showing the last known list."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Failed to fetch")).toBeInTheDocument();
+    // NOT the "there are no tasks" wording — there are.
+    expect(screen.queryByText("Couldn't load tasks.")).toBeNull();
+    expect(screen.getByText("Still here")).toBeInTheDocument();
+  });
+
+  it("still says the list could not be loaded when there are no tasks to show", () => {
+    tasks = [];
+    tasksError = "Failed to fetch";
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByText("Couldn't load tasks.")).toBeInTheDocument();
+    expect(screen.queryByText("Could not refresh tasks — showing the last known list.")).toBeNull();
+  });
+
   it("re-runs the task fetch when Retry is clicked", async () => {
     tasks = [];
     tasksError = "Failed to fetch";

@@ -17,10 +17,10 @@
 // timer inside the store outlives the component that scheduled it and
 // leaks across tests (resetStore() replaces state but cannot reach a
 // module-scoped timer).
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Toast } from "../store/types.js";
-import { CloseIcon } from "./icons.js";
+import { CloseIcon, WarningTriangleIcon } from "./icons.js";
 
 // An error is the case this whole slice exists for, so it gets the longest
 // life — long enough to read and act on, short enough that a burst of
@@ -52,13 +52,54 @@ export function ToastHost() {
 }
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
+  const lifetime = TOAST_LIFETIME_MS[toast.kind];
+  // The auto-dismiss PAUSES while the pointer is over the toast or the
+  // toast holds focus, and resumes with the time that was actually left.
+  //
+  // A 10-second error toast is short enough to miss a sentence in, and
+  // for a few failures the toast is the ONLY record of what happened (a
+  // killed pane, a failed favourites fetch) — so a toast that expires
+  // while it is being read is a message that cannot be read at all
+  // (WCAG 2.2.1).
+  const [paused, setPaused] = useState(false);
+  // The time left when the timer was last (re)started. A plain
+  // `setTimeout` restarted from scratch on every pause would give a
+  // hovered toast an unbounded lifetime; this keeps the ORIGINAL
+  // deadline.
+  const remainingRef = useRef(lifetime);
+  const deadlineRef = useRef<number | null>(null);
+
   useEffect(() => {
-    const timer = setTimeout(() => onDismiss(toast.id), TOAST_LIFETIME_MS[toast.kind]);
-    return () => clearTimeout(timer);
-  }, [onDismiss, toast.id, toast.kind]);
+    if (paused) return;
+    deadlineRef.current = Date.now() + remainingRef.current;
+    const timer = setTimeout(() => onDismiss(toast.id), remainingRef.current);
+    return () => {
+      clearTimeout(timer);
+      // Fold the elapsed time into what is left, so resuming continues
+      // the countdown instead of restarting it.
+      if (deadlineRef.current !== null) {
+        remainingRef.current = Math.max(0, deadlineRef.current - Date.now());
+      }
+    };
+  }, [onDismiss, toast.id, toast.kind, paused]);
 
   return (
-    <div className={`toast toast--${toast.kind}`} role={toast.kind === "error" ? "alert" : undefined}>
+    <div
+      className={`toast toast--${toast.kind}`}
+      role={toast.kind === "error" ? "alert" : undefined}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+    >
+      {/* The error variant's icon is the NON-COLOUR cue: the background is
+          tinted with --r, but the message itself must never be carried by
+          the red alone (WCAG 1.4.1). `aria-hidden` because the icon
+          contributes nothing to what the live region announces — a
+          screen reader should hear the message, not "warning triangle". */}
+      {toast.kind === "error" && (
+        <WarningTriangleIcon size={14} className="toast-icon" aria-hidden="true" />
+      )}
       <span className="toast-message">{toast.message}</span>
       {/* Icon-only on purpose: the button's accessible name comes from
           aria-label, but its TEXT CONTENT is empty, so it contributes
