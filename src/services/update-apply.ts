@@ -496,10 +496,17 @@ async function waitForLaunchdLabelGone(
       ok: false,
       message:
         `the launchctl deadline was already exhausted before the label ${target} ` +
-        `could be confirmed unloaded (only ${options.deadline - Date.now()}ms of the ` +
+        `could be confirmed unloaded (only ${Math.max(0, options.deadline - Date.now())}ms of the ` +
         `${LAUNCHCTL_TIMEOUT_MS}ms budget was left)`,
     };
   }
+  // What the probes actually established, so the timeout message can say
+  // WHICH thing went wrong: a label that is still registered (the probes
+  // ran and said so), or probes that never answered at all (a hung
+  // launchctl), which proves nothing either way. Those need different
+  // answers from whoever is reading the failure.
+  let sawStillRegistered = false;
+  let unansweredProbe: string | undefined;
   while (Date.now() < waitUntil) {
     const probe = await runLaunchctl(["print", target], {
       cwd: options.cwd,
@@ -509,15 +516,29 @@ async function waitForLaunchdLabelGone(
     });
     // exit 0 → still registered; a non-zero exit → launchctl ran and says it
     // is gone. `exitCode` is undefined when launchctl never ran at all, so
-    // that case is NOT taken as an answer.
+    // that case is NOT taken as an answer — it means "nobody said", not
+    // "it's gone".
     if (!probe.ok && probe.exitCode !== undefined) {
       return { ok: true };
     }
+    if (probe.ok) {
+      sawStillRegistered = true;
+    } else {
+      unansweredProbe = probe.message;
+    }
     await sleep(LAUNCHCTL_LABEL_POLL_MS);
+  }
+  if (sawStillRegistered) {
+    return {
+      ok: false,
+      message: `the launchd label ${target} was still registered when the wait ran out`,
+    };
   }
   return {
     ok: false,
-    message: `the launchd label ${target} was still registered when the wait ran out`,
+    message:
+      `could not read the launchd label ${target} — the probe never answered ` +
+      `(${unansweredProbe ?? "no reason reported"}), so whether it unloaded is unknown`,
   };
 }
 

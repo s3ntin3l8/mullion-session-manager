@@ -306,6 +306,38 @@ describe("spawnSelfUpdate", async () => {
     }
   }, 30_000);
 
+  it("does not start the update when the label probe never answers", async () => {
+    // The load-bearing distinction: a probe that NEVER RAN is not the same
+    // as a probe that ran and said "the label is gone". Reading the first
+    // as the second would let the bootstrap through on no evidence at all —
+    // and the bootstrap would then be refused by launchd with the very
+    // opaque error this wait exists to prevent.
+    setPlatform("darwin");
+    launchctlHangsOn = ["print"];
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-probe-hung-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "9.9.9",
+        assetUrl: "https://example.invalid/mullion-9.9.9.tgz",
+        checksumUrl: "https://example.invalid/mullion-9.9.9.tgz.sha256",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe(500);
+      // The message says the probe never answered — NOT that the label is
+      // gone, and not that it is still registered.
+      expect(asFailure(result).message).toMatch(/probe never answered/);
+      expect(asFailure(result).message).not.toMatch(/still registered when the wait ran out/);
+      // And the bootstrap was never attempted: nothing was proved, so
+      // nothing was started.
+      expect(
+        spawnCalls.filter((call) => call.command === "launchctl" && call.args[0] === "bootstrap"),
+      ).toHaveLength(0);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("reports a launchctl refusal instead of claiming the update started", async () => {
     // A refusal that is swallowed would be a 202 and a UI that says
     // "downloading" for a job that never started.
