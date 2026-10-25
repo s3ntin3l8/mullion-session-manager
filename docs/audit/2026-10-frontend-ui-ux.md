@@ -393,12 +393,16 @@ OMITS it in Task view rather than rendering it disabled: the Task view has no pa
 purpose (issue #730), and a disabled control explains itself only through a `title`, which
 touch never shows.
 
-The phone toolbar's width is not a CSS-text fact, so it was measured instead: at 320px,
-the narrowest phone worth supporting, the actions take 112px, the lead 60px, and the
-session switcher keeps 148px, with nothing clipped in either view. The actions group
-does not shrink (`flex-shrink: 0` on the phone tier), so the notification bell can never
-be the thing that gets clipped — the switcher beside it is the only thing that gives way,
-and it truncates its title.
+The phone toolbar's width is not a CSS-text fact, so it was measured instead. At 320px —
+the narrowest phone worth supporting, with touch emulation so `(pointer: coarse)` matches
+and the buttons are 44px rather than 30px — the list view's action group takes 112px (the
+palette's 44px button, the 8px gap, the bell's 44px, and the group's 16px of padding) and
+the session switcher keeps 148px of the 320px screen. In Task view the palette's button is
+not rendered at all, so the group holds only the bell: 60px, and the switcher keeps
+200px. `scrollWidth - clientWidth` on the group is 0 in both views: nothing is clipped.
+The actions group does not shrink (`flex-shrink: 0` on the phone tier), so the
+notification bell can never be the thing that gets clipped — the switcher beside it is
+the only thing that gives way, and it truncates its title.
 
 **The Settings filter (finding 38) is a unit-test guard**: the defect was that the
 phone's list had no filter at all, which is a matter of what the list renders.

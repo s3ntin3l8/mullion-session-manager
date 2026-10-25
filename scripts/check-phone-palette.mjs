@@ -175,14 +175,76 @@ function targetsDescendant(selector, cls) {
     });
 }
 
-// The hide vocabulary, matching the Dock's guard
-// (scripts/check-dock-availability.ts): out of the flow, invisible, or
-// transparent. `!important` is part of the pattern on purpose: the rule this
-// script guards against was literally `.run-cmd-btn { display: none !important
-// }`, and a pattern that only matched a bare `display: none` would have
-// passed the regression it exists to catch.
-const HIDE =
-  /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|content-visibility\s*:\s*hidden)\s*(!important\s*)?(;|$)/i;
+/**
+ * The declarations of a rule body, as [property, value] pairs — the last
+ * declaration of a property winning, as in CSS.
+ *
+ * Parsing declarations rather than pattern-matching the whole body is what
+ * makes the value comparisons exact: `opacity: 0`, `opacity: 0.0` and
+ * `opacity: .0` are all zero, `opacity: 0.5` is not, and `!important` is
+ * not part of the value.
+ */
+function declarations(body) {
+  const last = new Map();
+  for (const part of body.split(";")) {
+    const colon = part.indexOf(":");
+    if (colon < 0) continue;
+    last.set(
+      part.slice(0, colon).trim().toLowerCase(),
+      part
+        .slice(colon + 1)
+        .replace(/!important/gi, "")
+        .trim()
+        .toLowerCase(),
+    );
+  }
+  return last;
+}
+
+/**
+ * Whether a CSS opacity value is exactly zero.
+ *
+ * The spellings are many — `0`, `0.0`, `.0`, `0.00`, `.00` — and only the
+ * ones that ARE zero hide anything: `opacity: 0.5` must not be mistaken
+ * for a hidden button.
+ */
+function isZeroOpacity(value) {
+  const n = Number.parseFloat(value);
+  return Number.isFinite(n) && n === 0;
+}
+
+/**
+ * Whether a rule body hides what it applies to.
+ *
+ * The hide vocabulary is the Dock guard's
+ * (scripts/check-dock-availability.ts): out of the flow, invisible, or
+ * transparent. `!important` is part of the vocabulary on purpose: the rule
+ * this script exists to catch was literally `.run-cmd-btn { display: none
+ * !important }`, and a pattern that only matched a bare `display: none`
+ * would have passed the regression it exists to catch.
+ */
+function hides(body) {
+  return [...declarations(body)].some(
+    ([property, value]) =>
+      (property === "display" && value === "none") ||
+      (property === "visibility" && value === "hidden") ||
+      (property === "content-visibility" && value === "hidden") ||
+      (property === "opacity" && isZeroOpacity(value)),
+  );
+}
+
+/**
+ * Whether a rule body takes what it applies to OUT OF THE FLOW — removed
+ * from the layout, not merely invisible.
+ *
+ * The desktop pill's WIDTH is what does not fit on a phone, so a label
+ * hidden with `opacity: 0` would leave the pill just as wide as before.
+ */
+function removes(body) {
+  return [...declarations(body)].some(
+    ([property, value]) => property === "display" && value === "none",
+  );
+}
 
 const cssFiles = readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"));
 
@@ -193,7 +255,7 @@ for (const file of cssFiles) {
   const css = stripComments(readFileSync(path.join(STYLES_DIR, file), "utf8"));
   for (const rule of leafRules(css)) {
     if (!targetsButton(rule.selector)) continue;
-    if (!HIDE.test(rule.body)) continue;
+    if (!hides(rule.body)) continue;
     hidden.push(`${file}: ${rule.selector}`);
   }
 }
@@ -233,25 +295,21 @@ function phoneBlocks(css) {
 }
 
 /**
- * The `display` the phone's own CSS ends up with for one of the button's
- * descendants — the last rule that says anything about it, across all the
- * phone blocks.
+ * The rule body the phone's own CSS ends up with for one of the button's
+ * descendants — the last rule that says anything about its `display`, across
+ * all the phone blocks.
  *
- * The descendant must end up `display: none`: REMOVED from the flow, not
- * merely made invisible. `opacity: 0` would leave the desktop pill exactly
- * as wide as before, which is the whole reason the label has to go.
+ * The descendant must end up REMOVED FROM THE FLOW, not merely made
+ * invisible: `opacity: 0` would leave the desktop pill exactly as wide as
+ * before, which is the whole reason the label has to go.
  */
-function phoneDisplay(blocks, cls) {
+function phoneRule(blocks, cls) {
   let decided = null;
   for (const block of blocks) {
     for (const rule of leafRules(block)) {
       if (!targetsDescendant(rule.selector, cls)) continue;
-      const display = /(^|;)\s*display\s*:\s*([^;]+)/i.exec(rule.body);
-      if (!display) continue;
-      decided = display[2]
-        .replace(/!important/gi, "")
-        .trim()
-        .toLowerCase();
+      if (!declarations(rule.body).has("display")) continue;
+      decided = rule.body;
     }
   }
   return decided;
@@ -261,12 +319,13 @@ const blocks = phoneBlocks(mobile);
 if (blocks.length === 0) {
   fail('mobile.css has no :where(.app[data-tier="phone"]) block to check the palette in.');
 }
-const labelDisplay = phoneDisplay(blocks, LABEL_CLASS);
-const kbdDisplay = phoneDisplay(blocks, KBD_CLASS);
-if (labelDisplay !== "none" || kbdDisplay !== "none") {
+const labelBody = phoneRule(blocks, LABEL_CLASS);
+const kbdBody = phoneRule(blocks, KBD_CLASS);
+if (!removes(labelBody ?? "") || !removes(kbdBody ?? "")) {
+  const displayOf = (body) => (body === null ? "unset" : declarations(body).get("display"));
   fail(
     "the phone tier does not hide the palette button's label and keycap " +
-      `(label: ${labelDisplay ?? "unset"}, keycap: ${kbdDisplay ?? "unset"}), so the ` +
+      `(label: ${displayOf(labelBody)}, keycap: ${displayOf(kbdBody)}), so the ` +
       'desktop\'s bordered pill ("Run command…" plus a ⌘K chip) does not fit the ' +
       "phone toolbar (issue #1880).",
   );

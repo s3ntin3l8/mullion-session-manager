@@ -75,9 +75,12 @@
      session switcher beside it is the only thing that gives way, and it
      truncates its title instead (`.mobile-session-title`).
 
-     Measured at 320px, the narrowest phone worth supporting: the actions
-     take 112px, the lead 60px, and the switcher keeps 148px. Nothing is
-     clipped (issue #1880's review).
+     Measured at 320px, the narrowest phone worth supporting: in the list
+     view the actions take 112px (the palette's button, the gap, the bell
+     and the padding) and the switcher keeps 148px; in Task view the
+     palette's button is not rendered, so the actions take 60px and the
+     switcher keeps 200px. Nothing is clipped in either view (issue #1880's
+     review).
 
      Phone-only: on a coarse-pointer tablet the 44px buttons fill this
      44px-tall group, and a clip would cut their focus rings. */
