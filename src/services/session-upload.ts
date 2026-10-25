@@ -144,9 +144,11 @@ export function sanitizeUploadName(name: string): string {
 /**
  * Generic-file counterpart to saveSessionUpload: writes `buffer` to
  * `<cwd>/.mullion-uploads/<uuid>/<sanitized-name>` and returns the absolute
- * path. No content-type allow-list, unlike the image path — Mullion never
- * serves files out of a project directory, and the user already has a shell
- * in that same directory, so an arbitrary file here grants nothing new. The
+ * path. No content-type allow-list, unlike the image path — nothing here
+ * serves an upload back (the file browser's download route, routes/project-
+ * files.ts, always sends an attachment with an opaque type), and the user
+ * already has a shell in that same directory, so an arbitrary file here
+ * grants nothing new. The
  * on-disk name is still server-controlled: `sanitizeUploadName` strips
  * everything but a plain basename, and the uuid directory keeps same-named
  * uploads from colliding while the CLI still sees the original file name.

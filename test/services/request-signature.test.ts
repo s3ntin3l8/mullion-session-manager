@@ -206,6 +206,14 @@ describe("request-signature (issue #249 / roadmap 7.5)", () => {
       expect(isUnsignedBodyPath("/internal/uploads?cwd=/x&mime=image/png")).toBe(true);
     });
 
+    it("matches the file browser's streamed upload, query string included, but not its JSON download", () => {
+      expect(isUnsignedBodyPath("/internal/project-files/upload?cwd=/x&path=a.bin")).toBe(true);
+      expect(isUnsignedBodyPath("/internal/project-files/upload-extra")).toBe(false);
+      // download carries a small JSON body that IS hashed
+      expect(isUnsignedBodyPath("/internal/project-files/download")).toBe(false);
+      expect(isUnsignedBodyPath("/internal/project-files/write")).toBe(false);
+    });
+
     it("does not match an ordinary JSON-body route", () => {
       expect(isUnsignedBodyPath("/internal/sessions")).toBe(false);
     });

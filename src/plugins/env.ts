@@ -186,6 +186,14 @@ export const schema = {
       default: 7,
       minimum: 0,
     },
+    // Per-file cap for the file browser's streamed upload/download
+    // (routes/project-files.ts). Bytes are streamed, never buffered, so this
+    // bounds disk use and transfer time, not memory. Read on agents too.
+    FILE_TRANSFER_MAX_BYTES: {
+      type: "number",
+      default: 2 * 1024 * 1024 * 1024,
+      minimum: 1,
+    },
     // Issue #245 / roadmap 7.1 — agent-initiated registration. Six new vars,
     // split by which role reads them (an agent has no use for the two
     // primary-only ones and vice versa — see src/app.ts's role split).
@@ -1047,6 +1055,7 @@ declare module "fastify" {
       MULLION_AGENT_TOKEN: string;
       HOST_HEARTBEAT_INTERVAL_SECONDS: number;
       MULLION_UPLOAD_RETENTION_DAYS: number;
+      FILE_TRANSFER_MAX_BYTES: number;
       MULLION_PRIMARY_URL: string;
       MULLION_ENROLLMENT_TOKEN: string;
       MULLION_AGENT_ADVERTISE_URL: string;

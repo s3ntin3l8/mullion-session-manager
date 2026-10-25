@@ -454,3 +454,71 @@
   flex-direction: column;
   gap: 1px;
 }
+
+/* UploadStatus.tsx / the file trees' drop-to-upload target. */
+.upload-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 11.5px;
+}
+.upload-status-row,
+.upload-status-errors {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.upload-status-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.upload-status-current {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  overflow: hidden;
+}
+.upload-status-bar-fill {
+  height: 100%;
+  background: var(--accent-solid);
+  transition: width 0.15s linear;
+}
+.upload-status-errors {
+  color: var(--r);
+}
+.upload-status-errors ul {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: 14px;
+  overflow-wrap: anywhere;
+}
+.file-drop-target {
+  outline: 2px dashed var(--accent-solid);
+  outline-offset: -2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-solid) 8%, transparent);
+}
+.file-drop-hint {
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+}
+
+.files-sidebar-view {
+  min-height: 100%; /* the whole pane is a drop-to-upload target, empty space included */
+}

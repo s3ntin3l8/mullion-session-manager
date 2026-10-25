@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
+import path from "node:path";
+import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
+import { Readable, Transform } from "node:stream";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { WebSocket as NodeWebSocket } from "ws";
 import {
   SIGNATURE_HEADER,
@@ -183,6 +187,12 @@ const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
 // enough for. 25 MiB needs ~3.5 Mbit/s to finish inside this window.
 const UPLOAD_REQUEST_TIMEOUT_MS = 60_000;
+
+// File-browser transfers (uploadProjectFile / downloadProjectFile) can run for
+// minutes, so a TOTAL timeout would kill a healthy large transfer. This is an
+// IDLE timeout instead: it re-arms on every chunk that moves, and only fires
+// when the link has gone quiet for this long.
+const TRANSFER_IDLE_TIMEOUT_MS = 30_000;
 
 // #484 — the four new task-git proxy calls each wrap an agent-side git
 // shell-out with its own timeout (git-push.ts/git-refs.ts/git-status.ts/
@@ -1212,6 +1222,162 @@ export class RemoteHostClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, from, to }),
     });
+  }
+
+  /**
+   * Streams a file upload to this agent's /internal/project-files/upload.
+   * The body is piped through, never buffered, under an idle (not total)
+   * timeout. No 401 retry: the body stream is single-use, so a stale-credential
+   * failure surfaces to the caller instead of being replayed.
+   */
+  async uploadProjectFile(
+    cwd: string,
+    relPath: string,
+    body: Readable,
+    opts: { mkdirs?: boolean } = {},
+  ): Promise<{ path: string; size: number }> {
+    const query = new URLSearchParams({ cwd, path: relPath });
+    if (opts.mkdirs) query.set("mkdirs", "1");
+    const requestTarget = `/internal/project-files/upload?${query.toString()}`;
+    const idle = this.idleAbort(TRANSFER_IDLE_TIMEOUT_MS);
+    const metered = body.pipe(
+      new Transform({
+        transform(chunk, _enc, cb) {
+          idle.touch();
+          cb(null, chunk);
+        },
+      }),
+    );
+    // A client that hangs up mid-upload ends `body` with an error; propagate
+    // it so fetch aborts instead of waiting for bytes that never come.
+    body.on("error", (err) => metered.destroy(err));
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${requestTarget}`, {
+        method: "POST",
+        headers: {
+          "content-type": FILE_STREAM_CONTENT_TYPE,
+          authorization: `Bearer ${this.token}`,
+          ...this.signatureHeaders("POST", requestTarget, undefined),
+        },
+        body: Readable.toWeb(metered) as ReadableStream<Uint8Array>,
+        duplex: "half",
+        redirect: "manual",
+        signal: idle.signal,
+        dispatcher: this.pinnedDispatcher(),
+      } as RequestInit & { duplex: "half" });
+    } catch (err) {
+      throw new HostUnreachableError(this.hostId, err);
+    } finally {
+      idle.clear();
+    }
+    return this.readJsonResponse<{ path: string; size: number }>(res);
+  }
+
+  /**
+   * Opens a streamed download from this agent's /internal/project-files/
+   * download. Resolves once the agent has accepted the request (every refusal
+   * — not found, too large, a directory — is a HostRequestError thrown
+   * BEFORE any byte is returned); the bytes then flow through `stream` under
+   * an idle timeout. One 401 retry with refreshed credentials, as request().
+   */
+  async downloadProjectFile(
+    cwd: string,
+    relPath: string,
+  ): Promise<{ stream: Readable; size: number; path: string; name: string }> {
+    const open = async () => {
+      const requestTarget = "/internal/project-files/download";
+      const payload = JSON.stringify({ cwd, path: relPath });
+      const idle = this.idleAbort(TRANSFER_IDLE_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${this.baseUrl}${requestTarget}`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.token}`,
+            ...this.signatureHeaders("POST", requestTarget, payload),
+          },
+          body: payload,
+          redirect: "manual",
+          signal: idle.signal,
+          dispatcher: this.pinnedDispatcher(),
+        } as RequestInit);
+        return { res, idle };
+      } catch (err) {
+        idle.clear();
+        throw new HostUnreachableError(this.hostId, err);
+      }
+    };
+    let { res, idle } = await open();
+    if (res.status === 401 && this.refreshCredentials) {
+      const fresh = this.refreshCredentials();
+      if (fresh && (fresh.token !== this.token || fresh.sessionSecret !== this.sessionSecret)) {
+        await res.body?.cancel().catch(() => undefined);
+        idle.clear();
+        this.token = fresh.token;
+        this.sessionSecret = fresh.sessionSecret;
+        ({ res, idle } = await open());
+      }
+    }
+    if (!res.ok || !res.body) {
+      idle.clear();
+      return this.readJsonResponse(res);
+    }
+    const size = Number(res.headers.get("content-length"));
+    const stream = Readable.fromWeb(res.body as WebReadableStream).pipe(
+      new Transform({
+        transform(chunk, _enc, cb) {
+          idle.touch();
+          cb(null, chunk);
+        },
+        flush(cb) {
+          idle.clear();
+          cb();
+        },
+      }),
+    );
+    // An aborted/stalled body must not leave the idle timer armed.
+    stream.on("close", () => idle.clear());
+    return {
+      stream,
+      size: Number.isFinite(size) ? size : 0,
+      path: relPath,
+      name: path.basename(relPath),
+    };
+  }
+
+  /** An AbortSignal that fires after `ms` without a `touch()`. */
+  private idleAbort(ms: number): { signal: AbortSignal; touch: () => void; clear: () => void } {
+    const controller = new AbortController();
+    let timer: NodeJS.Timeout | undefined;
+    const arm = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(new Error("transfer idle timeout")), ms);
+    };
+    arm();
+    return {
+      signal: controller.signal,
+      touch: arm,
+      clear: () => {
+        if (timer) clearTimeout(timer);
+        timer = undefined;
+      },
+    };
+  }
+
+  /** request()'s response handling, for the streaming methods that issue
+   * their own fetch: 4xx -> HostRequestError (with the agent's body, so the
+   * route can read its `code`), 5xx -> unreachable, 2xx -> parsed JSON. */
+  private async readJsonResponse<T>(res: Response): Promise<T> {
+    if (!res.ok) {
+      if (res.status >= 400 && res.status < 500) {
+        const text = await res.text().catch(() => "");
+        throw new HostRequestError(this.hostId, res.status, text);
+      }
+      await res.body?.cancel().catch(() => undefined);
+      throw new HostUnreachableError(this.hostId, new Error(`HTTP ${res.status}`));
+    }
+    return (await res.json()) as T;
   }
 
   async searchProjectFiles(cwd: string, query: string): Promise<ProjectSearchListing> {
