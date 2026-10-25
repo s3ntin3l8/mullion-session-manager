@@ -353,8 +353,13 @@ checked one last time first).
   `400`. Flags are fixed (`m`). A worker-isolated, unrestricted regex is
   tracked in #1653.
 - Same per-connection wait cap (`429`), abort-on-socket-close and
-  caller-must-stay-active rules as `sessions.wait`. Local sessions only: a
-  child on a remote host is `409` (#1627).
+  caller-must-stay-active rules as `sessions.wait`. A child on another host
+  (issue #1951) is waited on **on that host**: the primary asks the agent for
+  one bounded wait at a time (at most 60 s each, resuming from the previous
+  chunk's `outputOffset`) until your `timeoutMs`, so no agent holds a PTY
+  subscription open on a primary that has gone away. A match split across the
+  exact boundary between two chunks can be missed. An agent build too old to
+  have the route answers `501` ("upgrade it"); an unreachable host `502`.
 
 **`sessions.prompt`** types a prompt into a _running_ child agent and
 submits it as a new turn — the follow-up primitive after `sessions.spawn_child`
@@ -397,9 +402,19 @@ the prompt _was_ delivered either way).
   its turn ends); `501` unsupported
   agent; `503` if the bytes could not be delivered (write-backpressure cap, no
   live PTY); `413`/`400` for bad text/arguments; `429` if `wait` would exceed
-  `MAX_WAITS_PER_CONNECTION`. A session that is not in this host's PTY manager
-  — including a remote-host session (#1627) — is `409 … not running on this
-host`.
+  `MAX_WAITS_PER_CONNECTION`. A session with no live process on its host is
+  `409 … not running`.
+- **A child on another host (issue #1951)** is prompted **on that host**: the
+  primary keeps the derived-status gate (`agent_blocked` / `agent_gone` →
+  `409`), then proxies the delivery to the agent, which types it under the
+  same per-session lock. Differences from a local child: **`wait` is not
+  supported** (`400` — the "has a new turn started" guard reads the child's
+  event counter, which only its own host has; send the prompt without it, then
+  use `sessions.wait_for_output` with the reply's `outputOffset` as
+  `afterOffset`, which has no such race); the second, pre-Enter blocked check
+  is skipped; and a timeout _after_ the body was typed leaves it sitting
+  unsubmitted in the child's input box (the call is not idempotent — do not
+  blindly retry it). An agent too old for the route answers `501`.
 - **One prompt at a time per session.** Concurrent prompts to one child are
   serialized (body, gap, Enter each) so they can't interleave into one merged
   prompt plus a stray empty submit.

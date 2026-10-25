@@ -1214,6 +1214,65 @@ describe("RemoteHostClient", () => {
     expect((err as RequestError).statusCode).toBe(404);
   });
 
+  it("posts a prompt to /internal/sessions/:id/prompt and returns the output offset (issue #1951)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { outputOffset: 42 }));
+    await expect(client().resolvePrompt("7", { text: "hi", submit: true })).resolves.toEqual({
+      outputOffset: 42,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/7/prompt",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ text: "hi", submit: true }),
+      }),
+    );
+  });
+
+  it("resolvePrompt surfaces the agent's 422 refusal body as a HostRequestError (issue #1951)", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ status: 501, error: "no framing" }), { status: 422 }),
+    );
+    const err = await client()
+      .resolvePrompt("7", { text: "hi", submit: true })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect((err as RequestError).statusCode).toBe(422);
+    expect(JSON.parse((err as RequestError).body)).toEqual({
+      status: 501,
+      error: "no framing",
+    });
+  });
+
+  it("posts a bounded output wait to /internal/sessions/:id/wait-output (issue #1951)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { matched: false, timedOut: true, outputOffset: 9 }),
+    );
+    await expect(
+      client().resolveWaitOutput("7", {
+        match: "OK",
+        regex: false,
+        timeoutMs: 1000,
+        afterOffset: 3,
+      }),
+    ).resolves.toEqual({ matched: false, timedOut: true, outputOffset: 9 });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/7/wait-output",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ match: "OK", regex: false, timeoutMs: 1000, afterOffset: 3 }),
+      }),
+    );
+  });
+
+  it("resolveWaitOutput throws HostRequestError on a 404 from an agent that predates the route (version skew, issue #1951)", async () => {
+    fetchMock.mockResolvedValue(new Response("Not Found", { status: 404 }));
+    const err = await client()
+      .resolveWaitOutput("7", { match: "OK", regex: false, timeoutMs: 1000 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect((err as RequestError).statusCode).toBe(404);
+  });
+
   it("bypasses fetch entirely for an empty ids array", async () => {
     await expect(client().bulkLiveStatus([], 1000)).resolves.toEqual({});
     await expect(client().bulkIsMasterAlive([])).resolves.toEqual({});

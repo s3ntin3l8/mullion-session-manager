@@ -30,6 +30,14 @@ import {
 import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
+import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
+import {
+  deliverPrompt,
+  REMOTE_WAIT_CHUNK_MS,
+  type PromptOutcome,
+  type WaitOutputOutcome,
+  type WaitOutputRequest,
+} from "./session-prompt.js";
 
 /**
  * Logs a failed remote-host call, split the one way every caller needs
@@ -186,6 +194,16 @@ export interface SessionBackend {
   // doesn't track — both of which the route reports as the same 409; a
   // caller here has no way (and no need) to distinguish them further.
   acknowledgeAttention(id: string): Promise<boolean>;
+  // Issue #1951 — types a prompt into the session's agent on whichever host
+  // owns its PTY (`sessions.prompt` for a child on another host). Resolves a
+  // refusal as a value, never a throw: an unreachable host or an agent too
+  // old to have the route is `{ ok: false, status }` like any other refusal.
+  prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome>;
+  // Issue #1951 — `sessions.wait_for_output` against the session's own host.
+  // A remote host is waited on in bounded chunks (the request client has no
+  // caller-supplied abort, and an agent must not hold a subscription for an
+  // hour on behalf of a primary that may have given up).
+  waitOutput(id: string, req: WaitOutputRequest): Promise<WaitOutputOutcome>;
   // Issue #271 — creates a worktree on whichever host actually owns `cwd`'s
   // filesystem, for the launcher-toggle and promote flows. Returns
   // `{ created: false, reason, detail? }` when creation fails for a
@@ -436,6 +454,31 @@ class LocalBackend implements SessionBackend {
     return this.app.pty.acknowledgeAttention(id);
   }
 
+  async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
+    const delivery = await deliverPrompt(this.app, id, {
+      ...opts,
+      notRunning: "the session is not running",
+    });
+    return delivery.ok ? { ok: true, outputOffset: delivery.outputOffset } : delivery;
+  }
+
+  async waitOutput(id: string, req: WaitOutputRequest): Promise<WaitOutputOutcome> {
+    const matcher = compileOutputMatcher(req.match, req.regex);
+    if (!matcher.ok) return { failed: true, status: 400, error: matcher.error };
+    const session = this.app.pty.get(id);
+    if (!session || !session.isAlive) return { notRunning: true };
+    const result = await waitForOutput(matcher, req.timeoutMs, {
+      signal: req.signal,
+      onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
+      // A cursor from before a restart can be AHEAD of the counter; treat
+      // that as "no gap output" rather than an error (like afterSeq).
+      ...(req.afterOffset !== undefined ? { seed: session.getOutputSince(req.afterOffset) } : {}),
+      alive: () => session.isAlive && req.alive(),
+    });
+    if ("aborted" in result) return { aborted: true };
+    return { ...result, outputOffset: session.outputOffset };
+  }
+
   createWorktree(
     cwd: string,
     baseRef: string,
@@ -641,6 +684,85 @@ class RemoteBackend implements SessionBackend {
 
   acknowledgeAttention(id: string): Promise<boolean> {
     return this.client.acknowledgeAttention(id);
+  }
+
+  async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
+    try {
+      const delivered = await this.client.resolvePrompt(id, opts);
+      return { ok: true, outputOffset: delivered.outputOffset };
+    } catch (err) {
+      return { ok: false, ...this.remoteRefusal(err, "prompts") };
+    }
+  }
+
+  async waitOutput(id: string, req: WaitOutputRequest): Promise<WaitOutputOutcome> {
+    const deadline = Date.now() + req.timeoutMs;
+    // The cursor the NEXT chunk resumes from. Chunk 1 uses the caller's own
+    // (possibly absent: "only output from now on"); each later chunk resumes
+    // exactly where the previous one stopped, so nothing printed between two
+    // requests is lost. (A match split across that exact boundary can be
+    // missed — milliseconds wide, and the price of not holding one request
+    // open for the whole wait.)
+    let cursor = req.afterOffset;
+    for (;;) {
+      if (req.signal.aborted) return { aborted: true };
+      const remaining = deadline - Date.now();
+      if (!req.alive()) {
+        return { matched: false, gone: true, outputOffset: cursor ?? 0 };
+      }
+      if (remaining <= 0) {
+        return { matched: false, timedOut: true, outputOffset: cursor ?? 0 };
+      }
+      let chunk;
+      try {
+        chunk = await this.client.resolveWaitOutput(id, {
+          match: req.match,
+          regex: req.regex,
+          timeoutMs: Math.min(remaining, REMOTE_WAIT_CHUNK_MS),
+          ...(cursor !== undefined ? { afterOffset: cursor } : {}),
+        });
+      } catch (err) {
+        return { failed: true, ...this.remoteRefusal(err, "output waits") };
+      }
+      if ("notRunning" in chunk) return { notRunning: true };
+      if ("matched" in chunk && chunk.matched) return chunk;
+      if ("gone" in chunk) return chunk;
+      // This chunk elapsed with no match: carry on from where it stopped.
+      cursor = chunk.outputOffset;
+    }
+  }
+
+  /**
+   * A failed remote call, as the status/message `sessions.prompt` and
+   * `sessions.wait_for_output` reply with. The agent answers its own refusals
+   * as HTTP 422 carrying `{status, error}` (a 4xx, because the request client
+   * discards the body of a 5xx); a 404 is an agent build too old to have the
+   * route at all; anything else is a rejection or an unreachable host.
+   */
+  private remoteRefusal(err: unknown, what: string): { status: number; error: string } {
+    if (err instanceof HostRequestError) {
+      if (err.statusCode === 404) {
+        return {
+          status: 501,
+          error: `this host's Mullion is too old to accept ${what} for its sessions — upgrade it`,
+        };
+      }
+      if (err.statusCode === 422) {
+        try {
+          const parsed = JSON.parse(err.body) as { status?: unknown; error?: unknown };
+          if (typeof parsed.status === "number" && typeof parsed.error === "string") {
+            return { status: parsed.status, error: parsed.error };
+          }
+        } catch {
+          // fall through to the generic rejection below
+        }
+      }
+      return {
+        status: 502,
+        error: `the session's host rejected the request (HTTP ${err.statusCode})`,
+      };
+    }
+    return { status: 502, error: "the session's host is unreachable" };
   }
 
   createWorktree(

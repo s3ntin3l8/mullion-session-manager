@@ -4557,6 +4557,258 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  // Issue #1951 — the agent-side halves of `sessions.prompt` and
+  // `sessions.wait_for_output` for a child whose PTY lives on this host. A
+  // refusal is HTTP 422 carrying `{status, error}`: RemoteHostClient discards
+  // the body of a 5xx, so the real answer must travel as a 4xx.
+  describe("POST /internal/sessions/:id/prompt (issue #1951)", () => {
+    async function spawn(app: Awaited<ReturnType<typeof buildApp>>, id: string, command: string) {
+      const before = fakePtyChildren.length;
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id, cwd: "/tmp", command, cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+      return fakePtyChildren[fakePtyChildren.length - 1];
+    }
+
+    it("types the prompt, submits it, and reports the output offset", async () => {
+      const app = await buildApp();
+      const pty = await spawn(app, "9201", "claude");
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9201/prompt",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { text: "run the build", submit: true },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ outputOffset: expect.any(Number) });
+      const typed = pty.writeSpy.mock.calls.map((c) => String(c[0]));
+      expect(typed.some((s) => s.includes("run the build"))).toBe(true);
+      expect(typed[typed.length - 1]).toBe("\r");
+      await app.close();
+    });
+
+    it("types without submitting when submit is false", async () => {
+      const app = await buildApp();
+      const pty = await spawn(app, "9202", "claude");
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9202/prompt",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { text: "draft only", submit: false },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(pty.writeSpy.mock.calls.map((c) => String(c[0])).includes("\r")).toBe(false);
+      await app.close();
+    });
+
+    it("answers 422 {status: 501} for an agent with no prompt framing", async () => {
+      const app = await buildApp();
+      await spawn(app, "9203", "bash");
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9203/prompt",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { text: "hi", submit: true },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toEqual({ status: 501, error: expect.stringMatching(/not supported/) });
+      await app.close();
+    });
+
+    it("answers 422 {status: 409} for a session this agent is not running", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9204/prompt",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { text: "hi", submit: true },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().status).toBe(409);
+      await app.close();
+    });
+
+    it("rejects a request with the wrong token", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9205/prompt",
+        headers: { authorization: "Bearer wrong" },
+        payload: { text: "hi", submit: true },
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
+  describe("POST /internal/sessions/:id/wait-output (issue #1951)", () => {
+    async function spawn(app: Awaited<ReturnType<typeof buildApp>>, id: string) {
+      const before = fakePtyChildren.length;
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id, cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+      return fakePtyChildren[fakePtyChildren.length - 1];
+    }
+    const post = (app: Awaited<ReturnType<typeof buildApp>>, id: string, payload: object) =>
+      app.inject({
+        method: "POST",
+        url: `/internal/sessions/${id}/wait-output`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload,
+      });
+
+    it("resolves a match as it is printed, with the PTY's output offset", async () => {
+      const app = await buildApp();
+      const pty = await spawn(app, "9211");
+      const pending = post(app, "9211", { match: "BUILD OK", regex: false, timeoutMs: 5000 });
+      await new Promise((r) => setTimeout(r, 50));
+      pty.emitData("compiling...\r\nBUILD OK\r\n");
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        matched: true,
+        text: "BUILD OK",
+        outputOffset: expect.any(Number),
+      });
+      await app.close();
+    });
+
+    it("counts output printed since afterOffset (no prompt -> wait race)", async () => {
+      const app = await buildApp();
+      const pty = await spawn(app, "9212");
+      const session = app.pty.get("9212")!;
+      const offset = session.outputOffset;
+      pty.emitData("DONE already\r\n");
+      const res = await post(app, "9212", {
+        match: "DONE",
+        regex: false,
+        timeoutMs: 5000,
+        afterOffset: offset,
+      });
+      expect(res.json()).toMatchObject({ matched: true });
+      await app.close();
+    });
+
+    it("reports {timedOut} with the offset to resume from when the chunk elapses", async () => {
+      const app = await buildApp();
+      await spawn(app, "9213");
+      const res = await post(app, "9213", { match: "never", regex: false, timeoutMs: 100 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        matched: false,
+        timedOut: true,
+        outputOffset: expect.any(Number),
+      });
+      await app.close();
+    });
+
+    it("reports {notRunning} for a session this agent does not run", async () => {
+      const app = await buildApp();
+      const res = await post(app, "9214", { match: "x", regex: false, timeoutMs: 100 });
+      expect(res.json()).toEqual({ notRunning: true });
+      await app.close();
+    });
+
+    it("answers 422 {status: 400} for an unsafe regex", async () => {
+      const app = await buildApp();
+      await spawn(app, "9215");
+      const res = await post(app, "9215", { match: "(a+)+$", regex: true, timeoutMs: 100 });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().status).toBe(400);
+      await app.close();
+    });
+
+    it("holds the wait open over a real socket until output arrives (the request's own close is not a hang-up)", async () => {
+      const { app, port } = await buildAndListen();
+      const pty = await spawn(app, "9219");
+      const pending = fetch(`http://127.0.0.1:${port}/internal/sessions/9219/wait-output`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ match: "READY", regex: false, timeoutMs: 5000 }),
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      pty.emitData("READY\r\n");
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ matched: true, text: "READY" });
+      await app.close();
+    });
+
+    it("aborts the agent-side wait when the requester hangs up", async () => {
+      const { app, port } = await buildAndListen();
+      await spawn(app, "9220");
+      const outputWait = await import("../../src/services/output-wait.js");
+      let seen: AbortSignal | undefined;
+      const waitSpy = vi.spyOn(outputWait, "waitForOutput").mockImplementation((_m, _t, deps) => {
+        seen = deps.signal;
+        return new Promise(() => {});
+      });
+      try {
+        const controller = new AbortController();
+        const pending = fetch(`http://127.0.0.1:${port}/internal/sessions/9220/wait-output`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ match: "NEVER", regex: false, timeoutMs: 5000 }),
+          signal: controller.signal,
+        }).catch(() => null);
+        await waitUntil(() => seen !== undefined);
+        expect(seen!.aborted).toBe(false);
+        controller.abort();
+        await pending;
+        await waitUntil(() => seen!.aborted);
+      } finally {
+        waitSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("rejects a wait longer than one remote chunk, rather than holding a subscription that long", async () => {
+      const app = await buildApp();
+      await spawn(app, "9216");
+      const res = await post(app, "9216", { match: "never", regex: false, timeoutMs: 60_001 });
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({ status: 400, error: expect.stringMatching(/timeoutMs/) });
+      await app.close();
+    });
+
+    it("accepts a wait of exactly one remote chunk", async () => {
+      const app = await buildApp();
+      await spawn(app, "9218");
+      const outputWait = await import("../../src/services/output-wait.js");
+      const waitSpy = vi
+        .spyOn(outputWait, "waitForOutput")
+        .mockResolvedValue({ matched: false, timedOut: true });
+      try {
+        const res = await post(app, "9218", { match: "never", regex: false, timeoutMs: 60_000 });
+        expect(res.statusCode).toBe(200);
+        expect(waitSpy.mock.calls[0][1]).toBe(60_000);
+      } finally {
+        waitSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("rejects a request with the wrong token", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/sessions/9217/wait-output",
+        headers: { authorization: "Bearer wrong" },
+        payload: { match: "x", regex: false, timeoutMs: 100 },
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+  });
+
   it("expands a leading ~ in a spawned session's cwd against this host's own home dir", async () => {
     const app = await buildApp();
     const before = fakePtyChildren.length;

@@ -872,9 +872,12 @@ alternative, and how the two compose.
   primary. A session running on an agent host gets
   `MULLION_CONTROL_UNAVAILABLE=remote-host` in its env, and the `mullion` CLI /
   MCP tools fail immediately with an explanation instead of a connect error.
-  From the primary, a local caller can still `wait`/`get`/read scrollback of a
-  remote child, but `prompt` (and `wait_for_output`) return a 409 because they
-  need the live PTY. The real agent→primary relay is tracked separately.
+  From the primary, a local caller can drive a remote child: `wait`, `get`,
+  scrollback, `kill`, and — since issue #1951 — `prompt` and `wait_for_output`
+  (both run on the child's own host).
+  `prompt` with `wait` is not supported for a remote child yet (use
+  `wait_for_output` with the prompt's `outputOffset`). The child calling _back_
+  into the primary is the agent→primary relay, tracked separately (#1656).
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it

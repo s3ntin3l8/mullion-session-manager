@@ -175,6 +175,7 @@ const {
 } = await import("../../src/plugins/control-socket.js");
 const { sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
+const sessionBackendModule = await import("../../src/services/session-backend.js");
 const { insertSessionEvents } = await import("../../src/services/event-history.js");
 
 const TEST_TOKEN = "test-auth-token-0123456789";
@@ -2550,6 +2551,9 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
 
       describe("sessions.wait_for_output", () => {
+        afterEach(() => {
+          vi.restoreAllMocks();
+        });
         const lastPty = () => fakePtyChildren[fakePtyChildren.length - 1];
 
         async function childWithSocket() {
@@ -2559,6 +2563,81 @@ describe("controlSocketPlugin (issue #185)", () => {
           const socket = await sessionScopeSocket(parent.hookToken);
           return { ...parent, childId, pty, socket };
         }
+
+        // Issue #1951 — a child on ANOTHER host is waited on through that
+        // host (SessionBackend.waitOutput), not refused.
+        async function remoteWaitChild(waitOutput: ReturnType<typeof vi.fn>) {
+          const { childId, socket } = await childWithSocket();
+          const hostRes = await app!.inject({
+            method: "POST",
+            url: "/api/hosts",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { name: "mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+          });
+          const hostId = hostRes.json().id as string;
+          if (!hostId) throw new Error(`host create: ${hostRes.statusCode} ${hostRes.body}`);
+          app!.db.update(sessions).set({ hostId }).where(eq(sessions.id, childId)).run();
+          const realResolveBackend = sessionBackendModule.resolveBackend;
+          vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(((
+            appArg: Parameters<typeof realResolveBackend>[0],
+            host: string,
+          ) =>
+            host === hostId
+              ? { waitOutput, prompt: vi.fn() }
+              : realResolveBackend(
+                  appArg,
+                  host,
+                )) as unknown as typeof sessionBackendModule.resolveBackend);
+          return { childId, socket };
+        }
+
+        it("waits on the child's own host when it runs on another one (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const waitOutput = vi.fn().mockResolvedValue({
+            matched: true,
+            text: "BUILD OK",
+            line: "BUILD OK",
+            outputOffset: 55,
+          });
+          const { childId, socket } = await remoteWaitChild(waitOutput);
+          const reply = await ask(socket, "sessions.wait_for_output", {
+            sessionId: childId,
+            match: "BUILD OK",
+            afterOffset: 10,
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            status: 200,
+            result: { matched: true, text: "BUILD OK", outputOffset: 55 },
+          });
+          expect(waitOutput).toHaveBeenCalledWith(
+            String(childId),
+            expect.objectContaining({ match: "BUILD OK", regex: false, afterOffset: 10 }),
+          );
+          socket.destroy();
+        });
+
+        it("relays a remote wait's failure and not-running outcomes (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const waitOutput = vi
+            .fn()
+            .mockResolvedValueOnce({ failed: true, status: 502, error: "host unreachable" })
+            .mockResolvedValueOnce({ notRunning: true });
+          const { childId, socket } = await remoteWaitChild(waitOutput);
+          const failed = await ask(socket, "sessions.wait_for_output", {
+            sessionId: childId,
+            match: "x",
+          });
+          expect(failed).toMatchObject({ ok: false, status: 502, error: "host unreachable" });
+          const notRunning = await ask(socket, "sessions.wait_for_output", {
+            sessionId: childId,
+            match: "x",
+          });
+          expect(notRunning).toMatchObject({ ok: false, status: 409 });
+          socket.destroy();
+        });
 
         it("resolves with the matching line when the child prints the text", async () => {
           app = await buildApp();
@@ -2669,6 +2748,9 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
 
       describe("sessions.prompt", () => {
+        afterEach(() => {
+          vi.restoreAllMocks();
+        });
         /** The FakePty of the most recently spawned session (the child just created). */
         const lastPty = () => fakePtyChildren[fakePtyChildren.length - 1];
         const writes = (pty: FakePty) => pty.writeSpy.mock.calls.map(([d]) => d as string);
@@ -2682,6 +2764,97 @@ describe("controlSocketPlugin (issue #185)", () => {
           const socket = await sessionScopeSocket(parent.hookToken);
           return { ...parent, childId, pty, socket };
         }
+
+        // Issue #1951 — a child on ANOTHER host: its PTY is there, so the
+        // delivery is proxied to that host through SessionBackend.prompt.
+        async function remoteChild(prompt: ReturnType<typeof vi.fn>) {
+          const { childId, socket, pty } = await agentChild();
+          const hostRes = await app!.inject({
+            method: "POST",
+            url: "/api/hosts",
+            headers: { authorization: `Bearer ${TEST_TOKEN}` },
+            payload: { name: "mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+          });
+          const hostId = hostRes.json().id as string;
+          if (!hostId) throw new Error(`host create: ${hostRes.statusCode} ${hostRes.body}`);
+          app!.db.update(sessions).set({ hostId }).where(eq(sessions.id, childId)).run();
+          const backend = { prompt, waitOutput: vi.fn() };
+          const realResolveBackend = sessionBackendModule.resolveBackend;
+          vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(((
+            appArg: Parameters<typeof realResolveBackend>[0],
+            host: string,
+          ) =>
+            host === hostId
+              ? backend
+              : realResolveBackend(
+                  appArg,
+                  host,
+                )) as unknown as typeof sessionBackendModule.resolveBackend);
+          return { childId, socket, pty, backend, hostId };
+        }
+
+        it("proxies the prompt to the child's own host instead of 409ing (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 123 });
+          const { childId, socket, pty, hostId } = await remoteChild(prompt);
+          pty.writeSpy.mockClear();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({
+            ok: true,
+            status: 200,
+            result: { delivered: true, submitted: true, outputOffset: 123 },
+          });
+          expect(prompt).toHaveBeenCalledWith(String(childId), { text: "go", submit: true });
+          // Nothing was typed into the PRIMARY's own (stale) PTY for that id.
+          expect(writes(pty)).toEqual([]);
+          void hostId;
+          socket.destroy();
+        });
+
+        it("relays a remote refusal's status and message (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi
+            .fn()
+            .mockResolvedValue({ ok: false, status: 501, error: "no framing for that agent" });
+          const { childId, socket } = await remoteChild(prompt);
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({
+            ok: false,
+            status: 501,
+            error: "no framing for that agent",
+          });
+          socket.destroy();
+        });
+
+        it("refuses `wait` for a remote child, pointing at wait_for_output (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn();
+          const { childId, socket } = await remoteChild(prompt);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: true,
+          });
+          expect(reply).toMatchObject({ ok: false, status: 400 });
+          expect(String(reply.error)).toMatch(/wait_for_output/);
+          expect(prompt).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("still applies the primary's blocked/gone gate to a remote child (#1951)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn();
+          const { childId, socket } = await remoteChild(prompt);
+          app!.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, childId)).run();
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(prompt).not.toHaveBeenCalled();
+          socket.destroy();
+        });
 
         it("types the prompt as a bracketed paste, then submits with Enter", async () => {
           app = await buildApp();

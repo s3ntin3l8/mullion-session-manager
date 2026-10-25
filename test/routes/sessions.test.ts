@@ -140,6 +140,8 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
     resolveReviewGate: vi.fn().mockResolvedValue(false),
     acknowledgeAttention: vi.fn().mockResolvedValue(false),
+    prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
+    waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
     createWorktree: vi.fn().mockResolvedValue({ created: false, reason: "not-a-repo" }),
     checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
     removeWorktree: vi.fn().mockResolvedValue(false),

@@ -60,6 +60,15 @@ export function compileOutputMatcher(match: unknown, regex: unknown): OutputMatc
   if (FORBIDDEN_REGEX_FEATURES.test(match)) {
     return { ok: false, error: "'match' may not use backreferences or lookarounds" };
   }
+  // The pattern is caller-supplied BY DESIGN (the whole feature is "wait until
+  // the child prints <pattern>"), and since #1951 it can arrive over an agent's
+  // /internal/sessions/:id/wait-output as well as the control socket. The
+  // containment is the guards above and below — length cap, no
+  // backreferences/lookarounds, star height <= 1 (safe-regex2) — plus the
+  // matching window being bounded to the last 16 KiB. CodeQL's
+  // js/regex-injection only models escaping as a sanitizer, so the alert is
+  // dismissed in GHAS with this argument (this repo's CodeQL workflow has no
+  // step that turns an inline `codeql[...]` annotation into a dismissal).
   let re: RegExp;
   try {
     re = new RegExp(match, "m");
