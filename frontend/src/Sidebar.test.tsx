@@ -6,7 +6,15 @@ import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type { Device, GitStatus, Host, Project, Session, Task } from "./api/index.js";
+import type {
+  Device,
+  GitPullReason,
+  GitStatus,
+  Host,
+  Project,
+  Session,
+  Task,
+} from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
@@ -892,27 +900,38 @@ describe("Sidebar git pull kebab entry", () => {
   });
 
   // Closes the formatPullReasonMessage coverage hole (was 1/8 reasons
-  // exercised). Single it.each over the full GitPullReason union plus the
-  // unknown-reason default — cheap, locks down copy drift.
+  // exercised). One case per GitPullReason, plus the unknown-reason default —
+  // cheap, locks down copy drift.
   describe("formatPullReasonMessage copy", () => {
+    // The record is EXHAUSTIVE on purpose, and typed as GitPullReason: a
+    // new member of the union with no case here is a COMPILE error, not a
+    // silent fall-through to the default branch — which would tell the user
+    // the pull FAILED for a reason that is not a failure (issue #1896's
+    // "busy"). The union is the shared thing; the two renderers' copy is
+    // deliberately their own.
+    const unionCases: Record<GitPullReason, RegExp> = {
+      "not-a-repo": /Not a git repository/i,
+      "unborn-head": /unborn branch/i,
+      "detached-head": /detached HEAD/i,
+      "no-upstream": /no upstream/i,
+      "dirty-tree": /Working tree has uncommitted changes/i,
+      "not-fast-forward": /diverged from origin/i,
+      "already-up-to-date": /Already up to date/i,
+      "pull-failed": /The pull operation failed/i,
+      busy: /already running/i,
+    };
+
     const cases: Array<{
       reason: string;
       detail?: string;
       matches: RegExp;
     }> = [
-      { reason: "not-a-repo", matches: /Not a git repository/i },
-      { reason: "unborn-head", matches: /unborn branch/i },
-      { reason: "detached-head", matches: /detached HEAD/i },
-      { reason: "no-upstream", matches: /no upstream/i },
-      { reason: "dirty-tree", matches: /Working tree has uncommitted changes/i },
-      { reason: "not-fast-forward", matches: /diverged from origin/i },
-      { reason: "already-up-to-date", matches: /Already up to date/i },
+      ...Object.entries(unionCases).map(([reason, matches]) => ({ reason, matches })),
       {
         reason: "pull-failed",
         detail: "conflict on README.md",
         matches: /conflict on README\.md/i,
       },
-      { reason: "pull-failed", matches: /The pull operation failed/i },
       { reason: "totally-unknown-reason", detail: "boom", matches: /Pull failed: boom/i },
       { reason: "totally-unknown-reason", matches: /Pull failed/i },
     ];
