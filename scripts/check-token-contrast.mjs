@@ -471,4 +471,7 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
-console.log("OK — every design token clears its WCAG contrast threshold.");
+console.log(
+  "OK — every design token clears its WCAG contrast threshold, and every\n" +
+    "de-emphasised graphical object clears 3:1 as the composite it paints.",
+);
