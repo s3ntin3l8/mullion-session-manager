@@ -416,6 +416,31 @@ diff --git a/${rel} b/${rel}
     }
   });
 
+  it("loadCoverageReports warns for a missing explicit path, and does not sum a repeated one twice", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const file = path.join(root, "src/shared.ts");
+      const stmt = { start: { line: 1, column: 0 }, end: { line: 1, column: 5 } };
+      const report = path.join(dir, "a.json");
+      writeFileSync(
+        report,
+        JSON.stringify({ [file]: { statementMap: { "0": stmt }, s: { "0": 1 }, f: {}, b: {} } }),
+      );
+      const merged = loadCoverageReports([
+        report,
+        report,
+        path.join(dir, "missing.json"),
+        path.join(root, "coverage/coverage-final.json.absent"),
+      ]) as unknown as Record<string, { s: unknown }>;
+      expect(merged["src/shared.ts"].s).toEqual({ "0": 1 });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("cli --annotations emits a ::warning with the file and line of each uncovered line", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "patch-cov-"));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});

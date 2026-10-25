@@ -208,7 +208,7 @@ jobs:
           {
             echo '### Patch coverage (own check, advisory; threshold 75%)'
             echo '```'
-            grep -v '^::warning' patch-coverage.txt
+            grep -v '^::warning' patch-coverage.txt || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$status"

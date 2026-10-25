@@ -287,13 +287,15 @@ const DEFAULT_COVERAGE_FILES = [
 export function loadCoverageReports(files) {
   const coverageData = {};
 
-  const paths = files ?? DEFAULT_COVERAGE_FILES;
+  // De-duplicated, so a default report that was also passed with --coverage is
+  // not summed twice.
+  const paths = [...new Set(files ?? DEFAULT_COVERAGE_FILES)];
 
   for (const p of paths) {
     if (!existsSync(p)) {
-      // Only an explicit --coverage path is worth a diagnostic: the defaults are
-      // routinely absent when one workspace was not tested.
-      if (files && files !== DEFAULT_COVERAGE_FILES) {
+      // Only an explicit --coverage path is worth a diagnostic: the default
+      // reports are routinely absent when one workspace was not tested.
+      if (!DEFAULT_COVERAGE_FILES.includes(p)) {
         console.warn(`Warning: coverage file ${p} does not exist; skipping it.`);
       }
     } else {
