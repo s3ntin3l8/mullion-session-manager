@@ -5,7 +5,7 @@ import type { LayoutMode, Session } from "./api/index.js";
 
 // Set by the pane-cap test before render. Null keeps every other test on the
 // old path: DockviewReact never reports an api, and the palette stays empty.
-const { splitHarness, sidebarHarness, persistenceHarness } = vi.hoisted(() => ({
+const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoisted(() => ({
   splitHarness: {
     api: null as {
       panels: unknown[];
@@ -26,6 +26,9 @@ const { splitHarness, sidebarHarness, persistenceHarness } = vi.hoisted(() => ({
     announced: false,
   },
   sidebarHarness: {
+    props: null as { workspaceProjectIds?: number[] | null } | null,
+  },
+  dockHarness: {
     props: null as { workspaceProjectIds?: number[] | null } | null,
   },
   persistenceHarness: {
@@ -119,7 +122,12 @@ vi.mock("./CommandPalette.js", () => ({
       />
     ) : null,
 }));
-vi.mock("./Dock.js", () => ({ Dock: () => null }));
+vi.mock("./Dock.js", () => ({
+  Dock: (props: { workspaceProjectIds?: number[] | null }) => {
+    dockHarness.props = props;
+    return null;
+  },
+}));
 vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }));
 vi.mock("./panels/registry.js", () => ({
   components: {},
@@ -638,8 +646,9 @@ describe("App tablet pane-cap notice", () => {
 
 // Issue #1877 — workspaceProjectIdsFromPanels resolves panel sessionIds
 // against `sessions`, which is [] until GET /api/sessions lands, while the
-// layout restores on its own. Passing that [] scopes the sidebar to "nothing"
-// and paints the empty-workspace copy. null is unscoped.
+// layout restores on its own. Passing that [] scopes both the sidebar and
+// the Dock to "nothing" and paints their empty-workspace copy. null is
+// unscoped, and both surfaces have to receive that same value.
 describe("App sidebar workspace scope", () => {
   function makeApi() {
     const panels = [
@@ -666,6 +675,7 @@ describe("App sidebar workspace scope", () => {
     splitHarness.api = makeApi();
     splitHarness.launch = null;
     sidebarHarness.props = null;
+    dockHarness.props = null;
     persistenceHarness.restoringRef.current = false;
     persistenceHarness.restoredWorkspaceIdRef.current = 1;
     useDashboardStore.setState({
@@ -686,6 +696,7 @@ describe("App sidebar workspace scope", () => {
     splitHarness.announced = false;
     persistenceHarness.restoredWorkspaceIdRef.current = null;
     sidebarHarness.props = null;
+    dockHarness.props = null;
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
@@ -699,14 +710,19 @@ describe("App sidebar workspace scope", () => {
 
     // Panels are already restored and the workspace id matches, but sessions
     // is still []. Without the sessionsLoaded gate this would be [] and the
-    // sidebar would render "Nothing tiled in this workspace".
+    // sidebar would render "Nothing tiled in this workspace" while the Dock
+    // rendered "No projects tiled in this workspace yet".
     expect(sidebarHarness.props?.workspaceProjectIds).toBeNull();
+    expect(dockHarness.props?.workspaceProjectIds).toBeNull();
+    expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
 
     await act(async () => {
       useDashboardStore.setState({ sessionsLoaded: true });
     });
     // Loaded, and the restored panel's session is not in the list: a real
-    // empty workspace, which the sidebar is allowed to call empty.
+    // empty workspace, which both surfaces are allowed to call empty.
+    // Same array, not a second empty list built for the Dock.
     expect(sidebarHarness.props?.workspaceProjectIds).toEqual([]);
+    expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
   });
 });

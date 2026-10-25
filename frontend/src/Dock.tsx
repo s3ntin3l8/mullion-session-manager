@@ -158,7 +158,10 @@ export function Dock({
   onOpenGitHub,
   onOpenBrowser,
 }: {
-  workspaceProjectIds: number[];
+  // null: the scope is not knowable yet (cold start) or this is the phone
+  // tier, which has no workspaces. Same value the sidebar receives. Unscoped
+  // — every project — and not the empty-workspace copy, which is a known `[]`.
+  workspaceProjectIds: number[] | null;
   onOpenGitHub: (projectId: number) => void;
   // Issue #28 — same "glance row opens the fuller panel" shape as
   // onOpenGitHub above, but gated on the project having a devServerUrl
@@ -299,10 +302,13 @@ export function Dock({
   // projects that no longer exist (e.g. deleted since the id was pinned).
   // dockColumnProjectIds is that rule; the sidebar calls the same helper,
   // so a pin cannot stay in this rail and vanish from the project tree.
-  const columnIds = useMemo(
-    () => dockColumnProjectIds(workspaceProjectIds, manualIds, projects),
-    [workspaceProjectIds, manualIds, projects],
-  );
+  // `null` is unscoped, the same as the sidebar: every project, not "nothing
+  // tiled". Collapsing it to `[]` here is what printed the empty copy while
+  // the tree still listed everything.
+  const columnIds = useMemo(() => {
+    if (workspaceProjectIds == null) return projects.map((project) => project.id);
+    return dockColumnProjectIds(workspaceProjectIds, manualIds, projects);
+  }, [workspaceProjectIds, manualIds, projects]);
 
   // Pure derivation, never written back — see `activeProjectIdRaw`'s own
   // doc comment above for why a project temporarily dropping out of
@@ -326,8 +332,10 @@ export function Dock({
   const removeColumn = (id: number) => persistManual(manualIds.filter((x) => x !== id));
   // A project section only gets a remove-x when it's pinned AND not also
   // derived from the workspace — otherwise it would just reappear on the
-  // next render.
-  const manualOnly = (id: number) => manualIds.includes(id) && !workspaceProjectIds.includes(id);
+  // next render. While the scope is unknown every project is shown, so a
+  // remove would look like it did nothing.
+  const manualOnly = (id: number) =>
+    workspaceProjectIds != null && manualIds.includes(id) && !workspaceProjectIds.includes(id);
 
   const liveCount = sessions.filter(
     (s) =>
@@ -559,11 +567,13 @@ export function Dock({
       </div>
       {!collapsed &&
         !dockUnavailable &&
-        (columnIds.length === 0 ? (
+        // `null` is unknown, not empty — the copy is only for a known
+        // workspace with nothing tiled and nothing pinned.
+        (workspaceProjectIds != null && columnIds.length === 0 ? (
           <div className="dock-empty dock-empty-workspace">
             No projects tiled in this workspace yet
           </div>
-        ) : (
+        ) : columnIds.length === 0 ? null : (
           <div
             ref={setSplitRef}
             className={`dock-split${splitStacked ? " dock-split--stacked" : ""}`}

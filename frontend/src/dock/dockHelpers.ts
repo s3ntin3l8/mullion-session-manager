@@ -732,8 +732,19 @@ export function writeDockManualProjectIds(ids: number[]): void {
 
 export function subscribeDockManualProjectIds(listener: () => void): () => void {
   manualIdsListeners.add(listener);
+  // `storage` fires in every tab except the one that wrote. Same-tab pins
+  // still go through writeDockManualProjectIds's notify above — a listener
+  // here alone would miss the click that just pinned. getSnapshot re-reads
+  // when the stored string no longer matches the cache, so this only has to
+  // wake subscribers. No `window` in the node unit tests.
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== STORAGE_KEYS.dockManualProjects) return;
+    listener();
+  };
+  if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
   return () => {
     manualIdsListeners.delete(listener);
+    if (typeof window !== "undefined") window.removeEventListener("storage", onStorage);
   };
 }
 

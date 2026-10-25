@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import {
   dockerSessionIdentity,
   dockColumnProjectIds,
   dockManualProjectIdsFromStorage,
+  readDockManualProjectIds,
+  subscribeDockManualProjectIds,
   dockRowKey,
   runningSessionFor,
   composeProjectForControl,
@@ -17,6 +19,7 @@ import {
   imageTag,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
+import { STORAGE_KEYS } from "../lib/persistedState.js";
 import type { DockControl } from "../api/index.js";
 
 function dockerControl(overrides: Partial<DockControl> = {}): DockControl {
@@ -659,5 +662,68 @@ describe("dockManualProjectIdsFromStorage", () => {
   it("collapses a non-array to an empty list", () => {
     expect(dockManualProjectIdsFromStorage({ 1: true })).toEqual([]);
     expect(dockManualProjectIdsFromStorage(null)).toEqual([]);
+  });
+});
+
+// Same-tab writes notify the in-memory set (writeDockManualProjectIds). A
+// pin from another tab only arrives as a `storage` event, which does not
+// fire in the writing tab — so the subscribe/getSnapshot pair has to hear
+// that event and then return the new array.
+describe("subscribeDockManualProjectIds", () => {
+  const store = new Map<string, string>();
+  const storageHandlers = new Set<(event: { key: string | null }) => void>();
+
+  beforeEach(() => {
+    store.clear();
+    storageHandlers.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        store.set(key, value);
+      },
+      removeItem: (key: string) => {
+        store.delete(key);
+      },
+      clear: () => {
+        store.clear();
+      },
+    });
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, handler: (event: { key: string | null }) => void) => {
+        if (type === "storage") storageHandlers.add(handler);
+      },
+      removeEventListener: (type: string, handler: (event: { key: string | null }) => void) => {
+        if (type === "storage") storageHandlers.delete(handler);
+      },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a storage event updates the snapshot returned by the subscribe/getSnapshot pair", () => {
+    store.set(STORAGE_KEYS.dockManualProjects, "[1]");
+    let snapshot = readDockManualProjectIds();
+    expect(snapshot).toEqual([1]);
+
+    const unsubscribe = subscribeDockManualProjectIds(() => {
+      snapshot = readDockManualProjectIds();
+    });
+
+    // Another tab has already written localStorage when `storage` fires.
+    // An unrelated key must not publish, or every storage write in the
+    // browser would rebuild the pin list.
+    store.set(STORAGE_KEYS.dockManualProjects, "[1,4]");
+    for (const handler of storageHandlers) handler({ key: "crs.other" });
+    expect(snapshot).toEqual([1]);
+
+    for (const handler of storageHandlers) handler({ key: STORAGE_KEYS.dockManualProjects });
+    expect(snapshot).toEqual([1, 4]);
+    // getSnapshot stays the same array while the stored string does not change.
+    expect(readDockManualProjectIds()).toBe(snapshot);
+
+    unsubscribe();
+    expect(storageHandlers.size).toBe(0);
   });
 });
