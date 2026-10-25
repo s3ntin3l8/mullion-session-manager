@@ -114,6 +114,12 @@ describe("color-math: compositing", () => {
       { r: 28, g: 28, b: 30, a: 1 },
     ];
     const composited = compositeLayers(layers);
+    // The @returns annotation on compositeLayers says it never returns
+    // null — and under allowJs without checkJs that annotation is a CLAIM
+    // the compiler does not verify, so this assertion is what makes it
+    // true: a future `return null` in the .mjs fails HERE, loudly,
+    // instead of breaking every caller silently.
+    expect(composited).not.toBeNull();
     near(composited.r, 46.81);
     near(composited.b, 48.63);
   });
