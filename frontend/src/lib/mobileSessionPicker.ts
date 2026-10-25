@@ -187,10 +187,11 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       searchFields,
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),
-      // Where this session lives (issue #1882). A session open in the current
-      // layout is here by definition, so it carries the current workspace's
-      // label even when no saved layout mentions it.
-      workspace: homes.get(session.id) ?? (panel ? current : null),
+      // Where this session lives (issue #1882). A session OPEN in the live
+      // grid is in the current workspace's layout, full stop — the opener
+      // would focus that panel, never swap — so the live layout wins over
+      // any stale saved layout that also mentions the session.
+      workspace: panel ? current : (homes.get(session.id) ?? null),
     };
   };
 

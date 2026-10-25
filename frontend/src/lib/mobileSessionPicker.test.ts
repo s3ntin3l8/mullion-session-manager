@@ -301,5 +301,25 @@ describe("buildPickerSections", () => {
       );
       expect(sections[0].rows[0].workspace).toBeNull();
     });
+
+    // The live grid wins over a stale saved layout. A session open in the
+    // current layout is here — the opener focuses that panel, it never
+    // swaps — so naming another workspace would promise a swap that never
+    // happens.
+    it("names the current workspace for a session open in the live grid even when another workspace claims it", () => {
+      const sections = buildPickerSections(
+        input({
+          sessions: [makeSession({ id: 7, projectId: 1 })],
+          panels: [{ id: "session-7", title: "open", sessionId: 7 }],
+          workspaces: [
+            makeWorkspace({ id: 1, name: "Default", layout: null }),
+            makeWorkspace({ id: 2, name: "Work", layout: layout(7) }),
+          ],
+          activeWorkspaceId: 1,
+        }),
+      );
+      const row = sections.flatMap((s) => s.rows).find((r) => r.session?.id === 7);
+      expect(row?.workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
+    });
   });
 });

@@ -8,6 +8,9 @@ import {
   SWIPE_COMMIT_PX,
   swipeTargetId,
 } from "./lib/mobileSessionSwipe.js";
+// The workspace a row's session lives in — owned by the picker, which is what
+// decides it, and rendered here (issue #1882).
+import type { PickerWorkspace } from "./lib/mobileSessionPicker.js";
 
 // An OPEN pane — what the trigger's `n/N` counter and swipe cycle through.
 export interface MobileSessionItem {
@@ -29,21 +32,10 @@ export interface MobileSessionRow {
   agentLogo: string | null;
   unreadCount: number;
   needsYou: boolean;
-  // Where this session's panel lives — the workspace holding it — or null when
-  // it is in no workspace (issue #1882).
-  workspace: MobileSessionWorkspace | null;
+  // Where this row's session's panel lives — the workspace holding it — or
+  // null when it is in no workspace (issue #1882).
+  workspace: PickerWorkspace | null;
   searchFields: string[];
-}
-
-// The workspace a row's session lives in, and whether that is the workspace
-// the user is looking at right now. Issue #1882: on the phone tier the
-// workspace was invisible, so opening a session from another workspace
-// swapped the whole layout with nothing on screen saying so — and no way
-// back, because the phone has no workspace switcher.
-export interface MobileSessionWorkspace {
-  id: number;
-  name: string;
-  isCurrent: boolean;
 }
 
 export interface MobileSessionSection {

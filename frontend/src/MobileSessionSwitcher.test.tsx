@@ -9,8 +9,8 @@ import type {
   MobileSessionItem,
   MobileSessionRow,
   MobileSessionSection,
-  MobileSessionWorkspace,
 } from "./MobileSessionSwitcher.js";
+import type { PickerWorkspace } from "./lib/mobileSessionPicker.js";
 
 vi.mock("./store/index.js", () => {
   const state = { theme: "dark" };
@@ -395,7 +395,7 @@ describe("MobileSessionSwitcher", () => {
     const HERE = { id: 1, name: "Default", isCurrent: true };
     const ELSEWHERE = { id: 2, name: "Work", isCurrent: false };
 
-    const sectionsWith = (workspace: MobileSessionWorkspace | null): MobileSessionSection[] => [
+    const sectionsWith = (workspace: PickerWorkspace | null): MobileSessionSection[] => [
       {
         key: "project-1",
         label: "runway",

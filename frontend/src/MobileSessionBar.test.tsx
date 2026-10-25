@@ -310,12 +310,18 @@ describe("failed rename (audit finding 9)", () => {
     ];
     storeState.activeWorkspaceId = 1;
 
-    renderBar("session-1", { tier: "phone" });
+    // Phone: the chip is there.
+    const phone = renderBar("session-1", { tier: "phone" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /shell/ }));
     // Session 3 lives in the current workspace's saved layout.
     expect(screen.getAllByText("Default").length).toBeGreaterThan(0);
+    phone.unmount();
 
-    await user.click(screen.getByRole("button", { name: /Close session list/i }));
+    // Tablet: it is not — the tablet's navigator has a workspace switcher,
+    // so the row would only repeat what that switcher already says.
+    renderBar("session-1", { tier: "tablet" });
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    expect(screen.queryByText("Default")).toBeNull();
   });
 });
