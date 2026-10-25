@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.46](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.45...v0.3.46) (2026-10-25)
+
+
+### Features
+
+* **git-panel:** check whether a project's clone is whole (read-only) ([#1900](https://github.com/s3ntin3l8/mullion-session-manager/issues/1900)) ([dff540e](https://github.com/s3ntin3l8/mullion-session-manager/commit/dff540ea8972c95d68d692f869736532c798c7ee))
+* **git-panel:** offer the clone repair, as a confirmed action ([#1906](https://github.com/s3ntin3l8/mullion-session-manager/issues/1906)) ([0aa7a60](https://github.com/s3ntin3l8/mullion-session-manager/commit/0aa7a607d7a748b83aa43f69f1c926e56598139d))
+* **hosts:** place the session, and the worktree, on the host that was chosen ([#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724)) ([#1850](https://github.com/s3ntin3l8/mullion-session-manager/issues/1850)) ([d91778e](https://github.com/s3ntin3l8/mullion-session-manager/commit/d91778e783d6d2d435a39553251f14c168773cd1))
+* **hosts:** say WHY a session is on the host it is on ([#1852](https://github.com/s3ntin3l8/mullion-session-manager/issues/1852)) ([#1905](https://github.com/s3ntin3l8/mullion-session-manager/issues/1905)) ([c9649e5](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9649e58a3450b09ba5ad5ff7132584501f7aa1a))
+* **uiux:** a11y and contrast pass ([#1895](https://github.com/s3ntin3l8/mullion-session-manager/issues/1895)) ([1083849](https://github.com/s3ntin3l8/mullion-session-manager/commit/10838495d688940cc89d772ed674ce12b7f9d5db))
+* **uiux:** phone-tier navigation parity (command palette + settings search) ([#1930](https://github.com/s3ntin3l8/mullion-session-manager/issues/1930)) ([b19704b](https://github.com/s3ntin3l8/mullion-session-manager/commit/b19704b69e978779771687607b936d231c6ace66))
+
+
+### Bug Fixes
+
+* **ci:** the patch-coverage fallback counts type and interface bodies as executable lines ([#1901](https://github.com/s3ntin3l8/mullion-session-manager/issues/1901)) ([bde3aa4](https://github.com/s3ntin3l8/mullion-session-manager/commit/bde3aa4c7451618e5ac3cb8ac807f0f52ddb29c0))
+* **deploy:** wait for a launchd label to unload before bootstrapping it back ([#1936](https://github.com/s3ntin3l8/mullion-session-manager/issues/1936)) ([ee4c54c](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee4c54c5fa5a40115433482ac7b4a86e1173e99f))
+* **git:** never trigger the background gc in a user's clone ([#1851](https://github.com/s3ntin3l8/mullion-session-manager/issues/1851)) ([#1874](https://github.com/s3ntin3l8/mullion-session-manager/issues/1874)) ([c0f11bd](https://github.com/s3ntin3l8/mullion-session-manager/commit/c0f11bd41dccf9fb4748c8db3d609347875c28fa))
+* **review-relay:** cap a marker's pairing window; align the ledger name and reviewer login with the workflow ([#1937](https://github.com/s3ntin3l8/mullion-session-manager/issues/1937)) ([27faf92](https://github.com/s3ntin3l8/mullion-session-manager/commit/27faf924869bf9b3720941628fcc73d7441f3d2e))
+* **review-relay:** only the reviewer's own comment counts as the triage reply ([#1873](https://github.com/s3ntin3l8/mullion-session-manager/issues/1873)) ([e4528c0](https://github.com/s3ntin3l8/mullion-session-manager/commit/e4528c06a0ee8216160ebfd0e7c28ece654075c0)), closes [#1847](https://github.com/s3ntin3l8/mullion-session-manager/issues/1847)
+* **review-relay:** pair a ledger marker only with a review from its own run ([#1929](https://github.com/s3ntin3l8/mullion-session-manager/issues/1929)) ([e5f1491](https://github.com/s3ntin3l8/mullion-session-manager/commit/e5f149133952106bfaf3da95ef807978288d79cf))
+* **review-relay:** read the reviewed commit from the ledger, not reviews[].commit_id ([#1922](https://github.com/s3ntin3l8/mullion-session-manager/issues/1922)) ([94d495a](https://github.com/s3ntin3l8/mullion-session-manager/commit/94d495a4a3981bae2bd75c4b668f6c0f1c4ee6df))
+* **uiux:** confirm irreversible actions and guard double submits ([#1898](https://github.com/s3ntin3l8/mullion-session-manager/issues/1898)) ([5235aa7](https://github.com/s3ntin3l8/mullion-session-manager/commit/5235aa7d59c8b1be3e7349bc6f637423fe52732b))
+* **uiux:** findSessionWorkspace picks an arbitrary workspace when a session is in several ([#1923](https://github.com/s3ntin3l8/mullion-session-manager/issues/1923)) ([227eb7d](https://github.com/s3ntin3l8/mullion-session-manager/commit/227eb7dcaba2a149f9280ce8b13c9d65a5e78a92))
+* **uiux:** NotificationBell's trigger names what it opens ([#1934](https://github.com/s3ntin3l8/mullion-session-manager/issues/1934)) ([68a1816](https://github.com/s3ntin3l8/mullion-session-manager/commit/68a1816986764c992d58c4549de5d20faea505f1))
+* **uiux:** surface failures instead of swallowing them ([#1897](https://github.com/s3ntin3l8/mullion-session-manager/issues/1897)) ([6b9c951](https://github.com/s3ntin3l8/mullion-session-manager/commit/6b9c9513c5dacec296c2d000a3c0a402244a10c0))
+* **uiux:** the Dock's availability must match its configurability ([#1927](https://github.com/s3ntin3l8/mullion-session-manager/issues/1927)) ([31996f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/31996f0cfcd55095dc16d35c828ae0d18d09df7b))
+* **uiux:** the phone tier's cross-workspace session swap is invisible and unreversible ([#1926](https://github.com/s3ntin3l8/mullion-session-manager/issues/1926)) ([70915d7](https://github.com/s3ntin3l8/mullion-session-manager/commit/70915d7a991910084b7b3635b213dba693304a5b))
+* **uiux:** the review-relay section uses the shared relative-time formatter ([#1935](https://github.com/s3ntin3l8/mullion-session-manager/issues/1935)) ([ea99eb1](https://github.com/s3ntin3l8/mullion-session-manager/commit/ea99eb1a2eb45f1133275383f1cee47d44340655))
+* **uiux:** the sidebar's Projects header states the session count ([#1933](https://github.com/s3ntin3l8/mullion-session-manager/issues/1933)) ([d6f66cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/d6f66cca1bc839414de6cbae1476a6d63c315e7e))
+
 ## [0.3.45](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.44...v0.3.45) (2026-10-24)
 
 
