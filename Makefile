@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-ui lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-ui verify-dockview-restore lint typecheck format format-check build clean wt check-scope-leaks git-safe git-doctor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -41,6 +41,9 @@ test-e2e: ## Run the opt-in Phase 4 socket API e2e suite (real browser/sockets, 
 
 verify-ui: ## Verify the UI/UX audit's runtime checks in a real browser (needs Playwright's Chromium; not part of `make test`)
 	node scripts/verify-ui-runtime.mjs
+
+verify-dockview-restore: ## Verify the dockview workspace-restore path in a real browser (issue #1903; needs Playwright's Chromium)
+	node scripts/verify-dockview-restore.mjs
 
 check-scope-leaks: ## Scan crs-session-* systemd scopes for leaks (issue #1137; standalone, not part of `make test`/lint)
 	npm run check:scope-leaks
