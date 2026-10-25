@@ -437,7 +437,15 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   the review already in flight — wait for it, or stop it deliberately with
   `review stop <runId>`. A request for a commit that has **already been
   reviewed** is refused the same way: there is nothing new to review, so push
-  a new commit to ask for another round (or dismiss that review first). A
+  a new commit to ask for another round (or dismiss that review first). "Already
+  reviewed" means the head holds the content of the last commit the reviewer
+  demonstrably reviewed — read from the `Hermes review` marker, not from the
+  review's own `commit_id`, which GitHub re-points at the head when the branch
+  is rewritten — so a rebase that changes nothing is refused, while an "Update
+  branch" merge is reviewed. When the marker cannot be read (the check-run
+  token lacks access, or the repository's workflow keeps no ledger) the
+  review's `commit_id` is used only while that commit is not newer than the
+  review; otherwise the whole diff is reviewed. A
   repeat request for the **same commit** inside the configured cooldown exits
   non-zero with a 409 as well. A session that works an **active Task Master
   task** (claimed, in progress or reviewing) is refused with a 409 for that

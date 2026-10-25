@@ -1610,7 +1610,9 @@ describe("runCommand", () => {
           client: fakeClient({ request: vi.fn(async () => landed) }),
           io,
         });
-        expect(io.written.join("")).toContain("posted: hermes[bot] APPROVED at abc1234");
+        expect(io.written.join("")).toContain("posted: hermes[bot] APPROVED");
+        // A re-pointed commit_id may name a commit the review never covered: not shown.
+        expect(io.written.join("")).not.toContain("abc1234");
         const none = fakeIo();
         await runCommand(["review", "status"], {
           client: fakeClient({
@@ -1647,7 +1649,7 @@ describe("runCommand", () => {
         const io = fakeIo();
         expect(await runCommand(["review", "status"], { client, io })).toBe(0);
         const out = io.written.join("");
-        expect(out).toContain("posted: hermes[bot] CHANGES_REQUESTED at abc1234");
+        expect(out).toContain("posted: hermes[bot] CHANGES_REQUESTED");
         expect(out).toContain("review text: ## Review");
         expect(out).toContain("REQUEST_CHANGES");
         expect(out).toContain("https://github.com/acme/widgets/pull/42#pullrequestreview-1");

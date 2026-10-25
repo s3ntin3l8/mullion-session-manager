@@ -835,6 +835,8 @@ export interface CommitCheckRunSummary {
   conclusion: string | null;
   /** The marker records the session the round ran in: "session: <id>". */
   summary: string;
+  /** When the run started — ISO-8601 UTC; "" when GitHub did not say. */
+  startedAt: string;
 }
 
 /**
@@ -862,6 +864,7 @@ export async function listCommitCheckRuns(
         external_id?: string | null;
         status?: string;
         conclusion?: string | null;
+        started_at?: string | null;
         output?: { summary?: string | null } | null;
       }>;
     }>(
@@ -880,12 +883,133 @@ export async function listCommitCheckRuns(
         status: r.status ?? "",
         conclusion: r.conclusion ?? null,
         summary: r.output?.summary ?? "",
+        startedAt: r.started_at ?? "",
       });
     }
     if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
   }
   // Newest first, by id — the endpoint's own order is not the contract.
   return out.sort((a, b) => b.id - a.id);
+}
+
+/**
+ * A finished "Hermes review" ledger marker on one of a PR's commits.
+ *
+ * The marker sits on the commit the run reviewed and does NOT follow the PR's
+ * head, which makes it the one reliable record of what a review covered:
+ * `pulls/{n}/reviews[].commit_id` is re-pointed at the current head when the
+ * branch tip is rewritten (a force-push, "Update branch" — s3ntin3l8/.github#129).
+ */
+export interface ReviewMarker {
+  /** The commit the run reviewed. */
+  oid: string;
+  /** The check run's id: the highest is the newest dispatch. */
+  id: number;
+  /** When the run started — ISO-8601 UTC. */
+  startedAt: string;
+}
+
+/** How many of a PR's newest commits are searched for markers. */
+const MARKER_COMMIT_WINDOW = 50;
+/** GitHub lists at most 250 commits of a PR, 100 to a page. */
+const PR_COMMITS_PAGE_SIZE = 100;
+const PR_COMMITS_MAX_PAGES = 3;
+/** Commits whose check runs are read at the same time. */
+const MARKER_FETCH_CONCURRENCY = 10;
+
+/**
+ * The finished (`success`) ledger markers on a PR's last commits. A run that
+ * was stopped or failed reviewed nothing, so it is not returned. The shared
+ * workflow reads the same markers with the same window and the same filter
+ * (`hermes-review.yml`, "Resolve review scope") — the two must agree, since
+ * the delta base they derive goes into one idempotency key.
+ *
+ * Two tokens, because no single one can do both reads: the PR's commits need
+ * the PR token (`pull_requests`/`contents`), while the App's installation
+ * token for the ledger is checks-only (`checks` + `metadata`) and GitHub
+ * answers GraphQL `pullRequest.commits` — and REST `/pulls/{n}/commits` —
+ * with FORBIDDEN for it on a private repository. Its own check-run reads work.
+ * (It is the same split `readRememberedSession` relies on.)
+ *
+ * Cost: up to 3 requests for the PR's commits plus one per commit of the
+ * window (50), in batches of 10 — `base()` runs on every relay dispatch, and
+ * the window is what sizes it.
+ */
+export async function listReviewMarkers(
+  prToken: string,
+  checksToken: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  markerName: string,
+  /**
+   * Told about each commit whose check runs could not be read. Those commits
+   * are skipped and the rest are kept: a base derived from fewer commits is
+   * older, so the round over-reviews rather than under-reviews.
+   */
+  onError?: (detail: string) => void,
+): Promise<ReviewMarker[]> {
+  // The PR's commits, oldest first; only the newest window is searched.
+  const commits: string[] = [];
+  for (let page = 1; page <= PR_COMMITS_MAX_PAGES; page++) {
+    const data = await githubRequest<Array<{ sha: string }>>(
+      prToken,
+      owner,
+      repo,
+      "GET",
+      `/pulls/${prNumber}/commits?per_page=${PR_COMMITS_PAGE_SIZE}&page=${page}`,
+    );
+    commits.push(...data.map((c) => c.sha));
+    if (data.length < PR_COMMITS_PAGE_SIZE) break;
+  }
+  const window = commits.slice(-MARKER_COMMIT_WINDOW);
+  const out: ReviewMarker[] = [];
+  for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {
+    const batch = window.slice(i, i + MARKER_FETCH_CONCURRENCY);
+    // Not atomic: one commit's failed read (a 5xx, a timeout, a rate limit)
+    // must not throw away the markers the other reads already returned.
+    const runs = await Promise.allSettled(
+      batch.map((sha) => listCommitCheckRuns(checksToken, owner, repo, sha)),
+    );
+    batch.forEach((sha, j) => {
+      const result = runs[j];
+      if (!result || result.status === "rejected") {
+        onError?.(
+          `check runs of ${sha} unreadable, skipping it: ${result?.status === "rejected" ? String(result.reason?.message ?? result.reason) : "no result"}`,
+        );
+        return;
+      }
+      for (const run of result.value) {
+        if (run.name === markerName && run.conclusion === "success" && run.startedAt) {
+          out.push({ oid: sha, id: run.id, startedAt: run.startedAt });
+        }
+      }
+    });
+  }
+  return out;
+}
+
+export interface CommitInfo {
+  /** The commit's tree: two commits with one tree hold identical content. */
+  treeSha: string;
+  /** When the commit was committed — ISO-8601 UTC; "" when unknown. */
+  committedAt: string;
+}
+
+/** A commit's tree and committer date. */
+export async function getCommitInfo(
+  token: string,
+  owner: string,
+  repo: string,
+  sha: string,
+): Promise<CommitInfo> {
+  const data = await githubRequest<{
+    commit?: { tree?: { sha?: string }; committer?: { date?: string | null } | null };
+  }>(token, owner, repo, "GET", `/commits/${encodeURIComponent(sha)}`);
+  return {
+    treeSha: data.commit?.tree?.sha ?? "",
+    committedAt: data.commit?.committer?.date ?? "",
+  };
 }
 
 /**

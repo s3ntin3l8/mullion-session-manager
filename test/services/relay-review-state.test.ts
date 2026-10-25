@@ -28,6 +28,7 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
 import {
   annotateRelayReviewState,
   getRelayReviewState,
+  resolveReviewedCommit,
   overlayRelayRuns,
   pruneLandedMemo,
 } from "../../src/services/relay-review-state.js";
@@ -137,6 +138,17 @@ describe("getRelayReviewState memo", () => {
     expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(2);
   });
 
+  it("finds a review whose commit_id GitHub re-pointed at a newer head (#129)", async () => {
+    // The run was dispatched for sha41; "Update branch" has since moved the
+    // head, and GitHub re-pointed the approval's commit_id with it. The review
+    // is the run's all the same: it was submitted after the dispatch.
+    mocks.listPullRequestReviews.mockResolvedValue([{ ...hermesReview, commitId: "sha-merge" }]);
+    expect(await ask(makeApp())).toMatchObject({
+      state: "landed",
+      verdict: "APPROVED",
+    });
+  });
+
   it("ignores another bot's review of the head", async () => {
     mocks.listPullRequestReviews.mockResolvedValue([{ ...hermesReview, author: "claude[bot]" }]);
     expect(await ask(makeApp())).toMatchObject({ state: "requested", landedChecked: true });
@@ -213,5 +225,99 @@ describe("overlayRelayRuns", () => {
       landedChecked: false,
     });
     expect(cached.relayReview).toMatchObject({ state: "landed", runId: "run_1" });
+  });
+});
+
+describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
+  const review = (over: Record<string, unknown> = {}) => ({
+    author: "hermes[bot]",
+    authorIsBot: true,
+    state: "APPROVED",
+    commitId: "sha-now",
+    submittedAt: "2026-01-02T00:00:00Z",
+    ...over,
+  });
+  const resolve = (
+    reviews: ReturnType<typeof review>[],
+    over: Partial<Parameters<typeof resolveReviewedCommit>[0]> = {},
+  ) =>
+    resolveReviewedCommit({
+      reviews,
+      reviewerBotLogin: "hermes[bot]",
+      committedAt: async () => "2026-01-01T00:00:00Z",
+      ...over,
+    });
+
+  it("is empty with no landed review by the reviewer", async () => {
+    expect(await resolve([])).toBe("");
+    expect(await resolve([review({ author: "claude[bot]" })])).toBe("");
+    expect(await resolve([review({ state: "PENDING", submittedAt: null })])).toBe("");
+    expect(await resolve([review({ authorIsBot: false })])).toBe("");
+  });
+
+  it("takes the newest marker that a landed review was submitted after", async () => {
+    // Deliberately not in id order: the newest is decided by id, not by position.
+    const markers = async () => [
+      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z" },
+      { oid: "silent", id: 3, startedAt: "2026-01-03T00:00:00Z" },
+      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z" },
+    ];
+    expect(await resolve([review()], { markers })).toBe("new");
+  });
+
+  it("does not pair a marker with a dismissed review (the escape hatch)", async () => {
+    // Dismissing the review retracts the pairing: the marker alone is not a
+    // review, so rule 1 is empty and, with no landed review left, so is rule 2.
+    const markers = async () => [{ oid: "reviewed", id: 1, startedAt: "2026-01-01T11:00:00Z" }];
+    expect(await resolve([review({ state: "DISMISSED" })], { markers })).toBe("");
+  });
+
+  it("says so when the ledger or a commit cannot be read", async () => {
+    const onError = vi.fn();
+    expect(
+      await resolve([review({ commitId: "sha-old" })], {
+        markers: async () => {
+          throw new Error("FORBIDDEN");
+        },
+        onError,
+      }),
+    ).toBe("sha-old");
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("ledger unreadable"));
+    onError.mockClear();
+    expect(
+      await resolve([review()], {
+        committedAt: async () => {
+          throw new Error("gone");
+        },
+        onError,
+      }),
+    ).toBe("");
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("unreadable"));
+  });
+
+  it("falls back to the commit_id when the ledger fails or names nothing", async () => {
+    const reviews = [review({ commitId: "sha-old" })];
+    expect(
+      await resolve(reviews, {
+        markers: async () => {
+          throw new Error("no checks scope");
+        },
+      }),
+    ).toBe("sha-old");
+    expect(await resolve(reviews, { markers: async () => [] })).toBe("sha-old");
+  });
+
+  it("trusts a commit_id only while the commit is not newer than the review", async () => {
+    expect(await resolve([review()], { committedAt: async () => "2026-01-03T00:00:00Z" })).toBe("");
+    expect(await resolve([review()], { committedAt: async () => "" })).toBe("");
+    expect(
+      await resolve([review()], {
+        committedAt: async () => {
+          throw new Error("gone");
+        },
+      }),
+    ).toBe("");
+    expect(await resolve([review({ commitId: "" })])).toBe("");
+    expect(await resolve([review({ submittedAt: null })])).toBe("");
   });
 });

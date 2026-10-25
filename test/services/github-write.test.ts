@@ -11,6 +11,8 @@ import {
   findMergedPullRequestByHead,
   getPullRequestByNumber,
   listPullRequestReviews,
+  listReviewMarkers,
+  getCommitInfo,
   MAX_REVIEW_BODY_CHARS,
   listIssueComments,
   MAX_ISSUE_COMMENT_CHARS,
@@ -213,6 +215,140 @@ describe("github-write service", () => {
         }),
       }),
     );
+  });
+
+  describe("listReviewMarkers (s3ntin3l8/.github#129)", () => {
+    const checkRun = (over: Record<string, unknown> = {}) => ({
+      id: 10,
+      name: "Hermes review",
+      status: "completed",
+      conclusion: "success",
+      started_at: "2026-01-01T12:00:00Z",
+      ...over,
+    });
+    // The PR's commits come from /pulls/{n}/commits, each commit's check runs
+    // from /commits/{sha}/check-runs; answered by URL so the order the reads
+    // happen in does not matter.
+    const serve = (shas: string[], runsBySha: Record<string, unknown[]>) =>
+      fetchMock.mockImplementation(async (url: string) => {
+        const u = String(url);
+        if (u.includes("/pulls/9/commits")) {
+          const page = Number(/[?&]page=(\d+)/.exec(u)?.[1] ?? "1");
+          return jsonResponse(
+            200,
+            shas.slice((page - 1) * 100, page * 100).map((sha) => ({ sha })),
+          );
+        }
+        const sha = /\/commits\/([^/]+)\/check-runs/.exec(u)?.[1] ?? "";
+        return jsonResponse(200, { check_runs: runsBySha[sha] ?? [] });
+      });
+    const authOf = (call: unknown[]) => JSON.stringify((call[1] as RequestInit).headers);
+    const list = () =>
+      listReviewMarkers("pr-tok", "checks-tok", "owner", "repo", 9, "Hermes review");
+
+    it("returns the finished markers with the commit each sits on", async () => {
+      serve(["aaa", "bbb"], {
+        aaa: [checkRun({ id: 10 })],
+        bbb: [checkRun({ id: 20, started_at: "2026-01-02T00:00:00Z" })],
+      });
+      expect(await list()).toEqual([
+        { oid: "aaa", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+        { oid: "bbb", id: 20, startedAt: "2026-01-02T00:00:00Z" },
+      ]);
+    });
+
+    it("reads the PR's commits with the PR token and the check runs with the checks token", async () => {
+      // The App's checks-only token cannot read a private repo's PR commits.
+      serve(["aaa"], { aaa: [checkRun()] });
+      await list();
+      const commitsCall = fetchMock.mock.calls.find((c) =>
+        String(c[0]).includes("/pulls/9/commits"),
+      );
+      const runsCall = fetchMock.mock.calls.find((c) => String(c[0]).includes("/check-runs"));
+      expect(authOf(commitsCall as unknown[])).toContain("pr-tok");
+      expect(authOf(commitsCall as unknown[])).not.toContain("checks-tok");
+      expect(authOf(runsCall as unknown[])).toContain("checks-tok");
+      expect(authOf(runsCall as unknown[])).not.toContain("pr-tok");
+    });
+
+    it("drops runs that reviewed nothing, other checks, and unusable rows", async () => {
+      serve(["aaa"], {
+        aaa: [
+          checkRun({ conclusion: "cancelled" }),
+          checkRun({ conclusion: null }),
+          checkRun({ name: "CI" }),
+          checkRun({ started_at: null }),
+        ],
+      });
+      expect(await list()).toEqual([]);
+    });
+
+    it("keeps the markers it read when one commit's check runs cannot be read", async () => {
+      // One failed read (a 5xx, a timeout) loses that commit only, not the whole
+      // answer: the base is then older, so the round over-reviews instead of
+      // degrading to the re-pointed commit_id.
+      serve(["aaa", "bad", "ccc"], { aaa: [checkRun({ id: 1 })], ccc: [checkRun({ id: 3 })] });
+      const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("/commits/bad/check-runs") ? jsonResponse(500, {}) : inner(url),
+      );
+      const onError = vi.fn();
+      const markers = await listReviewMarkers(
+        "pr-tok",
+        "checks-tok",
+        "owner",
+        "repo",
+        9,
+        "Hermes review",
+        onError,
+      );
+      expect(markers.map((m) => m.oid)).toEqual(["aaa", "ccc"]);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("bad"));
+    });
+
+    it("still fails when the PR's commits cannot be read at all", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(500, {}));
+      await expect(list()).rejects.toBeInstanceOf(GitHubApiError);
+    });
+
+    it("searches only the newest 50 commits of a long PR, across pages", async () => {
+      const shas = Array.from({ length: 130 }, (_, i) => `c${i}`);
+      serve(shas, {
+        c129: [checkRun({ id: 1 })],
+        c79: [checkRun({ id: 2 })],
+        c80: [checkRun({ id: 3 })],
+      });
+      const markers = await list();
+      // c80..c129 are the last 50: c79 is outside the window.
+      expect(markers.map((m) => m.oid).sort()).toEqual(["c129", "c80"]);
+      const runReads = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/check-runs"));
+      expect(runReads).toHaveLength(50);
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("page=2"))).toBe(true);
+    });
+  });
+
+  describe("getCommitInfo", () => {
+    it("returns the commit's tree and committer date", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          commit: { tree: { sha: "treeabc" }, committer: { date: "2026-01-01T00:00:00Z" } },
+        }),
+      );
+      expect(await getCommitInfo("tok", "owner", "repo", "abc123")).toEqual({
+        treeSha: "treeabc",
+        committedAt: "2026-01-01T00:00:00Z",
+      });
+      expect(fetchMock.mock.calls[0][0]).toContain("/commits/abc123");
+    });
+
+    it("tolerates a commit with no committer", async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, { commit: {} }));
+      expect(await getCommitInfo("tok", "owner", "repo", "abc123")).toEqual({
+        treeSha: "",
+        committedAt: "",
+      });
+    });
   });
 
   describe("listPullRequestReviews", () => {

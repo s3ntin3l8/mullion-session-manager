@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   listIssueComments: vi.fn(),
   getIssueState: vi.fn(),
   completeReviewMarkerCheckRun: vi.fn(),
+  getCommitInfo: vi.fn(),
+  listReviewMarkers: vi.fn(),
   getRemoteHostClient: vi.fn(),
 }));
 
@@ -50,6 +52,8 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
   listIssueComments: mocks.listIssueComments,
   getIssueState: mocks.getIssueState,
   completeReviewMarkerCheckRun: mocks.completeReviewMarkerCheckRun,
+  getCommitInfo: mocks.getCommitInfo,
+  listReviewMarkers: mocks.listReviewMarkers,
 }));
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
@@ -81,6 +85,7 @@ import {
   pruneLandedMemo,
   repoRefMemoSize,
   resetRepoRefMemo,
+  reviewReader,
 } from "../../src/routes/review-relay.js";
 import {
   HermesAuthError,
@@ -175,6 +180,16 @@ describe("review-request routes", () => {
     // The duplicate-review check (#1705) reads the PR's reviews on every
     // dispatch — an empty list is the common case.
     mocks.listPullRequestReviews.mockResolvedValue([]);
+    // The reviewed commit comes from the ledger (s3ntin3l8/.github#129): no
+    // markers by default, and every commit is old enough that a review's
+    // commit_id is trusted — the cases that matter override both.
+    mocks.listReviewMarkers.mockResolvedValue([]);
+    mocks.getCommitInfo.mockImplementation(
+      async (_t: string, _o: string, _r: string, sha: string) => ({
+        treeSha: `tree-${sha}`,
+        committedAt: "2000-01-01T00:00:00Z",
+      }),
+    );
     mocks.listIssueComments.mockResolvedValue([]);
     mocks.getIssueState.mockResolvedValue({ state: "open", labels: [], isPullRequest: false });
   });
@@ -333,6 +348,7 @@ describe("review-request routes", () => {
       // The base is resolved lazily, by the relay, so a request the relay
       // refuses does not pay for the PR's reviews.
       resolveBase: expect.any(Function),
+      sameContent: expect.any(Function),
       sessionId,
       // Any token that can read check runs finds the remembered session;
       // only the App's checks token writes the marker (#1790).
@@ -513,6 +529,166 @@ describe("review-request routes", () => {
     });
   });
 
+  describe("the reviewed commit comes from the ledger (s3ntin3l8/.github#129)", () => {
+    // GitHub re-points an approval's commit_id at the PR's current head when
+    // the branch tip is rewritten ("Update branch", a force-push). The check
+    // run the review left on the commit it reviewed does not move.
+    const resolvedBase = async () => {
+      const call = mocks.requestHermesReview.mock.calls[0];
+      const resolveBase = (call?.[1] as { resolveBase?: () => Promise<string> }).resolveBase;
+      return resolveBase ? resolveBase() : undefined;
+    };
+    const hermesApproval = (over: Record<string, unknown> = {}) => ({
+      author: "s3ntin3l8-hermes[bot]",
+      authorIsBot: true,
+      state: "APPROVED",
+      commitId: "sha42", // re-pointed: this is the PR's CURRENT head
+      submittedAt: "2026-01-02T00:00:00Z",
+      ...over,
+    });
+
+    it("takes the base from the ledger marker, not from a re-pointed commit_id", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
+      mocks.listReviewMarkers.mockResolvedValue([
+        { oid: "sha-reviewed", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+      ]);
+      // The head was committed AFTER the review was submitted.
+      mocks.getCommitInfo.mockImplementation(
+        async (_t: string, _o: string, _r: string, sha: string) => ({
+          treeSha: `tree-${sha}`,
+          committedAt: sha === "sha42" ? "2026-01-03T00:00:00Z" : "2026-01-01T00:00:00Z",
+        }),
+      );
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(await resolvedBase()).toBe("sha-reviewed");
+      // The App's checks-only token cannot read a private repo's commits: it
+      // is for the markers, and nothing else.
+      expect(mocks.getCommitInfo).toHaveBeenCalled();
+      expect(mocks.getCommitInfo.mock.calls.every((c) => c[0] !== "ghs_checks")).toBe(true);
+    });
+
+    it("does not trust a commit_id that is newer than its review when no marker pairs", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
+      mocks.getCommitInfo.mockResolvedValue({
+        treeSha: "t",
+        committedAt: "2026-01-03T00:00:00Z",
+      });
+      await post(sessionId, {});
+      // Nothing is known about what was covered: the whole diff.
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("does not trust a commit_id it cannot read", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "gone" })]);
+      mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("gone", 404));
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("");
+    });
+
+    it("ignores a marker no review was submitted after (the run posted nothing)", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "sha40" })]);
+      mocks.listReviewMarkers.mockResolvedValue([
+        { oid: "sha-silent", id: 20, startedAt: "2026-01-05T00:00:00Z" },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("prefers the newest paired marker", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
+      mocks.listReviewMarkers.mockResolvedValue([
+        { oid: "sha-newer", id: 30, startedAt: "2026-01-01T13:00:00Z" },
+        { oid: "sha-older", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+      ]);
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha-newer");
+    });
+
+    it("falls back to the commit_id when the ledger cannot be read", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "sha40" })]);
+      mocks.listReviewMarkers.mockRejectedValue(new GitHubApiError("no checks scope", 403));
+      await post(sessionId, {});
+      expect(await resolvedBase()).toBe("sha40");
+    });
+
+    it("reads the ledger with the check-run read token", async () => {
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "sha40" })]);
+      await post(sessionId, {});
+      await resolvedBase();
+      // Two tokens: the PR's commits are read with the PR token, the check runs
+      // with the check-run read token (the App's checks-only one).
+      expect(mocks.listReviewMarkers).toHaveBeenCalledWith(
+        expect.not.stringMatching(/^ghs_checks$/),
+        "ghs_checks",
+        "acme",
+        "widgets",
+        expect.any(Number),
+        "Hermes review",
+        expect.any(Function), // onError: a failed commit read is logged, not swallowed
+      );
+    });
+
+    it("does not warn that a re-pointed approval 'already landed on this commit'", async () => {
+      // The approval reports the head's SHA, but the head was committed after
+      // the review: it never saw this commit.
+      mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
+      mocks.getCommitInfo.mockResolvedValue({
+        treeSha: "t",
+        committedAt: "2026-01-03T00:00:00Z",
+      });
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(200);
+      expect(res.json().warning).toBeUndefined();
+    });
+  });
+
+  describe("reviewReader().sameContent / committedAt (s3ntin3l8/.github#129)", () => {
+    const reader = () =>
+      reviewReader("pr-token", "acme", "widgets", 1, "hermes[bot]", "ghs_checks");
+
+    it("treats the same commit as the same content without asking GitHub", async () => {
+      expect(await reader().sameContent("a", "a")).toBe(true);
+      expect(mocks.getCommitInfo).not.toHaveBeenCalled();
+    });
+
+    it("compares trees, reading commits with the PR token and not the checks token", async () => {
+      mocks.getCommitInfo.mockImplementation(
+        async (_t: string, _o: string, _r: string, sha: string) => ({
+          treeSha: sha === "rebased" ? "tree-a" : `tree-${sha}`,
+          committedAt: "2000-01-01T00:00:00Z",
+        }),
+      );
+      const r = reader();
+      // A rebase that changed nothing: a new SHA with the reviewed commit's tree.
+      expect(await r.sameContent("a", "rebased")).toBe(true);
+      // An "Update branch" merge: new content, new tree.
+      expect(await r.sameContent("a", "merged")).toBe(false);
+      expect(mocks.getCommitInfo.mock.calls.every((c) => c[0] === "pr-token")).toBe(true);
+    });
+
+    it("is not 'the same' when a tree is unreadable or empty", async () => {
+      mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("nope", 404));
+      expect(await reader().sameContent("x", "y")).toBe(false);
+      mocks.getCommitInfo.mockResolvedValue({ treeSha: "", committedAt: "" });
+      expect(await reader().sameContent("x", "y")).toBe(false);
+    });
+
+    it("reads each commit once per request", async () => {
+      mocks.getCommitInfo.mockResolvedValue({ treeSha: "t", committedAt: "2000-01-01T00:00:00Z" });
+      const r = reader();
+      await r.sameContent("x", "y");
+      await r.committedAt("x");
+      await r.committedAt("y");
+      expect(mocks.getCommitInfo).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports an unreadable commit's date as unknown", async () => {
+      mocks.getCommitInfo.mockRejectedValue(new GitHubApiError("nope", 404));
+      expect(await reader().committedAt("x")).toBe("");
+    });
+  });
+
   describe("duplicate-review warning (#1705)", () => {
     it("warns, but still dispatches, when a bot review already landed for the commit", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([
@@ -641,6 +817,7 @@ describe("review-request routes", () => {
       prNumber: 99,
       headSha: "sha99",
       resolveBase: expect.any(Function),
+      sameContent: expect.any(Function),
       sessionId,
       githubToken: "ghs_checks",
       markerWriteToken: "ghs_checks",

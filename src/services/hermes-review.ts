@@ -258,6 +258,13 @@ export interface RelayTarget {
    * (up to ten pages), and a request the relay refuses must not pay for it.
    */
   resolveBase?: () => Promise<string>;
+  /**
+   * Does the head hold the same content as the reviewed commit (the same
+   * commit, or the same tree)? A rebase or a recreated branch that changed
+   * nothing has nothing new to review; an "Update branch" merge does. The
+   * workflow skips on the same test. Without it only the same commit counts.
+   */
+  sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
   /** Dispatching Mullion session, when the request came from an agent. */
   sessionId?: number;
   /**
@@ -723,6 +730,8 @@ export interface HermesReviewRequest {
    * RANGE and cannot dispatch it twice.
    */
   resolveBase?: () => Promise<string>;
+  /** See `RelayTarget.sameContent`. */
+  sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
   /** Dispatching Mullion session, so only it can stop the run. */
   sessionId?: number;
   /**
@@ -772,6 +781,7 @@ export async function requestHermesReview(
     prNumber,
     headSha,
     resolveBase,
+    sameContent,
     sessionId,
     githubToken,
     markerWriteToken,
@@ -785,6 +795,7 @@ export async function requestHermesReview(
     number: prNumber,
     headSha,
     resolveBase,
+    sameContent,
     sessionId,
     githubToken,
     markerWriteToken,
@@ -901,10 +912,18 @@ export async function requestRelay(
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
-    // An empty range means the bot's last landed review is on this very
-    // commit: there is nothing new to review, and a run for it would be a
-    // second review of the same diff.
-    if (target.kind === "pull_request" && baseSha && baseSha === target.headSha) {
+    // An empty range means the reviewed commit holds the head's content (it IS
+    // the head, or has its tree — a rebase or a recreated branch that changed
+    // nothing): there is nothing new to review, and a run for it would be a
+    // second review of the same diff. The reviewed commit comes from the
+    // ledger, not from a review's commit_id, which GitHub re-points at the
+    // head when the branch is rewritten (s3ntin3l8/.github#129).
+    if (
+      target.kind === "pull_request" &&
+      baseSha &&
+      (baseSha === target.headSha ||
+        (target.sameContent && (await target.sameContent(baseSha, target.headSha ?? ""))))
+    ) {
       throw new ReviewAlreadyLandedError(baseSha);
     }
     const rangeKey =
@@ -1111,7 +1130,7 @@ export async function requestRelay(
  * request through the relay see a review the workflow started, and the other
  * way round.
  */
-const REVIEW_MARKER_NAME = "Hermes review";
+export const REVIEW_MARKER_NAME = "Hermes review";
 
 /**
  * The session the previous round ran in, read off the in-flight marker it
