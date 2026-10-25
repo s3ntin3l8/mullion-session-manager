@@ -8,10 +8,11 @@ import type { AddressInfo } from "node:net";
 import type * as ScaffoldGenerateModule from "../../src/services/scaffold-generate.js";
 import { vi } from "vitest";
 import { EventEmitter } from "node:events";
-import { spawn as childProcessSpawn } from "node:child_process";
+import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
+import type { CloneHealth } from "../../src/shared/types.js";
 import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
@@ -780,6 +781,90 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(dock.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
+  // Issue #1851 — the READ-ONLY clone health check, for a remote-hosted
+  // project's clone. It goes through the same resolveWithinRoots gate as
+  // every other filesystem-touching route in this file, and it never
+  // mutates anything.
+  it("reports the health of a clone on this host", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "health-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-health?cwd=${encodeURIComponent(repo)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as CloneHealth;
+    expect(body.healthy).toBe(true);
+    expect(body.gitDir).toBe(path.join(repo, ".git"));
+    expect(body.zeroByteObjects).toEqual([]);
+    expect(body.otherZeroByteFiles).toEqual([]);
+    expect(body.fsckErrors).toEqual([]);
+    await app.close();
+  });
+
+  // The check is READ-ONLY: a damaged clone is reported, never repaired.
+  it("reports a damaged clone as unhealthy, and changes nothing", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "damaged-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+    // A zero-byte loose object — the #1836 damage.
+    const tree = execFileSync("git", ["-C", repo, "rev-parse", "HEAD^{tree}"], {
+      env: gitEnv(),
+      encoding: "utf8",
+    }).trim();
+    const loose = path.join(repo, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+    fs.rmSync(loose, { force: true });
+    fs.writeFileSync(loose, "");
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-health?cwd=${encodeURIComponent(repo)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as CloneHealth;
+    expect(body.healthy).toBe(false);
+    expect(body.zeroByteObjects).toHaveLength(1);
+    // Read-only: the damage is still exactly where it was.
+    expect(fs.statSync(loose).size).toBe(0);
+    await app.close();
+  });
+
+  it("rejects a git-health request with no cwd", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/git-health",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects a git-health request for a cwd outside this agent's PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-health-outside-"));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/internal/git-health?cwd=${encodeURIComponent(outsideRoots)}`,
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
 
     fs.rmSync(outsideRoots, { recursive: true, force: true });
     await app.close();

@@ -45,6 +45,7 @@ import type {
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
+import type { CloneHealth } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
 import type {
@@ -1000,6 +1001,12 @@ export class RemoteHostClient {
    * from a host-reachability 5xx. */
   resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Issue #1851 — the READ-ONLY clone health check on this agent's
+   * filesystem. Returns the doctor's CloneHealth shape. */
+  resolveGitHealth(cwd: string): Promise<CloneHealth> {
+    return this.request(`/internal/git-health?cwd=${encodeURIComponent(cwd)}`);
   }
 
   /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).

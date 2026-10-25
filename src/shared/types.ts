@@ -241,6 +241,27 @@ export interface GitPullResult {
 }
 
 // ---------------------------------------------------------------------------
+// services/git-doctor.ts — CloneHealth (issue #1851)
+//
+// The READ-ONLY half of the doctor: what a health check on a project's clone
+// found. It never mutates anything — the repair is a deliberate, operator-run
+// action (scripts/git-doctor.mjs --apply).
+
+export interface CloneHealth {
+  /** The shared git dir, or null when this is not a git checkout. */
+  gitDir: string | null;
+  /** Zero-byte files that are loose objects — the #1836 damage. */
+  zeroByteObjects: string[];
+  /** Zero-byte files under objects/ that are NOT loose objects — a different,
+   * riskier kind of damage. */
+  otherZeroByteFiles: string[];
+  /** git fsck's error lines, without the `dangling …` noise that is normal. */
+  fsckErrors: string[];
+  /** True when nothing is wrong. */
+  healthy: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // routes/projects.ts — release-please detection/run/merge (#744)
 // ---------------------------------------------------------------------------
 //

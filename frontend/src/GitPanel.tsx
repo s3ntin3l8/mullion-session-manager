@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api/index.js";
-import type { GitBranchesResult, GitFileStatus, GitStatus, Session } from "./api/index.js";
+import type {
+  CloneHealth,
+  GitBranchesResult,
+  GitFileStatus,
+  GitStatus,
+  Session,
+} from "./api/index.js";
 import { GitBranchIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
@@ -93,6 +99,9 @@ export function GitPanel({
   );
   const [isFetching, setIsFetching] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [health, setHealth] = useState<CloneHealth | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
   const [pullError, setPullError] = useState<string | null>(null);
   // Issue #442 — per-row refusal state for branch delete / worktree remove,
   // keyed by `branch:<name>` / `worktree:<path>`. Cleared on a successful
@@ -129,6 +138,7 @@ export function GitPanel({
   );
   const fetchProjectGit = useDashboardStore((s) => s.fetchProjectGit);
   const pullProjectGit = useDashboardStore((s) => s.pullProjectGit);
+  const checkProjectGitHealth = useDashboardStore((s) => s.checkProjectGitHealth);
   const effectiveAutoFetch = autoFetch ?? globalEnabled;
   const isInherited = autoFetch === null;
 
@@ -398,6 +408,21 @@ export function GitPanel({
     }
   }, [params.projectId, pullProjectGit, refreshAll]);
 
+  // Issue #1851 — a READ-ONLY health check on this project's clone. It never
+  // mutates anything; the repair stays an operator-run action.
+  const handleCheckHealth = useCallback(async () => {
+    setIsCheckingHealth(true);
+    setHealth(null);
+    try {
+      setHealth(await checkProjectGitHealth(params.projectId));
+    } catch (err) {
+      console.debug("[GitPanel] checkProjectGitHealth failed", err);
+      setHealthError(err instanceof Error ? err.message : "Health check failed — try again.");
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  }, [params.projectId, checkProjectGitHealth]);
+
   const handleToggleAutoFetch = useCallback(async () => {
     const store = useDashboardStore.getState();
     const p = store.projects.find((p) => p.id === params.projectId);
@@ -461,6 +486,14 @@ export function GitPanel({
           >
             {isPulling ? "⟳" : "↓"} Pull
           </button>
+          <button
+            className="git-panel-fetch-btn"
+            onClick={handleCheckHealth}
+            disabled={isCheckingHealth}
+            title="Check this repository for damage from a background git gc (read-only)"
+          >
+            {isCheckingHealth ? "⟳" : "✓"} Check
+          </button>
           <span className="git-panel-toggle-wrapper">
             <Toggle
               size="small"
@@ -490,6 +523,36 @@ export function GitPanel({
 
       {pullError && (
         <div className="github-panel-empty-row github-panel-conflicts">{pullError}</div>
+      )}
+
+      {healthError && (
+        <div className="github-panel-empty-row github-panel-conflicts">{healthError}</div>
+      )}
+
+      {health && (
+        <div
+          className={
+            health.healthy
+              ? "github-panel-empty-row"
+              : "github-panel-empty-row github-panel-conflicts"
+          }
+        >
+          {health.healthy ? (
+            "This repository is healthy."
+          ) : (
+            <>
+              This repository looks damaged
+              {health.zeroByteObjects.length > 0 &&
+                `: ${health.zeroByteObjects.length} zero-byte object(s)`}
+              {health.otherZeroByteFiles.length > 0 &&
+                `: ${health.otherZeroByteFiles.length} other zero-byte file(s)`}
+              {health.fsckErrors.length > 0 && `: ${health.fsckErrors.length} fsck error(s)`}. A
+              background git gc can do this — repair it with{" "}
+              <code>make git-doctor APPLY=1 DIR=&lt;path&gt;</code> on the machine that holds the
+              clone.
+            </>
+          )}
+        </div>
       )}
 
       <div className="github-panel-section">
