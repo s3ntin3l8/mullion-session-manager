@@ -143,16 +143,7 @@
   display: flex;
   flex-direction: column;
   border-bottom: 1px solid var(--border);
-  padding: 4px 0 6px;
-}
-.sidebar-blocked-tasks-heading {
-  margin: 0;
-  padding: 4px 12px 2px;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--dim);
+  padding-bottom: 6px;
 }
 .sidebar-blocked-task {
   display: flex;
@@ -186,6 +177,21 @@
   border: 1px solid var(--border-soft);
   border-radius: 999px;
   padding: 0 5px;
+}
+.sidebar-blocked-tasks-more {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 4px 12px 2px;
+  cursor: pointer;
+}
+.sidebar-blocked-tasks-more:hover {
+  color: var(--fg);
 }
 
 /* Device lifecycle controls (Start/Stop on the sidebar's own device rows).

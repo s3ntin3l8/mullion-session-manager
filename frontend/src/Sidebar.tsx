@@ -93,6 +93,13 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 // rendering strategy out from under the user mid-keystroke.
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
+// Issue #1891 — every blocked task is a row above Devices and Projects, and
+// `.sidebar-wrapper` is the only scroller, so an uncapped backlog squeezes
+// the session list off the first screen. Eight is enough to see that work
+// is stuck; the rest stay one click away on the board, through the same
+// `onOpenTasks` the Tasks entry already uses — not a second way to navigate.
+const BLOCKED_TASKS_VISIBLE_CAP = 8;
+
 export interface SidebarProps {
   // Phone navigator only: render just one of the sidebar's two areas (the
   // full-screen navigator shows Projects and Devices as separate tabs).
@@ -354,6 +361,19 @@ export function Sidebar({
     [projects, filterActive, filteredSessionsByProject],
   );
 
+  // Issue #1891 — the Tasks entry above is a nav row and stays global on
+  // purpose. This is a list, so it follows the same filter as the project
+  // tree: `visibleProjects` is already "projects the search or the chips
+  // still show", and a task whose project was filtered out does not stay
+  // behind as a row from somewhere else.
+  const filteredBlockedTasks = useMemo(() => {
+    if (!filterActive) return blockedTasks;
+    const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
+    return blockedTasks.filter((task) => visibleProjectIds.has(task.projectId));
+  }, [blockedTasks, filterActive, visibleProjects]);
+  const shownBlockedTasks = filteredBlockedTasks.slice(0, BLOCKED_TASKS_VISIBLE_CAP);
+  const hiddenBlockedTaskCount = filteredBlockedTasks.length - shownBlockedTasks.length;
+
   // Issue #1889 — the Projects section header's caption. It used to be the
   // bare word "sessions", which read as a label with no number (or a number
   // that never got filled in); it is now the count of the sessions the
@@ -495,20 +515,29 @@ export function Sidebar({
           )}
         </button>
       )}
-      {phoneSection !== "devices" && blockedTasks.length > 0 && (
+      {phoneSection !== "devices" && filteredBlockedTasks.length > 0 && (
         <section className="sidebar-blocked-tasks" aria-label="Blocked tasks">
-          <h3 className="sidebar-blocked-tasks-heading">Blocked tasks</h3>
-          {blockedTasks.map((task) => (
+          <div className="sidebar-section-header">
+            <h3 className="sidebar-section-title">Blocked tasks</h3>
+          </div>
+          {shownBlockedTasks.map((task) => (
             <button
               key={task.id}
               type="button"
               className="sidebar-blocked-task"
               onClick={() => onOpenTask(task)}
             >
-              <span className="sidebar-blocked-task-title">{task.title}</span>
+              <span className="sidebar-blocked-task-title" title={task.title}>
+                {task.title}
+              </span>
               <span className="sidebar-blocked-task-state">blocked</span>
             </button>
           ))}
+          {hiddenBlockedTaskCount > 0 && (
+            <button type="button" className="sidebar-blocked-tasks-more" onClick={onOpenTasks}>
+              +{hiddenBlockedTaskCount} more
+            </button>
+          )}
         </section>
       )}
       {phoneSection !== "projects" && <SidebarDevices onOpenDevice={onOpenDevice} />}

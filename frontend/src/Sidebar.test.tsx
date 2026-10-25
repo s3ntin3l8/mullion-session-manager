@@ -414,6 +414,51 @@ describe("blocked tasks outside the board (issue #1891)", () => {
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.getByRole("button", { name: /Wait on the API/ })).toHaveTextContent("blocked");
   });
+
+  it("puts the task title on the truncated label", () => {
+    const title = "Wait on the API key rotation that the row cannot show in full";
+    tasks = [makeTask({ id: 1, title, blockedState: "blocked" })];
+    renderSidebar();
+    expect(screen.getByText(title)).toHaveAttribute("title", title);
+  });
+
+  it("caps the list and opens the board for the rest", async () => {
+    tasks = Array.from({ length: 9 }, (_, i) =>
+      makeTask({ id: i + 1, title: `Blocked task ${i + 1}`, blockedState: "blocked" }),
+    );
+    const onOpenTasks = vi.fn();
+    const onOpenTask = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenTasks, onOpenTask });
+
+    expect(screen.getByText("Blocked task 1")).toBeInTheDocument();
+    expect(screen.getByText("Blocked task 8")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked task 9")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "+1 more" }));
+
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+    expect(onOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("hides a blocked task whose project the search has filtered out", async () => {
+    projects = [PROJECT, makeProject({ id: 2, name: "other", cwd: "/home/x/other" })];
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "claude code" }),
+      makeSession({ id: 2, projectId: 2, command: "npm run build" }),
+    ];
+    tasks = [
+      makeTask({ id: 1, projectId: 1, title: "Stuck on demo", blockedState: "blocked" }),
+      makeTask({ id: 2, projectId: 2, title: "Stuck on other", blockedState: "blocked" }),
+    ];
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.type(screen.getByLabelText("Filter sessions"), "npm");
+
+    expect(screen.queryByRole("button", { name: /Stuck on demo/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Stuck on other/ })).toBeInTheDocument();
+  });
 });
 
 describe("Sidebar search filter (U3)", () => {
