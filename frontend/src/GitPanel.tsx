@@ -67,7 +67,7 @@ function statusDotClass(status: GitFileStatus["status"]): string {
 // error) keeps whatever was last successfully shown, exactly like the
 // sidebar's own gitStatuses map now does (store.ts's refreshGitStatuses).
 //
-// Audit finding 28 (docs/ui-ux-audit.md) — that "keeps whatever was last
+// Audit finding 28 (docs/audit/2026-10-frontend-ui-ux.md) — that "keeps whatever was last
 // successfully shown" posture had a hole in it: `status === undefined` meant
 // BOTH "still loading" and "the first fetch failed", so a failed FIRST
 // attempt rendered "Loading…" forever. The user was told the panel was still

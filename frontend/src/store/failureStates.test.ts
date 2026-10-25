@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // The store-level half of the UI/UX audit's "surface failures instead of
-// swallowing them" pass (docs/ui-ux-audit.md).
+// swallowing them" pass (docs/audit/2026-10-frontend-ui-ux.md).
 //
 // Three findings live here:
 //
