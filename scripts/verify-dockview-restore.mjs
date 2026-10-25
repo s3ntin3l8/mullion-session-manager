@@ -95,7 +95,11 @@ function captureAutosavedLayout(page) {
   return captured;
 }
 
-/** Resolves true once a layout PATCH newer than `since` has been captured. */
+/**
+ * Resolves true once a layout PATCH newer than `since` has been captured.
+ * Rejects when `signal` aborts — a cancelled wait is not a missed PATCH, and
+ * must not be reported as one.
+ */
 async function waitForPatch(autosaved, since, timeoutMs = 15_000, signal) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
