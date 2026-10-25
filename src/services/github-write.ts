@@ -837,6 +837,8 @@ export interface CommitCheckRunSummary {
   summary: string;
   /** When the run started — ISO-8601 UTC; "" when GitHub did not say. */
   startedAt: string;
+  /** When the run was closed — ISO-8601 UTC; "" while it is still open. */
+  completedAt: string;
 }
 
 /**
@@ -865,6 +867,7 @@ export async function listCommitCheckRuns(
         status?: string;
         conclusion?: string | null;
         started_at?: string | null;
+        completed_at?: string | null;
         output?: { summary?: string | null } | null;
       }>;
     }>(
@@ -884,6 +887,7 @@ export async function listCommitCheckRuns(
         conclusion: r.conclusion ?? null,
         summary: r.output?.summary ?? "",
         startedAt: r.started_at ?? "",
+        completedAt: r.completed_at ?? "",
       });
     }
     if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
@@ -907,6 +911,11 @@ export interface ReviewMarker {
   id: number;
   /** When the run started — ISO-8601 UTC. */
   startedAt: string;
+  /**
+   * When the run was closed — ISO-8601 UTC. With `startedAt` it bounds which
+   * reviews are this run's: one submitted while it ran, not any later one.
+   */
+  completedAt: string;
 }
 
 /** How many of a PR's newest commits are searched for markers. */
@@ -964,6 +973,7 @@ export async function listReviewMarkers(
   }
   const window = commits.slice(-MARKER_COMMIT_WINDOW);
   const out: ReviewMarker[] = [];
+  const failed: string[] = [];
   for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {
     const batch = window.slice(i, i + MARKER_FETCH_CONCURRENCY);
     // Not atomic: one commit's failed read (a 5xx, a timeout, a rate limit)
@@ -974,17 +984,35 @@ export async function listReviewMarkers(
     batch.forEach((sha, j) => {
       const result = runs[j];
       if (!result || result.status === "rejected") {
-        onError?.(
-          `check runs of ${sha} unreadable, skipping it: ${result?.status === "rejected" ? String(result.reason?.message ?? result.reason) : "no result"}`,
+        failed.push(
+          `${sha}: ${result?.status === "rejected" ? String(result.reason?.message ?? result.reason) : "no result"}`,
         );
         return;
       }
       for (const run of result.value) {
-        if (run.name === markerName && run.conclusion === "success" && run.startedAt) {
-          out.push({ oid: sha, id: run.id, startedAt: run.startedAt });
+        if (
+          run.name === markerName &&
+          run.conclusion === "success" &&
+          run.startedAt &&
+          run.completedAt
+        ) {
+          out.push({
+            oid: sha,
+            id: run.id,
+            startedAt: run.startedAt,
+            completedAt: run.completedAt,
+          });
         }
       }
     });
+  }
+  // One report for the whole read, not one per commit: a systemic failure (a
+  // token without access, a rate limit) fails all of the up-to-50 reads and
+  // would otherwise log 50 warnings for a single dispatch.
+  if (failed.length > 0) {
+    onError?.(
+      `check runs of ${failed.length} commit(s) unreadable, skipping them (first: ${failed[0]})`,
+    );
   }
   return out;
 }

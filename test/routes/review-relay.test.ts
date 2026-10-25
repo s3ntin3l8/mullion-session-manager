@@ -550,7 +550,12 @@ describe("review-request routes", () => {
     it("takes the base from the ledger marker, not from a re-pointed commit_id", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
       mocks.listReviewMarkers.mockResolvedValue([
-        { oid: "sha-reviewed", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+        {
+          oid: "sha-reviewed",
+          id: 10,
+          startedAt: "2026-01-01T12:00:00Z",
+          completedAt: "2026-01-01T23:59:00Z",
+        },
       ]);
       // The head was committed AFTER the review was submitted.
       mocks.getCommitInfo.mockImplementation(
@@ -589,7 +594,12 @@ describe("review-request routes", () => {
     it("ignores a marker no review was submitted after (the run posted nothing)", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "sha40" })]);
       mocks.listReviewMarkers.mockResolvedValue([
-        { oid: "sha-silent", id: 20, startedAt: "2026-01-05T00:00:00Z" },
+        {
+          oid: "sha-silent",
+          id: 20,
+          startedAt: "2026-01-05T00:00:00Z",
+          completedAt: "2026-01-05T23:59:00Z",
+        },
       ]);
       await post(sessionId, {});
       expect(await resolvedBase()).toBe("sha40");
@@ -598,8 +608,18 @@ describe("review-request routes", () => {
     it("prefers the newest paired marker", async () => {
       mocks.listPullRequestReviews.mockResolvedValue([hermesApproval()]);
       mocks.listReviewMarkers.mockResolvedValue([
-        { oid: "sha-newer", id: 30, startedAt: "2026-01-01T13:00:00Z" },
-        { oid: "sha-older", id: 10, startedAt: "2026-01-01T12:00:00Z" },
+        {
+          oid: "sha-newer",
+          id: 30,
+          startedAt: "2026-01-01T13:00:00Z",
+          completedAt: "2026-01-01T23:59:00Z",
+        },
+        {
+          oid: "sha-older",
+          id: 10,
+          startedAt: "2026-01-01T12:00:00Z",
+          completedAt: "2026-01-01T23:59:00Z",
+        },
       ]);
       await post(sessionId, {});
       expect(await resolvedBase()).toBe("sha-newer");

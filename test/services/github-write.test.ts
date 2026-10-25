@@ -224,6 +224,7 @@ describe("github-write service", () => {
       status: "completed",
       conclusion: "success",
       started_at: "2026-01-01T12:00:00Z",
+      completed_at: "2026-01-01T12:30:00Z",
       ...over,
     });
     // The PR's commits come from /pulls/{n}/commits, each commit's check runs
@@ -252,8 +253,18 @@ describe("github-write service", () => {
         bbb: [checkRun({ id: 20, started_at: "2026-01-02T00:00:00Z" })],
       });
       expect(await list()).toEqual([
-        { oid: "aaa", id: 10, startedAt: "2026-01-01T12:00:00Z" },
-        { oid: "bbb", id: 20, startedAt: "2026-01-02T00:00:00Z" },
+        {
+          oid: "aaa",
+          id: 10,
+          startedAt: "2026-01-01T12:00:00Z",
+          completedAt: "2026-01-01T12:30:00Z",
+        },
+        {
+          oid: "bbb",
+          id: 20,
+          startedAt: "2026-01-02T00:00:00Z",
+          completedAt: "2026-01-01T12:30:00Z",
+        },
       ]);
     });
 
@@ -305,6 +316,39 @@ describe("github-write service", () => {
       expect(markers.map((m) => m.oid)).toEqual(["aaa", "ccc"]);
       expect(onError).toHaveBeenCalledTimes(1);
       expect(onError).toHaveBeenCalledWith(expect.stringContaining("bad"));
+    });
+
+    it("drops a marker that was never closed (no completed_at)", async () => {
+      // Without a close time the run's window has no end, so the marker cannot be
+      // paired with the run's own review (#133).
+      serve(["aaa"], { aaa: [checkRun({ completed_at: null })] });
+      expect(await list()).toEqual([]);
+    });
+
+    it("reports unreadable commits once, not once per commit", async () => {
+      // A systemic failure (a token without access, a rate limit) fails all of the
+      // up-to-50 reads; one dispatch must not log 50 warnings.
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("/pulls/9/commits")
+          ? jsonResponse(
+              200,
+              ["a", "b", "c"].map((sha) => ({ sha })),
+            )
+          : jsonResponse(500, {}),
+      );
+      const onError = vi.fn();
+      const markers = await listReviewMarkers(
+        "pr-tok",
+        "checks-tok",
+        "owner",
+        "repo",
+        9,
+        "Hermes review",
+        onError,
+      );
+      expect(markers).toEqual([]);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("3 commit(s)"));
     });
 
     it("still fails when the PR's commits cannot be read at all", async () => {
