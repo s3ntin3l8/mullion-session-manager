@@ -1,7 +1,7 @@
 import type { NotificationEvent, Project, Session, Workspace } from "../api/index.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import { isListedSession, sessionDisplayTitle } from "./sessionDisplay.js";
-import { extractSessionIds } from "../panelUtils.js";
+import { findSessionWorkspaces } from "../panelUtils.js";
 
 // Issue #1882 — the workspace a session's panel lives in.
 //
@@ -86,24 +86,23 @@ export interface PickerInput {
 // opens the session locally rather than swapping the layout — which is what
 // the opener does for an ambiguous session anyway.
 function workspaceHomes(
+  sessions: Session[],
   workspaces: Workspace[],
   activeWorkspaceId: number | null,
 ): Map<number, PickerWorkspace> {
-  const claimants = new Map<number, Workspace[]>();
-  for (const ws of workspaces) {
-    for (const sessionId of extractSessionIds(ws.layout)) {
-      const list = claimants.get(sessionId);
-      if (list) list.push(ws);
-      else claimants.set(sessionId, [ws]);
-    }
-  }
+  const byId = new Map(workspaces.map((ws) => [ws.id, ws] as const));
   const homes = new Map<number, PickerWorkspace>();
-  for (const [sessionId, list] of claimants) {
-    const current = list.find((ws) => ws.id === activeWorkspaceId);
-    if (current) {
-      homes.set(sessionId, { id: current.id, name: current.name, isCurrent: true });
-    } else if (list.length === 1) {
-      homes.set(sessionId, { id: list[0].id, name: list[0].name, isCurrent: false });
+  for (const session of sessions) {
+    // findSessionWorkspaces (issue #1883) already answers "which workspaces
+    // claim this session" — every one of them, in no particular order.
+    const claims = findSessionWorkspaces(session.id, workspaces);
+    if (claims.length === 0) continue;
+    const current = activeWorkspaceId !== null ? byId.get(activeWorkspaceId) : undefined;
+    if (current && claims.includes(current.id)) {
+      homes.set(session.id, { id: current.id, name: current.name, isCurrent: true });
+    } else if (claims.length === 1) {
+      const only = byId.get(claims[0]);
+      if (only) homes.set(session.id, { id: only.id, name: only.name, isCurrent: false });
     }
   }
   return homes;
@@ -133,7 +132,7 @@ function currentWorkspace(
 // when it has an open tiled panel — an open pane must always be switchable.
 export function buildPickerSections(input: PickerInput): PickerSection[] {
   const muted = new Set(input.mutedSessionIds);
-  const homes = workspaceHomes(input.workspaces, input.activeWorkspaceId);
+  const homes = workspaceHomes(input.sessions, input.workspaces, input.activeWorkspaceId);
   const current = currentWorkspace(input.workspaces, input.activeWorkspaceId);
   const sessionById = new Map(input.sessions.map((s) => [s.id, s] as const));
   const panelBySession = new Map<number, PickerPanel>();
