@@ -239,40 +239,6 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
-### PRs are not required to be up to date with `main` (`strict: false`)
-
-`required_status_checks.strict` is **off** (#1907). A PR does not have to
-contain `main`'s current tip to merge, so it does not need a rebase — and a
-rebase is what re-triggers the pull-request workflows. With `strict` on, every
-push to `main` bounced every open PR through another full CI cycle (~10 min),
-and a PR that merely fell behind was refused with the unhelpful
-`405 {"message":"5 of 5 required status checks are expected."}`: its checks
-were green, but on a head that no longer contained `main`'s tip.
-
-The merge queue is the native fix and is **not available here**: it is only
-offered on organization-owned repositories, and this one is owned by a user
-account. The same choice was made for runway.
-
-What the up-to-date rule was standing in for is covered later, in two layers:
-
-- **The required checks run again on the push to `main`** — `ci-cd.yml` and
-  `codeql.yml` both have a `push` trigger, and `cancel-in-progress` is
-  restricted to `pull_request`, so every merge gets a recorded verdict. The
-  difference from `strict` is _when_ (after the merge, not before) and _who_
-  (whoever picks up a red `main`, not the author whose PR was bounced).
-- **Releases are cut separately.** release-please opens a release PR
-  against current `main`, and that PR needs the maintainer's approval to run
-  its workflows (see "By design, not a gap"), so a broken `main` does not
-  ship.
-
-The cost to know about: a broken `main` turns every open PR's CI red, so **if
-CI is red on something your diff doesn't touch, check `main`'s latest push
-run before "fixing" it.** If `strict` is ever turned back on, a behind PR is
-refreshed with `gh pr update-branch <pr>` (a push made with `GITHUB_TOKEN`
-triggers no workflows, so it must be a user/App token), and Task Master's
-merge sweep already does this on `mergeable_state: "behind"`
-(`src/services/task-reconciler.ts`).
-
 **Issue #1360 — this same lookup is a silent no-op for Task Master's own
 CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
 with no operator-side fix.** That feature needs to read exactly this
@@ -310,6 +276,45 @@ throttled warning in the reconcile log — a human still has to notice and
 act. The command above returning a 403 (rather than the contexts list, or a
 404 for "no protection configured") is the same signal Mullion's own code
 sees.
+
+### PRs are not required to be up to date with `main` (`strict: false`)
+
+`required_status_checks.strict` is **off** (#1907). A PR does not have to
+contain `main`'s current tip to merge, so it does not need a rebase — and a
+rebase is what re-triggers the pull-request workflows. With `strict` on, every
+push to `main` bounced every open PR through another full CI cycle (~10 min),
+and a PR that merely fell behind was refused with the unhelpful
+`405 {"message":"5 of 5 required status checks are expected."}`: its checks
+were green, but on a head that no longer contained `main`'s tip.
+
+The merge queue is the native fix and is **not available here**: it is only
+offered on organization-owned repositories, and this one is owned by a user
+account. The same choice was made for runway.
+
+What the up-to-date rule was standing in for is covered later, in two layers:
+
+- **The required checks run again on the push to `main`** — `ci-cd.yml` and
+  `codeql.yml` both have a `push` trigger, and `cancel-in-progress` is
+  restricted to `pull_request`, so every merge gets a recorded verdict. The
+  difference from `strict` is _when_ (after the merge, not before) and _who_
+  (whoever picks up a red `main`, not the author whose PR was bounced).
+- **Releases are cut separately.** release-please opens a release PR
+  against current `main`, and that PR needs the maintainer's approval to run
+  its workflows (see "By design, not a gap"), so a broken `main` does not
+  ship.
+
+The cost to know about: a broken `main` turns every open PR's CI red, so **if
+CI is red on something your diff doesn't touch, check `main`'s latest push
+run before "fixing" it.** If `strict` is ever turned back on, a behind PR is
+refreshed with `gh pr update-branch <pr>` (a push made with `GITHUB_TOKEN`
+triggers no workflows, so it must be a user/App token), and Task Master's
+merge sweep already does this on `mergeable_state: "behind"`
+(`src/services/task-reconciler.ts`; see the `mergeable_state` table in
+[`tasks-internals.md`](tasks-internals.md)).
+
+Related decisions still open: required approval (#1912), `dependency-review`
+as a required check (#1913), and enforcing the patch-coverage floor in CI
+(#1914).
 
 ## Local hooks
 
