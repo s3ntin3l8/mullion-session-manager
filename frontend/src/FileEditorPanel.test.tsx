@@ -142,16 +142,16 @@ describe("FileEditorPanel", () => {
     await user.click(await screen.findByText(".env"));
     const editor = await screen.findByLabelText("editor:.env");
     expect(editor).toHaveValue("A=1\n");
-    expect(screen.getByText("Save")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
 
     fireEvent.change(editor, { target: { value: "A=2\n" } });
     expect(screen.getByLabelText("Unsaved changes")).toBeInTheDocument();
-    await user.click(screen.getByText("Save"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(screen.queryByLabelText("Unsaved changes")).toBeNull());
     const put = calls.find((c) => c.method === "PUT")!;
     expect(put.body).toEqual({ path: ".env", content: "A=2\n", expectedMtimeMs: 100 });
-    expect(screen.getByText("Save")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("saves via the editor's Ctrl+S handler", async () => {
@@ -175,7 +175,7 @@ describe("FileEditorPanel", () => {
     fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "changed" } });
 
     expect(screen.getByText("big.bin").closest("button")).toBeDisabled();
-    await user.click(screen.getByText("Discard"));
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(screen.getByLabelText("editor:.env")).toHaveValue("A=1\n");
     expect(screen.getByText("big.bin").closest("button")).not.toBeDisabled();
   });
@@ -249,7 +249,7 @@ describe("FileEditorPanel", () => {
 
       fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "x" } });
       expect(screen.getByRole("combobox")).toBeDisabled();
-      await user.click(screen.getByText("Save"));
+      await user.click(screen.getByRole("button", { name: "Save" }));
       const put = calls.find((c) => c.method === "PUT")!;
       expect(put.body).toMatchObject({ path: ".env", sessionId: 7 });
     });
@@ -296,7 +296,7 @@ describe("FileEditorPanel", () => {
       expect(screen.getByLabelText("editor:.env")).toHaveValue("dirty");
       expect(calls.some((c) => c.url.includes("sessionId=43"))).toBe(false);
 
-      await user.click(screen.getByText("Discard"));
+      await user.click(screen.getByRole("button", { name: "Discard changes" }));
       rerender(<FileEditorPanel params={{ projectId: 1, sessionId: 44 }} />);
       await waitFor(() => expect(calls.some((c) => c.url.includes("sessionId=44"))).toBe(true));
     });
@@ -649,7 +649,7 @@ describe("FileEditorPanel", () => {
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByText(".env"));
     fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "mine" } });
-    await user.click(screen.getByText("Save"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/changed on disk since you opened it/)).toBeInTheDocument();
 
     await user.click(screen.getByText("Overwrite"));
@@ -667,7 +667,7 @@ describe("FileEditorPanel", () => {
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByText(".env"));
     fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "mine" } });
-    await user.click(screen.getByText("Save"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     await user.click(await screen.findByText("Reload from disk"));
     await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=1\n"));
     expect(calls.filter((c) => c.url.includes("/file?path=.env")).length).toBe(2);
@@ -680,7 +680,7 @@ describe("FileEditorPanel", () => {
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByText(".env"));
     fireEvent.change(await screen.findByLabelText("editor:.env"), { target: { value: "x" } });
-    await user.click(screen.getByText("Save"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Permission denied")).toBeInTheDocument();
   });
 

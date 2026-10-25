@@ -1,12 +1,32 @@
 import type { Extension } from "@codemirror/state";
 import { StreamLanguage } from "@codemirror/language";
+import { tags as t } from "@lezer/highlight";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
 import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
+
+// The legacy properties mode names a `KEY=value` line's key "def" and its value
+// "quote" — tags CodeEditor's highlight style leaves plain (a key reads as an
+// ordinary identifier, a value as nothing at all). Remapping them HERE keeps
+// the fix scoped to these files rather than recolouring every language that
+// uses definition/quote tags. The two halves need different mechanisms:
+// `tokenTable` only supplies names @codemirror/language does not already know
+// (`quote`), and a built-in name (`def` -> variableName.definition) is never
+// looked up in it — so keys are renamed to "property" at the token itself.
+const propertiesLanguage = () =>
+  StreamLanguage.define({
+    ...properties,
+    token: (stream, state) => {
+      const kind = properties.token(stream, state);
+      return kind === "def" ? "property" : kind;
+    },
+    tokenTable: { quote: t.string },
+  });
 
 /** Picks a syntax mode from a file's basename; `null` = plain text. `.env`
  * and `.env.*` use the properties mode (KEY=value, # comments). */
@@ -14,7 +34,15 @@ export function languageForFile(fileName: string): Extension | null {
   const base = fileName.split("/").pop() ?? fileName;
   const lower = base.toLowerCase();
   if (lower === ".env" || lower.startsWith(".env.") || lower.endsWith(".env")) {
-    return StreamLanguage.define(properties);
+    return propertiesLanguage();
+  }
+  if (
+    lower === "dockerfile" ||
+    lower.startsWith("dockerfile.") ||
+    lower === "containerfile" ||
+    lower.startsWith("containerfile.")
+  ) {
+    return StreamLanguage.define(dockerFile);
   }
   const ext = lower.includes(".") ? lower.slice(lower.lastIndexOf(".") + 1) : "";
   switch (ext) {
@@ -22,7 +50,9 @@ export function languageForFile(fileName: string): Extension | null {
     case "ini":
     case "cfg":
     case "conf":
-      return StreamLanguage.define(properties);
+      return propertiesLanguage();
+    case "dockerfile":
+      return StreamLanguage.define(dockerFile);
     case "sh":
     case "bash":
     case "zsh":

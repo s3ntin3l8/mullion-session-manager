@@ -7,8 +7,12 @@ import {
   ChevronRightIcon,
   FileTextIcon,
   FolderIcon,
+  RenameIcon,
+  SaveIcon,
   TrashIcon,
+  UndoIcon,
 } from "./ui/icons.js";
+import { isMacPlatform } from "./browserKeyMap.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store/index.js";
@@ -34,6 +38,9 @@ interface DirState {
   entries: ProjectDirEntry[];
   truncated: boolean;
 }
+
+// The editor binds Mod-s: Cmd+S on macOS, Ctrl+S elsewhere.
+const SAVE_SHORTCUT = isMacPlatform() ? "⌘S" : "Ctrl+S";
 
 function joinPath(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
@@ -461,7 +468,7 @@ function FileEditorBody({
                       disabled={affectsDirtyFile}
                       onClick={() => setRenaming({ path: entryPath, value: entry.name })}
                     >
-                      ✎
+                      <RenameIcon size={12} />
                     </button>
                     {affectsDirtyFile ? (
                       <button
@@ -661,16 +668,25 @@ function FileEditorBody({
               </div>
               <div className="agent-rules-panel-editor-actions">
                 {dirty && (
-                  <button className="git-panel-fetch-btn" onClick={handleDiscard} disabled={saving}>
-                    Discard
+                  <button
+                    className="file-editor-icon-btn"
+                    aria-label="Discard changes"
+                    title="Discard changes"
+                    onClick={handleDiscard}
+                    disabled={saving}
+                  >
+                    <UndoIcon size={15} />
                   </button>
                 )}
                 <button
-                  className="git-panel-fetch-btn"
+                  className="file-editor-icon-btn"
+                  aria-label="Save"
+                  aria-busy={saving}
+                  title={saving ? "Saving…" : `Save (${SAVE_SHORTCUT})`}
                   onClick={handleSaveClick}
                   disabled={!dirty || saving}
                 >
-                  {saving ? "Saving…" : "Save"}
+                  <SaveIcon size={15} />
                 </button>
               </div>
             </div>

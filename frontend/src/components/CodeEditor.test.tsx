@@ -101,10 +101,46 @@ describe("languageForFile", () => {
       "x.tsx",
       "README.md",
       "dir/.env",
+      "Dockerfile",
+      "Dockerfile.dev",
+      "Containerfile",
+      "app.dockerfile",
+      "Containerfile.dev",
+      "docker-compose.yml",
     ]) {
       expect(languageForFile(name), name).not.toBeNull();
     }
     expect(languageForFile("notes.txt")).toBeNull();
+    // KEY=value grammar would mislead on these (`!keep` reads as a comment)
+    expect(languageForFile(".gitignore")).toBeNull();
+    expect(languageForFile(".dockerignore")).toBeNull();
     expect(languageForFile("Makefile")).toBeNull();
+  });
+
+  it("colours .env keys and values like JSON's property names and strings", () => {
+    const env = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
+    const json = render(<CodeEditor value={'{"KEY": "value"}'} fileName="x.json" />);
+    const spanWithText = (root: HTMLElement, text: string) =>
+      Array.from(root.querySelectorAll<HTMLElement>(".cm-line span")).find(
+        (e) => e.textContent === text,
+      );
+    const envKey = spanWithText(env.container, "KEY");
+    const envValue = spanWithText(env.container, "value");
+    // the styles the editor gives a property name / a string elsewhere
+    const jsonKey = spanWithText(json.container, '"KEY"');
+    const jsonValue = spanWithText(json.container, '"value"');
+    expect(envKey && jsonKey && envValue && jsonValue).toBeTruthy();
+    // before the remap the key was an ordinary identifier (var(--fg)) and the
+    // value had no highlight at all
+    expect(envKey!.className).toBe(jsonKey!.className);
+    expect(envValue!.className).toBe(jsonValue!.className);
+  });
+
+  it("keeps .env comments highlighted", () => {
+    const { container } = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
+    const comment = Array.from(container.querySelectorAll<HTMLElement>(".cm-line span")).find(
+      (e) => e.textContent === "# note",
+    );
+    expect(comment).toBeTruthy();
   });
 });
