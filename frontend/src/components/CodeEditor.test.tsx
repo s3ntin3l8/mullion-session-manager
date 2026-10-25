@@ -117,14 +117,30 @@ describe("languageForFile", () => {
     expect(languageForFile("Makefile")).toBeNull();
   });
 
-  it("colours .env keys and values, not just comments", () => {
+  it("colours .env keys and values like JSON's property names and strings", () => {
+    const env = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
+    const json = render(<CodeEditor value={'{"KEY": "value"}'} fileName="x.json" />);
+    const spanWithText = (root: HTMLElement, text: string) =>
+      Array.from(root.querySelectorAll<HTMLElement>(".cm-line span")).find(
+        (e) => e.textContent === text,
+      );
+    const envKey = spanWithText(env.container, "KEY");
+    const envValue = spanWithText(env.container, "value");
+    // the styles the editor gives a property name / a string elsewhere
+    const jsonKey = spanWithText(json.container, '"KEY"');
+    const jsonValue = spanWithText(json.container, '"value"');
+    expect(envKey && jsonKey && envValue && jsonValue).toBeTruthy();
+    // before the remap the key was an ordinary identifier (var(--fg)) and the
+    // value had no highlight at all
+    expect(envKey!.className).toBe(jsonKey!.className);
+    expect(envValue!.className).toBe(jsonValue!.className);
+  });
+
+  it("keeps .env comments highlighted", () => {
     const { container } = render(<CodeEditor value={"# note\nKEY=value\n"} fileName=".env" />);
-    const spans = (container.querySelectorAll(".cm-line")[1] as HTMLElement).querySelectorAll(
-      "span",
+    const comment = Array.from(container.querySelectorAll<HTMLElement>(".cm-line span")).find(
+      (e) => e.textContent === "# note",
     );
-    // key and value each get their own highlight class, and they differ
-    // (before the token remap the value was unstyled and the key plain text)
-    expect(spans).toHaveLength(2);
-    expect(spans[0]!.className).not.toBe(spans[1]!.className);
+    expect(comment).toBeTruthy();
   });
 });

@@ -11,14 +11,21 @@ import { toml } from "@codemirror/legacy-modes/mode/toml";
 import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 
 // The legacy properties mode names a `KEY=value` line's key "def" and its value
-// "quote" — tags CodeEditor's highlight style leaves unstyled (a key reads as
-// plain text, a value as nothing at all). Remapping them HERE, onto tags the
-// style already colours, keeps the fix scoped to these files rather than
-// recolouring every language that uses definition/quote tags.
+// "quote" — tags CodeEditor's highlight style leaves plain (a key reads as an
+// ordinary identifier, a value as nothing at all). Remapping them HERE keeps
+// the fix scoped to these files rather than recolouring every language that
+// uses definition/quote tags. The two halves need different mechanisms:
+// `tokenTable` only supplies names @codemirror/language does not already know
+// (`quote`), and a built-in name (`def` -> variableName.definition) is never
+// looked up in it — so keys are renamed to "property" at the token itself.
 const propertiesLanguage = () =>
   StreamLanguage.define({
     ...properties,
-    tokenTable: { def: t.propertyName, quote: t.string },
+    token: (stream, state) => {
+      const kind = properties.token(stream, state);
+      return kind === "def" ? "property" : kind;
+    },
+    tokenTable: { quote: t.string },
   });
 
 /** Picks a syntax mode from a file's basename; `null` = plain text. `.env`
