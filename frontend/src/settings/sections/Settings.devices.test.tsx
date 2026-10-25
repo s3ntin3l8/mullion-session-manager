@@ -1028,6 +1028,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     });
     expect(screen.getByText("Not installed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Uninstall/ })).toBeInTheDocument();
+    expect(screen.getByTitle(/removes this system image from this machine/)).toBeInTheDocument();
   });
 
   it("shows available images error when the fetch fails", async () => {
@@ -1585,6 +1586,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     // License modal should appear after the license-related error
     expect(await screen.findByText("Accept SDK licenses")).toBeInTheDocument();
     expect(screen.getByText(/Some Android SDK packages require accepting/)).toBeInTheDocument();
+    expect(screen.getByText(/pending SDK licenses on this machine/)).toBeInTheDocument();
   });
 
   it("clicking 'Accept licenses' in modal opens the license WS", async () => {

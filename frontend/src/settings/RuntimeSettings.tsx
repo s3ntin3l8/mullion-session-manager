@@ -183,7 +183,7 @@ export function EmulatorGpuSetting() {
   return (
     <Row
       label="Emulator GPU"
-      desc="How the emulator draws. Software rendering works everywhere; host uses this machine's GPU and needs a display. Applies the next time an emulator starts. Other modes stay on the server default (DEVICE_EMULATOR_GPU)."
+      desc="How the emulator draws. Software rendering works everywhere; the GPU mode “host” uses this machine's GPU and needs a display. Applies the next time an emulator starts. Other modes stay on the server default (DEVICE_EMULATOR_GPU)."
     >
       <Dropdown<string>
         ariaLabel="Emulator GPU"
