@@ -4726,6 +4726,50 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("holds the wait open over a real socket until output arrives (the request's own close is not a hang-up)", async () => {
+      const { app, port } = await buildAndListen();
+      const pty = await spawn(app, "9219");
+      const pending = fetch(`http://127.0.0.1:${port}/internal/sessions/9219/wait-output`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ match: "READY", regex: false, timeoutMs: 5000 }),
+      });
+      await new Promise((r) => setTimeout(r, 150));
+      pty.emitData("READY\r\n");
+      const res = await pending;
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ matched: true, text: "READY" });
+      await app.close();
+    });
+
+    it("aborts the agent-side wait when the requester hangs up", async () => {
+      const { app, port } = await buildAndListen();
+      await spawn(app, "9220");
+      const outputWait = await import("../../src/services/output-wait.js");
+      let seen: AbortSignal | undefined;
+      const waitSpy = vi.spyOn(outputWait, "waitForOutput").mockImplementation((_m, _t, deps) => {
+        seen = deps.signal;
+        return new Promise(() => {});
+      });
+      try {
+        const controller = new AbortController();
+        const pending = fetch(`http://127.0.0.1:${port}/internal/sessions/9220/wait-output`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ match: "NEVER", regex: false, timeoutMs: 5000 }),
+          signal: controller.signal,
+        }).catch(() => null);
+        await waitUntil(() => seen !== undefined);
+        expect(seen!.aborted).toBe(false);
+        controller.abort();
+        await pending;
+        await waitUntil(() => seen!.aborted);
+      } finally {
+        waitSpy.mockRestore();
+      }
+      await app.close();
+    });
+
     it("rejects a wait longer than one remote chunk, rather than holding a subscription that long", async () => {
       const app = await buildApp();
       await spawn(app, "9216");

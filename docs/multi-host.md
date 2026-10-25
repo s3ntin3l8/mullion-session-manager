@@ -835,8 +835,7 @@ alternative, and how the two compose.
   MCP tools fail immediately with an explanation instead of a connect error.
   From the primary, a local caller can drive a remote child: `wait`, `get`,
   scrollback, `kill`, and — since issue #1951 — `prompt` and `wait_for_output`
-  (both run on the child's own host; see
-  [Dispatching a child session to another host](#dispatching-a-child-session-to-another-host)).
+  (both run on the child's own host).
   `prompt` with `wait` is not supported for a remote child yet (use
   `wait_for_output` with the prompt's `outputOffset`). The child calling _back_
   into the primary is the agent→primary relay, tracked separately (#1656).

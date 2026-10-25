@@ -2441,8 +2441,15 @@ export async function internalRoutes(app: FastifyInstance) {
       const session = app.pty.get(request.params.id);
       if (!session || !session.isAlive) return { notRunning: true };
       const controller = new AbortController();
-      const onClose = () => controller.abort();
-      request.raw.once("close", onClose);
+      // `reply.raw`, not `request.raw`: the REQUEST message emits `close` as
+      // soon as its body has been consumed (Node >= 16), which is before this
+      // handler even runs — aborting on it would cancel every wait at once.
+      // The RESPONSE closes when the connection does; `writableFinished`
+      // separates "we already answered" from "the requester hung up".
+      const onClose = () => {
+        if (!reply.raw.writableFinished) controller.abort();
+      };
+      reply.raw.once("close", onClose);
       try {
         const result = await waitForOutput(matcher, request.body.timeoutMs, {
           signal: controller.signal,
@@ -2456,7 +2463,7 @@ export async function internalRoutes(app: FastifyInstance) {
         if ("aborted" in result) return reply.code(499).send();
         return { ...result, outputOffset: session.outputOffset };
       } finally {
-        request.raw.off("close", onClose);
+        reply.raw.off("close", onClose);
       }
     },
   );
