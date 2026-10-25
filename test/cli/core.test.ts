@@ -2053,6 +2053,40 @@ describe("runCommand", () => {
         expect(calls).toBe(2);
       });
 
+      it("session spawn-child sends --host/--platform/--isolate as the wire target fields (#1951)", async () => {
+        const request = vi.fn(async () => ({ id: 5 }));
+        const code = await runCommand(
+          [
+            "session",
+            "spawn-child",
+            "--command",
+            "claude",
+            "--parent",
+            "3",
+            "--platform",
+            "darwin",
+            "--isolate",
+          ],
+          { client: fakeClient({ request }), io: fakeIo() },
+        );
+        expect(code).toBe(0);
+        expect(request).toHaveBeenCalledWith("sessions.spawn_child", {
+          command: "claude",
+          parentSessionId: "3",
+          targetPlatform: "darwin",
+          isolate: true,
+        });
+        await runCommand(
+          ["session", "spawn-child", "--command", "claude", "--parent", "3", "--host", "mac-1"],
+          { client: fakeClient({ request }), io: fakeIo() },
+        );
+        expect(request).toHaveBeenLastCalledWith("sessions.spawn_child", {
+          command: "claude",
+          parentSessionId: "3",
+          targetHostId: "mac-1",
+        });
+      });
+
       it("session spawn-child sends --open and rejects other values (#1624)", async () => {
         const request = vi.fn(async () => ({ id: 5 }));
         const code = await runCommand(

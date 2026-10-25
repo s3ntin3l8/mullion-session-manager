@@ -247,7 +247,32 @@ const spawnChildSession = {
           "Optional working directory override. Must resolve inside the project's own " +
           "directory, OR be another directory git already lists as a worktree of the " +
           "project's own repo (e.g. a sibling '.mullion-worktrees/<name>' checkout) — " +
-          "local projects only. Anything else is rejected.",
+          "local projects only. Anything else is rejected. Cannot be combined with " +
+          "'isolate'.",
+      },
+      host: {
+        type: "string",
+        description:
+          "Run the child on this host (a host id) instead of wherever placement would put " +
+          "it. The project must have a checkout on that host (its 'hostCwds' map) and the " +
+          "host must be online and not drained, otherwise the spawn is refused (409) — it " +
+          "never silently falls back to another host. Mutually exclusive with 'platform'.",
+      },
+      platform: {
+        type: "string",
+        description:
+          "Run the child on any eligible host of this platform ('darwin', 'linux' or " +
+          "'win32') — e.g. 'darwin' for Xcode/iOS work. Same rules as 'host': refused (409) " +
+          "when no eligible host of that platform has the project. Mutually exclusive with " +
+          "'host'.",
+      },
+      isolate: {
+        type: "boolean",
+        description:
+          "Give the child its own fresh git worktree (a new 'mullion/child-…' branch off the " +
+          "default base ref), cut on the host the child runs on. Use it with 'host'/'platform' " +
+          "so the remote child works on its own branch and pushes it. Cannot be combined " +
+          "with 'cwd'.",
       },
       initialPrompt: {
         type: "string",
@@ -317,6 +342,9 @@ const spawnChildSession = {
       command: args?.command,
       name: args?.name,
       cwd: args?.cwd,
+      host: args?.host,
+      platform: args?.platform,
+      isolate: args?.isolate,
       kind: args?.kind,
       initialPrompt: args?.initialPrompt,
       skipPermissions: args?.skipPermissions,

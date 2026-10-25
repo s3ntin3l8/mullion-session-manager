@@ -546,6 +546,28 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    // Issue #1951 — `host`/`platform` are the agent-facing names; the wire
+    // fields (POST /api/sessions) are `targetHostId`/`targetPlatform`.
+    it("spawnChildSession sends host/platform/isolate as targetHostId/targetPlatform/isolate", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.spawn_child");
+        expect(msg.body).toEqual({
+          command: "claude",
+          targetHostId: "mac-1",
+          targetPlatform: "darwin",
+          isolate: true,
+        });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 201 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.spawnChildSession({
+        command: "claude",
+        host: "mac-1",
+        platform: "darwin",
+        isolate: true,
+      });
+    });
+
     // Root-cause fix for the opencode `command`-embedded-prompt trap. Sent
     // over the wire as `seedPrompt`, not `initialPrompt` — POST
     // /api/sessions' own field name for this (routes/sessions.ts's

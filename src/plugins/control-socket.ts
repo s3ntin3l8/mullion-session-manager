@@ -160,6 +160,13 @@ interface OpSpec {
  * `kind` does NOT join: making a child a dock session hides it from the
  * session list, which is a visibility change rather than a permission one,
  * and #426 called it out explicitly.
+ *
+ * Issue #1951 — `targetHostId`/`targetPlatform` (run the child on a chosen
+ * host) and `isolate` (a server-chosen fresh worktree on that host) join.
+ * Neither widens anything: a target only reaches hosts the PROJECT is mapped
+ * on and that are eligible (placement.ts's resolveTargetHost), and `isolate`
+ * is the safe spelling of a worktree — the raw `worktree` stays stripped.
+ * POST /api/sessions rejects `isolate` combined with `cwd`/`worktree`.
  */
 const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "command",
@@ -170,6 +177,9 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "seedPrompt",
   "open",
   "skipPermissions",
+  "targetHostId",
+  "targetPlatform",
+  "isolate",
 ];
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {

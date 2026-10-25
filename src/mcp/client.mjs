@@ -423,6 +423,9 @@ export class MullionClient {
     command,
     name,
     cwd,
+    host,
+    platform,
+    isolate,
     kind,
     initialPrompt,
     skipPermissions,
@@ -434,6 +437,11 @@ export class MullionClient {
     const body = { command };
     if (name !== undefined) body.name = name;
     if (cwd !== undefined) body.cwd = cwd;
+    // Issue #1951 — `host`/`platform` are the agent-facing names; the wire
+    // fields (POST /api/sessions) are `targetHostId`/`targetPlatform`.
+    if (host !== undefined) body.targetHostId = host;
+    if (platform !== undefined) body.targetPlatform = platform;
+    if (isolate !== undefined) body.isolate = isolate;
     if (kind !== undefined) body.kind = kind;
     // Sent as `seedPrompt`, not `initialPrompt` — POST /api/sessions (what
     // this control op ultimately forwards to) only accepts the former; the

@@ -29,10 +29,16 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { viaRemote } from "./host-git.js";
+import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
-import { parseHostCwds, projectCwdOnHost, resolvePlacement } from "./placement.js";
+import {
+  parseHostCwds,
+  projectCwdOnHost,
+  resolvePlacement,
+  resolveTargetHost,
+  type PlacementTarget,
+} from "./placement.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import {
   readProjectBriefing,
@@ -117,6 +123,22 @@ export interface CreateSessionBody {
   // per-project session list. Defaults to "terminal" (the schema default).
   kind?: "terminal" | "dock";
   worktree?: WorktreeIntent;
+  // Issue #1951 — "give this session its own fresh worktree", with the base
+  // ref and branch name chosen by the SERVER on the host the session is
+  // placed on (resolveHostBaseRef + a generated `mullion/child-…` branch).
+  // `worktree` needs the caller to name a baseRef — which, for a targeted
+  // spawn (`target`), is not knowable until placement has picked the host,
+  // and a SHA resolved on the wrong machine is not on the clone that cuts
+  // the worktree. Mutually exclusive with `worktree` and with `cwd`
+  // (checked by the route): a caller-supplied cwd would be the repo the
+  // worktree is cut from, and the child-cwd containment check does not
+  // run for a worktree.
+  isolate?: boolean;
+  // Issue #1951 — the wire spelling of `CreateSessionParams.target`: run the
+  // session on THIS host id, or on any host of THIS platform. At most one of
+  // the two (the route rejects both); the route turns it into `target`.
+  targetHostId?: string;
+  targetPlatform?: string;
   // When true, a preview worktree created for this session is periodically
   // synced to the branch's latest commit via `git reset --hard`. Set by
   // the frontend based on the dock control's worktreeRefresh config.
@@ -375,6 +397,17 @@ export type CreateSessionParams = CreateSessionBody & {
   // is cut, so the two cannot disagree). The row records it, so the
   // decision can be explained rather than re-derived.
   placementReason?: string;
+  // Issue #1951 — "this session MUST run on a host matching this" (a host id
+  // or a platform), where `hostId` above is "run on THIS host, no questions
+  // asked". Unlike `hostId`, a target goes through the placement policy's
+  // eligibility rules (online, not drained, has the project — `hostCwds`)
+  // and is REFUSED (`no-target-host`) when nothing matches, rather than
+  // falling back to the project's host.
+  //
+  // Public: `POST /api/sessions` exposes it as `targetHostId` /
+  // `targetPlatform`, and `sessions.spawn_child` forwards it from a session
+  // scope. Mutually exclusive with `hostId`.
+  target?: PlacementTarget;
 };
 
 export type CreateSessionResult =
@@ -414,6 +447,10 @@ export type CreateSessionResult =
   // and the caller supplied no directory of its own. There is nowhere for
   // it to run: the project's own path does not exist on that host.
   | { ok: false; reason: "host-unknown-project"; detail?: string }
+  // Issue #1951 — a targeted spawn (`params.target`) found no host that is
+  // eligible AND matches. `detail` names only the target the caller asked
+  // for, never the rest of the fleet.
+  | { ok: false; reason: "no-target-host"; detail: string }
   | { ok: false; reason: "child-cap-exceeded" }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
@@ -933,8 +970,34 @@ function resolveSessionPlacement(
   params: CreateSessionParams,
 ):
   | { ok: true; placement: SessionPlacement }
-  | { ok: false; reason: "host-unknown-project"; detail: string } {
+  | { ok: false; reason: "host-unknown-project" | "no-target-host"; detail: string } {
   const hostCwds = parseHostCwds(project.hostCwds);
+
+  if (params.target !== undefined && params.hostId === undefined) {
+    const targeted = resolveTargetHost(app, {
+      project: {
+        hostId: project.hostId,
+        placement: project.placement,
+        cwd: project.cwd,
+        hostCwds: project.hostCwds,
+      },
+      target: params.target,
+      unattended: params.unattended === true,
+    });
+    if (!targeted.ok) {
+      return { ok: false, reason: "no-target-host", detail: targeted.detail };
+    }
+    return {
+      ok: true,
+      placement: {
+        hostId: targeted.decision.hostId,
+        // resolveTargetHost only picks a host the project IS on (its
+        // eligibility rule), so this is never null here.
+        cwd: projectCwdOnHost(project, targeted.decision.hostId, hostCwds) ?? project.cwd,
+        reason: targeted.decision.reason,
+      },
+    };
+  }
 
   if (params.hostId !== undefined) {
     // The caller knows better than the policy: this session has to be
@@ -1050,7 +1113,7 @@ async function createSessionRecordInner(
   // only the no-worktree branch can carry unchecked. (A worktree's own cwd
   // is, in fact, nested under the project root via `.mullion-worktrees/` —
   // it just never needs this check because it was never caller-supplied.)
-  if (parent.parentId !== null && !params.worktree) {
+  if (parent.parentId !== null && !params.worktree && !params.isolate) {
     // Issue #1724 — the containment is measured against the project root ON
     // THE PLACEMENT HOST, because that is the directory the child will be
     // spawned in. For a pinned project that is `projects.cwd` exactly as
@@ -1154,11 +1217,35 @@ async function prepareWorktree(
   // where the scope runs.
   placement: SessionPlacement,
 ): Promise<Step<{ cwd: string | undefined }>> {
-  const { worktree } = params;
   const cwd = params.cwd;
   // The project root on the placement host — the worktree is cut from
   // THERE, not from the project's own host.
   const projectRootOnHost = placement.cwd;
+  let worktree = params.worktree;
+  if (params.isolate && worktree === undefined) {
+    // Issue #1951 — the base ref is resolved HERE, on the placement host,
+    // because only now is the host known; resolving it on the project's host
+    // (as Task Master's claim does) can name a SHA the clone that cuts the
+    // worktree has never fetched.
+    const base = await resolveHostBaseRef(app, placement.hostId, projectRootOnHost);
+    if (!base.ok) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          reason: "worktree-failed",
+          detail:
+            base.reason === "unsupported"
+              ? `host ${placement.hostId} is too old to resolve a base ref — upgrade it`
+              : base.detail,
+        },
+      };
+    }
+    worktree = {
+      baseRef: base.value.baseRef,
+      branchName: `mullion/child-${params.parentSessionId ?? "x"}-${Date.now().toString(36)}`,
+    };
+  }
   if (worktree?.branch) {
     // Issue #345 — dock-preview worktrees now work on remote hosts too:
     // checkoutBranchWorktree, the worktreeRefresh sync tick, and cleanup
@@ -1508,12 +1595,12 @@ async function spawnOrRollback(
     ] as const) {
       if (applied !== undefined && applied !== requested) {
         app.log.warn(
-          { sessionId, hostId: project.hostId, requested, applied },
+          { sessionId, hostId: placementHost, requested, applied },
           `${field}: remote agent applied a different value than requested — possible version skew`,
         );
       } else if (applied === undefined && requested === false) {
         app.log.warn(
-          { sessionId, hostId: project.hostId, requested },
+          { sessionId, hostId: placementHost, requested },
           `${field}: remote agent did not echo this field, and likely predates it — an old build's own \`?? true\` fallback means it probably injected this even though it was requested off`,
         );
       }
@@ -1529,12 +1616,12 @@ async function spawnOrRollback(
     //      reattach of a session whose original spawn predates this change).
     if (taskId !== undefined && spawnResult.taskIdApplied === undefined) {
       app.log.warn(
-        { sessionId, hostId: project.hostId, requested: taskId },
+        { sessionId, hostId: placementHost, requested: taskId },
         "taskId: remote agent did not echo taskIdApplied, and likely predates the Task Master skill-denial fix — opencode/codex brainstorming / writing-plans / finishing-a-development-branch are NOT being denied on this agent",
       );
     } else if (taskId !== undefined && spawnResult.taskIdApplied === false) {
       app.log.warn(
-        { sessionId, hostId: project.hostId, requested: taskId },
+        { sessionId, hostId: placementHost, requested: taskId },
         "taskId: remote agent received the taskId but the resulting Session has taskId: undefined — possible version skew or a reattach of a session whose original spawn predates this field",
       );
     }
@@ -1641,7 +1728,7 @@ function trackPreview(
                 return logPreviewWorktreeHostError(
                   app,
                   "remove",
-                  project.hostId,
+                  placementHost,
                   effectiveCwd,
                   err,
                   wasAlreadyWarned,
@@ -1662,7 +1749,7 @@ function trackPreview(
                 return logPreviewWorktreeHostError(
                   app,
                   "sync",
-                  project.hostId,
+                  placementHost,
                   effectiveCwd,
                   err,
                   wasAlreadyWarned,
