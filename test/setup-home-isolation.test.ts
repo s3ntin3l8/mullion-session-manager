@@ -3,7 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { applyHookAdapters } from "../src/services/hook-adapters/index.js";
-import { resolveBundleSyncManifestPath } from "../src/services/bundle-sync.js";
+import {
+  resolveBundleSyncManifestPath,
+  removeBundleContentForCli,
+} from "../src/services/bundle-sync.js";
 import {
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
@@ -50,10 +53,14 @@ describe("test HOME isolation (issue #1944)", () => {
       injectProjectBriefing: false,
       injectMullionBundle: false,
     });
-    // managedInstall is fire-and-forget; poll rather than guess a delay.
-    for (let i = 0; i < 100 && existsSync(skillDir); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
+    // managedInstall runs in a microtask and queues its removal on
+    // bundle-sync's serialized op queue. Let microtasks drain so the adapter's
+    // removal is queued first, then use a second removal as a barrier: it
+    // resolves only after the adapter's has run, so no timing is involved.
+    await new Promise((resolve) => setImmediate(resolve));
+    const barrier = await removeBundleContentForCli("claude-code");
+    // Nothing left for the barrier to remove: the adapter's own call did it.
+    expect(barrier.skillsRemoved).toBe(0);
 
     expect(existsSync(skillDir)).toBe(false);
     const after = existsSync(realManifest) ? statSync(realManifest).mtimeMs : null;

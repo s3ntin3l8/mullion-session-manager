@@ -135,6 +135,8 @@ for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_C
 if (!process.env.MULLION_TEST_REAL_HOME) {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), `vitest-home-${process.pid}-`));
   process.env.HOME = tmpHome;
+  // os.homedir() reads USERPROFILE rather than HOME on Windows.
+  process.env.USERPROFILE = tmpHome;
   afterAll(() => {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
