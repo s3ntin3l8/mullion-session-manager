@@ -496,6 +496,11 @@ export function GitPanel({
       const outcome = await repairProjectGitRepair(params.projectId);
       setRepairOutcome(outcome);
       setRepairPlan(null);
+      // The outcome REPLACES the health banner: the banner still holds the
+      // pre-repair snapshot, and leaving it up would say "this repository
+      // looks damaged … the Repair button below fixes it" directly above
+      // "the clone is whole again" — with no Repair button left to click.
+      setHealth(null);
       // The repair rewrites the index, so the staged/unstaged state on
       // screen may no longer be true. The outcome is what is reported — a
       // stale plan is not a correctness problem — but the status is worth
@@ -515,9 +520,9 @@ export function GitPanel({
     if (!repairPlan) return "";
     const parts: string[] = [];
     parts.push(
-      repairPlan.quarantine.length > 0
+      repairPlan.actionable
         ? `quarantine ${repairPlan.quarantine.length} damaged object(s)`
-        : "quarantine nothing",
+        : "quarantine nothing — there is no damaged object to move aside, so the fetch is what helps this clone",
     );
     if (repairPlan.willFetch) parts.push("fetch from origin");
     if (repairPlan.indexesToRebuild.length > 0) {
@@ -785,6 +790,12 @@ export function GitPanel({
             Repair will {repairPlanText}. Damaged objects are MOVED into a quarantine directory
             inside the git directory — nothing is deleted.
           </div>
+          {repairPlan.indexesToSkip.map((skip) => (
+            <div key={skip.path}>
+              {skip.path}: left alone — staged content not in the working tree (
+              {skip.paths.join(", ")})
+            </div>
+          ))}
           <div className="git-panel-row-actions">
             <ConfirmButton
               title={`Repair this clone: ${repairPlanText}. Damaged objects are moved into a quarantine directory inside the git directory — nothing is deleted.`}
@@ -811,6 +822,13 @@ export function GitPanel({
             ? "Repair finished — the clone is whole again."
             : "Repair finished, but the clone is NOT whole."}{" "}
           {repairOutcomeText}.
+          {repairOutcome.indexesSkipped.length > 0 && (
+            <div>
+              {repairOutcome.indexesSkipped.map((skipped) => (
+                <div key={skipped}>{skipped}</div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

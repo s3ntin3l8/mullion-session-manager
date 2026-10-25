@@ -5101,6 +5101,39 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // The CLONE is the resource, not the project: two project rows can point
+    // at the same directory, and the background auto-fetch sweep runs
+    // `git fetch` on the same clone — a fetch landing inside the repair's own
+    // fetch window would fail its ref update and make a healthy clone look
+    // broken.
+    it("refuses a repair while a git operation is already running on that clone", async () => {
+      const { cwd } = await damagedClone();
+      const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+      const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "repair-busy-repo", cwd },
+      });
+
+      // Stand in for the auto-fetch sweep, which claims the same clone.
+      markCloneBusy(LOCAL_HOST_ID, cwd);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-repair`,
+          payload: { confirm: true },
+        });
+        expect(res.statusCode).toBe(409);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, cwd);
+      }
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("refuses a second repair for the same project while one is running", async () => {
       const { cwd } = await damagedClone();
       const app = await buildApp();

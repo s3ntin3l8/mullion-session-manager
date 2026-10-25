@@ -334,19 +334,6 @@ async function worktrees(cwd: string): Promise<string[]> {
 }
 
 /**
- * Rebuild one worktree's index.
- *
- * The index is rebuilt from HEAD — which drops the stale cache-tree that names
- * the broken object — and then exactly the paths that were staged are
- * re-staged from the working tree:
- *
- * - `git add -A` with an EXPLICIT pathspec limits the operation to those
- *   paths, so an unrelated untracked file is never adopted;
- * - a path that is staged AND has been changed again in the working tree
- *   holds content the working tree does not have. Re-staging it from the
- *   working tree would discard that content, so the rebuild refuses.
- */
-/**
  * The staged paths that are ALSO changed in the working tree.
  *
  * Re-staging those from the working tree would discard the staged content, so
@@ -485,7 +472,14 @@ export async function inspectGitClone(
  * renamed, nothing is fetched.
  *
  * The decisions are the SAME ones `repairGitClone` makes — both call
- * `lostStagedPaths` — so the plan and the repair cannot disagree.
+ * `lostStagedPaths` — so the plan and the repair cannot disagree about the
+ * one thing they both decide: which staged content would be lost.
+ *
+ * They can differ in ONE case: an index that cannot be read at all is
+ * counted here as "to rebuild", while the repair re-reads it after the
+ * quarantine and the fetch and may find it readable, and skip it. The
+ * divergence is in the safe direction — the plan over-promises, the repair
+ * is more conservative — and the repair's outcome is what is reported.
  */
 export async function planRepair(cwd: string): Promise<RepairPlan> {
   const common = await commonDir(cwd);

@@ -44,6 +44,7 @@ import {
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
+import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
 import { runGitPull } from "../services/git-pull.js";
 import { runGitInit } from "../services/git-init.js";
 import {
@@ -3585,9 +3586,6 @@ export async function projectsRoute(app: FastifyInstance) {
       additionalProperties: false,
     },
   };
-  // The projects with a repair in flight. A second concurrent repair for the
-  // same project is refused rather than allowed to interleave.
-  const repairsInFlight = new Set<number>();
   app.post<{ Params: { id: string }; Body: { confirm?: boolean } }>(
     "/api/projects/:id/git-repair",
     { schema: gitRepairParamsSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
@@ -3615,10 +3613,16 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      if (repairsInFlight.has(projectId)) {
-        return reply.conflict("A repair is already running for this project.");
+      // The CLONE is the resource, not the project: two project rows can
+      // point at the same directory, and the background auto-fetch sweep
+      // runs `git fetch` on the same clone on a timer — a fetch landing
+      // inside the repair's own fetch window would fail the ref update and
+      // make a healthy clone look broken. The registry is the same one the
+      // sweep uses, so the two exclude each other.
+      if (isCloneBusy(project.hostId, project.cwd)) {
+        return reply.conflict("A git operation is already running for this repository.");
       }
-      repairsInFlight.add(projectId);
+      markCloneBusy(project.hostId, project.cwd);
       try {
         if (project.hostId === LOCAL_HOST_ID) {
           const lines: string[] = [];
@@ -3636,7 +3640,7 @@ export async function projectsRoute(app: FastifyInstance) {
           );
         }
       } finally {
-        repairsInFlight.delete(projectId);
+        releaseClone(project.hostId, project.cwd);
       }
     },
   );

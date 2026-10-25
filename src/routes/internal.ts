@@ -97,6 +97,8 @@ import {
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
+import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
@@ -1296,10 +1298,20 @@ export async function internalRoutes(app: FastifyInstance) {
       if (confirm !== true) {
         return await planRepair(resolvedCwd);
       }
-      const lines: string[] = [];
-      const outcome = await repairGitClone(resolvedCwd, { log: (line) => lines.push(line) });
-      app.log.info({ lines }, "git repair finished");
-      return outcome;
+      // The clone is the resource: a fetch in flight on it (the primary's
+      // auto-fetch sweep, say) would fail this repair's ref update.
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        return reply.conflict("A git operation is already running for this repository.");
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        const lines: string[] = [];
+        const outcome = await repairGitClone(resolvedCwd, { log: (line) => lines.push(line) });
+        app.log.info({ lines }, "git repair finished");
+        return outcome;
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
     },
   );
 
@@ -1318,7 +1330,19 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await runGitFetch(resolvedCwd);
+      // A repair is running on this clone (issue #1896): it fetches and
+      // rewrites the indexes itself, and a second fetch in that window would
+      // fail its ref update and make a healthy clone look broken. Skip it —
+      // the next tick will fetch.
+      if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
+        return { success: false, error: "a git operation is already running for this clone" };
+      }
+      markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
+      try {
+        return await runGitFetch(resolvedCwd);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, resolvedCwd);
+      }
     },
   );
 

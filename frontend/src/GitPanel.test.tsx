@@ -500,6 +500,9 @@ describe("GitPanel", () => {
     expect(await screen.findByText(/the clone is whole again/)).toBeInTheDocument();
     expect(bodies.filter((b) => b.confirm === true)).toHaveLength(1);
     expect(await screen.findByText(/1 damaged object\(s\) moved into/)).toBeInTheDocument();
+    // The outcome REPLACES the damage banner: the panel must not go on
+    // saying the repository looks damaged after it has been repaired.
+    expect(screen.queryByText(/This repository looks damaged/)).toBeNull();
   });
 
   it("says so when the repair plan cannot be computed", async () => {
