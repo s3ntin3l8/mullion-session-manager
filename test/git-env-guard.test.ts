@@ -72,6 +72,53 @@ describe("git child processes scrub the ambient git environment", () => {
     expect(offenders).toEqual([]);
   });
 
+  // Issue #1851 — Mullion's own git commands must never trigger the
+  // background `git gc` that can delete a loose object a CONCURRENT write
+  // is creating (#1836). The fix is `-c gc.auto=0` on every git invocation.
+  //
+  // The same scan as the rule above: every git spawn in src/, test/ and
+  // scripts/ must carry the override, so the invariant holds by construction
+  // — including for a call site added later.
+  it("carries -c gc.auto=0 at every git spawn in src/ and scripts/", () => {
+    // src/ and scripts/ only: those run git in a REAL repo — the user's
+    // clone, or this repo's shared clone. A test fixture runs git in a
+    // throwaway temp repo, where a background gc can do no harm.
+    const files = execFileSync("git", ["ls-files", "src", "scripts"], { cwd: ROOT })
+      .toString()
+      .split("\n")
+      .filter((f) => /\.(ts|mjs|js)$/.test(f) && f !== "test/git-env-guard.test.ts");
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const lines = readFileSync(path.join(ROOT, file), "utf8").split("\n");
+      lines.forEach((line, i) => {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("//") || trimmed.startsWith("*")) return;
+        if (!GIT_SPAWN.test(line)) return;
+        // Just this call's own statement: up to the first line ending in `);`.
+        let end = i;
+        while (end < lines.length - 1 && !/\)\s*;?\s*$/.test(lines[end].trimEnd())) end++;
+        const call = lines.slice(i, end + 1).join("\n");
+        if (!call.includes("GIT_NO_AUTO_GC")) offenders.push(`${file}:${i + 1}`);
+      });
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // The override lives in three places — the TypeScript source of truth, the
+  // plain-JS twin the scripts use, and the CLI's own copy (it is copied into
+  // dist/ verbatim and cannot import the TypeScript module). They must agree.
+  it("defines GIT_NO_AUTO_GC identically everywhere it appears", () => {
+    const sources = ["src/services/git-env.ts", "scripts/git-env.mjs", "src/cli/core.mjs"];
+    const values = sources.map((file) => {
+      const code = readFileSync(path.join(ROOT, file), "utf8");
+      const match = /GIT_NO_AUTO_GC\s*=\s*\[([^\]]*)\]/.exec(code);
+      expect(match, `${file} does not define GIT_NO_AUTO_GC as an array`).not.toBeNull();
+      return match![1].replace(/\s+/g, "");
+    });
+    expect(new Set(values).size).toBe(1);
+  });
+
   // Issue #1649: a fixture's `git config user.*` that escapes its temp repo
   // pollutes the real checkout; commit identity comes from test/setup.ts's
   // GIT_AUTHOR_*/GIT_COMMITTER_* env instead, which never writes a config file.

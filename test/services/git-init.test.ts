@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { GIT_NO_AUTO_GC } from "../../src/services/git-env.js";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 
@@ -45,7 +46,7 @@ describe("runGitInit", () => {
     expect(spawnCalls).toHaveLength(1);
     const [file, args] = spawnCalls[0] as [string, string[]];
     expect(file).toBe("git");
-    expect(args).toEqual(["-C", "/home/user/project", "init", "--quiet"]);
+    expect(args).toEqual([...GIT_NO_AUTO_GC, "-C", "/home/user/project", "init", "--quiet"]);
   });
 
   it("reports failure (not a throw) on a non-zero git exit", async () => {

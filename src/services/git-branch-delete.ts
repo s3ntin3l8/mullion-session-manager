@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { listWorktrees } from "./git-refs.js";
 
 // Branch *deletion* (issue #442) — the mutating counterpart to git-refs.ts's
@@ -39,7 +39,7 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, ...args], {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       env: gitEnv(),
     });

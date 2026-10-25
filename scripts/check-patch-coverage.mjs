@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { gitEnv } from "./git-env.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -27,7 +27,7 @@ export function resolveBaseRef(explicitRef) {
   const candidates = ["origin/main", "main", "HEAD~1"];
   for (const ref of candidates) {
     try {
-      execFileSync("git", ["rev-parse", "--verify", ref], {
+      execFileSync("git", [...GIT_NO_AUTO_GC, "rev-parse", "--verify", ref], {
         cwd: root,
         stdio: "ignore",
         env: gitEnv(),
@@ -269,7 +269,7 @@ export function runPatchCoverageCheck(options = {}) {
     let diffBase = baseRef; // fallback: diff against baseRef tip if merge-base fails
     try {
       try {
-        diffBase = execFileSync("git", ["merge-base", baseRef, "HEAD"], {
+        diffBase = execFileSync("git", [...GIT_NO_AUTO_GC, "merge-base", baseRef, "HEAD"], {
           cwd: root,
           encoding: "utf8",
           env: gitEnv(),
@@ -290,12 +290,16 @@ export function runPatchCoverageCheck(options = {}) {
       // Only the paths parseDiff keeps: a whole-repo diff (a large docs or
       // lockfile change, or a damaged index that stages every file as
       // deleted) used to overflow the buffer with ENOBUFS.
-      diffText = execFileSync("git", ["diff", "-U0", diffBase, "--", "src", "frontend/src"], {
-        cwd: root,
-        encoding: "utf8",
-        env: gitEnv(),
-        maxBuffer: 256 * 1024 * 1024,
-      });
+      diffText = execFileSync(
+        "git",
+        [...GIT_NO_AUTO_GC, "diff", "-U0", diffBase, "--", "src", "frontend/src"],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: gitEnv(),
+          maxBuffer: 256 * 1024 * 1024,
+        },
+      );
     } catch (err) {
       console.error(`ERROR: Failed to diff against ${baseRef}:`, err.message);
       return { ok: false, overallPercent: 0, error: "diff-failed" };

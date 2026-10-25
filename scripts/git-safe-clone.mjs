@@ -28,12 +28,12 @@
 // failure.
 
 import { execFileSync } from "node:child_process";
-import { gitEnv } from "./git-env.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 
 /** Runs git, returning stdout, or null when git exits non-zero. */
 function gitTry(args, opts = {}) {
   try {
-    return execFileSync("git", args, {
+    return execFileSync("git", [...GIT_NO_AUTO_GC, ...args], {
       encoding: "utf8",
       env: gitEnv(),
       stdio: ["ignore", "pipe", "pipe"],
@@ -66,7 +66,7 @@ function main() {
   }
 
   try {
-    execFileSync("git", ["config", "--local", "gc.auto", "0"], {
+    execFileSync("git", [...GIT_NO_AUTO_GC, "config", "--local", "gc.auto", "0"], {
       encoding: "utf8",
       env: gitEnv(),
       stdio: ["ignore", "pipe", "pipe"],

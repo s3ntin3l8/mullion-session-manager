@@ -1504,8 +1504,20 @@ function cliGitEnv() {
   return env;
 }
 
+// `-c gc.auto=0` — issue #1851. The source of truth is
+// src/services/git-env.ts's GIT_NO_AUTO_GC; this file is copied into dist/
+// verbatim and cannot import that TypeScript module (see cliGitEnv's comment
+// above for the same constraint). test/cli/core.test.ts and
+// test/git-env-guard.test.ts fail if the copies drift.
+//
+// git asks "while I'm here, should I tidy up this repo?" after some porcelain
+// commands, and the background gc it can start can delete a loose object a
+// CONCURRENT write is creating (#1836). This answers "no" for that one
+// command, and writes nothing anywhere.
+const GIT_NO_AUTO_GC = ["-c", "gc.auto=0"];
+
 function git(args, cwd) {
-  return execFileSync("git", args, {
+  return execFileSync("git", [...GIT_NO_AUTO_GC, ...args], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],

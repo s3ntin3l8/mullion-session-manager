@@ -51,11 +51,51 @@ export const GIT_ENV_KEYS_TO_STRIP = [
   "GIT_CONFIG_SYSTEM",
 ] as const;
 
+/**
+ * The carrier of the env form of `-c <key>=<value>`: `GIT_CONFIG_COUNT` plus
+ * numbered `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` pairs. git reads only
+ * indices 0..COUNT-1, so removing COUNT disables the whole mechanism — which is
+ * what we want for the same reason GIT_CONFIG is stripped: an ambient pair
+ * could otherwise add config to every git command Mullion runs (`core.bare=true`
+ * would be the #1602 hazard all over again).
+ *
+ * Deliberately NOT in {@link GIT_ENV_KEYS_TO_STRIP}: that list's contract is
+ * "these keys must be ABSENT", and the session env deliberately SETS this one
+ * (see session-env.ts's GIT_CONFIG_NO_AUTO_GC_ENV). It is removed explicitly
+ * instead, and test/scripts/git-env.test.ts checks the two copies agree.
+ */
+export const GIT_CONFIG_COUNT_KEY = "GIT_CONFIG_COUNT";
+
+/**
+ * `-c gc.auto=0` — issue #1851.
+ *
+ * git asks "while I'm here, should I tidy up this repo?" after some
+ * porcelain commands, and sometimes the answer is yes: a background
+ * `git gc --auto` starts and can delete a loose object that a CONCURRENT
+ * write is creating. The damage surfaces far from the cause — a commit
+ * that cannot complete, naming a *missing* object rather than a corrupt
+ * one (see #1836 for the full story).
+ *
+ * This answers "no" for that one command. It writes NOTHING: not the
+ * repo's config, not the global config, not the user's. Their own git
+ * still tidies up exactly as it does today.
+ *
+ * Applied to EVERY git invocation Mullion makes, so the invariant is
+ * "Mullion never triggers an auto-gc in any repo it touches" holds by
+ * construction — including call sites added later. test/git-env-guard.test.ts
+ * enforces it the same way it enforces the gitEnv() rule.
+ *
+ * `-c` is a git GLOBAL option, so it goes before the subcommand and
+ * composes with `-C <cwd>` in either order.
+ */
+export const GIT_NO_AUTO_GC = ["-c", "gc.auto=0"] as const;
+
 export function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of GIT_ENV_KEYS_TO_STRIP) {
     delete env[key];
   }
+  delete env[GIT_CONFIG_COUNT_KEY];
   env.LC_ALL = "C";
   return env;
 }

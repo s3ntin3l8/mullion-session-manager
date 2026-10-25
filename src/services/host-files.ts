@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { viaRemote, type HostGitResult } from "./host-git.js";
 import { resolveSymlinkTargetWithin, resolveWithin } from "./safe-path.js";
@@ -163,7 +163,10 @@ export function writeEntriesLocally(
     // purely to make an upcoming diff/preview complete; commitWipChanges
     // (apply) does its own equivalent staging pass regardless of what's
     // already staged — see that function's own doc comment.
-    execFileSync("git", ["-C", cwd, "add", "-A"], { stdio: "pipe", env: gitEnv() });
+    execFileSync("git", [...GIT_NO_AUTO_GC, "-C", cwd, "add", "-A"], {
+      stdio: "pipe",
+      env: gitEnv(),
+    });
   }
 }
 

@@ -32,14 +32,14 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { gitEnv } from "./git-env.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 
 const APPLY = process.argv.includes("--apply");
 const FORCE = process.argv.includes("--force");
 
 /** Runs git, returning trimmed stdout. Throws when git exits non-zero. */
 function git(args, opts = {}) {
-  return execFileSync("git", args, {
+  return execFileSync("git", [...GIT_NO_AUTO_GC, ...args], {
     encoding: "utf8",
     env: gitEnv(),
     stdio: ["ignore", "pipe", "pipe"],
@@ -50,7 +50,7 @@ function git(args, opts = {}) {
 /** Runs git, returning its raw stdout (no trimming — for NUL-separated output). */
 function gitRaw(args, opts = {}) {
   try {
-    return execFileSync("git", args, {
+    return execFileSync("git", [...GIT_NO_AUTO_GC, ...args], {
       encoding: "utf8",
       env: gitEnv(),
       stdio: ["ignore", "pipe", "pipe"],
@@ -135,11 +135,15 @@ function shaOfLoosePath(rel) {
 function fsckErrors() {
   let output;
   try {
-    output = execFileSync("git", ["fsck", "--connectivity-only", "--no-progress"], {
-      encoding: "utf8",
-      env: gitEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    output = execFileSync(
+      "git",
+      [...GIT_NO_AUTO_GC, "fsck", "--connectivity-only", "--no-progress"],
+      {
+        encoding: "utf8",
+        env: gitEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   } catch (err) {
     // fsck exits non-zero when it finds problems — that is the interesting case.
     output = `${err.stdout ?? ""}${err.stderr ?? ""}`;

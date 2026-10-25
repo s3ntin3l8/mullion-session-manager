@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { getGitStatus } from "./git-status.js";
 import { listWorktrees } from "./git-refs.js";
 
@@ -68,7 +68,7 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, ...args], {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       env: gitEnv(),
     });
