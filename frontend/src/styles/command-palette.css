@@ -44,6 +44,14 @@
 .cmd-palette-search input::placeholder {
   color: var(--muted);
 }
+/* The search input suppressed the UA outline with nothing in its place, so a
+   keyboard user had no idea where the caret was. Same 2px accent outline the
+   rest of the app uses for keyboard focus (dock.css's .custom-select-trigger,
+   toolbar.css's .kbd-btn). */
+.cmd-palette-search input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .cmd-palette-target-strip {
   padding: 11px 15px;
   border-bottom: 1px solid var(--border-soft);

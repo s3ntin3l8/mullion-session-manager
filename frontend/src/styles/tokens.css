@@ -28,10 +28,27 @@
   --border: #2c2c30;
   --border-soft: #232326;
   --fg: #ededed;
-  --muted: #8b8b92;
-  --dim: #666670;
+  /* --muted / --dim are TEXT roles. They were #8b8b92 / #666670, which never
+     cleared 4.5:1 against this theme's own surfaces (--dim bottomed out at
+     2.73:1 on --pane-hd, and it is the color of 182 separate `color:`
+     declarations across the stylesheets — session meta lines, section
+     captions, inactive dockview tab labels). They are now #9b9ba5 / #8a8a94:
+     5.63:1 and 4.53:1 worst-case, still the same neutral hue family and
+     still a clear step below --fg. */
+  --muted: #9b9ba5;
+  --dim: #8a8a94;
   --accent-solid: #0e9f6e;
   --ring: #12b981;
+  /* --accent-fill / --badge-dim are FILL roles: they are the background of a
+     badge or button that carries WHITE text. --accent-solid and --ring are
+     tuned to be readable AS text on a dark surface, which is the opposite
+     requirement — white on --ring is only 2.54:1 and white on --accent-solid
+     only 3.39:1, so neither can double as a white-on-fill background. These
+     two are the darker fills for that job (white-on 5.35:1 / 8.78:1). The
+     split is forced, not stylistic: no single value can serve both roles.
+     See --badge-dim's note below for the arithmetic. */
+  --accent-fill: #0a7a53;
+  --badge-dim: #4a4a52;
   --g: #5ec27a;
   --r: #e5575a;
   --b: #5c9bf5;
@@ -55,10 +72,20 @@
   --border: #e2e2df;
   --border-soft: #ececea;
   --fg: #171717;
-  --muted: #737373;
-  --dim: #9a9a9a;
-  --accent-solid: #0e9f6e;
-  --ring: #0e9f6e;
+  /* Same two roles as the dark theme above, re-tuned for light surfaces:
+     --muted was #737373 (3.90:1 on --pane-hd — below AA) and --dim was
+     #9a9a9a (2.31:1). Now 5.67:1 and 4.72:1 worst-case. */
+  --muted: #5a5a5a;
+  --dim: #666666;
+  /* --accent-solid doubles as a text color here (link/label text in the
+     settings sections) and as a badge fill. #0e9f6e was only 3.24:1 as text
+     and 3.39:1 under white text; #0b6e4b is 5.16:1 and 6.28:1. Still the
+     same emerald — just the darker step of it, which is what the light
+     theme needs to pass on a near-white surface. */
+  --accent-solid: #0b6e4b;
+  --ring: #0b6e4b;
+  --accent-fill: #0b6e4b;
+  --badge-dim: #5f5f5f;
   --g: #1a7f37;
   --r: #cf222e;
   --b: #0969da;
@@ -133,6 +160,23 @@ html[data-theme-hint="dark"] {
 
 .cmux-mono {
   font-family: "Geist Mono", monospace;
+}
+
+/* Visible to a screen reader, invisible on screen.
+   The app's own <h1> lives in App.tsx: the shell has no visible title, but
+   a document with no top-level heading gives a screen-reader user nothing
+   to orient by when they tab into it. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 @keyframes cmuxBlink {
@@ -292,4 +336,40 @@ html[data-theme-hint="dark"] {
 }
 .cmux-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* Reduced motion — WCAG 2.3.3 (Animation from Interactions) and the
+   vestibular-safety half of 2.2.2. Fifteen animations in this codebase run
+   `infinite`: the attention ring (cmuxAttn), the working-session pulse
+   (cmuxPulse), the header ring (cmuxRingHeader), the spinners (cmuxSpin),
+   the settings blink and the striped progress bar. Only login.css had a
+   `prefers-reduced-motion` block before this one, so every one of those
+   pulses ran at full strength for a user who has asked their OS to stop
+   moving things.
+
+   This is the standard universal reset rather than a list of the fifteen
+   selectors, for two reasons. First, a per-selector list would need a
+   matching rule for every animation, and the next one added would silently
+   miss the guard. Second — and this is why it lives in tokens.css, which is
+   imported FIRST — the animated rules live in sidebar.css, terminal.css,
+   dock.css, modals.css, settings.css, destructive-confirm.css,
+   empty-states.css and tablet.css, all of which come later in the cascade.
+   A plain `animation: none` here would lose to every one of them on source
+   order. `!important` is the one thing that beats a later non-important
+   declaration regardless of position, so the guard holds no matter which
+   file a future animation is added to.
+
+   The end states are safe: cmuxPulse settles at opacity 1 (full legibility),
+   cmuxAttn settles at a fully transparent ring, and the attention state
+   also carries a static tint, a left-edge accent bar and the word
+   "Attention" in the sidebar — so nothing is signalled by motion alone. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

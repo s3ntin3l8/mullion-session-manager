@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { DeviceFlowStatus } from "./api/index.js";
-import { CloseIcon, GitHubIcon } from "./ui/icons.js";
+import { GitHubIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { SecondaryButton } from "./ui/primitives.js";
 import { ErrorText } from "./ui/ErrorText.js";
+import { Modal } from "./ui/Modal.js";
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -80,62 +81,13 @@ export function GitHubDeviceFlowModal({
   };
 
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
-      <div className="create-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="create-modal-header">
-          <span className="create-modal-icon">
-            <GitHubIcon size={16} />
-          </span>
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">Connect with GitHub</span>
-            <span className="create-modal-subtitle">
-              Enter this code at the link below to finish connecting.
-            </span>
-          </span>
-          <button className="create-modal-close" onClick={onClose}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
-
-        <div className="create-modal-body">
-          {error && <ErrorText>{error}</ErrorText>}
-          {!error && !state && <div className="settings-readonly-value">Starting device flow…</div>}
-          {!error && state?.status === "pending" && (
-            <>
-              <div className="device-flow-code">{state.userCode}</div>
-              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <SecondaryButton onClick={copyCode}>
-                  {copied ? "Copied" : "Copy code"}
-                </SecondaryButton>
-                <a
-                  className="create-modal-submit"
-                  style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}
-                  href={state.verificationUri}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open GitHub
-                </a>
-              </div>
-              <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
-                Waiting for authorization…
-              </div>
-            </>
-          )}
-          {!error && state?.status === "expired" && (
-            <ErrorText>This code expired before it was used — close this and try again.</ErrorText>
-          )}
-          {!error && state?.status === "denied" && (
-            <ErrorText>Authorization was denied on GitHub.</ErrorText>
-          )}
-          {!error && state?.status === "error" && (
-            <ErrorText>
-              {state.errorMessage ?? "Something went wrong connecting to GitHub."}
-            </ErrorText>
-          )}
-        </div>
-
-        <div className="create-modal-footer">
+    <Modal
+      onClose={onClose}
+      icon={<GitHubIcon size={16} />}
+      title="Connect with GitHub"
+      subtitle="Enter this code at the link below to finish connecting."
+      footer={
+        <>
           <span className="create-modal-footer-hint">
             {state?.status === "pending"
               ? `Code expires if left unused for a while.`
@@ -144,8 +96,40 @@ export function GitHubDeviceFlowModal({
           <button className="create-modal-cancel" onClick={onClose}>
             Close
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      {error && <ErrorText>{error}</ErrorText>}
+      {!error && !state && <div className="settings-readonly-value">Starting device flow…</div>}
+      {!error && state?.status === "pending" && (
+        <>
+          <div className="device-flow-code">{state.userCode}</div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <SecondaryButton onClick={copyCode}>{copied ? "Copied" : "Copy code"}</SecondaryButton>
+            <a
+              className="create-modal-submit"
+              style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+              href={state.verificationUri}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open GitHub
+            </a>
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
+            Waiting for authorization…
+          </div>
+        </>
+      )}
+      {!error && state?.status === "expired" && (
+        <ErrorText>This code expired before it was used — close this and try again.</ErrorText>
+      )}
+      {!error && state?.status === "denied" && (
+        <ErrorText>Authorization was denied on GitHub.</ErrorText>
+      )}
+      {!error && state?.status === "error" && (
+        <ErrorText>{state.errorMessage ?? "Something went wrong connecting to GitHub."}</ErrorText>
+      )}
+    </Modal>
   );
 }

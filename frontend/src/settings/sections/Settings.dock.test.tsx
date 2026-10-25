@@ -78,8 +78,11 @@ describe("Settings -> Dock", () => {
   it("renders the auto-detect dev server control, defaulting to Ask (issue #404)", async () => {
     render(<Settings onClose={vi.fn()} initialSection="dock" />);
     expect(await screen.findByText("Detect dev servers in plain sessions")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ask" })).toHaveClass("active");
-    expect(screen.getByRole("button", { name: "Off" })).not.toHaveClass("active");
+    // The segmented control's options are radios, not plain buttons — the
+    // selection used to be carried by the `.active` class alone, which said
+    // nothing to a screen reader.
+    expect(screen.getByRole("radio", { name: "Ask" })).toHaveClass("active");
+    expect(screen.getByRole("radio", { name: "Off" })).not.toHaveClass("active");
   });
 
   it("switches auto-detect dev server to Off", async () => {
@@ -87,9 +90,9 @@ describe("Settings -> Dock", () => {
     render(<Settings onClose={vi.fn()} initialSection="dock" />);
     await screen.findByText("Detect dev servers in plain sessions");
 
-    await user.click(screen.getByRole("button", { name: "Off" }));
+    await user.click(screen.getByRole("radio", { name: "Off" }));
 
-    expect(screen.getByRole("button", { name: "Off" })).toHaveClass("active");
+    expect(screen.getByRole("radio", { name: "Off" })).toHaveClass("active");
     expect(useDashboardStore.getState().settings.dock.autoDetectDevServer).toBe("off");
   });
 

@@ -356,10 +356,14 @@
   color: #fff;
 }
 .pane-tab-unread-badge.attention {
-  background: var(--ring);
+  /* --accent-fill: white-on-fill background (9.5px white text), not --ring. */
+  background: var(--accent-fill);
 }
 .pane-tab-unread-badge.exited {
-  background: var(--dim);
+  /* --badge-dim: the white-text variant of the muted tone. --dim is now a
+     text-role color (4.53:1 on --pane-hd), which would put white text on
+     it at only 3.42:1. */
+  background: var(--badge-dim);
 }
 /* Issue: narrow headers overflow — below TIGHT_TAB_THRESHOLD_PX (PaneTab.tsx)
    the count text is dropped, leaving only the icon; the pill's own

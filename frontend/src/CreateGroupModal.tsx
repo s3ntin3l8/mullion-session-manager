@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { GridIcon, CloseIcon } from "./ui/icons.js";
+import { useRef, useState } from "react";
+import { GridIcon } from "./ui/icons.js";
+import { Modal } from "./ui/Modal.js";
 
 interface CreateGroupModalProps {
   onClose: () => void;
@@ -42,6 +43,17 @@ export function CreateGroupModal({
   const [name, setName] = useState(initialName);
   const [color, setColor] = useState(initialColor ?? SWATCHES[0].color);
   const isEdit = mode === "edit";
+  // The name field is the one control the user came here to fill in, so it
+  // takes initial focus. The shared Modal's focus trap would otherwise land
+  // on the close button, which precedes it in DOM order.
+  //
+  // Deliberately NOT `autoFocus`: React applies `autoFocus` during the
+  // commit phase, which is BEFORE `useFocusTrap`'s effect captures
+  // `document.activeElement` — so the hook would capture the input as
+  // "what was focused before the dialog opened" and restore focus to a
+  // detached node on close. `initialFocusRef` gives the same result without
+  // breaking focus restoration.
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const confirm = () => {
     const finalName = name.trim() || "New group";
@@ -49,61 +61,16 @@ export function CreateGroupModal({
   };
 
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
-      <div className="create-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="create-modal-header">
-          <span className="create-modal-icon">
-            <GridIcon size={16} />
-          </span>
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">
-              {isEdit ? "Edit workspace group" : "New workspace group"}
-            </span>
-            <span className="create-modal-subtitle">
-              {isEdit
-                ? "Update this group's name or color."
-                : "Group related sessions under one label."}
-            </span>
-          </span>
-          <button className="create-modal-close" onClick={onClose}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
-
-        <div className="create-modal-body">
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Workspace name</span>
-            <span className="create-modal-input-row">
-              <input
-                autoFocus
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Active PRs"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
-                }}
-              />
-            </span>
-          </label>
-
-          <div className="create-modal-field">
-            <span className="create-modal-field-label">Color</span>
-            <div className="create-modal-swatches">
-              {SWATCHES.map((s) => (
-                <button
-                  key={s.color}
-                  type="button"
-                  className={`color-swatch${color === s.color ? " selected" : ""}`}
-                  style={{ background: s.color }}
-                  title={s.title}
-                  onClick={() => setColor(s.color)}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="create-modal-footer">
+    <Modal
+      onClose={onClose}
+      icon={<GridIcon size={16} />}
+      title={isEdit ? "Edit workspace group" : "New workspace group"}
+      subtitle={
+        isEdit ? "Update this group's name or color." : "Group related sessions under one label."
+      }
+      initialFocusRef={nameRef}
+      footer={
+        <>
           <span className="create-modal-footer-hint">
             {isEdit
               ? "Member workspaces keep their current order."
@@ -115,8 +82,39 @@ export function CreateGroupModal({
           <button className="create-modal-submit" onClick={confirm}>
             {isEdit ? "Save changes" : "Create group"}
           </button>
+        </>
+      }
+    >
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Workspace name</span>
+        <span className="create-modal-input-row">
+          <input
+            ref={nameRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Active PRs"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+        </span>
+      </label>
+
+      <div className="create-modal-field">
+        <span className="create-modal-field-label">Color</span>
+        <div className="create-modal-swatches">
+          {SWATCHES.map((s) => (
+            <button
+              key={s.color}
+              type="button"
+              className={`color-swatch${color === s.color ? " selected" : ""}`}
+              style={{ background: s.color }}
+              title={s.title}
+              onClick={() => setColor(s.color)}
+            />
+          ))}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

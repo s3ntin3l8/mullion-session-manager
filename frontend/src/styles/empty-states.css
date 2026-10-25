@@ -67,7 +67,9 @@
   align-items: center;
   gap: 6px;
   border: none;
-  background: var(--accent-solid);
+  /* --accent-fill, not --accent-solid: this is a white-on-fill background,
+     and --accent-solid is tuned as a TEXT color (see tokens.css). */
+  background: var(--accent-fill);
   color: #fff;
   border-radius: 8px;
   padding: 7px 12px;
@@ -3220,6 +3222,13 @@ button.github-panel-row.gh-issue-row {
   outline: none;
   cursor: default;
 }
+/* The canvas is focusable (tabIndex={0} — BrowserPanel.tsx, DevicePane.tsx),
+   so suppressing its outline left a keyboard user with no indication of
+   where they were. */
+.browser-pane-canvas:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .device-pane-canvas {
   touch-action: none;
   user-select: none;
@@ -3332,7 +3341,8 @@ button.github-panel-row.gh-issue-row {
   padding: 6px 14px;
   border-radius: 6px;
   border: none;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   color: #fff;
   font-size: 11.5px;
   font-weight: 600;

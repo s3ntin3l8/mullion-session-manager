@@ -138,6 +138,12 @@
 .create-modal-input-row input.mono {
   font-family: "Geist Mono", monospace;
 }
+/* The input row's own border does not change on focus, and the input
+   suppressed the UA outline, so there was no focus indicator at all. */
+.create-modal-input-row input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .create-modal-textarea {
   border: 1px solid var(--border-soft);
   border-radius: 9px;
@@ -148,6 +154,10 @@
   padding: 9px 11px;
   outline: none;
   resize: vertical;
+}
+.create-modal-textarea:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
 }
 .create-modal-browse-btn {
   display: inline-flex;
@@ -189,7 +199,8 @@
   height: 28px;
   padding: 0 12px;
   border: none;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   color: #fff;
   border-radius: 7px;
   cursor: pointer;
@@ -268,7 +279,8 @@
   height: 32px;
   padding: 0 16px;
   border: none;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   color: #fff;
   border-radius: 8px;
   cursor: pointer;
@@ -356,6 +368,12 @@
   font-size: 12.5px;
   outline: none;
 }
+/* The settings rail's search input suppressed the UA outline and its wrapper
+   does not react to focus — no visible indicator for keyboard users. */
+.settings-nav-search input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .settings-nav-items {
   display: flex;
   flex-direction: column;
@@ -427,7 +445,8 @@
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -808,6 +827,11 @@
   font-family: inherit;
   font-size: 12.5px;
   outline: none;
+}
+/* Same as .settings-nav-search input above — no focus indicator without this. */
+.settings-image-filters-search input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
 }
 .settings-image-filters-search input::placeholder {
   color: var(--muted);

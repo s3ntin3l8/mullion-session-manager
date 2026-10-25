@@ -54,6 +54,7 @@ import {
 import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
+import { sessionIdFromPanelId } from "./panelUtils.js";
 import { Header } from "./session-row/Header.js";
 import { Details } from "./session-row/Details.js";
 import { QuotaBadge } from "./session-row/QuotaBadge.js";
@@ -439,7 +440,7 @@ export function Sidebar({
       {phoneSection !== "devices" && (
         <>
           <div className="sidebar-section-header">
-            <span className="sidebar-section-title">Projects</span>
+            <h3 className="sidebar-section-title">Projects</h3>
             <span className="project-session-count">sessions</span>
             <HierarchyToggle />
             <button
@@ -999,6 +1000,8 @@ function ProjectHeader({
                 label: "Edit",
                 icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: () => setEditOpen(true),
+                // Opens the Edit-project modal, which traps focus itself.
+                opensOverlay: true,
               },
               {
                 key: "git-pull",
@@ -1612,6 +1615,13 @@ export function SessionRow({
   // eventsClient.ts), scoped to just this session's list. Selector-based so
   // a live event for a DIFFERENT session's list doesn't re-render this row.
   const sessionEvents = useDashboardStore((s) => s.events[session.id]);
+  // Which session is currently open in a pane. `aria-current` marks it for a
+  // screen reader ("you are here"), and the `.active` class gives the row
+  // the visual state it never had — before this, the sidebar showed no
+  // indication at all of which session you were looking at.
+  const isActiveSession = useDashboardStore(
+    (s) => sessionIdFromPanelId(s.activePanelId) === session.id,
+  );
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
   // Issue #29 — the Runway quota chip. The snapshot is fetched ONCE for the
@@ -1878,7 +1888,10 @@ export function SessionRow({
   return (
     <>
       <div
-        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}`}
+        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}${
+          isActiveSession ? " active" : ""
+        }`}
+        aria-current={isActiveSession ? "true" : undefined}
         // CSS custom property, not a computed inline margin — styles.css
         // owns the actual indent math (base + depth * step), same "component
         // supplies data, CSS supplies presentation" split as every other

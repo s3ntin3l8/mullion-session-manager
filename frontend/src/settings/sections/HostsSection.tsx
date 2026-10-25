@@ -408,6 +408,9 @@ export function HostsSection() {
                           label: "View config",
                           icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => setViewingConfig({ id: host.id, name: host.name }),
+                          // Opens the host-config modal, which traps focus
+                          // itself.
+                          opensOverlay: true,
                         },
                         {
                           key: "edit",

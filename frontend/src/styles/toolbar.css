@@ -105,7 +105,9 @@
   min-width: 15px;
   height: 15px;
   padding: 0 3px;
-  background: var(--ring);
+  /* --accent-fill: white-on-fill background. --ring is tuned as a text/focus
+     color and is only 2.54:1 under white text in the dark theme. */
+  background: var(--accent-fill);
   color: #fff;
   border-radius: 999px;
   font-size: 10px;
