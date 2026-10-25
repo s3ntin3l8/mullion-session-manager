@@ -19,7 +19,11 @@ export function ErrorText({
   className?: string;
 }) {
   return (
-    <div className={className} style={{ fontSize: 12, color: "var(--r)", ...style }} role="alert">
+    <div
+      className={className}
+      style={{ fontSize: "0.75rem", color: "var(--r)", ...style }}
+      role="alert"
+    >
       {children}
     </div>
   );

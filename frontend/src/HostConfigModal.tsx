@@ -92,7 +92,9 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
           </button>
         </div>
       )}
-      {!config && !error && <div style={{ fontSize: 12, color: "var(--dim)" }}>Loading…</div>}
+      {!config && !error && (
+        <div style={{ fontSize: "0.75rem", color: "var(--dim)" }}>Loading…</div>
+      )}
       {config && (
         <>
           <div className="create-modal-field">

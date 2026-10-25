@@ -138,7 +138,7 @@ function RecentReviews() {
         desc="Review runs requested from this Mullion since it last started. Stop cancels a run that is stuck or was requested by mistake."
       />
       {runs && runs.length === 0 && (
-        <div style={{ opacity: 0.7, fontSize: 12 }}>No reviews requested yet.</div>
+        <div style={{ opacity: 0.7, fontSize: "0.75rem" }}>No reviews requested yet.</div>
       )}
       {runs && runs.length > 0 && (
         <StyledList>
@@ -314,7 +314,7 @@ export function ReviewRelaySection() {
       />
       {providerRow}
       {relay.provider === "none" ? (
-        <div style={{ opacity: 0.7, fontSize: 12 }} data-testid="review-relay-none">
+        <div style={{ opacity: 0.7, fontSize: "0.75rem" }} data-testid="review-relay-none">
           Agents cannot request reviews through Mullion; reviews come from your repository&apos;s
           own workflow.
         </div>
@@ -444,7 +444,7 @@ export function ReviewRelaySection() {
               {testing ? "Testing…" : "Test connection"}
             </SecondaryButton>
             {testResult && (
-              <span style={{ marginLeft: 10, fontSize: 11.5, color: "var(--dim)" }}>
+              <span style={{ marginLeft: 10, fontSize: "0.71875rem", color: "var(--dim)" }}>
                 {testResult}
               </span>
             )}

@@ -276,7 +276,7 @@ export function BridgesSection() {
                     subtitle={bridge.platform ?? undefined}
                     trailing={
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
+                        <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
                           {describeBridge(bridge)}
                         </span>
                         <ConfirmButton
@@ -309,7 +309,7 @@ export function BridgesSection() {
         <ErrorText style={{ marginTop: 10 }}>Couldn't load SSH agent bridges.</ErrorText>
       )}
       {bridges !== null && bridges.length === 0 && !loadError && (
-        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
+        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
           No SSH agent bridges yet. Until you pair one, sessions use the SSH agent of the host they
           run on.
         </div>

@@ -649,7 +649,7 @@ export function BrowserPanel({
               title="Follow Agent URL Sync"
               style={{
                 whiteSpace: "nowrap",
-                fontSize: 11,
+                fontSize: "0.6875rem",
                 padding: "0 6px",
                 marginRight: 6,
                 display: "flex",
@@ -802,7 +802,7 @@ export function BrowserPanel({
             title="Follow Agent URL Sync"
             style={{
               whiteSpace: "nowrap",
-              fontSize: 11,
+              fontSize: "0.6875rem",
               padding: "0 6px",
               marginRight: 6,
               display: "flex",

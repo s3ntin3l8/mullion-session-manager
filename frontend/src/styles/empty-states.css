@@ -45,12 +45,12 @@
   flex-shrink: 0;
 }
 .ui-empty-state-title {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 600;
   color: var(--fg);
 }
 .ui-empty-state-body {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
   line-height: 1.5;
   max-width: 220px;
@@ -73,7 +73,7 @@
   color: #fff;
   border-radius: 8px;
   padding: 7px 12px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -90,7 +90,7 @@
   color: var(--fg);
   border-radius: 8px;
   padding: 7px 12px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -114,7 +114,7 @@
   background: transparent;
   color: var(--fg);
   padding: 8px 12px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -227,7 +227,7 @@
   border: none;
   background: transparent;
   color: var(--accent-solid);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
   cursor: pointer;
   padding: 0;
@@ -250,12 +250,12 @@
    below, so it reads as one form-control language rather than introducing
    a third. */
 .tasks-panel-parent-filter-label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   flex-shrink: 0;
 }
 .tasks-panel-parent-filter {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   padding: 4px 7px;
   border-radius: 5px;
   border: 1px solid var(--border);
@@ -273,7 +273,7 @@
   color: var(--fg);
   border-radius: 6px;
   padding: 4px 9px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -291,7 +291,7 @@
 }
 .tasks-panel-new-project,
 .tasks-panel-new-title {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   padding: 4px 7px;
   border-radius: 5px;
   border: 1px solid var(--border);
@@ -310,7 +310,7 @@
   color: var(--accent-solid);
   border-radius: 5px;
   padding: 4px 9px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -320,7 +320,7 @@
   cursor: default;
 }
 .tasks-panel-empty-hint {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   text-align: center;
   max-width: 320px;
@@ -329,7 +329,7 @@
   border: none;
   background: transparent;
   color: var(--accent-solid);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   padding: 0;
@@ -357,12 +357,12 @@
   color: var(--dim);
 }
 .tasks-panel-redirect-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--fg);
 }
 .tasks-panel-redirect-hint {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   max-width: 280px;
   line-height: 1.5;
 }
@@ -376,7 +376,7 @@
   color: var(--fg);
   border-radius: 6px;
   padding: 4px 9px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -429,7 +429,7 @@
   opacity: 0.7;
 }
 .task-card-title {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -450,7 +450,7 @@
   display: flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   /* .task-card-issue is now sometimes an <a> (D2 — was always a <span>, a
      dead end that only ever carried the issue URL as a tooltip); this and
@@ -466,7 +466,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   text-decoration: none;
 }
@@ -475,7 +475,7 @@
   text-decoration: underline;
 }
 .task-card-age {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -488,7 +488,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   text-decoration: none;
   max-width: 160px;
@@ -501,12 +501,12 @@
   text-decoration: underline;
 }
 .task-card-subissues {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
 .task-card-archived {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -520,7 +520,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--y);
 }
 .task-card-blocked-unresolved {
@@ -545,25 +545,25 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--y);
 }
 .task-card-hint {
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--y);
 }
 .task-card-failure-reason {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--r);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .task-card-review-round {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--muted);
 }
 /* Task 258971's investigation: a task whose round budget is spent needs a
@@ -578,7 +578,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
   border: 1px solid var(--border-soft);
   border-radius: 6px;
@@ -642,13 +642,13 @@
   gap: 10px;
 }
 .task-detail-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   color: var(--fg);
   flex: 1;
 }
 .task-status-badge {
-  font-size: 10px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   font-weight: 700;
@@ -685,7 +685,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
 }
 .task-detail-agents-config {
@@ -699,7 +699,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
 }
 .task-detail-agent-label {
@@ -721,7 +721,7 @@
   text-decoration: underline;
 }
 .task-detail-body {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
   white-space: pre-wrap;
 }
@@ -729,14 +729,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--r);
 }
 .task-detail-sync-error {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--y);
 }
 /* Wraps TaskActions + DeleteTaskAction directly under the title/status
@@ -754,14 +754,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--y);
 }
 .task-detail-session-attention {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--y);
 }
 .task-detail-actions {
@@ -778,7 +778,7 @@
 }
 .task-detail-hint,
 .task-detail-error {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
 }
 .task-detail-error {
@@ -792,7 +792,7 @@
   padding-top: 10px;
 }
 .task-detail-section-title {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-weight: 700;
@@ -806,7 +806,7 @@
   gap: 4px;
   padding: 0;
   margin: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .task-detail-review-section {
   background: color-mix(in srgb, var(--y) 6%, transparent);
@@ -815,7 +815,7 @@
   border-top: none;
 }
 .task-detail-review-hint {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
 }
 .task-detail-review-noseed,
@@ -823,11 +823,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--y);
 }
 .task-detail-review-round {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-weight: 600;
   color: var(--y);
 }
@@ -837,7 +837,7 @@
   color: var(--r);
 }
 .task-detail-review-findings {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--fg);
   background: var(--bg);
   border: 1px solid var(--border-soft);
@@ -848,7 +848,7 @@
 }
 .task-detail-review-findings h2,
 .task-detail-review-findings h3 {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   margin: 10px 0 4px;
 }
@@ -874,7 +874,7 @@
 }
 .task-detail-review-findings code {
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   border-radius: 3px;
   padding: 1px 4px;
@@ -887,7 +887,7 @@
   margin: 0 0 8px;
   padding: 4px 6px;
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   border-radius: 3px;
   /* pre-wrap, not the default pre: preserves fenced content's leading
@@ -900,7 +900,7 @@
   margin-bottom: 0;
 }
 .task-detail-footer {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
   border-top: 1px solid var(--border-soft);
   padding-top: 8px;
@@ -922,13 +922,13 @@
   color: var(--dim);
 }
 .empty-grid-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--muted);
   font-weight: 500;
 }
 .empty-grid-hint {
   font-family: "Geist Mono", monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 
@@ -994,7 +994,7 @@
   border-bottom: 1px solid var(--border-soft);
 }
 .kanban-column-title {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-weight: 700;
@@ -1002,7 +1002,7 @@
   flex: 1;
 }
 .kanban-column-count {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   background: var(--track);
@@ -1014,7 +1014,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--y);
   font-family: "Geist Mono", monospace;
   background: color-mix(in srgb, var(--y) 14%, transparent);
@@ -1028,7 +1028,7 @@
   gap: 8px;
 }
 .kanban-column-empty {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   padding: 8px 4px;
 }
@@ -1053,7 +1053,7 @@
   border-radius: 0;
 }
 .kanban-card-project {
-  font-size: 10px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
@@ -1163,7 +1163,7 @@
   border-bottom: 1px solid var(--border);
 }
 .kanban-detail-drawer-header-label {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-weight: 700;
@@ -1234,7 +1234,7 @@
   border: none;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   font-weight: 700;
@@ -1243,7 +1243,7 @@
   padding: 0;
 }
 .kanban-lane-count {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   background: var(--track);
@@ -1265,7 +1265,7 @@
      much room" affordance; a silent inner scrollbar isn't. */
 }
 .kanban-lane-empty {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   padding: 0 0 12px;
 }
@@ -1284,7 +1284,7 @@
   width: 260px;
 }
 .kanban-lane-group-title {
-  font-size: 10px;
+  font-size: 0.625rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
@@ -1413,7 +1413,7 @@
   border-bottom: 1px solid var(--border-soft);
 }
 .dock-monitor-name {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   flex: 1;
   white-space: nowrap;
@@ -1422,7 +1422,7 @@
   min-width: 0;
 }
 .dock-monitor-tag {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
@@ -1521,7 +1521,7 @@
    accent-tinted .dock-monitor-url pills — this is status text, not an
    actionable/clickable pill. */
 .dock-monitor-container-state {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
@@ -1533,7 +1533,7 @@
   flex-shrink: 1;
 }
 .dock-monitor-worktree-select .custom-select-trigger {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-family: "Geist Mono", monospace;
   max-width: 100%;
   color: var(--fg);
@@ -1554,7 +1554,7 @@
   align-items: center;
   gap: 4px;
   font-family: "Geist Mono", monospace;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--muted);
   background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-solid) 20%, transparent);
@@ -1620,7 +1620,7 @@
    e.g. a dev and a prod stack, so a single flat label could no longer say
    which stack a hoisted action would hit). */
 .dock-group-label {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
@@ -1763,7 +1763,7 @@
   align-items: center;
   justify-content: center;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 /* GitHub panel (GitHubPanel.tsx, issue #27) — a dockview panel, opened from
@@ -1808,7 +1808,7 @@
   height: 100%;
   padding: 12px 14px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 /* Four call sites (SkillsPanel, DockConfigPanel, AgentRulesPanel x2) nest
@@ -1823,7 +1823,7 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--fg);
   text-decoration: none;
@@ -1849,7 +1849,7 @@
   margin-bottom: 16px;
 }
 .github-panel-section-title {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--dim);
@@ -1865,7 +1865,7 @@
   align-items: center;
 }
 .github-panel-empty-row {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
   padding: 4px 2px;
 }
@@ -1894,7 +1894,7 @@
   padding: 5px 6px;
   color: var(--fg);
   text-decoration: none;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   border-radius: 5px;
   text-align: left;
 }
@@ -1904,7 +1904,7 @@
 .github-panel-row-number {
   color: var(--dim);
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   flex-shrink: 0;
 }
 .github-panel-row-title {
@@ -1922,7 +1922,7 @@ button.github-panel-row.gh-issue-row {
   text-align: left;
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
 }
 .gh-issue-row-main {
   display: flex;
@@ -1946,7 +1946,7 @@ button.github-panel-row.gh-issue-row {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 .gh-label-row {
@@ -1959,7 +1959,7 @@ button.github-panel-row.gh-issue-row {
   padding: 0;
 }
 .gh-label-chip {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   line-height: 1.5;
   padding: 0 6px;
   border: 1px solid var(--dim);
@@ -1975,7 +1975,7 @@ button.github-panel-row.gh-issue-row {
   background: color-mix(in srgb, var(--fg) 14%, transparent);
 }
 .gh-task-chip {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   padding: 0 6px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--fg) 10%, transparent);
@@ -1993,12 +1993,12 @@ button.github-panel-row.gh-issue-row {
   align-self: flex-start;
 }
 .gh-detail-title {
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 600;
   overflow-wrap: anywhere;
 }
 .gh-detail-meta {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 .gh-detail-actions {
@@ -2008,11 +2008,11 @@ button.github-panel-row.gh-issue-row {
   gap: 8px;
 }
 .gh-detail-notice {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--g);
 }
 .gh-html {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -2031,7 +2031,7 @@ button.github-panel-row.gh-issue-row {
 }
 /* PR drill-in (github/PrDetailView.tsx) and PR list phase pills. */
 .gh-phase-pill {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   padding: 0 6px;
   border-radius: 999px;
   white-space: nowrap;
@@ -2087,11 +2087,11 @@ button.github-panel-row.gh-issue-row {
   min-width: 0;
 }
 .gh-status-title {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
 }
 .gh-status-summary {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 .gh-status-body {
@@ -2108,7 +2108,7 @@ button.github-panel-row.gh-issue-row {
   color: var(--accent, var(--fg));
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
 }
 .gh-clamp {
@@ -2118,12 +2118,12 @@ button.github-panel-row.gh-issue-row {
 .gh-add {
   color: var(--g);
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .gh-del {
   color: var(--r);
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 /* Git sidebar: collapsible sections and the commit graph (git/*.tsx). */
 /* Git sidebar: collapsible sections, cards, and the commit graph (git/*.tsx). */
@@ -2145,7 +2145,7 @@ button.github-panel-row.gh-issue-row {
   text-align: left;
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--dim);
@@ -2161,7 +2161,7 @@ button.github-panel-row.gh-issue-row {
   gap: 6px;
 }
 .gh-section-count-badge {
-  font-size: 10px;
+  font-size: 0.625rem;
   padding: 1px 6px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
@@ -2189,7 +2189,7 @@ button.github-panel-row.gh-issue-row {
   text-align: left;
   cursor: pointer;
   font: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   border-radius: 5px;
 }
 .gh-commit-row:hover {
@@ -2219,7 +2219,7 @@ button.github-panel-row.gh-issue-row {
   flex: 1;
 }
 .gh-commit-meta {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   flex-shrink: 0;
 }
@@ -2229,7 +2229,7 @@ button.github-panel-row.gh-issue-row {
   gap: 4px;
 }
 .gh-ref {
-  font-size: 10px;
+  font-size: 0.625rem;
   padding: 1px 5px;
   border-radius: 4px;
   border: 1px solid var(--border-soft);
@@ -2255,7 +2255,7 @@ button.github-panel-row.gh-issue-row {
 }
 .gh-commit-message {
   white-space: pre-wrap;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   margin: 4px 0 6px;
 }
@@ -2273,7 +2273,7 @@ button.github-panel-row.gh-issue-row {
   border: none;
   cursor: pointer;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--fg);
   text-align: left;
 }
@@ -2282,7 +2282,7 @@ button.github-panel-row.gh-issue-row {
 }
 .gh-commit-file-path {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .gh-file-stats {
   display: flex;
@@ -2292,7 +2292,7 @@ button.github-panel-row.gh-issue-row {
 .gh-bin {
   color: var(--dim);
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 .gh-link-button.active {
   font-weight: 600;
@@ -2332,11 +2332,11 @@ button.github-panel-row.gh-issue-row {
 }
 .git-worktree-title-btn {
   font-weight: 500;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .git-worktree-branch {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
 }
 .git-worktree-sessions {
   display: flex;
@@ -2354,7 +2354,7 @@ button.github-panel-row.gh-issue-row {
   overflow: hidden;
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   border: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   color: var(--fg);
@@ -2389,7 +2389,7 @@ button.github-panel-row.gh-issue-row {
   background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-solid) 30%, transparent);
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--fg);
 }
 .gh-history-clear-scope {
@@ -2398,7 +2398,7 @@ button.github-panel-row.gh-issue-row {
   color: var(--dim);
   cursor: pointer;
   padding: 0 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1;
 }
 .gh-history-clear-scope:hover {
@@ -2436,7 +2436,7 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
   margin-bottom: 14px;
 }
@@ -2453,7 +2453,7 @@ button.github-panel-row.gh-issue-row {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 2px 6px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   cursor: pointer;
   line-height: 1.4;
@@ -2472,11 +2472,11 @@ button.github-panel-row.gh-issue-row {
   gap: 3px;
 }
 .git-panel-toggle-label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .git-panel-toggle-inherited {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   opacity: 0.5;
   font-style: italic;
@@ -2486,7 +2486,7 @@ button.github-panel-row.gh-issue-row {
   border: none;
   color: var(--dim);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 0.8125rem;
   padding: 0;
   line-height: 1;
   opacity: 0.6;
@@ -2522,7 +2522,7 @@ button.github-panel-row.gh-issue-row {
   align-items: center;
   gap: 3px;
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
@@ -2540,7 +2540,7 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
 }
 .source-control-branch-name {
@@ -2599,7 +2599,7 @@ button.github-panel-row.gh-issue-row {
   background: none;
   border: none;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   cursor: pointer;
   text-align: left;
 }
@@ -2607,7 +2607,7 @@ button.github-panel-row.gh-issue-row {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 .github-panel-pr-author {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   flex-shrink: 0;
 }
@@ -2616,7 +2616,7 @@ button.github-panel-row.gh-issue-row {
   opacity: 0.35;
 }
 .github-panel-branch-labels {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   padding: 0 10px 6px;
   font-family: "Geist Mono", monospace;
@@ -2637,7 +2637,7 @@ button.github-panel-row.gh-issue-row {
   border-radius: 0;
   background: none;
   font: inherit;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   text-align: left;
   color: var(--fg);
   text-decoration: none;
@@ -2653,13 +2653,13 @@ button.github-panel-row.gh-issue-row {
 }
 .github-panel-run-status {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
 .github-panel-pr-ci-summary {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -2668,7 +2668,7 @@ button.github-panel-row.gh-issue-row {
    or one has landed. */
 .github-panel-pr-relay-pill {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   padding: 1px 6px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -2700,7 +2700,7 @@ button.github-panel-row.gh-issue-row {
   align-items: center;
   gap: 8px;
   padding: 6px 10px 2px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   color: var(--dim);
   text-decoration: none;
@@ -2712,7 +2712,7 @@ button.github-panel-row.gh-issue-row {
 .github-panel-log {
   margin: 0;
   padding: 8px 16px 8px 18px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-family: "Geist Mono", monospace;
   line-height: 1.4;
   white-space: pre-wrap;
@@ -2727,7 +2727,7 @@ button.github-panel-row.gh-issue-row {
 .github-panel-log-truncated {
   display: block;
   padding-top: 4px;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
   font-style: italic;
 }
@@ -2751,7 +2751,7 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-empty {
   padding: 12px 14px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 .session-timeline-controls {
@@ -2766,7 +2766,7 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-search {
   flex: 1;
   min-width: 140px;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 5px 9px;
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
@@ -2791,7 +2791,7 @@ button.github-panel-row.gh-issue-row {
   border-left: 1px solid var(--border);
 }
 .session-timeline-kind-chip {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   padding: 3px 9px;
   border-radius: 999px;
@@ -2830,7 +2830,7 @@ button.github-panel-row.gh-issue-row {
   align-items: baseline;
   gap: 10px;
   padding: 5px 2px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .session-timeline-row-time {
@@ -2838,11 +2838,11 @@ button.github-panel-row.gh-issue-row {
   width: 56px;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 .session-timeline-row-kind {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -2910,7 +2910,7 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-persistence-hint {
   flex-shrink: 0;
   padding: 4px 14px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
 }
@@ -2922,7 +2922,7 @@ button.github-panel-row.gh-issue-row {
   flex-shrink: 0;
   margin: 8px 14px 12px;
   padding: 6px 10px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   border-radius: 6px;
   border: 1px solid color-mix(in srgb, var(--fg) 16%, transparent);
@@ -2942,7 +2942,7 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-load-older-error {
   flex-shrink: 0;
   margin: -4px 14px 12px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--r);
 }
 /* Hermes review, PR #560 (round 2) — a failed INITIAL history fetch was
@@ -2955,13 +2955,13 @@ button.github-panel-row.gh-issue-row {
   align-items: center;
   gap: 8px;
   padding: 4px 14px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--r);
   border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
 }
 .session-timeline-error-retry {
   padding: 1px 8px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--r) 45%, transparent);
@@ -2989,7 +2989,7 @@ button.github-panel-row.gh-issue-row {
 .browser-panel-empty {
   padding: 12px 14px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 /* Padding/border aligned to .session-timeline-controls above and
@@ -3010,7 +3010,7 @@ button.github-panel-row.gh-issue-row {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: "Geist Mono", monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 .browser-panel-reload {
@@ -3036,7 +3036,7 @@ button.github-panel-row.gh-issue-row {
 .browser-panel-address {
   flex: 1;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   padding: 3px 7px;
   border-radius: 5px;
   border: 1px solid var(--border-soft);
@@ -3051,7 +3051,7 @@ button.github-panel-row.gh-issue-row {
   border: none;
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   color: var(--fg);
-  font-size: 11px;
+  font-size: 0.6875rem;
   cursor: pointer;
 }
 .browser-panel-go:hover {
@@ -3078,7 +3078,7 @@ button.github-panel-row.gh-issue-row {
   border: 1px solid var(--border-soft);
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   color: var(--fg);
-  font-size: 11px;
+  font-size: 0.6875rem;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -3114,7 +3114,7 @@ button.github-panel-row.gh-issue-row {
   border-radius: 5px;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -3133,7 +3133,7 @@ button.github-panel-row.gh-issue-row {
 }
 .browser-panel-dropdown-project {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   margin-left: 6px;
 }
 .browser-panel-dropdown-separator {
@@ -3264,7 +3264,7 @@ button.github-panel-row.gh-issue-row {
   border: 1px solid var(--r);
   border-radius: 6px;
   padding: 6px 12px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   max-width: 80%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3292,7 +3292,7 @@ button.github-panel-row.gh-issue-row {
 }
 .saved-url-modal-header h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--fg);
 }
@@ -3325,7 +3325,7 @@ button.github-panel-row.gh-issue-row {
 .saved-url-input {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid var(--border-soft);
@@ -3344,7 +3344,7 @@ button.github-panel-row.gh-issue-row {
   /* --accent-fill: white-on-fill background, not the text-role accent. */
   background: var(--accent-fill);
   color: #fff;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   cursor: pointer;
 }
@@ -3358,7 +3358,7 @@ button.github-panel-row.gh-issue-row {
   border: 1px solid var(--border-soft);
   background: transparent;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   cursor: pointer;
 }
 .saved-url-list {
@@ -3372,13 +3372,13 @@ button.github-panel-row.gh-issue-row {
   border-radius: 6px;
   background: color-mix(in srgb, var(--r) 15%, transparent);
   color: var(--r);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .saved-url-empty {
   text-align: center;
   padding: 24px 16px;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .saved-url-row {
   display: flex;
@@ -3403,7 +3403,7 @@ button.github-panel-row.gh-issue-row {
   border-radius: 3px;
   background: transparent;
   color: var(--dim);
-  font-size: 8px;
+  font-size: 0.5rem;
   cursor: pointer;
   padding: 0;
   line-height: 1;
@@ -3426,7 +3426,7 @@ button.github-panel-row.gh-issue-row {
   border: none;
   border-radius: 5px;
   background: transparent;
-  font-size: 15px;
+  font-size: 0.9375rem;
   cursor: pointer;
   color: var(--dim);
 }
@@ -3444,12 +3444,12 @@ button.github-panel-row.gh-issue-row {
   gap: 2px;
 }
 .saved-url-label {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
   font-weight: 500;
 }
 .saved-url-value {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3466,7 +3466,7 @@ button.github-panel-row.gh-issue-row {
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   cursor: pointer;
 }
 .saved-url-edit-btn:hover {

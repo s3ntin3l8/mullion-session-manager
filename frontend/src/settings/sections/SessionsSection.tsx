@@ -39,8 +39,8 @@ export function SessionsSection() {
   return (
     <>
       <div style={{ padding: "6px 0 12px" }}>
-        <div style={{ fontSize: 13.5, fontWeight: 500 }}>New-session name pattern</div>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>
+        <div style={{ fontSize: "0.84375rem", fontWeight: 500 }}>New-session name pattern</div>
+        <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: 3 }}>
           Tokens:{" "}
           <span style={{ fontFamily: "Geist Mono, monospace", color: "var(--c)" }}>
             {"{agent}"}

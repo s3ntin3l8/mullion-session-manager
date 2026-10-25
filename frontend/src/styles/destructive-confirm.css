@@ -28,13 +28,13 @@
   animation: cmuxSpin 1.4s linear infinite;
 }
 .terminal-status-text {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
   font-weight: 600;
 }
 .terminal-status-subtext {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .terminal-status-retry {
@@ -46,7 +46,7 @@
   color: var(--fg);
   border-radius: 8px;
   padding: 6px 13px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -74,13 +74,13 @@
   background: var(--bg);
 }
 .crashed-pane-title {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--fg);
 }
 .crashed-pane-subtitle {
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
 }
 /* Issue #1009 — collapsed by default (a native <details> needs no extra
@@ -88,7 +88,7 @@
    doesn't blow out a small pane's layout. */
 .crashed-pane-detail {
   max-width: 100%;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
 }
 .crashed-pane-detail summary {
@@ -104,7 +104,7 @@
   word-break: break-word;
   text-align: left;
   font-family: "Geist Mono", monospace;
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--dim);
 }
 .crashed-pane-reload {
@@ -113,7 +113,7 @@
   color: var(--r);
   border-radius: 7px;
   padding: 5px 11px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
   cursor: pointer;
   font-family: inherit;
@@ -150,7 +150,7 @@
   backdrop-filter: blur(1px);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   color: var(--g);
   z-index: 10;
@@ -187,7 +187,7 @@
   backdrop-filter: blur(1px);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 500;
   color: var(--fg);
   z-index: 10;
@@ -228,7 +228,7 @@
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
   color: var(--accent-solid);
-  font-size: 13px;
+  font-size: 0.8125rem;
   pointer-events: none;
 }
 
@@ -267,7 +267,7 @@
   backdrop-filter: blur(1px);
   border: 1px solid var(--border);
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   font-style: italic;
   z-index: 10;
@@ -307,7 +307,7 @@
   border: none;
   background: transparent;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-family: inherit;
   padding: 2px 0;
 }
@@ -324,7 +324,7 @@
 .terminal-find-count {
   flex-shrink: 0;
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
   white-space: nowrap;
 }
@@ -345,7 +345,7 @@ button {
   border: 1px solid var(--border-soft);
   color: var(--fg);
   border-radius: 7px;
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 5px 10px;
   cursor: pointer;
   font-family: inherit;

@@ -95,7 +95,7 @@
   border: none;
   border-radius: 5px;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   text-align: left;
   cursor: pointer;
 }
@@ -113,7 +113,7 @@
 }
 .agent-rules-panel-row-meta {
   color: var(--dim);
-  font-size: 11px;
+  font-size: 0.6875rem;
   white-space: nowrap;
 }
 /* ProjectBriefingPanel.tsx's live byte-count hint (Hermes review, PR #893)
@@ -149,7 +149,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .agent-rules-panel-editor-actions {
@@ -158,7 +158,7 @@
   gap: 8px;
 }
 .agent-rules-panel-notice {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   background: color-mix(in srgb, var(--o) 12%, transparent);
   border-radius: 5px;
@@ -186,7 +186,7 @@
   color: var(--fg);
   font-family:
     ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.5;
 }
 .agent-rules-panel-textarea:focus {
@@ -224,13 +224,13 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   margin-bottom: 8px;
 }
 .dock-config-panel-empty-hint {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   padding: 8px 6px;
 }
 .dock-config-panel-add {
@@ -265,7 +265,7 @@
   padding: 5px 9px;
   border-radius: 7px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
 }
 .dock-config-env-remove {
   flex-shrink: 0;
@@ -332,7 +332,7 @@
   border-radius: 5px;
   padding: 4px 6px;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .file-editor-new-input:focus {
   outline: none;
@@ -392,7 +392,7 @@
   border: 1px solid var(--border);
   border-radius: 5px;
   color: var(--fg);
-  font-size: 12px;
+  font-size: 0.75rem;
   padding: 2px 4px;
 }
 

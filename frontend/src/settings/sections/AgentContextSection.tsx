@@ -42,8 +42,8 @@ export function AgentContextSection() {
         />
       </Row>
       <div style={{ padding: "12px 0" }}>
-        <div style={{ fontSize: 13.5, fontWeight: 500 }}>Workflow conventions</div>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 3, marginBottom: 8 }}>
+        <div style={{ fontSize: "0.84375rem", fontWeight: 500 }}>Workflow conventions</div>
+        <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginTop: 3, marginBottom: 8 }}>
           How your team works (branching, merging, review), added to every new session. A project
           can opt out from its briefing panel, and a project's own AGENTS.md always takes
           precedence.

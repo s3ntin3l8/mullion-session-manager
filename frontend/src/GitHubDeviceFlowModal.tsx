@@ -116,7 +116,7 @@ export function GitHubDeviceFlowModal({
               Open GitHub
             </a>
           </div>
-          <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
+          <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 12 }}>
             Waiting for authorization…
           </div>
         </>

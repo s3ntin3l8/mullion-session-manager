@@ -10,10 +10,10 @@ import {
   type InstalledRoleModels,
 } from "../../modelRoles.js";
 
-const hintStyle = { fontSize: 12, color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
+const hintStyle = { fontSize: "0.75rem", color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
 
 const warningStyle = {
-  fontSize: 11.5,
+  fontSize: "0.71875rem",
   // Amber, not the error red: this is an advisory note, and the codebase
   // colours advisory prose amber throughout (PromoteDialog, HostsSection,
   // IntegrationsSection). Red reads as a failure in a neutral settings row.

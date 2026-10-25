@@ -73,7 +73,9 @@ export function ProjectsSection() {
             key={root}
             icon={<FolderIcon size={15} />}
             title={
-              <span style={{ fontFamily: "Geist Mono, monospace", fontSize: 12.5 }}>{root}</span>
+              <span style={{ fontFamily: "Geist Mono, monospace", fontSize: "0.78125rem" }}>
+                {root}
+              </span>
             }
             trailing={
               <span
@@ -87,7 +89,7 @@ export function ProjectsSection() {
           />
         ))}
         {roots.length === 0 && (
-          <div style={{ fontSize: 12, color: "var(--dim)", padding: "4px 2px" }}>
+          <div style={{ fontSize: "0.75rem", color: "var(--dim)", padding: "4px 2px" }}>
             No roots configured. Using the server's default roots ({info?.projectsRoots || "none"}).
           </div>
         )}
@@ -129,7 +131,9 @@ export function ProjectsSection() {
             key={root}
             icon={<FolderIcon size={15} />}
             title={
-              <span style={{ fontFamily: "Geist Mono, monospace", fontSize: 12.5 }}>{root}</span>
+              <span style={{ fontFamily: "Geist Mono, monospace", fontSize: "0.78125rem" }}>
+                {root}
+              </span>
             }
             trailing={
               <span
@@ -145,7 +149,7 @@ export function ProjectsSection() {
           />
         ))}
         {readable.length === 0 && (
-          <div style={{ fontSize: 12, color: "var(--dim)", padding: "4px 2px" }}>
+          <div style={{ fontSize: "0.75rem", color: "var(--dim)", padding: "4px 2px" }}>
             No readable paths — files outside a project can't be opened.
           </div>
         )}
@@ -180,7 +184,7 @@ export function ProjectsSection() {
       <Row label="Discover now" desc="Scan the roots for new repositories.">
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {rescanStatus && (
-            <span style={{ fontSize: 11.5, color: "var(--dim)" }}>{rescanStatus}</span>
+            <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>{rescanStatus}</span>
           )}
           <SecondaryButton onClick={rescan} disabled={rescanning} icon={<RefreshIcon size={13} />}>
             Rescan
@@ -208,7 +212,7 @@ export function ProjectsSection() {
         <span className="settings-readonly-value">{info?.crsConfigDir ?? "…"}</span>
       </Row>
 
-      <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
+      <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
         {projects.length} project{projects.length === 1 ? "" : "s"} registered in total.
       </div>
     </>

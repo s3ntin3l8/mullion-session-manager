@@ -8,7 +8,7 @@
   flex-direction: column;
   background: var(--bg);
   color: var(--fg);
-  font-size: 14px;
+  font-size: 0.875rem;
   overflow: hidden;
 }
 

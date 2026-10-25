@@ -53,12 +53,12 @@
 }
 .create-modal-title {
   display: block;
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
 }
 .create-modal-subtitle {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 .create-modal-close {
@@ -93,12 +93,12 @@
   gap: 7px;
 }
 .create-modal-field-label {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
   color: var(--muted);
 }
 .create-modal-field-hint {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .create-modal-field-hint.error {
@@ -131,7 +131,7 @@
   border: none;
   background: transparent;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   outline: none;
   padding: 0;
 }
@@ -149,7 +149,7 @@
   border-radius: 9px;
   background: var(--field);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-family: inherit;
   padding: 9px 11px;
   outline: none;
@@ -163,7 +163,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   background: transparent;
   border: 1px solid var(--border);
@@ -190,7 +190,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
   cursor: pointer;
 }
@@ -205,7 +205,7 @@
   border-radius: 7px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   font-weight: 600;
 }
 .create-modal-dir-confirm-btn:hover {
@@ -217,7 +217,7 @@
 }
 .create-modal-detected-devserver {
   align-self: flex-start;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--accent-solid);
   background: transparent;
   border: none;
@@ -256,7 +256,7 @@
 }
 .create-modal-footer-hint {
   flex: 1;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .create-modal-cancel {
@@ -268,7 +268,7 @@
   border-radius: 8px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
 }
 .create-modal-cancel:hover {
@@ -285,7 +285,7 @@
   border-radius: 8px;
   cursor: pointer;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
 }
 .create-modal-submit:hover {
@@ -300,7 +300,7 @@
    the user_code GitHub asks for at the verification_uri. */
 .device-flow-code {
   font-family: "Geist Mono", monospace;
-  font-size: 24px;
+  font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-align: center;
@@ -318,7 +318,7 @@
    they're the same visual treatment, not two different things. */
 .bridge-pairing-command {
   font-family: "Geist Mono", monospace;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   padding: 12px 14px;
   border: 1px dashed var(--border);
   border-radius: 9px;
@@ -365,7 +365,7 @@
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   outline: none;
 }
 /* The settings rail's search input suppressed the UA outline and its wrapper
@@ -404,7 +404,7 @@
   color: var(--muted);
   cursor: pointer;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   text-align: left;
 }
@@ -418,7 +418,7 @@
 }
 .settings-nav-group {
   padding: 12px 10px 4px;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -429,7 +429,7 @@
 }
 .settings-nav-empty {
   padding: 12px 14px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 .settings-nav-footer {
@@ -452,11 +452,11 @@
   justify-content: center;
   flex-shrink: 0;
   color: #fff;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
 }
 .settings-nav-footer-text {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
 }
 
@@ -472,12 +472,12 @@
   flex-shrink: 0;
 }
 .settings-content-title {
-  font-size: 16.5px;
+  font-size: 1.03125rem;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 .settings-content-desc {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--muted);
   margin-top: 4px;
 }
@@ -509,7 +509,7 @@
   min-width: 0;
 }
 .settings-row-label {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 500;
 }
 .settings-inline-link {
@@ -523,7 +523,7 @@
   text-underline-offset: 2px;
 }
 .settings-row-desc {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
   margin-top: 3px;
   line-height: 1.45;
@@ -539,18 +539,18 @@
   padding: 5px 9px;
   border-radius: 7px;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
 }
 
 .settings-group-heading {
   padding: 6px 0 11px;
 }
 .settings-group-title {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-weight: 500;
 }
 .settings-group-desc {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
   margin-top: 3px;
 }
@@ -558,14 +558,14 @@
   padding: 18px 0 9px;
 }
 .settings-eyebrow {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--dim);
   font-weight: 700;
 }
 .settings-eyebrow-desc {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
   margin-top: 5px;
   line-height: 1.45;
@@ -634,7 +634,7 @@
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   cursor: pointer;
 }
@@ -660,7 +660,7 @@
 }
 .settings-slider-bubble {
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   min-width: 34px;
   text-align: right;
   color: var(--fg);
@@ -682,7 +682,7 @@
   background: transparent;
   color: var(--fg);
   font-family: "Geist Mono", monospace;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   padding: 7px 4px 7px 11px;
   text-align: right;
   -moz-appearance: textfield;
@@ -693,7 +693,7 @@
   margin: 0;
 }
 .settings-numberfield-suffix {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   padding-right: 11px;
   white-space: nowrap;
@@ -706,7 +706,7 @@
   appearance: none;
   -webkit-appearance: none;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
   background: var(--field);
   border: 1px solid var(--border-soft);
@@ -715,7 +715,7 @@
   cursor: pointer;
 }
 .settings-dropdown.small select {
-  font-size: 12px;
+  font-size: 0.75rem;
   border-radius: 7px;
   padding: 6px 26px 6px 10px;
 }
@@ -753,7 +753,7 @@
   opacity: 1;
 }
 .settings-list-row-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   flex-shrink: 0;
 }
@@ -761,7 +761,7 @@
   flex: 1;
   min-width: 0;
   font-family: "Geist Mono", monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -825,7 +825,7 @@
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   outline: none;
 }
 /* Same as .settings-nav-search input above — no focus indicator without this. */
@@ -893,7 +893,7 @@
   padding: 0 13px 4px;
 }
 .settings-launcher-head span {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--dim);
@@ -918,7 +918,7 @@
   display: block;
 }
 .settings-launcher-name {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -926,7 +926,7 @@
 }
 .settings-launcher-config {
   font-family: "Geist Mono", monospace;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -938,7 +938,7 @@
   justify-content: center;
 }
 .settings-launcher-status {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   text-align: center;
 }
 .settings-launcher-status.available {
@@ -959,7 +959,7 @@
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   cursor: pointer;
   width: 100%;
 }
@@ -978,7 +978,7 @@
   border: 1px solid color-mix(in srgb, var(--r) 40%, transparent);
   background: color-mix(in srgb, var(--r) 10%, transparent);
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
 }
 
@@ -998,7 +998,7 @@
   border: 1px solid var(--border-soft);
   border-radius: 10px;
   background: var(--field);
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 .bundle-sync-cli-list {
@@ -1019,7 +1019,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
 }
 .bundle-sync-field {
@@ -1029,7 +1029,7 @@
   padding-left: 23px;
 }
 .bundle-sync-field-label {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--dim);
@@ -1038,12 +1038,12 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  font-size: 12px;
+  font-size: 0.75rem;
   flex-wrap: wrap;
 }
 .bundle-sync-field-root {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1051,11 +1051,11 @@
   max-width: 320px;
 }
 .bundle-sync-field-count {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .bundle-sync-field-note {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .bundle-sync-remove-row {
@@ -1069,7 +1069,7 @@
 }
 .bundle-sync-remove-desc {
   flex: 1;
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
 }
 
@@ -1083,7 +1083,7 @@
   background: var(--field);
   color: var(--fg);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   cursor: pointer;
 }
@@ -1097,7 +1097,7 @@
 
 .settings-kbd-chip {
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   background: var(--track);
   padding: 3px 8px;
   border-radius: 6px;
@@ -1140,7 +1140,7 @@
   border-radius: 2px;
 }
 .settings-swatch-label {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   color: var(--muted);
 }
@@ -1178,7 +1178,7 @@
   background: #5ec27a;
 }
 .settings-terminal-preview-label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   font-family: "Geist Mono", monospace;
   margin-left: 4px;
@@ -1233,17 +1233,17 @@
   flex-shrink: 0;
 }
 .settings-health-label {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .settings-health-status {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--muted);
   font-family: "Geist Mono", monospace;
 }
 .settings-health-uptime {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -1259,14 +1259,14 @@
   border-radius: 10px;
 }
 .settings-stat-label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--dim);
   font-weight: 700;
 }
 .settings-stat-value {
-  font-size: 13.5px;
+  font-size: 0.84375rem;
   font-family: "Geist Mono", monospace;
   margin-top: 5px;
 }
@@ -1336,7 +1336,7 @@
   background: var(--field);
 }
 .settings-info-key {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--muted);
   width: 150px;
   flex-shrink: 0;
@@ -1345,20 +1345,20 @@
   flex: 1;
   min-width: 0;
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .settings-footer-note {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
   margin-top: 14px;
   line-height: 1.5;
 }
 
 .settings-readonly-value {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-family: "Geist Mono", monospace;
   color: var(--muted);
 }
@@ -1389,12 +1389,12 @@
   margin-bottom: 7px;
 }
 .storage-disk-name {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
 }
 .storage-disk-figure {
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--muted);
   text-align: right;
 }
@@ -1410,7 +1410,7 @@
 .storage-disk-paths {
   margin-top: 6px;
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1439,7 +1439,7 @@
   margin-top: 10px;
 }
 .storage-refresh-age {
-  font-size: 11.5px;
+  font-size: 0.71875rem;
   color: var(--dim);
 }
 .storage-tiers {
@@ -1466,12 +1466,12 @@
   gap: 10px;
 }
 .storage-tier-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
 }
 .storage-tier-total {
   font-family: "Geist Mono", monospace;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 .storage-tier-rows {
   display: flex;
@@ -1482,16 +1482,16 @@
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--muted);
 }
 .storage-tier-note {
   color: var(--dim);
-  font-size: 11.5px;
+  font-size: 0.71875rem;
 }
 .storage-tier-figure {
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
   white-space: nowrap;
 }
@@ -1511,7 +1511,7 @@
   gap: 8px;
 }
 .storage-job-head {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
 }
 .storage-job .settings-footer-note {
@@ -1519,7 +1519,7 @@
 }
 .storage-subhead {
   margin-top: 18px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--dim);
@@ -1530,6 +1530,6 @@
 }
 .storage-details summary {
   cursor: pointer;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--muted);
 }

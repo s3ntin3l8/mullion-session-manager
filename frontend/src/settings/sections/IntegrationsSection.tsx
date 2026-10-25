@@ -158,7 +158,7 @@ export function IntegrationsSection() {
       {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
 
       {integration && !integration.deviceFlowAvailable && (
-        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 12 }}>
+        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 12 }}>
           "Connect with GitHub" becomes available once the server administrator configures a GitHub
           OAuth App.
         </div>
@@ -430,7 +430,7 @@ function GitHubAppSection({
             <textarea
               autoComplete="off"
               rows={4}
-              style={{ width: 320, fontFamily: "monospace", fontSize: 11.5 }}
+              style={{ width: 320, fontFamily: "monospace", fontSize: "0.71875rem" }}
               placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;…&#10;-----END RSA PRIVATE KEY-----" // pragma: allowlist secret
               value={privateKey}
               onChange={(e) => setPrivateKey(e.target.value)}
@@ -455,7 +455,7 @@ function GitHubAppSection({
       {result && (
         <div
           style={{
-            fontSize: 12,
+            fontSize: "0.75rem",
             color: result.verified ? "var(--dim)" : "var(--y)",
             marginTop: 8,
           }}

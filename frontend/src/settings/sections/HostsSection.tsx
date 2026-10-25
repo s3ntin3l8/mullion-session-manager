@@ -296,14 +296,14 @@ export function HostsSection() {
           }
           trailing={
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>
+              <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>always online</span>
               {/* Issue #1725 — the primary can be parked too: parking it is
                   how you drain it. The local host takes no other edits, but
                   this one is a placement decision rather than an edit of
                   the host's identity. */}
               {localHost?.drained && (
                 <span
-                  style={{ fontSize: 10.5, color: "var(--y)" }}
+                  style={{ fontSize: "0.65625rem", color: "var(--y)" }}
                   title="Parked: this machine takes no new work. Nothing on it is stopped."
                 >
                   parked
@@ -345,14 +345,16 @@ export function HostsSection() {
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     {display.label && (
-                      <span style={{ fontSize: 10.5, color: display.color }}>{display.label}</span>
+                      <span style={{ fontSize: "0.65625rem", color: display.color }}>
+                        {display.label}
+                      </span>
                     )}
                     {/* Issue #1725 — the parked state, visible next to the
                         health: the host is up, it is just taking no new
                         work. */}
                     {host.drained && (
                       <span
-                        style={{ fontSize: 10.5, color: "var(--y)" }}
+                        style={{ fontSize: "0.65625rem", color: "var(--y)" }}
                         title="Parked: this host takes no new work. Nothing on it is stopped."
                       >
                         parked
@@ -364,14 +366,14 @@ export function HostsSection() {
                       const applying = applyingUpdate[host.id] ?? false;
                       if (info.upToDate) {
                         return (
-                          <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
+                          <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
                             v{info.hostVersion} · up to date
                           </span>
                         );
                       }
                       return (
                         <>
-                          <span style={{ fontSize: 10.5, color: "var(--y)" }}>
+                          <span style={{ fontSize: "0.65625rem", color: "var(--y)" }}>
                             v{info.hostVersion} → v{info.primaryVersion}
                           </span>
                           {info.updatable ? (
@@ -384,7 +386,7 @@ export function HostsSection() {
                           ) : (
                             info.unavailableReason && (
                               <span
-                                style={{ fontSize: 10.5, color: "var(--dim)" }}
+                                style={{ fontSize: "0.65625rem", color: "var(--dim)" }}
                                 title={info.unavailableReason}
                               >
                                 update unavailable
@@ -475,7 +477,7 @@ export function HostsSection() {
       </div>
 
       {hosts.filter((h) => h.id !== LOCAL_HOST_ID).length === 0 && (
-        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
+        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
           No remote hosts yet. Every project runs on this machine until you add one.
         </div>
       )}

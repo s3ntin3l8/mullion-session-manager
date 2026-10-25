@@ -64,7 +64,7 @@
   /* --accent-fill: white-on-fill background, not the text-role accent. */
   background: var(--accent-fill);
   color: #fff;
-  font-size: 9px;
+  font-size: 0.5625rem;
   line-height: 14px;
   text-align: center;
 }
@@ -137,7 +137,7 @@
   padding: 8px var(--rs-pad-x) 4px;
 }
 .right-sidebar-title {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -269,9 +269,9 @@
   min-width: 0;
 }
 .project-sidebar-row-title {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 .project-sidebar-row-sub {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }

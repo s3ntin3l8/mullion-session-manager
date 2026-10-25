@@ -220,7 +220,9 @@ export function BrowserCookiesSection() {
                   >
                     Choose file…
                   </SecondaryButton>
-                  {fileName && <span style={{ fontSize: 12, color: "var(--fg)" }}>{fileName}</span>}
+                  {fileName && (
+                    <span style={{ fontSize: "0.75rem", color: "var(--fg)" }}>{fileName}</span>
+                  )}
                 </div>
               </Row>
             )}

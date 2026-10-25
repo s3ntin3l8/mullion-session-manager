@@ -296,7 +296,7 @@ export function BundleSyncPanel() {
       {resyncError && <ErrorText style={{ marginTop: 4 }}>{resyncError}</ErrorText>}
 
       {loading && !status && (
-        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
           Loading sync status…
         </div>
       )}
@@ -311,7 +311,7 @@ export function BundleSyncPanel() {
       {status && !isOff && (
         <div className="bundle-sync-cli-list">
           {detectedClis.length === 0 && (
-            <div style={{ fontSize: 11.5, color: "var(--dim)" }}>
+            <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
               No supported CLI detected on this host yet.
             </div>
           )}
