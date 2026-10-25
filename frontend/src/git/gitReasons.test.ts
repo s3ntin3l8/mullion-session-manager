@@ -43,8 +43,10 @@ describe("pullReasonMessage copy", () => {
     expect(pullReasonMessage(unknown, undefined)).toMatch(/failed/i);
   });
 
-  it("says the action failed when there is no reason at all", () => {
-    expect(pullReasonMessage(undefined, undefined)).toMatch(/failed/i);
+  it("says the pull failed when there is no reason at all", () => {
+    // Not /failed/i: both "Action failed." and "Pull failed — try again."
+    // match that, so it could not tell them apart. The copy says PULL.
+    expect(pullReasonMessage(undefined, undefined)).toMatch(/^Pull failed/i);
   });
 
   // The shared renderer's default branch is the forward-compatibility path
