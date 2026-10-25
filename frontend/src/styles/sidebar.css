@@ -594,6 +594,27 @@
 .ws-drag-handle:active {
   cursor: grabbing;
 }
+
+/* The ACTIVE workspace row is a FILL surface, not a flat one: it paints
+   `var(--accent-fill)` under white text (see `.workspace-item.active` above).
+   The text-role `--dim` token cannot be used inside it — `--dim` on the
+   accent fill is 1.57:1 (1.15:1 once the handle's 0.4 opacity is applied),
+   so the handle was effectively invisible on the very row the user had
+   selected. The row's own `color: #fff`, the kebab trigger's
+   `.workspace-item.active .kebab-trigger-btn` rule (terminal.css) and the
+   `.danger` action's override above all already follow this white-on-fill
+   rule; the drag handle and the actions wrapper were the two that did not.
+
+   The handle is also dropped to full opacity here: at the base row's 0.4 it
+   would be white at 40% over the emerald fill (2.10:1), still short of the
+   3:1 WCAG 1.4.11 asks of a graphical object. */
+.workspace-item.active .ws-drag-handle {
+  color: #fff;
+  opacity: 1;
+}
+.workspace-item.active .workspace-item-actions {
+  color: rgba(255, 255, 255, 0.85);
+}
 .ws-dragging {
   transform: rotate(-1deg);
   box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.6);

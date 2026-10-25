@@ -154,29 +154,29 @@ drawer's scroll container is what the session list's virtualizer measures.
 
 ### Findings
 
-| #   | Finding                                                                                                                         | Evidence                                                                                                   | Fix / disposition                                                                                                                                        |
-| --- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4   | `--dim` failed WCAG AA in **both** themes — 182 text uses, 2.31:1–3.49:1                                                        | `styles/tokens.css`                                                                                        | **Fixed** — re-tuned to `#8a8a94` / `#666666` (4.53:1 / 4.72:1 worst case)                                                                               |
-| 5   | White text on the accent/ring fills was 2.54:1–3.39:1                                                                           | `styles/sidebar.css:735`, `styles/terminal.css:359`, `styles/right-sidebar.css:64`, `styles/login.css:117` | **Fixed** — split the palette into a **text role** and a **fill role**: new `--accent-fill` and `--badge-dim` tokens carry the white-on-fill backgrounds |
-| 6   | 15 infinite animations ran with no `prefers-reduced-motion` guard                                                               | only `styles/login.css:218` had one                                                                        | **Fixed** — one global guard in `styles/tokens.css`                                                                                                      |
-| 7   | `KebabMenu` was entirely mouse-driven — no `role`, no keys, no accessible name                                                  | `ui/KebabMenu.tsx`                                                                                         | **Fixed** — the full APG menu pattern, ported from `PaneActionsMenu`                                                                                     |
-| 8   | Six inputs had their focus ring removed with no replacement                                                                     | `styles/command-palette.css:41`, `styles/modals.css:135,149,357`, `styles/sidebar.css:260,1957`            | **Fixed** — `:focus-visible` outlines added (nine sites in the end — see below)                                                                          |
-| 9   | Session rename was optimistic with no rollback, and all three call sites dropped the rejection                                  | `store/slices/sessions.ts:205-215`; `PaneTab.tsx:271`, `Sidebar.tsx:1941`, `MobileSessionBar.tsx:201`      | **Fixed** — the store rolls the optimistic rename back and rethrows; the three call sites report it                                                      |
-| 10  | The Dock's kill path swallowed its error — while its two siblings in the same file both reported theirs                         | `dock/DockProjectGroup.tsx:776-788`                                                                        | **Fixed** — the failure is reported on the row, like its two siblings already were                                                                       |
-| 11  | The pane-overflow kill closed the pane first, then logged the failure to the console only                                       | `PaneActionsMenu.tsx:242-247`                                                                              | **Fixed** — the pane is already closed, so the failure goes to the app-wide toast                                                                        |
-| 12  | Workspace and group delete failures were unhandled rejections                                                                   | `WorkspaceSwitcher.tsx:321,333`                                                                            | **Fixed** — both the grouped and the ungrouped list's delete and rename paths report it                                                                  |
-| 13  | `ServerInfoSection` showed "Loading…" forever — `null` meant both loading and failed                                            | `settings/sections/ServerInfoSection.tsx:23-38`                                                            | **Fixed** — the two probes have their own failure state and their own retry                                                                              |
-| 14  | The sidebar showed "Welcome to Mullion" while projects were loading, and forever if the fetch failed — no `projectsLoaded` flag | `Sidebar.tsx:498-521`; `store/slices/projects.ts:9,13`                                                     | **Fixed** — `projectsLoaded` and `projectsError` separate loading, empty and failed                                                                      |
-| 15  | A failed task fetch rendered as "No tasks yet." and invited the user to create one                                              | `store/slices/tasks.ts:93-105`; `UnifiedBoard.tsx:743-751`                                                 | **Fixed** — `tasksError` separates a failed fetch from an empty task list                                                                                |
-| 16  | The GitHub App "Clear" destroyed the App ID and private key in one click, with no confirmation                                  | `settings/sections/IntegrationsSection.tsx:297-312,359`                                                    | **Fixed** — the Clear is a `ConfirmButton`, and the button is disabled while the clear is in flight                                                      |
-| 17  | The GitHub "Disconnect" revoked the credential in one click, with no confirmation and no pending state                          | `settings/sections/IntegrationsSection.tsx:60-68,91`                                                       | **Fixed** — the Disconnect is a `ConfirmButton`, and the button is disabled while it is in flight                                                        |
-| 18  | "Add host" could be submitted twice with Enter — no re-entry guard                                                              | `CreateHostModal.tsx:41-61`                                                                                | **Fixed** — the submit is guarded against re-entry, the same shape `CreateProjectModal` already had                                                      |
-| 19  | `Segmented` conveyed its selection by CSS class alone — no `aria-pressed`/`aria-checked`, no group name                         | `ui/primitives.tsx:99-112`                                                                                 | **Fixed** — `role="radiogroup"` + `role="radio"` + `aria-checked`, with arrow-key/Home/End selection and a roving tab stop                               |
-| 20  | `TerminalToasts` had no live region — copy and upload feedback was silent to assistive technology                               | `terminal-pane/TerminalToasts.tsx`                                                                         | **Fixed** — a permanent `role="status"` region, with the failure variants raised to `role="alert"`                                                       |
-| 21  | The command palette was hidden on the phone tier, and the navigator had no Commands tab                                         | `styles/mobile.css:31-33`; `PhoneNavigator.tsx:17`                                                         | _Filed — [#1880](https://github.com/s3ntin3l8/mullion-session-manager/issues/1880)_                                                                      |
-| 22  | The Dock is hidden on every coarse-pointer tier, but the command palette still offers the Dock's configuration commands         | `styles/tablet.css:113-120`                                                                                | _Filed — [#1881](https://github.com/s3ntin3l8/mullion-session-manager/issues/1881)_                                                                      |
-| 23  | The phone tier's cross-workspace session swap has no visible signal and no way back                                             | `hooks/usePanelOpener.ts:246-253`                                                                          | _Filed — [#1882](https://github.com/s3ntin3l8/mullion-session-manager/issues/1882)_                                                                      |
-| 24  | `findSessionWorkspace` returns the first match, so "which workspace is this session in?" has an arbitrary answer                | `panelUtils.ts:90-95`                                                                                      | _Filed — [#1883](https://github.com/s3ntin3l8/mullion-session-manager/issues/1883)_                                                                      |
+| #   | Finding                                                                                                                         | Evidence                                                                                                   | Fix / disposition                                                                                                                                                                                                                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4   | `--dim` failed WCAG AA in **both** themes — 182 text uses, 2.31:1–3.49:1                                                        | `styles/tokens.css`                                                                                        | **Fixed** — re-tuned to `#8a8a94` / `#666666` (4.53:1 / 4.72:1 worst case). The figures are against _flat_ surfaces; the runtime verification below found two more places where a translucent background put it under AA, and fixed those too |
+| 5   | White text on the accent/ring fills was 2.54:1–3.39:1                                                                           | `styles/sidebar.css:735`, `styles/terminal.css:359`, `styles/right-sidebar.css:64`, `styles/login.css:117` | **Fixed** — split the palette into a **text role** and a **fill role**: new `--accent-fill` and `--badge-dim` tokens carry the white-on-fill backgrounds                                                                                      |
+| 6   | 15 infinite animations ran with no `prefers-reduced-motion` guard                                                               | only `styles/login.css:218` had one                                                                        | **Fixed** — one global guard in `styles/tokens.css`                                                                                                                                                                                           |
+| 7   | `KebabMenu` was entirely mouse-driven — no `role`, no keys, no accessible name                                                  | `ui/KebabMenu.tsx`                                                                                         | **Fixed** — the full APG menu pattern, ported from `PaneActionsMenu`                                                                                                                                                                          |
+| 8   | Six inputs had their focus ring removed with no replacement                                                                     | `styles/command-palette.css:41`, `styles/modals.css:135,149,357`, `styles/sidebar.css:260,1957`            | **Fixed** — `:focus-visible` outlines added (nine sites in the end — see below)                                                                                                                                                               |
+| 9   | Session rename was optimistic with no rollback, and all three call sites dropped the rejection                                  | `store/slices/sessions.ts:205-215`; `PaneTab.tsx:271`, `Sidebar.tsx:1941`, `MobileSessionBar.tsx:201`      | **Fixed** — the store rolls the optimistic rename back and rethrows; the three call sites report it                                                                                                                                           |
+| 10  | The Dock's kill path swallowed its error — while its two siblings in the same file both reported theirs                         | `dock/DockProjectGroup.tsx:776-788`                                                                        | **Fixed** — the failure is reported on the row, like its two siblings already were                                                                                                                                                            |
+| 11  | The pane-overflow kill closed the pane first, then logged the failure to the console only                                       | `PaneActionsMenu.tsx:242-247`                                                                              | **Fixed** — the pane is already closed, so the failure goes to the app-wide toast                                                                                                                                                             |
+| 12  | Workspace and group delete failures were unhandled rejections                                                                   | `WorkspaceSwitcher.tsx:321,333`                                                                            | **Fixed** — both the grouped and the ungrouped list's delete and rename paths report it                                                                                                                                                       |
+| 13  | `ServerInfoSection` showed "Loading…" forever — `null` meant both loading and failed                                            | `settings/sections/ServerInfoSection.tsx:23-38`                                                            | **Fixed** — the two probes have their own failure state and their own retry                                                                                                                                                                   |
+| 14  | The sidebar showed "Welcome to Mullion" while projects were loading, and forever if the fetch failed — no `projectsLoaded` flag | `Sidebar.tsx:498-521`; `store/slices/projects.ts:9,13`                                                     | **Fixed** — `projectsLoaded` and `projectsError` separate loading, empty and failed                                                                                                                                                           |
+| 15  | A failed task fetch rendered as "No tasks yet." and invited the user to create one                                              | `store/slices/tasks.ts:93-105`; `UnifiedBoard.tsx:743-751`                                                 | **Fixed** — `tasksError` separates a failed fetch from an empty task list                                                                                                                                                                     |
+| 16  | The GitHub App "Clear" destroyed the App ID and private key in one click, with no confirmation                                  | `settings/sections/IntegrationsSection.tsx:297-312,359`                                                    | **Fixed** — the Clear is a `ConfirmButton`, and the button is disabled while the clear is in flight                                                                                                                                           |
+| 17  | The GitHub "Disconnect" revoked the credential in one click, with no confirmation and no pending state                          | `settings/sections/IntegrationsSection.tsx:60-68,91`                                                       | **Fixed** — the Disconnect is a `ConfirmButton`, and the button is disabled while it is in flight                                                                                                                                             |
+| 18  | "Add host" could be submitted twice with Enter — no re-entry guard                                                              | `CreateHostModal.tsx:41-61`                                                                                | **Fixed** — the submit is guarded against re-entry, the same shape `CreateProjectModal` already had                                                                                                                                           |
+| 19  | `Segmented` conveyed its selection by CSS class alone — no `aria-pressed`/`aria-checked`, no group name                         | `ui/primitives.tsx:99-112`                                                                                 | **Fixed** — `role="radiogroup"` + `role="radio"` + `aria-checked`, with arrow-key/Home/End selection and a roving tab stop                                                                                                                    |
+| 20  | `TerminalToasts` had no live region — copy and upload feedback was silent to assistive technology                               | `terminal-pane/TerminalToasts.tsx`                                                                         | **Fixed** — a permanent `role="status"` region, with the failure variants raised to `role="alert"`                                                                                                                                            |
+| 21  | The command palette was hidden on the phone tier, and the navigator had no Commands tab                                         | `styles/mobile.css:31-33`; `PhoneNavigator.tsx:17`                                                         | _Filed — [#1880](https://github.com/s3ntin3l8/mullion-session-manager/issues/1880)_                                                                                                                                                           |
+| 22  | The Dock is hidden on every coarse-pointer tier, but the command palette still offers the Dock's configuration commands         | `styles/tablet.css:113-120`                                                                                | _Filed — [#1881](https://github.com/s3ntin3l8/mullion-session-manager/issues/1881)_                                                                                                                                                           |
+| 23  | The phone tier's cross-workspace session swap has no visible signal and no way back                                             | `hooks/usePanelOpener.ts:246-253`                                                                          | _Filed — [#1882](https://github.com/s3ntin3l8/mullion-session-manager/issues/1882)_                                                                                                                                                           |
+| 24  | `findSessionWorkspace` returns the first match, so "which workspace is this session in?" has an arbitrary answer                | `panelUtils.ts:90-95`                                                                                      | _Filed — [#1883](https://github.com/s3ntin3l8/mullion-session-manager/issues/1883)_                                                                                                                                                           |
 
 ### Notes on three of the fixes
 
@@ -223,6 +223,16 @@ The guard reads the stylesheets only. A colour written inline in a TSX
 `style={{ ... }}` object is out of its reach — nothing in this repo writes
 one today, and the script says so rather than implying coverage it does not
 have.
+
+The guard's other limit is structural: it compares a token against a token,
+so it cannot see a **translucent** layer painted under the text. The runtime
+verification below found two places where that mattered — a keycap chip and
+the active workspace row — both of which sat under 4.5:1 once their real
+painted background was composited. `scripts/verify-ui-runtime.mjs`
+(`make verify-ui`) is the guard for that layer: it measures the composited,
+hovered result in a real browser, and asserts the two fixed targets **by
+name**, so a partial revert of either fix fails it. Neither guard subsumes
+the other, and the token guard stays the one that runs on every push.
 
 ---
 
@@ -290,19 +300,214 @@ above deliberately follow their patterns rather than inventing new ones:
 
 ---
 
-## Runtime verification still owed
+## Runtime verification
 
-The audit was static — no dev server was running — so a handful of things
-need a real browser before the work is called done:
+The audit was static — no dev server was running — so five things it could
+not settle by reading code were left open in what used to be this
+document's "Runtime verification still owed" section. They have now been
+checked against a real browser by **`scripts/verify-ui-runtime.mjs`**
+(`make verify-ui`), which boots a throwaway Mullion
+(`scripts/demo/instance.mjs`: scratch DB, scratch `SESSIONS_DIR`/`HOME`, clean
+env, its own loopback ports), drives it with real Chromium, and tears
+everything down again — including the demo's session scopes.
 
-1. Where focus lands after a palette-initiated workspace switch — the audit
-   found the mechanism that loses it (finding 43, filed as
-   [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884)),
-   but the fix has to be confirmed against a real browser.
-2. That the `inert` drawer is genuinely unreachable by Tab on a real
-   phone-sized viewport.
-3. The rendered contrast of `--dim` over the tinted and hovered backgrounds
-   (the computed figures assume the plain surface behind it).
-4. Whether the 1040×720 Settings modal clips content at 200 % browser zoom.
-5. That the Dock's silent kill leaves a visibly stale row before the 4 s poll
-   corrects it.
+The script is committed and re-runnable, and it exits non-zero when a check
+fails, so it works as a manual gate. Its contrast arithmetic lives in
+`scripts/lib/color-math.mjs` and is pinned by
+`test/scripts/color-math.test.ts`, so a change to the maths fails the
+ordinary test suite rather than silently changing what the browser check
+measures. It is deliberately **not** wired into CI: it needs a browser binary
+and a demo instance, exactly like the opt-in `make test-e2e` suite, which is
+likewise not a required status check.
+
+### 1. Focus after a palette-initiated workspace switch — the defect is real
+
+> The audit's original wording was "the fix has to be confirmed against a
+> real browser". There is no fix to confirm: finding 43 was filed as
+> [#1884](https://github.com/s3ntin3l8/mullion-session-manager/issues/1884)
+> and deliberately deferred, and `CommandPalette.tsx` was never touched by
+> this series. What the browser can settle is the _mechanism_, and it
+> settles it: **the focus is lost.**
+
+Opening the palette, typing a workspace's name and activating its row does
+switch the workspace — the sidebar's active row follows — but focus lands on
+`<body>`. `CommandPalette.tsx`'s `closeAfterAction()` calls `suppressRestore()`
+before the palette unmounts, and `useFocusTrap.ts`'s cleanup skips the
+restore when that flag is set, so nothing claims focus on the way out. A
+keyboard user who switches workspace this way is left with no focus target at
+all. The check measures and reports the landing element rather than asserting
+a particular outcome, so it keeps working as a regression test once #1884
+lands.
+
+### 2. The `inert` drawer — confirmed unreachable
+
+At 375×812 the closed drawer carries `inert` (the property _and_ the
+attribute), 30 Tab presses land on **zero** elements inside it, and the walk
+does move — three distinct controls outside the drawer were reached, so this
+is not a pass by accident. The sharper half of the property also holds: while
+closed, the drawer **refuses** programmatic focus as well as the tab order;
+once opened, `inert` is gone and the drawer takes focus normally. The check
+asserts both halves, because "unreachable" is only meaningful if the drawer
+is reachable when it should be.
+
+### 3. Rendered contrast over tinted and hovered backgrounds — two defects, both fixed
+
+This is the item the shipped guard structurally could not answer.
+`scripts/check-token-contrast.mjs` compares a token against a token, so it
+sees `--dim` on `--pane-hd` (4.53:1) and never sees the **semi-transparent**
+layers the stylesheets actually paint text on — `color-mix(in srgb, var(--fg)
+6–9%, transparent)` and `color-mix(in srgb, var(--accent-solid) 6–18%,
+transparent)`.
+
+Measuring the painted result instead — compositing every translucent layer
+over its ancestors, then re-measuring each hoverable ancestor while it is
+genuinely hovered — found **two** defects the token-level figures missed.
+Both rows below quote the **dark theme**, which is the worse of the two for
+the chips; the drag handle's "was" is worse still in the light theme —
+**1.00:1** at the handle's 0.4 opacity (1.09:1 at full opacity), against
+1.15:1 in the dark:
+
+| Where                                  | Was                         | Now                          | Why                                                                                                                                                                                                     |
+| -------------------------------------- | --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.kbd` / `.kbd-btn` keycap chips       | **3.92:1** (3.12:1 hovered) | **11.45:1** (9.11:1 hovered) | The chip's own fill is a tint of `--fg`, so it moves the background _toward_ whatever text colour sits on it. `--dim` on it cannot clear 4.5:1; the chip's text is now `--fg`.                          |
+| The active workspace row's drag handle | **1.15:1**                  | **5.35:1**                   | The active row is a _fill_ surface (`--accent-fill` under white text), not a flat one. `--dim` on it was invisible; it is now white, like the row's own text and its kebab/danger actions already were. |
+
+Both are CSS-only fixes (`styles/toolbar.css`, `styles/sidebar.css`); no token
+value changed, because the tokens themselves were never the problem. The
+check now measures all three text-role tokens (`--dim`, `--muted`, `--fg`)
+across the app chrome _and_ the command palette, in both themes: **293
+samples across the four scope/theme combinations, every one clear of its WCAG
+threshold** (4.5:1 for text, 3:1 for a graphical object).
+
+#### What actually guards the two fixes
+
+A stylesheet-content lint rule cannot guard them: `jsdom` does not resolve
+`var()`, and no static rule can know that `.ws-drag-handle` is painted on top
+of `--accent-fill` without matching selectors against a real DOM. The browser
+check can — but only if it is told what to look at, and the token sweep alone
+is not enough.
+
+The token sweep sees elements painted in `--dim`, `--muted` or `--fg`. Both
+fixes deliberately moved their targets **off** `--dim`: the chips to `--fg`,
+the active row's handle to plain white. So once fixed, they leave the token
+sample set entirely. A full revert is still caught (the colour goes back to
+`--dim`), but a **partial** revert is not: dropping only the `opacity: 1`
+from the active row's drag handle leaves a white icon at 40 % over the
+emerald fill — 2.10:1 in the dark theme, 2.29:1 in the light one, both under
+the 3:1 WCAG 1.4.11 asks of a graphical object — and nothing in the token
+sweep would ever look at it.
+
+So three targets are asserted **by name**, against a stated minimum, in every
+theme, and judged on the state they are **actually painted in** with no
+allowance for a de-emphasis that lifts on hover:
+
+| Target                                   | What it paints              | Minimum |
+| ---------------------------------------- | --------------------------- | ------- |
+| `.workspace-item.active .ws-drag-handle` | a graphical object (an SVG) | 3:1     |
+| `.kbd`                                   | text                        | 4.5:1   |
+| `.kbd-btn`                               | text                        | 4.5:1   |
+
+Both reverts are verified to fail the check: dropping `opacity: 1` reports
+the handle at 2.10:1 (dark) / 2.29:1 (light), and putting `--dim` back on the
+chips reports them at 3.92:1 — caught by the guards _and_ by the token sweep.
+
+#### How a faded element is judged
+
+An element's `opacity` is part of what it paints, so it reaches the ratio: an
+element at `opacity: 0.4` is measured at 40 % strength, not as if it were
+opaque. But a deliberate de-emphasis — this app drops an inactive workspace
+row's drag handle to `opacity: 0.4` until the row is hovered — is a
+reversible presentation state, so it is judged in the state it is meant to be
+read in. The rule is therefore: **judge on the worst state at the element's
+highest observed opacity**. A de-emphasis that lifts on hover is judged
+engaged; a fade that never lifts is judged exactly as painted, because that
+is the state it lives in.
+
+Before this rule the opacity never reached the ratio at all, and a fade that
+never lifted was reported as a pass.
+
+#### The arithmetic is pinned by tests
+
+The contrast maths is the deliverable of this check, so it lives in its own
+module — `scripts/lib/color-math.mjs` — and `test/scripts/color-math.test.ts`
+pins it against known WCAG pairs and against the real token values: the
+`color(srgb …)` form Chromium reports `color-mix()` as (which is the form the
+whole tinted-surface argument depends on), the compositing of translucent
+layers, the ratios for `--dim` on `--accent-fill` (1.57:1), white on it
+(5.35:1) and white at 40 % opacity on it (2.10:1), and the judgement rule
+itself. A parse regression there would otherwise fail silently as "all clear".
+
+#### The check asserts its own preconditions
+
+A check that silently measures the wrong thing is worse than no check, so:
+
+- The theme toggle must actually switch to the light theme, and the two
+  themes must resolve different `--dim` values — otherwise the "light" pass
+  would re-measure the dark theme and the run would look like it covered both
+  themes while covering one twice.
+- Every scope must contribute at least 25 samples, and all four scope/theme
+  combinations must have been measured — a sweep that stopped finding
+  elements would otherwise still report "all clear".
+- Each scope measures ONE surface. With the command palette open, the app
+  chrome behind it is covered by the palette's backdrop: it cannot be hovered
+  and the user cannot see it, so it is measured in the app scope instead.
+  Without that, the same element would be judged differently in the two
+  scopes — its de-emphasis lifts on hover in the app scope and cannot lift
+  behind an overlay.
+
+### 4. The Settings modal at 200 % zoom — does not clip
+
+Chromium's real browser zoom is not settable from Playwright
+(`Emulation.setPageScaleFactor` is pinch-zoom and does not change layout;
+`--force-device-scale-factor` changes the device pixel ratio, not the CSS
+layout), so 200 % zoom is emulated the standard way: by halving the CSS
+viewport. Both regimes were checked.
+
+| 200 % of  | CSS viewport | Tier    | Modal                                           | Scroll containers                                               |
+| --------- | ------------ | ------- | ----------------------------------------------- | --------------------------------------------------------------- |
+| 2560×1440 | 1280×720     | desktop | **1040×664** — the audit's named 1040×720 modal | `.settings-nav-items` 794/544, `.settings-content-body` 526/526 |
+| 1440×900  | 720×450      | tablet  | 672×394 (shrinks via `max-width`/`max-height`)  | `.settings-nav-items` 794/274, `.settings-content-body` 674/256 |
+
+In both, the modal fits inside the viewport, every scroll container reaches
+its own end, and **nothing inside the modal hides content it cannot get back
+to** — the check walks the whole subtree for `overflow: hidden` elements
+whose content overflows with no scroll container in reach. The modal's own
+`overflow: hidden` is deliberate (it rounds the corners) and is checked
+rather than exempted. There is no defect here.
+
+### 5. A failed Dock kill — confirmed reported on the row
+
+The audit's original wording described the _pre-fix_ symptom ("the silent
+kill leaves a visibly stale row before the 4 s poll corrects it"). What
+PR 2 shipped is the opposite: the failure is **reported**. The check
+asserts the shipped behaviour — with the kill made to fail at the network
+boundary, the row shows **"Failed to kill — try again"** within a second,
+the status is **still there at 2 s** (so the 4 s window is real and not a
+flash a fast assertion would race past), and it is **gone by 5.5 s** (so the
+transient auto-clears and does not become a permanent badge).
+
+The kill is stubbed to fail on purpose: the React component, the store, the
+click handler and the status widget are all real, and only the one HTTP
+response is faked. That keeps the check runnable without a Docker daemon,
+which is what makes it committable at all.
+
+### What the check does not cover
+
+The demo dataset bounds the coverage, and the report says so rather than
+implying more:
+
+- The dock-control check writes a `.crs/dock.json` into the demo project, so
+  it exercises a **config**-sourced control. Docker-sourced controls (which
+  need a Docker daemon) are not exercised.
+- The contrast check measures the app chrome and the command palette, each as
+  its own scope. A surface that only exists behind a specific user action — a
+  long settings section, a populated task board — is not opened and measured.
+- The **inactive** workspace row's drag handle is deliberately de-emphasised
+  to `opacity: 0.4` until the row is hovered, so at rest it paints at
+  **1.88:1** (dark) / **1.74:1** (light) over `--sidebar` — under the 3:1
+  WCAG 1.4.11 asks of a graphical object. The check judges it in its engaged
+  state (4.60:1 / 4.63:1), which is the state it carries meaning in, and
+  reports the resting ratio rather than hiding it. Filed as
+  [#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908).
+- The 200 %-zoom check covers the two viewport regimes above, not every
+  window size at every zoom level.

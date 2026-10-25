@@ -20,6 +20,8 @@ data/
 docs/superpowers/
 .opencode/plans/
 landing-shots/
+# `make verify-ui` run artifact — a report, not a committed file.
+ui-verify-report.json
 
 # macOS Finder noise — never part of the tree.
 .DS_Store
