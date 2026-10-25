@@ -117,6 +117,31 @@ for (const key of ["XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_C
   delete process.env[key];
 }
 
+// A throwaway HOME for every test file. os.homedir() honours $HOME, and a
+// lot of src/ derives real, writable paths from it: ~/.claude, ~/.codex,
+// ~/.config/opencode, ~/.gemini, ~/.minimax and ~/.mullion/bundle-sync.json.
+// A test that drives a hook adapter without faking HOME itself used to run
+// that adapter's managedInstall against the developer's REAL config — with
+// injectMullionBundle off, that is removeBundleContentForCli wiping the
+// globally-synced Mullion skills for Claude Code and opencode (issue #1944).
+// Suites that need a specific HOME still assign process.env.HOME in their own
+// beforeEach and restore the value captured here, which is the throwaway one.
+//
+// The opt-in e2e project (vitest.e2e.config.ts) sets MULLION_TEST_REAL_HOME: it
+// drives real tools — Playwright's chromium under ~/.cache/ms-playwright, the
+// real agy/codex CLIs logged in under their own home dirs — that only work
+// against the real HOME, and it runs as its own CI job rather than in the
+// pre-push gate.
+if (!process.env.MULLION_TEST_REAL_HOME) {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), `vitest-home-${process.pid}-`));
+  process.env.HOME = tmpHome;
+  // os.homedir() reads USERPROFILE rather than HOME on Windows.
+  process.env.USERPROFILE = tmpHome;
+  afterAll(() => {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+}
+
 // The git hook env the pre-push stage runs this suite under. In a linked
 // worktree git exports GIT_DIR=<repo>/.git/worktrees/<name> to the hook, so
 // any git child that copies process.env (instead of gitEnv()) runs its

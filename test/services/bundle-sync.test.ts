@@ -272,6 +272,62 @@ describe("syncBundleContent — idempotence and change detection", () => {
   });
 });
 
+describe("syncBundleContent — self-heal when a CLI is missing from the manifest (issue #1944)", () => {
+  it("reinstalls a CLI after removeBundleContentForCli even though the bundle hash is unchanged", async () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+
+    await removeBundleContentForCli("claude-code");
+    const skillPath = path.join(resolveClaudeConfigDir(), "skills", "mullion-host", "SKILL.md");
+    const agentPath = path.join(resolveClaudeConfigDir(), "agents", "mullion-reviewer.md");
+    expect(existsSync(skillPath)).toBe(false);
+    expect(isBundleSyncedFor("claude-code")).toBe(false);
+
+    const result = syncBundleContent();
+
+    expect(result.changed).toBe(true);
+    expect(existsSync(skillPath)).toBe(true);
+    expect(existsSync(agentPath)).toBe(true);
+    expect(isBundleSyncedFor("claude-code")).toBe(true);
+    expect(syncBundleContent()).toEqual({ changed: false });
+  });
+
+  it("reinstalls opencode the same way", async () => {
+    writeSkill("host");
+    syncBundleContent();
+    await removeBundleContentForCli("opencode");
+    expect(isBundleSyncedFor("opencode")).toBe(false);
+
+    expect(syncBundleContent().changed).toBe(true);
+    expect(isBundleSyncedFor("opencode")).toBe(true);
+  });
+
+  it("resyncs when the manifest is missing just one agent entry", () => {
+    writeSkill("host");
+    writeAgent("reviewer");
+    syncBundleContent();
+    const manifestPath = resolveBundleSyncManifestPath();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.entries = manifest.entries.filter(
+      (entry: { path: string }) => !entry.path.endsWith(path.join("agent", "mullion-reviewer.md")),
+    );
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(syncBundleContent().changed).toBe(true);
+    expect(
+      readBundleSyncManifest()!.entries.some((entry) => entry.path.endsWith("mullion-reviewer.md")),
+    ).toBe(true);
+  });
+
+  it("does not demand an entry for an agent a target's transform skips", () => {
+    writeSkill("host");
+    writeAgent("broken", "no frontmatter at all\n");
+    syncBundleContent();
+    expect(syncBundleContent()).toEqual({ changed: false });
+  });
+});
+
 describe("syncBundleContent — prune", () => {
   it("removes a manifest-tracked skill directory no longer shipped in the bundle", async () => {
     writeSkill("host");

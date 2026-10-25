@@ -338,6 +338,45 @@ function manifestEntriesStillValid(manifest: BundleSyncManifest): boolean {
   return manifest.entries.every(manifestEntryStillValid);
 }
 
+/**
+ * Every path a full sync of `bundleDir` would install: each shipped skill
+ * under every SKILL_TARGETS root, and each shipped agent under every
+ * AGENT_TARGETS root whose `transform` doesn't skip it. The no-op
+ * short-circuit in syncBundleContent compares the manifest against this, so
+ * a CLI whose rows are missing entirely (a per-CLI removal, a hand-edited
+ * manifest) is reinstalled instead of looking "synced" because the entries
+ * that remain are all valid.
+ */
+function expectedManifestPaths(bundleDir: string): Set<string> {
+  const expected = new Set<string>();
+  const skillNames = listBundleSkillNames(bundleDir);
+  for (const target of SKILL_TARGETS) {
+    for (const name of skillNames) {
+      expected.add(path.join(target.root(), `${INSTALLED_SKILL_PREFIX}${name}`));
+    }
+  }
+  const agentNames = listBundleAgentNames(bundleDir);
+  for (const target of AGENT_TARGETS) {
+    for (const name of agentNames) {
+      let raw: string;
+      try {
+        raw = readFileSync(path.join(bundleDir, "agents", `${name}.md`), "utf8");
+      } catch {
+        continue;
+      }
+      if (target.transform(raw) === null) continue;
+      expected.add(path.join(target.root(), `${INSTALLED_SKILL_PREFIX}${name}.md`));
+    }
+  }
+  return expected;
+}
+
+function manifestCoversExpected(manifest: BundleSyncManifest, expected: Set<string>): boolean {
+  const have = new Set(manifest.entries.map((entry) => entry.path));
+  for (const p of expected) if (!have.has(p)) return false;
+  return true;
+}
+
 function pruneRemovedEntries(oldEntries: BundleSyncManifestEntry[], keepPaths: Set<string>): void {
   for (const entry of oldEntries) {
     if (keepPaths.has(entry.path)) continue;
@@ -419,7 +458,8 @@ export function syncBundleContent(): { changed: boolean } {
   if (
     existingManifest &&
     existingManifest.bundleHash === bundleHash &&
-    manifestEntriesStillValid(existingManifest)
+    manifestEntriesStillValid(existingManifest) &&
+    manifestCoversExpected(existingManifest, expectedManifestPaths(bundleDir))
   ) {
     return { changed: false };
   }
