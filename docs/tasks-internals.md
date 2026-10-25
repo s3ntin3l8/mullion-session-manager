@@ -1046,13 +1046,12 @@ Approve; combined with `autoApprove`, the pair gives a fully automatic
 issue-to-merged-`main` pipeline for that project.
 
 **Why merging isn't synchronous.** A merge can't happen inside the approve
-request itself — `main`'s branch protection requires the branch to be up to
-date and its required checks green, and a branch that was just pushed almost
-never satisfies either yet. GitHub's native auto-merge doesn't help either:
-it does not update a behind branch under a `strict` (up-to-date-required)
-protection rule, so relying on it would still need this same update-branch
-step by hand. Approving instead sets `tasks.mergeRequestedAt` (the durable
-_intent_), and a reconciler sweep (`processMergeRequests`,
+request itself — a branch that was just pushed almost never has its required
+checks green yet. `main`'s branch protection does **not** require the branch
+to be up to date (`strict` is off, #1907), so a green branch that is merely
+behind `main` merges as it is; GitHub reports `mergeable_state: "behind"` only
+under a `strict` rule, which makes the `behind` row below dormant. Approving instead sets `tasks.mergeRequestedAt` (the
+durable _intent_), and a reconciler sweep (`processMergeRequests`,
 task-reconciler.ts) lands the merge asynchronously, once GitHub allows it:
 
 | PR state (`mergeable_state`)     | Sweep action                                                                                                                      |

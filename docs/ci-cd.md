@@ -282,8 +282,9 @@ sees.
 `required_status_checks.strict` is **off** (#1907). A PR does not have to
 contain `main`'s current tip to merge, so it does not need a rebase — and a
 rebase is what re-triggers the pull-request workflows. With `strict` on, every
-push to `main` bounced every open PR through another full CI cycle (~10 min),
-and a PR that merely fell behind was refused with the unhelpful
+push to `main` made every open PR _stale_ — it could no longer merge until an
+update-branch push and a fresh CI cycle (~10 min) — and a PR that merely fell
+behind was refused with the unhelpful
 `405 {"message":"5 of 5 required status checks are expected."}`: its checks
 were green, but on a head that no longer contained `main`'s tip.
 
@@ -301,20 +302,36 @@ What the up-to-date rule was standing in for is covered later, in two layers:
 - **Releases are cut separately.** release-please opens a release PR
   against current `main`, and that PR needs the maintainer's approval to run
   its workflows (see "By design, not a gap"), so a broken `main` does not
-  ship.
+  ship. (The release path never merges a behind PR either:
+  `src/services/release-merge.ts` refuses `behind` deliberately, because
+  release-please owns that branch.)
 
 The cost to know about: a broken `main` turns every open PR's CI red, so **if
 CI is red on something your diff doesn't touch, check `main`'s latest push
-run before "fixing" it.** If `strict` is ever turned back on, a behind PR is
-refreshed with `gh pr update-branch <pr>` (a push made with `GITHUB_TOKEN`
-triggers no workflows, so it must be a user/App token), and Task Master's
-merge sweep already does this on `mergeable_state: "behind"`
-(`src/services/task-reconciler.ts`; see the `mergeable_state` table in
-[`tasks-internals.md`](tasks-internals.md)).
+run before "fixing" it.**
 
-Related decisions still open: required approval (#1912), `dependency-review`
-as a required check (#1913), and enforcing the patch-coverage floor in CI
-(#1914).
+Task Master's merge sweep has a `behind` branch
+(`src/services/task-reconciler.ts`; see the `mergeable_state` table in
+[`tasks-internals.md`](tasks-internals.md)) that calls update-branch and
+retries. It is **dormant now**, not a remaining rebase: GitHub reports
+`mergeable_state: "behind"` only while `strict` is on, so with it off a behind
+PR with green checks reports `clean` and is merged directly. If `strict` is
+ever turned back on, a behind PR is refreshed with `gh pr update-branch <pr>`
+(a push made with `GITHUB_TOKEN` triggers no workflows, so it must be a
+user/App token) and that sweep branch becomes live again.
+
+**How this was set and checked.** Set on 2026-10-25 with a PATCH on the
+targeted sub-endpoint, which changes only that field:
+`gh api -X PATCH repos/s3ntin3l8/mullion-session-manager/branches/main/protection/required_status_checks -F strict=false`
+— copy this, not a PUT (see the warning above). It was confirmed by a
+GET of the protection object with the maintainer's own `gh` login, which read
+back `strict: false` with the five contexts unchanged (the Mullion App token
+cannot read the policy; see Issue #1360 above), and by an open PR one commit
+behind `main` reporting `mergeStateStatus: CLEAN`.
+
+Related: required approval (#1912, open), `dependency-review` as a required
+check (#1913), and replacing Codecov's advisory patch status with our own
+(#1920; the floor stays advisory in CI, #1914).
 
 ## Local hooks
 
