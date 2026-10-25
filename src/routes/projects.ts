@@ -2390,6 +2390,11 @@ export async function projectsRoute(app: FastifyInstance) {
           getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
           // The ledger markers are check runs: any token that can read them.
           markerTokens.markerReadToken ?? ctx.token,
+          (detail) =>
+            app.log.warn(
+              { detail, owner: ctx.repoRef.owner, repo: ctx.repoRef.repo, prNumber: number },
+              "review-base: degraded",
+            ),
         );
         const run = await requestHermesReview(app, {
           owner: ctx.repoRef.owner,

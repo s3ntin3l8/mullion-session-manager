@@ -1665,7 +1665,10 @@ function formatReviewStatus(r) {
   if (r.github?.checked) {
     lines.push(
       r.github.review
-        ? `posted: ${r.github.review.author} ${r.github.review.state} at ${r.github.review.commitId.slice(0, 7)}`
+        ? // No commit SHA: GitHub re-points an approval's commit_id at the PR's
+          // current head when the branch is rewritten (s3ntin3l8/.github#129),
+          // so it may name a commit the review never covered.
+          `posted: ${r.github.review.author} ${r.github.review.state}`
         : "posted: nothing from a review bot yet",
     );
     // Issue #1704 — the reviewer's actual words, so an agent that asked for a

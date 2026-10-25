@@ -265,6 +265,36 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
     expect(await resolve([review()], { markers })).toBe("new");
   });
 
+  it("does not pair a marker with a dismissed review (the escape hatch)", async () => {
+    // Dismissing the review retracts the pairing: the marker alone is not a
+    // review, so rule 1 is empty and, with no landed review left, so is rule 2.
+    const markers = async () => [{ oid: "reviewed", id: 1, startedAt: "2026-01-01T11:00:00Z" }];
+    expect(await resolve([review({ state: "DISMISSED" })], { markers })).toBe("");
+  });
+
+  it("says so when the ledger or a commit cannot be read", async () => {
+    const onError = vi.fn();
+    expect(
+      await resolve([review({ commitId: "sha-old" })], {
+        markers: async () => {
+          throw new Error("FORBIDDEN");
+        },
+        onError,
+      }),
+    ).toBe("sha-old");
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("ledger unreadable"));
+    onError.mockClear();
+    expect(
+      await resolve([review()], {
+        committedAt: async () => {
+          throw new Error("gone");
+        },
+        onError,
+      }),
+    ).toBe("");
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining("unreadable"));
+  });
+
   it("falls back to the commit_id when the ledger fails or names nothing", async () => {
     const reviews = [review({ commitId: "sha-old" })];
     expect(

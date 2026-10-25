@@ -835,6 +835,8 @@ export interface CommitCheckRunSummary {
   conclusion: string | null;
   /** The marker records the session the round ran in: "session: <id>". */
   summary: string;
+  /** When the run started — ISO-8601 UTC; "" when GitHub did not say. */
+  startedAt: string;
 }
 
 /**
@@ -862,6 +864,7 @@ export async function listCommitCheckRuns(
         external_id?: string | null;
         status?: string;
         conclusion?: string | null;
+        started_at?: string | null;
         output?: { summary?: string | null } | null;
       }>;
     }>(
@@ -880,6 +883,7 @@ export async function listCommitCheckRuns(
         status: r.status ?? "",
         conclusion: r.conclusion ?? null,
         summary: r.output?.summary ?? "",
+        startedAt: r.started_at ?? "",
       });
     }
     if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
@@ -907,76 +911,61 @@ export interface ReviewMarker {
 
 /** How many of a PR's newest commits are searched for markers. */
 const MARKER_COMMIT_WINDOW = 50;
+/** GitHub lists at most 250 commits of a PR, 100 to a page. */
+const PR_COMMITS_PAGE_SIZE = 100;
+const PR_COMMITS_MAX_PAGES = 3;
+/** Commits whose check runs are read at the same time. */
+const MARKER_FETCH_CONCURRENCY = 10;
 
 /**
- * The finished (`SUCCESS`) ledger markers on a PR's last commits. A run that
+ * The finished (`success`) ledger markers on a PR's last commits. A run that
  * was stopped or failed reviewed nothing, so it is not returned. The shared
  * workflow reads the same markers with the same window and the same filter
  * (`hermes-review.yml`, "Resolve review scope") — the two must agree, since
  * the delta base they derive goes into one idempotency key.
+ *
+ * Two tokens, because no single one can do both reads: the PR's commits need
+ * the PR token (`pull_requests`/`contents`), while the App's installation
+ * token for the ledger is checks-only (`checks` + `metadata`) and GitHub
+ * answers GraphQL `pullRequest.commits` — and REST `/pulls/{n}/commits` —
+ * with FORBIDDEN for it on a private repository. Its own check-run reads work.
+ * (It is the same split `readRememberedSession` relies on.)
  */
 export async function listReviewMarkers(
-  token: string,
+  prToken: string,
+  checksToken: string,
   owner: string,
   repo: string,
   prNumber: number,
   markerName: string,
 ): Promise<ReviewMarker[]> {
-  const data = await githubGraphQL<{
-    repository: {
-      pullRequest: {
-        commits: {
-          nodes: Array<{
-            commit: {
-              oid: string;
-              checkSuites: {
-                nodes: Array<{
-                  checkRuns: {
-                    nodes: Array<{
-                      databaseId: number | null;
-                      name: string;
-                      conclusion: string | null;
-                      startedAt: string | null;
-                    }>;
-                  };
-                }>;
-              };
-            };
-          }>;
-        };
-      } | null;
-    } | null;
-  }>(
-    token,
-    `query($owner: String!, $repo: String!, $number: Int!, $name: String!) {
-      repository(owner: $owner, name: $repo) {
-        pullRequest(number: $number) {
-          commits(last: ${MARKER_COMMIT_WINDOW}) {
-            nodes { commit { oid checkSuites(first: 100) { nodes {
-              checkRuns(first: 20, filterBy: { checkName: $name }) {
-                nodes { databaseId name conclusion startedAt }
-              }
-            } } } }
-          }
-        }
-      }
-    }`,
-    { owner, repo, number: prNumber, name: markerName },
-  );
+  // The PR's commits, oldest first; only the newest window is searched.
+  const commits: string[] = [];
+  for (let page = 1; page <= PR_COMMITS_MAX_PAGES; page++) {
+    const data = await githubRequest<Array<{ sha: string }>>(
+      prToken,
+      owner,
+      repo,
+      "GET",
+      `/pulls/${prNumber}/commits?per_page=${PR_COMMITS_PAGE_SIZE}&page=${page}`,
+    );
+    commits.push(...data.map((c) => c.sha));
+    if (data.length < PR_COMMITS_PAGE_SIZE) break;
+  }
+  const window = commits.slice(-MARKER_COMMIT_WINDOW);
   const out: ReviewMarker[] = [];
-  for (const node of data.repository?.pullRequest?.commits.nodes ?? []) {
-    for (const suite of node.commit.checkSuites.nodes) {
-      for (const run of suite.checkRuns.nodes) {
-        if (
-          run.name === markerName &&
-          run.conclusion === "SUCCESS" &&
-          run.databaseId !== null &&
-          run.startedAt
-        ) {
-          out.push({ oid: node.commit.oid, id: run.databaseId, startedAt: run.startedAt });
+  for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {
+    const batch = window.slice(i, i + MARKER_FETCH_CONCURRENCY);
+    const runs = await Promise.all(
+      batch.map((sha) => listCommitCheckRuns(checksToken, owner, repo, sha)),
+    );
+    batch.forEach((sha, j) => {
+      for (const run of runs[j] ?? []) {
+        if (run.name === markerName && run.conclusion === "success" && run.startedAt) {
+          out.push({ oid: sha, id: run.id, startedAt: run.startedAt });
         }
       }
-    }
+    });
   }
   return out;
 }

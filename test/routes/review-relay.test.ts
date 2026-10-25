@@ -616,8 +616,11 @@ describe("review-request routes", () => {
       mocks.listPullRequestReviews.mockResolvedValue([hermesApproval({ commitId: "sha40" })]);
       await post(sessionId, {});
       await resolvedBase();
+      // Two tokens: the PR's commits are read with the PR token, the check runs
+      // with the check-run read token (the App's checks-only one).
       expect(mocks.listReviewMarkers).toHaveBeenCalledWith(
-        "ghs_checks", // the check-run read token, not the PR token
+        expect.not.stringMatching(/^ghs_checks$/),
+        "ghs_checks",
         "acme",
         "widgets",
         expect.any(Number),

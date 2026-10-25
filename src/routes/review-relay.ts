@@ -665,6 +665,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           prNumber,
           getStoredSettings(app.db).reviewRelay.reviewerBotLogin,
           target.markerReadToken ?? target.token,
+          (detail) => app.log.warn({ detail, owner, repo, prNumber }, "review-base: degraded"),
         );
         const run = await requestHermesReview(app, {
           owner,
@@ -1015,6 +1016,8 @@ export function reviewReader(
    * two bases (and so idempotency keys) differ.
    */
   ledgerToken?: string,
+  /** Told when a read failed and the base degraded (see `resolveReviewedCommit`). */
+  onError?: (detail: string) => void,
 ): {
   reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>>;
   base: () => Promise<string>;
@@ -1063,9 +1066,10 @@ export function reviewReader(
           reviews: await reviews(),
           reviewerBotLogin,
           markers: ledgerToken
-            ? () => listReviewMarkers(ledgerToken, owner, repo, prNumber, REVIEW_MARKER_NAME)
+            ? () => listReviewMarkers(token, ledgerToken, owner, repo, prNumber, REVIEW_MARKER_NAME)
             : undefined,
           committedAt: async (sha) => (await commitInfo(sha)).committedAt,
+          onError,
         });
       } catch {
         return "";

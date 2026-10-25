@@ -68,6 +68,12 @@ export async function resolveReviewedCommit(input: {
   markers?: () => Promise<ReviewMarker[]>;
   /** A commit's committer date (ISO-8601), or "" when unknown. */
   committedAt: (sha: string) => Promise<string>;
+  /**
+   * Told when a read failed and the rule degraded. Without it the failure is
+   * invisible: a private repo whose ledger cannot be read silently falls back
+   * to the very `commit_id` rule this exists to replace.
+   */
+  onError?: (detail: string) => void;
 }): Promise<string> {
   const landed = input.reviews.filter(
     (r) =>
@@ -85,8 +91,9 @@ export async function resolveReviewedCommit(input: {
         .sort((a, b) => a.id - b.id)
         .at(-1);
       if (paired) return paired.oid;
-    } catch {
+    } catch (err) {
       // No ledger answer: fall through to the commit_id rule.
+      input.onError?.(`ledger unreadable, falling back to commit_id: ${(err as Error).message}`);
     }
   }
   const last = landed.at(-1);
@@ -96,8 +103,11 @@ export async function resolveReviewedCommit(input: {
     if (!Number.isNaN(committed) && committed <= Date.parse(last.submittedAt)) {
       return last.commitId;
     }
-  } catch {
+  } catch (err) {
     // An unreadable commit is not a trusted one.
+    input.onError?.(
+      `commit ${last.commitId} unreadable, reviewing the whole diff: ${(err as Error).message}`,
+    );
   }
   return "";
 }
