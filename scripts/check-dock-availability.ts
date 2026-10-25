@@ -111,19 +111,34 @@ function matchBrace(css: string, open: number): number {
  */
 function leafRules(css: string, conditions: string[] = []): LeafRule[] {
   const found: LeafRule[] = [];
+  // The block this css belongs to is the last of the conditions.
+  const parent = conditions.length ? conditions[conditions.length - 1] : null;
   let i = 0;
+  // Declarations seen so far in this block, which belong to the block itself:
+  // CSS nesting lets a block carry both declarations and rules.
+  let pending = "";
   while (i < css.length) {
     const brace = css.indexOf("{", i);
-    if (brace === -1) break;
+    if (brace === -1) {
+      pending += css.slice(i);
+      break;
+    }
     const head = css.slice(i, brace);
     // What comes before this rule's selector may be the parent block's own
     // trailing declarations, so the selector starts after the last `;` or
     // `}` in the head.
     const cut = Math.max(head.lastIndexOf(";"), head.lastIndexOf("}"));
     const selector = (cut >= 0 ? head.slice(cut + 1) : head).trim();
+    if (cut >= 0) pending += head.slice(0, cut + 1);
     const close = matchBrace(css, brace);
     const body = css.slice(brace + 1, close);
     if (selector) {
+      // The declarations that precede a rule inside a block belong to the
+      // block itself, not to the rule.
+      if (pending.trim() && parent) {
+        found.push({ conditions: conditions.slice(0, -1), selector: parent, body: pending });
+      }
+      pending = "";
       if (body.includes("{")) {
         found.push(...leafRules(body, [...conditions, selector]));
       } else {
@@ -132,7 +147,27 @@ function leafRules(css: string, conditions: string[] = []): LeafRule[] {
     }
     i = close + 1;
   }
+  // Trailing declarations with no rule of their own.
+  if (pending.trim() && parent) {
+    found.push({ conditions: conditions.slice(0, -1), selector: parent, body: pending });
+  }
   return found;
+}
+
+/**
+ * Whether a selector compound's SUBJECT is the Dock element itself — `.dock`,
+ * not `.dock-header` or `.dock-group`.
+ *
+ * `:where(.dock)` and `:is(.dock)` are the Dock: the functional pseudo-class
+ * wraps the subject rather than qualifying it, so it is unwrapped and the
+ * inner compound asked about. `:not(.dock)` is NOT — its subject is
+ * everything that is not the Dock.
+ */
+function subjectIsDock(compound: string): boolean {
+  const functional = compound.match(/^:(?:where|is)\((.*)\)$/);
+  if (functional) return subjectIsDock(functional[1].trim());
+  const stripped = compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "");
+  return stripped === ".dock";
 }
 
 /**
@@ -148,14 +183,14 @@ function leafRules(css: string, conditions: string[] = []): LeafRule[] {
  * in front of the subject.
  */
 function dockQualifiers(selector: string): string[] {
-  return selector
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => {
-      const compound = part.split(/\s+/).pop() ?? "";
-      return compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "") === ".dock";
-    })
-    .map((part) => part.replace(/\.dock(::?[a-z-]+(\([^)]*\))?)?\s*$/, "").trim());
+  const qualifiers: string[] = [];
+  for (const part of selector.split(",")) {
+    const compounds = part.trim().split(/\s+/).filter(Boolean);
+    const subject = compounds[compounds.length - 1] ?? "";
+    if (!subjectIsDock(subject)) continue;
+    qualifiers.push(compounds.slice(0, -1).join(" "));
+  }
+  return qualifiers;
 }
 
 // The ways a rule can take the Dock away, all of them checked because all of
@@ -209,11 +244,17 @@ function dockHidingRules(): HidingRule[] {
       const reasons: DockUnavailableReason[] = [];
       let unknown = conditions.length === 0;
       for (const condition of conditions) {
-        const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(condition));
-        if (known) {
-          if (!reasons.includes(known.reason)) reasons.push(known.reason);
-        } else {
-          unknown = true;
+        // A media query can be a LIST — `@media (pointer: coarse), (max-width:
+        // 700px)` — and every arm of the list is a condition of its own. One
+        // matching arm is not enough: the other arm hides the Dock somewhere
+        // the predicate says nothing about.
+        for (const arm of condition.split(",")) {
+          const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(arm));
+          if (known) {
+            if (!reasons.includes(known.reason)) reasons.push(known.reason);
+          } else {
+            unknown = true;
+          }
         }
       }
       found.push({
