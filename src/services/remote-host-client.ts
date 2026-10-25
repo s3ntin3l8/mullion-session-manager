@@ -1015,8 +1015,12 @@ export class RemoteHostClient {
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —
    * background auto-fetch and manual fetch button). Returns
    * `{ success, error? }` so the caller can distinguish a git-level failure
-   * from a host-reachability 5xx. */
-  resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
+   * from a host-reachability 5xx.
+   *
+   * `skipped: true` means the clone was busy — a repair was working on it
+   * (issue #1896) — so the fetch did not run. That is not a failure, and the
+   * caller must not report it as one. */
+  resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
   }
 

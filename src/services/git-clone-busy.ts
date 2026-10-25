@@ -19,11 +19,17 @@
  * in a moment). Neither waits.
  */
 
+import path from "node:path";
+
 const busy = new Set<string>();
 
-/** The registry key for a clone on a host. */
+/** The registry key for a clone on a host.
+ *
+ * The cwd is resolved, so `/x` and `/x/` are the same key — they are the same
+ * clone, and two keys for one clone would defeat the whole registry.
+ */
 export function cloneKey(hostId: string, cwd: string): string {
-  return `${hostId}:${cwd}`;
+  return `${hostId}:${path.resolve(cwd)}`;
 }
 
 /** Whether a git operation on this clone is already running. */

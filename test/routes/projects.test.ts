@@ -5134,6 +5134,42 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // The manual Fetch and Pull write to the same clone the repair does, so
+    // they claim it too — a manual Fetch landing inside a repair's fetch
+    // window is the exact failure the registry exists to prevent.
+    it("refuses a manual fetch or pull while a git operation is running on that clone", async () => {
+      const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+      const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+      const app = await buildApp();
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-busy-"));
+      execFileSync("git", ["init", "-q", projectCwd], { env: gitEnv() });
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "busy-repo", cwd: projectCwd },
+      });
+
+      markCloneBusy(LOCAL_HOST_ID, projectCwd);
+      try {
+        const fetchRes = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-fetch`,
+        });
+        expect(fetchRes.statusCode).toBe(409);
+
+        const pullRes = await app.inject({
+          method: "POST",
+          url: `/api/projects/${created.json().id}/git-pull`,
+        });
+        expect(pullRes.statusCode).toBe(409);
+      } finally {
+        releaseClone(LOCAL_HOST_ID, projectCwd);
+      }
+
+      fs.rmSync(projectCwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     it("refuses a second repair for the same project while one is running", async () => {
       const { cwd } = await damagedClone();
       const app = await buildApp();

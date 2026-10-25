@@ -599,7 +599,8 @@ describe("GitPanel", () => {
                 unrecovered: ["fedcba"],
                 refsRestored: false,
                 indexesRebuilt: ["/tmp/x"],
-                indexesSkipped: ["/tmp/y"],
+                // The doctor's entries are "<path>: <reason>".
+                indexesSkipped: ["/tmp/y: staged content would be lost"],
                 whole: false,
               })
             : jsonResponse(200, {
@@ -625,7 +626,8 @@ describe("GitPanel", () => {
 
     // The outcome is what is reported, not the plan.
     expect(await screen.findByText(/the clone is NOT whole/)).toBeInTheDocument();
-    expect(screen.getByText(/1 index\(es\) left alone/)).toBeInTheDocument();
+    // The index that was left alone is listed, with the reason.
+    expect(screen.getByText(/staged content would be lost/)).toBeInTheDocument();
     expect(screen.getByText(/1 object\(s\) read fine again/)).toBeInTheDocument();
     expect(screen.getByText(/1 object\(s\) could not be recovered/)).toBeInTheDocument();
   });

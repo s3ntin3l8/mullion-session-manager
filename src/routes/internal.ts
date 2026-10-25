@@ -1335,7 +1335,14 @@ export async function internalRoutes(app: FastifyInstance) {
       // fail its ref update and make a healthy clone look broken. Skip it —
       // the next tick will fetch.
       if (isCloneBusy(LOCAL_HOST_ID, resolvedCwd)) {
-        return { success: false, error: "a git operation is already running for this clone" };
+        // `skipped`, not `success: false`: the clone was busy, which is not a
+        // failure — the next tick will fetch. The primary must not log this
+        // as "git fetch failed" or surface it as an error on the Fetch button.
+        return {
+          success: false,
+          skipped: true,
+          error: "a git operation is already running for this clone",
+        };
       }
       markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
       try {

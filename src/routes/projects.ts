@@ -3655,14 +3655,25 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      if (project.hostId === LOCAL_HOST_ID) {
-        return await runGitFetch(project.cwd);
+      // The clone is claimed for the fetch, so a manual Fetch cannot land
+      // inside a repair's own fetch window (issue #1896) — the same registry
+      // the background sweep and the repair use.
+      if (isCloneBusy(project.hostId, project.cwd)) {
+        return reply.conflict("A git operation is already running for this repository.");
       }
-
+      markCloneBusy(project.hostId, project.cwd);
       try {
-        return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
-      } catch {
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        if (project.hostId === LOCAL_HOST_ID) {
+          return await runGitFetch(project.cwd);
+        }
+
+        try {
+          return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
+        } catch {
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      } finally {
+        releaseClone(project.hostId, project.cwd);
       }
     },
   );
@@ -3687,14 +3698,24 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      if (project.hostId === LOCAL_HOST_ID) {
-        return await runGitPull(project.cwd);
+      // The clone is claimed for the pull: it fetches and merges, and the
+      // merge writes the index the repair rewrites (issue #1896).
+      if (isCloneBusy(project.hostId, project.cwd)) {
+        return reply.conflict("A git operation is already running for this repository.");
       }
-
+      markCloneBusy(project.hostId, project.cwd);
       try {
-        return await getRemoteHostClient(app, project.hostId).resolveGitPull(project.cwd);
-      } catch {
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        if (project.hostId === LOCAL_HOST_ID) {
+          return await runGitPull(project.cwd);
+        }
+
+        try {
+          return await getRemoteHostClient(app, project.hostId).resolveGitPull(project.cwd);
+        } catch {
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      } finally {
+        releaseClone(project.hostId, project.cwd);
       }
     },
   );

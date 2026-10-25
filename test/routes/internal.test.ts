@@ -936,6 +936,54 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // The clone is the resource: a repair and a fetch on the same clone would
+  // fight over the refs (issue #1896).
+  it("refuses a git-repair request for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/git-repair",
+        payload: { cwd: repo, confirm: true },
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(409);
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
+  });
+
+  it("skips a git-fetch for a clone a git operation has claimed", async () => {
+    const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+    const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "busy-fetch-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+
+    markCloneBusy(LOCAL_HOST_ID, repo);
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/git-fetch?cwd=${encodeURIComponent(repo)}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      // A busy clone is SKIPPED, not failed: the primary must not log this
+      // as "git fetch failed" or surface it as an error on the Fetch button.
+      expect(res.json()).toEqual(expect.objectContaining({ success: false, skipped: true }));
+    } finally {
+      releaseClone(LOCAL_HOST_ID, repo);
+    }
+    await app.close();
+  });
+
   it("rejects a git-repair request with no cwd", async () => {
     const app = await buildApp();
     const res = await app.inject({

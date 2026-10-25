@@ -549,9 +549,6 @@ export function GitPanel({
     if (repairOutcome.indexesRebuilt.length > 0) {
       parts.push(`${repairOutcome.indexesRebuilt.length} index(es) rebuilt`);
     }
-    if (repairOutcome.indexesSkipped.length > 0) {
-      parts.push(`${repairOutcome.indexesSkipped.length} index(es) left alone`);
-    }
     if (repairOutcome.recovered.length > 0) {
       parts.push(`${repairOutcome.recovered.length} object(s) read fine again`);
     }
