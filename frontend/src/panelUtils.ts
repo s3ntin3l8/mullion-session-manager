@@ -433,6 +433,53 @@ export function panelSessionId(panel: IDockviewPanel): number | undefined {
 }
 
 /**
+ * Issue #1877 — the Dock's definition of which projects belong to the
+ * active workspace. There is no workspace↔project row in the database
+ * (Dock.tsx's header); a project is in the workspace when one of its
+ * sessions is open in the live dockview layout. App.tsx's
+ * `workspaceProjectIds` memo is this function, and both the Dock and the
+ * sidebar read that one array, so the two trees cannot grow a second
+ * definition of "in this workspace".
+ *
+ * Walks every panel, not only tiled ones: a project whose only open
+ * session is a floating peek still belongs here (the same reason App.tsx
+ * does not reuse the phone switcher's tiled-only list). First-seen order
+ * is kept so the Dock's columns don't reshuffle on every render.
+ */
+export function workspaceProjectIdsFromPanels(
+  panels: ReadonlyArray<{ params?: { sessionId?: unknown } | undefined }>,
+  sessions: ReadonlyArray<{ id: number; projectId: number }>,
+): number[] {
+  const ids: number[] = [];
+  for (const panel of panels) {
+    const sessionId = panel.params?.sessionId;
+    if (typeof sessionId !== "number") continue;
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) continue;
+    if (!ids.includes(session.projectId)) ids.push(session.projectId);
+  }
+  return ids;
+}
+
+/**
+ * Issue #1877 — terminal panes already in the live layout. Activating one
+ * of these focuses that pane (openSessionPanel / onOpenSession look the
+ * panel up by `session-<id>`) instead of adding a second one. A timeline
+ * or browser pane for the same session is a different panel and does not
+ * count: the sidebar row opens the terminal.
+ */
+export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): number[] {
+  const ids: number[] = [];
+  for (const panel of panels) {
+    if (!panel.id.startsWith("session-")) continue;
+    const sessionId = sessionIdFromPanelId(panel.id);
+    if (sessionId == null || ids.includes(sessionId)) continue;
+    ids.push(sessionId);
+  }
+  return ids;
+}
+
+/**
  * The session id encoded in a dockview panel id, or null.
  *
  * Panel ids are `<kind>-<sessionId>` for the kinds that belong to a

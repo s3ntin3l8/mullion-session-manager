@@ -46,6 +46,8 @@ import {
   shouldWarnTabletPaneCap,
   canLaunchTerminal,
   shouldShowCodexHookTrustBanner,
+  workspaceProjectIdsFromPanels,
+  openTerminalSessionIds,
 } from "./panelUtils.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
@@ -1402,6 +1404,10 @@ export function App() {
   // is an opaque dockview blob) — this is what makes a "per-workspace dock"
   // possible without a schema change.
   //
+  // The walk itself lives in workspaceProjectIdsFromPanels so the sidebar
+  // can scope its project tree to the SAME ids this memo hands the Dock
+  // (issue #1877) — not a second copy of the loop.
+  //
   // Hermes review, PR #727 — deliberately walks ALL panels, not
   // `mobilePanels` (which is tiled-only). `<Dock>` below renders on desktop
   // too, and a project whose only open session is a floating (peeked) panel
@@ -1409,18 +1415,20 @@ export function App() {
   // exists solely to keep the phone session switcher's maximizeGroup safe
   // (App.tsx's own comment on that array), a mobile-crash concern that
   // shouldn't also silently drop a desktop Dock column.
-  const workspaceProjectIds = useMemo(() => {
-    const ids: number[] = [];
-    for (const panel of dockviewApi?.panels ?? []) {
-      const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
-      if (sessionId == null) continue;
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session) continue;
-      if (!ids.includes(session.projectId)) ids.push(session.projectId);
-    }
-    return ids;
+  const workspaceProjectIds = useMemo(
+    () => workspaceProjectIdsFromPanels(dockviewApi?.panels ?? [], sessions),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
-  }, [dockviewApi, sessions, panelsVersion]);
+    [dockviewApi, sessions, panelsVersion],
+  );
+  // Same panels, the terminal panes specifically. The sidebar marks these
+  // sessions; activating one goes through onOpenSession, which focuses the
+  // existing `session-<id>` pane instead of opening a second one. Not passed
+  // on the phone tier (no workspaces) — see the Sidebar props below.
+  const openSessionIds = useMemo(
+    () => openTerminalSessionIds(dockviewApi?.panels ?? []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- panelsVersion, same reason as workspaceProjectIds above
+    [dockviewApi, panelsVersion],
+  );
 
   // Mobile UI/UX overhaul, item C.2 — the key bar only makes sense while a
   // terminal session is the active mobile pane (not the timeline/Agent
@@ -1494,6 +1502,10 @@ export function App() {
     <Sidebar
       showSourceControl={isMobile}
       phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
+      // Issue #1877 — phone has no workspaces, so it keeps the full project
+      // list. Desktop and tablet scope to the same ids the Dock receives.
+      workspaceProjectIds={isMobile ? null : workspaceProjectIds}
+      openSessionIds={isMobile ? null : openSessionIds}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
