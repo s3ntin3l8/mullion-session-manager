@@ -258,14 +258,14 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
   it("takes the newest marker that a landed review was submitted after", async () => {
     // Deliberately not in id order: the newest is decided by id, not by position.
     const markers = async () => [
-      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z", completedAt: "2026-01-01T23:59:00Z" },
+      { oid: "new", id: 2, startedAt: "2026-01-01T11:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
       {
         oid: "silent",
         id: 3,
         startedAt: "2026-01-03T00:00:00Z",
-        completedAt: "2026-01-03T23:59:00Z",
+        completedAt: "2026-01-09T00:00:00Z",
       },
-      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z", completedAt: "2026-01-01T23:59:00Z" },
+      { oid: "old", id: 1, startedAt: "2026-01-01T10:00:00Z", completedAt: "2026-01-09T00:00:00Z" },
     ];
     expect(await resolve([review()], { markers })).toBe("new");
   });
@@ -328,7 +328,7 @@ describe("resolveReviewedCommit (s3ntin3l8/.github#129)", () => {
         oid: "reviewed",
         id: 1,
         startedAt: "2026-01-01T11:00:00Z",
-        completedAt: "2026-01-01T23:59:00Z",
+        completedAt: "2026-01-09T00:00:00Z",
       },
     ];
     expect(await resolve([review({ state: "DISMISSED" })], { markers })).toBe("");

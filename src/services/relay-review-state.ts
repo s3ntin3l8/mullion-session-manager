@@ -38,6 +38,14 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
 }
 
 /**
+ * How long after a marker was closed a review still counts as its run's. The
+ * marker is closed from a different clock than GitHub stamps the review with
+ * (the workflow's runner, or this server), so a few seconds of skew must not
+ * un-pair a genuine review. The shared workflow uses the same slack.
+ */
+const MARKER_PAIRING_SLACK_MS = 60_000;
+
+/**
  * The commit the last review round demonstrably covered ("R") — the base of
  * the next round's delta, and the commit whose content decides "nothing new to
  * review". The shared workflow computes the same value (`hermes-review.yml`,
@@ -62,14 +70,6 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
  * A failure to read the ledger or a commit is not fatal: it degrades to the
  * next rule, and ultimately to a full review.
  */
-/**
- * How long after a marker was closed a review still counts as its run's. The
- * marker is closed from a different clock than GitHub stamps the review with
- * (the workflow's runner, or this server), so a few seconds of skew must not
- * un-pair a genuine review. The shared workflow uses the same slack.
- */
-const MARKER_PAIRING_SLACK_MS = 60_000;
-
 export async function resolveReviewedCommit(input: {
   reviews: PullRequestReviewSummary[];
   reviewerBotLogin: string;

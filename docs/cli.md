@@ -442,8 +442,9 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   demonstrably reviewed — read from the `Hermes review` marker, not from the
   review's own `commit_id`, which GitHub re-points at the head when the branch
   is rewritten — so a rebase that changes nothing is refused, while an "Update
-  branch" merge is reviewed. When the marker cannot be read (the check-run
-  token lacks access, or the repository's workflow keeps no ledger) the
+  branch" merge is reviewed. When the marker cannot be used (the check-run
+  token lacks access, the repository's workflow keeps no ledger, or the marker was
+  never closed so its run has no end) the
   review's `commit_id` is used only while that commit is not newer than the
   review; otherwise the whole diff is reviewed. A
   repeat request for the **same commit** inside the configured cooldown exits

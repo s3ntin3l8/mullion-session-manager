@@ -554,7 +554,7 @@ describe("review-request routes", () => {
           oid: "sha-reviewed",
           id: 10,
           startedAt: "2026-01-01T12:00:00Z",
-          completedAt: "2026-01-01T23:59:00Z",
+          completedAt: "2026-01-09T00:00:00Z",
         },
       ]);
       // The head was committed AFTER the review was submitted.
@@ -598,7 +598,7 @@ describe("review-request routes", () => {
           oid: "sha-silent",
           id: 20,
           startedAt: "2026-01-05T00:00:00Z",
-          completedAt: "2026-01-05T23:59:00Z",
+          completedAt: "2026-01-09T00:00:00Z",
         },
       ]);
       await post(sessionId, {});
@@ -612,13 +612,13 @@ describe("review-request routes", () => {
           oid: "sha-newer",
           id: 30,
           startedAt: "2026-01-01T13:00:00Z",
-          completedAt: "2026-01-01T23:59:00Z",
+          completedAt: "2026-01-09T00:00:00Z",
         },
         {
           oid: "sha-older",
           id: 10,
           startedAt: "2026-01-01T12:00:00Z",
-          completedAt: "2026-01-01T23:59:00Z",
+          completedAt: "2026-01-09T00:00:00Z",
         },
       ]);
       await post(sessionId, {});

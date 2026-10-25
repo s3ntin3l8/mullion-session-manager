@@ -952,9 +952,11 @@ export async function listReviewMarkers(
   prNumber: number,
   markerName: string,
   /**
-   * Told about each commit whose check runs could not be read. Those commits
-   * are skipped and the rest are kept: a base derived from fewer commits is
-   * older, so the round over-reviews rather than under-reviews.
+   * Told ONCE, with a count, when some commits' check runs could not be read
+   * (not once per commit: a systemic failure would otherwise log up to 50
+   * warnings per dispatch). Those commits are skipped and the rest are kept: a
+   * base derived from fewer commits is older, so the round over-reviews rather
+   * than under-reviews.
    */
   onError?: (detail: string) => void,
 ): Promise<ReviewMarker[]> {
