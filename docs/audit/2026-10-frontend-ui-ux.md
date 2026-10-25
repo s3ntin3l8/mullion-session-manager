@@ -336,13 +336,15 @@ that mounts the Dock are driven by one question rather than three copies of it.
 That parity is machine-checked, not asserted, by
 `scripts/check-dock-availability.ts` (wired into `npm run lint`). It scans **every**
 stylesheet for a rule that hides `.dock`, works out the condition each one hangs
-under, and fails unless that set of conditions is exactly the predicate's own reason
-set. Change the media query to `(any-pointer: coarse)`, drop either
-`.dock { display: none }` rule, or add a new hiding rule anywhere — a
-`@media (max-width: 640px)` block in `dock.css`, say — and the check fails: a hiding
-rule under a condition the predicate does not know is a Dock the palette would promise
-and the CSS would hide. It strips CSS comments first, so a comment quoting the query
-cannot stand in for the rule itself.
+under — the enclosing block _and_ the selector's own qualifier, since this repo
+writes tier conditions into selectors as well as into media blocks — and fails unless
+that set of conditions is exactly the predicate's own reason set. Change the media
+query to `(any-pointer: coarse)`, drop either `.dock { display: none }` rule, or add a
+hiding rule anywhere — a `@media (max-width: 640px)` block in `dock.css`, a flat
+`.app[data-tier="tablet"] .dock`, or an unconditioned `.dock { visibility: hidden }`
+— and the check fails: a hiding rule under a condition the predicate does not know is
+a Dock the palette would promise and the CSS would hide. It strips CSS comments
+first, so a comment quoting the query cannot stand in for the rule itself.
 
 It is a **script** rather than a vitest file, and not for style: vitest stubs CSS
 imports (`css: false` in `frontend/vitest.config.ts`), so a test cannot read a

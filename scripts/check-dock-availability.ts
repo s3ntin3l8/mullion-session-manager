@@ -135,13 +135,27 @@ function leafRules(css: string, conditions: string[] = []): LeafRule[] {
   return found;
 }
 
-// Whether a selector's SUBJECT is the Dock element itself — `.dock`, not
-// `.dock-header` or `.dock-group`.
-function targetsDock(selector: string): boolean {
+/**
+ * The QUALIFIER of every part of a selector whose subject is the Dock
+ * element itself — `.dock`, not `.dock-header` or `.dock-group`.
+ *
+ * The qualifier is the part of the selector in front of the subject, and it
+ * is a condition in its own right: this repo writes tier conditions into
+ * selectors as well as into media blocks (`compact.css` has ten
+ * `.app[data-tier="tablet"] …` rules), so `.app[data-tier="tablet"] .dock`
+ * hides the Dock under a condition just as much as a rule inside a
+ * `@media` block does. An empty qualifier means the part had no condition
+ * in front of the subject.
+ */
+function dockQualifiers(selector: string): string[] {
   return selector
     .split(",")
-    .map((part) => part.trim().split(/\s+/).pop() ?? "")
-    .some((compound) => compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "") === ".dock");
+    .map((part) => part.trim())
+    .filter((part) => {
+      const compound = part.split(/\s+/).pop() ?? "";
+      return compound.replace(/::?[a-z-]+(\([^)]*\))?$/i, "") === ".dock";
+    })
+    .map((part) => part.replace(/\.dock(::?[a-z-]+(\([^)]*\))?)?\s*$/, "").trim());
 }
 
 // The `!important` is part of the pattern on purpose: the rules this script
@@ -160,18 +174,27 @@ interface HidingRule {
  *
  * `unknown` marks a hiding rule whose condition the predicate does not know
  * — that is the case where the CSS hides the Dock somewhere the app's
- * wording says it is available, and the script has to fail.
+ * wording says it is available, and the script has to fail. A rule with NO
+ * condition at all (`.dock { display: none }` at the top level) is unknown
+ * too: it hides the Dock everywhere, which no reason describes.
  */
 function dockHidingRules(): HidingRule[] {
   const found: HidingRule[] = [];
   for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
     const css = stripComments(readFileSync(path.join(STYLES_DIR, file), "utf8"));
     for (const rule of leafRules(css)) {
-      if (!targetsDock(rule.selector)) continue;
+      const qualifiers = dockQualifiers(rule.selector);
+      if (qualifiers.length === 0) continue;
       if (!HIDES.test(rule.body)) continue;
+      // The conditions are the enclosing blocks AND the selector's own
+      // qualifier — a tier condition can be written as either.
+      const conditions = [
+        ...rule.conditions,
+        ...qualifiers.filter((qualifier) => qualifier.length > 0),
+      ];
       const reasons: DockUnavailableReason[] = [];
-      let unknown = false;
-      for (const condition of rule.conditions) {
+      let unknown = conditions.length === 0;
+      for (const condition of conditions) {
         const known = KNOWN_CONDITIONS.find((k) => k.pattern.test(condition));
         if (known) {
           if (!reasons.includes(known.reason)) reasons.push(known.reason);
@@ -181,7 +204,7 @@ function dockHidingRules(): HidingRule[] {
       }
       found.push({
         file,
-        condition: rule.conditions.length ? rule.conditions.join(" → ") : "(no condition)",
+        condition: conditions.length ? conditions.join(" → ") : "(no condition)",
         reasons,
         unknown,
       });
@@ -244,5 +267,6 @@ for (const reason of predicate) {
 }
 
 console.log(
-  `OK — the Dock's availability and the CSS that hides it agree (${predicate.join(", ")}).`,
+  `OK — the Dock's availability and the CSS that hides it agree (${predicate.join(", ")}).\n` +
+    hiding.map((h) => `  ${h.file}: ${h.condition}`).join("\n"),
 );
