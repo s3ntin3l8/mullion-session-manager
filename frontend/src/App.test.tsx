@@ -217,6 +217,31 @@ describe("App tier wiring", () => {
     expect(app.classList.contains("sb-open")).toBe(false);
   });
 
+  // The compact tier's drawer is closed by sliding it off-screen
+  // (`transform: translateX(-101%)`), which left every control inside it —
+  // session rows, the filter input, the per-row kebab menus — focusable and
+  // in the accessibility tree while they sat off-screen. A keyboard user
+  // tabbing through the app landed on controls they could not see, and a
+  // screen reader read the whole hidden tree.
+  //
+  // `inert` takes the whole subtree out of both. It is applied only on the
+  // compact tier: the desktop sidebar is permanently visible, so making it
+  // inert while the (desktop-default) `sidebarOpen` is false would hide a
+  // visible panel.
+  it.each([
+    ["phone", true],
+    ["tablet", true],
+    ["desktop", false],
+  ] as const)("marks the drawer inert while it is closed on %s", (tier, inertWhenClosed) => {
+    stubWidth(tier);
+    const { container } = render(<App />);
+    const drawer = container.querySelector(".sidebar-wrapper")!;
+    expect(drawer.hasAttribute("inert")).toBe(inertWhenClosed);
+    if (tier === "desktop") return;
+    fireEvent.click(screen.getByTestId("toggle-sidebar"));
+    expect(drawer.hasAttribute("inert")).toBe(false);
+  });
+
   // The drawer registers with the back stack on every compact tier (not just
   // phone), so Android back closes it on the unfolded Fold too.
   it.each([
@@ -580,13 +605,15 @@ describe("App tablet pane-cap notice", () => {
     render(<App />);
     const launch = await screen.findByTestId("launch-split");
     fireEvent.click(launch);
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "This split is past the tablet pane cap",
-    );
+    // Scoped to the app's OWN notice rather than "any role=status" — the
+    // app also mounts the app-wide toast host, which is a role=status
+    // region that is always present (the global toast slice).
+    const notice = await screen.findByText(/This split is past the tablet pane cap/);
+    expect(notice).toHaveAttribute("role", "status");
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByTestId("show-workspace"));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
 
     useDashboardStore.setState({
       splitRequest: { referencePanelId: "session-1", direction: "right" },
@@ -595,7 +622,7 @@ describe("App tablet pane-cap notice", () => {
     // added. A new session is what can add another column.
     splitHarness.launch = { ...splitHarness.launch!, id: 10 };
     fireEvent.click(await screen.findByTestId("launch-split"));
-    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
   });
 });

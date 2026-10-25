@@ -1,6 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 
 // Commit history for the right sidebar's Git view: a paged `git log` (the
 // data behind the lane graph), one commit's file list, and one file's diff
@@ -58,10 +58,14 @@ function runGit(cwd: string, args: string[], maxBytes = MAX_BUFFER_BYTES): Promi
     let settled = false;
     // `log.showSignature=false`: a user's gitconfig can make log/show prepend a
     // `gpg:` verification block to every record, which would break parsing.
-    const child = spawnChild("git", ["-C", cwd, "-c", "log.showSignature=false", ...args], {
-      stdio: ["ignore", "pipe", "ignore"],
-      env: gitEnv(),
-    });
+    const child = spawnChild(
+      "git",
+      [...GIT_NO_AUTO_GC, "-C", cwd, "-c", "log.showSignature=false", ...args],
+      {
+        stdio: ["ignore", "pipe", "ignore"],
+        env: gitEnv(),
+      },
+    );
     let killTimer: ReturnType<typeof setTimeout> | null = null;
     const finish = (value: string | null) => {
       if (settled) return;

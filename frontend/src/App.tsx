@@ -21,6 +21,7 @@ import type { SettingsSection } from "./Settings.js";
 import { Dock } from "./Dock.js";
 import { GridIcon, RefreshIcon, ServerRackIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
+import { ToastHost } from "./ui/ToastHost.js";
 import {
   useDashboardStore,
   LIVE_REFRESH_INTERVAL_MS,
@@ -1525,6 +1526,14 @@ export function App() {
       className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${compact && viewMode === "kanban" ? " nav-tasks" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
+      {/* The app has no visible title, but a document with no top-level
+          heading gives a screen-reader user nothing to orient by when they
+          tab into it. Visually hidden, not absent. */}
+      <h1 className="visually-hidden">Mullion</h1>
+      {/* The app-wide toast host. Mounted here, at the top of the tree, so
+          every surface's failure has somewhere to land — including ones
+          rendered inside a modal or a panel further down. */}
+      <ToastHost />
       <Toolbar
         onToggleSidebar={toggleSidebar}
         onOpenSession={onOpenSession}
@@ -1541,7 +1550,29 @@ export function App() {
       />
       <div className="app-body" ref={appBodyRef}>
         <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-        <div className="sidebar-wrapper cmux-scroll" ref={sidebarWrapperRef}>
+        <div
+          className="sidebar-wrapper cmux-scroll"
+          ref={sidebarWrapperRef}
+          /* The compact tier's drawer is closed by sliding it off-screen
+             (styles/sidebar.css's `transform: translateX(-101%)`), which
+             leaves every control inside it — session rows, the filter
+             input, the per-row kebab menus — focusable and in the
+             accessibility tree while they sit off-screen. A keyboard user
+             tabbing through the app would land on controls they cannot
+             see, and a screen reader would read the whole hidden tree.
+
+             `inert` removes the subtree from both the tab order and the
+             accessibility tree in one attribute. It is applied only on the
+             compact tier: the desktop sidebar is always visible, so making
+             it inert when `sidebarOpen` is false (the desktop default)
+             would hide a permanently-visible panel.
+
+             styles/sidebar.css pairs this with `visibility: hidden` for
+             the closed state, which is the fallback for browsers without
+             `inert` support — an element with `visibility: hidden` is not
+             focusable either. */
+          inert={compact && !sidebarOpen}
+        >
           {/* Desktop-only (review finding, floating-sidebar redesign): the
               overlay's own `width: min(310px, 84vw) !important`
               (sidebar.css's phone/tablet `data-tier` block) outranks

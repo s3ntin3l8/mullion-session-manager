@@ -3,6 +3,7 @@ import { api } from "../../api/index.js";
 import { setGlobalRateLimitMax } from "../../api/client.js";
 import { connectTasksStream } from "../../tasksClient.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
+import { describeError } from "../../lib/describeError.js";
 import type { DashboardState, TasksSlice } from "../types.js";
 
 // Dedups overlapping refreshTasks() calls (same shape as
@@ -48,6 +49,7 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
     taskMasterEnabled: false,
     taskMasterEnv: null,
     tasksLoaded: false,
+    tasksError: null,
 
     // Phase 6 Task Master (6.5/#218) — hardened to refreshGitStatuses's own
     // pattern (in-flight dedup, swallow-and-keep-prior-state on failure).
@@ -89,7 +91,7 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
         }
         try {
           const tasks = await api.listTasks();
-          set({ tasks, tasksLoaded: true });
+          set({ tasks, tasksLoaded: true, tasksError: null });
         } catch (err) {
           console.warn("[tasks] refreshTasks failed", err);
           // Swallow — keep the last-known-good list rather than blanking it
@@ -102,7 +104,16 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
           // (same as an empty task list would) rather than being stuck on a
           // permanent loading skeleton with no success and no error ever
           // reaching the UI.
-          set({ tasksLoaded: true });
+          //
+          // The failure itself IS recorded, though — before this, a failed
+          // fetch rendered as "No tasks yet." and invited the user to
+          // create a task, which is actively misleading when the real
+          // cause is that the list could not be loaded (audit finding 15).
+          // UnifiedBoard.tsx reads this to say what actually happened.
+          set({
+            tasksLoaded: true,
+            tasksError: describeError(err, "Could not load tasks."),
+          });
         }
       };
 

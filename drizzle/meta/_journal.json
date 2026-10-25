@@ -547,6 +547,20 @@
       "when": 1792860018630,
       "tag": "0077_moaning_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1792868867646,
+      "tag": "0078_broken_nocturne",
+      "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1792883465513,
+      "tag": "0079_placement_wiring",
+      "breakpoints": true
     }
   ]
 }

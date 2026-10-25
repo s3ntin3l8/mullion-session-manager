@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
 import { OverflowIcon } from "./icons.js";
+import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import {
   useVisualViewportChange,
   visibleViewport,
@@ -45,6 +46,18 @@ export interface KebabMenuItem {
   // `disabled: true`: see the item render below for why a plain
   // `disabled` attribute can't carry this on its own.
   title?: string;
+  // The action opens ANOTHER focus-trapped overlay — the Settings modal,
+  // the command palette, the promote dialog. This menu's own focus trap
+  // must not restore focus to the trigger once the menu closes, because
+  // that would pull focus straight back out of the overlay that just took
+  // it.
+  //
+  // Same escape hatch as PaneActionsMenu's `closeMenuAfterAction`, which
+  // calls `useFocusTrap`'s `suppressRestore()` before closing the menu in
+  // the same click handler that opens the dialog. There the caller owns
+  // that call; here the caller only supplies an `onClick`, so the flag is
+  // how a call site says "this action takes focus somewhere else".
+  opensOverlay?: boolean;
 }
 
 export function KebabMenu({
@@ -80,6 +93,58 @@ export function KebabMenu({
   const armIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // The menu is a portaled `role="menu"` widget: focus moves into it on
+  // open, Tab is trapped inside it, Escape closes it and puts focus back on
+  // the trigger, and the arrow keys move between items. This used to be
+  // mouse-only — the trigger was an icon button with no accessible name,
+  // the menu had no `role`, the items had no `role="menuitem"`, and there
+  // was no key handling at all, so a keyboard user could not open the menu
+  // or reach any of its actions.
+  //
+  // `useFocusTrap` is the same shared primitive PaneActionsMenu uses for
+  // its overflow menu — see that component for why Escape is scoped to the
+  // menu's own `onKeyDown` rather than a window listener.
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
+    active: open,
+    containerRef: menuRef,
+  });
+
+  const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setOpen(false);
+      setArmedKey(null);
+      clearArmTimer();
+      return;
+    }
+    // APG menu pattern — ArrowUp/ArrowDown (and Home/End) move focus among
+    // the `role="menuitem"` children. The shared hook's Tab-trap alone
+    // doesn't provide that.
+    if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {
+      const items = menuRef.current
+        ? Array.from(menuRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        : [];
+      if (items.length === 0) return;
+      e.preventDefault();
+      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+      const nextIndex =
+        e.key === "Home"
+          ? 0
+          : e.key === "End"
+            ? items.length - 1
+            : e.key === "ArrowDown"
+              ? currentIndex < 0
+                ? 0
+                : (currentIndex + 1) % items.length
+              : currentIndex < 0
+                ? items.length - 1
+                : (currentIndex - 1 + items.length) % items.length;
+      items[nextIndex]?.focus();
+      return;
+    }
+    onTrapKeyDown(e);
+  };
 
   const clearArmTimer = () => {
     if (armIntervalRef.current) {
@@ -119,6 +184,10 @@ export function KebabMenu({
 
   const handleItemClick = (item: KebabMenuItem) => {
     if (item.disabled) return;
+    // The action is about to take focus somewhere else (another overlay).
+    // Tell the focus trap not to pull it back to this menu's trigger when
+    // the menu closes — see `opensOverlay` on KebabMenuItem.
+    if (item.opensOverlay) suppressRestore();
     if (item.confirm) {
       if (armedKey === item.key) {
         clearArmTimer();
@@ -197,14 +266,38 @@ export function KebabMenu({
         ref={btnRef}
         className="kebab-trigger-btn"
         title={title}
+        // The trigger is an icon-only button, so `title` alone would be its
+        // only accessible name — and a tooltip is not a reliable one. The
+        // label states what the menu does for this row.
+        aria-label={title}
+        aria-haspopup="menu"
+        aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
           if (!open && btnRef.current) {
+            // Focus the trigger BEFORE opening: the focus trap captures
+            // `document.activeElement` on activation to restore it on
+            // close, and Safari does not focus a button on click, so
+            // without this the "restore" target would be <body>.
+            btnRef.current.focus();
             setTriggerRect(btnRef.current.getBoundingClientRect());
           }
           setOpen((v) => !v);
           clearArmTimer();
           setArmedKey(null);
+        }}
+        onKeyDown={(e) => {
+          // APG: Down Arrow opens the menu and lands on its first item
+          // (the focus trap's own focus-in does the landing). Enter and
+          // Space are the button's native activation, handled by onClick.
+          if (e.key === "ArrowDown" && !open) {
+            e.preventDefault();
+            if (btnRef.current) {
+              btnRef.current.focus();
+              setTriggerRect(btnRef.current.getBoundingClientRect());
+            }
+            setOpen(true);
+          }
         }}
       >
         <OverflowIcon size={15} />
@@ -216,6 +309,8 @@ export function KebabMenu({
             ref={menuRef}
             className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
             style={menuStyle}
+            role="menu"
+            onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}
           >
             {items.map((item) => (
@@ -224,6 +319,7 @@ export function KebabMenu({
                 className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
                   armedKey === item.key ? " armed" : ""
                 }`}
+                role="menuitem"
                 // Issue #1106 — `aria-disabled`, not the native `disabled`
                 // attribute: a disabled button doesn't receive pointer
                 // events, which is exactly what makes a `title` on it

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
+import { render, act, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import * as panelUtils from "./panelUtils.js";
@@ -540,5 +540,91 @@ describe("WorkspaceSwitcher", () => {
       expect(container.querySelector(".ws-section-header .workspace-attn-dot")).toBeNull();
       expect(container.querySelector(".ws-section-header .workspace-working-dot")).toBeNull();
     });
+  });
+});
+
+// Audit finding 12 — the workspace and group deletes were `void`ed, so a
+// rejected request became an unhandled promise rejection: the delete
+// silently did nothing and the user was told nothing at all.
+describe("failed workspace/group delete (audit finding 12)", () => {
+  // This describe sits at the top level, so it does NOT inherit the
+  // inner describe's beforeEach — it needs its own store setup and its
+  // own listGroups mock, or the component's mount effect reaches the real
+  // fetch and rejects.
+  beforeEach(() => {
+    // The section's collapsed state lives in localStorage, and an earlier
+    // test in this file deliberately leaves it collapsed — so clear it,
+    // or the workspace rows (and their delete buttons) are not rendered.
+    localStorage.clear();
+    resetStore({
+      workspaces: [makeWorkspace()],
+      groups: [],
+      sessions: [makeSession()],
+      activeWorkspaceId: 1,
+      tasks: [],
+    });
+    vi.spyOn(api, "listGroups").mockResolvedValue([]);
+    vi.spyOn(api, "listWorkspaces").mockResolvedValue([makeWorkspace()]);
+  });
+
+  it("reports a failed workspace delete", async () => {
+    vi.spyOn(api, "deleteWorkspace").mockRejectedValue(new Error("the server said no"));
+    const user = userEvent.setup();
+    const { container } = render(<WorkspaceSwitcher />);
+
+    const deleteBtn = container.querySelector("button[title='Delete workspace']") as HTMLElement;
+    expect(deleteBtn).not.toBeNull();
+    // The ConfirmButton arms on the first click and fires on the second.
+    await user.click(deleteBtn);
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      const toasts = useDashboardStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("error");
+      expect(toasts[0].message).toContain("Could not delete the workspace.");
+      expect(toasts[0].message).toContain("the server said no");
+    });
+  });
+
+  it("reports a failed group delete", async () => {
+    vi.spyOn(api, "listGroups").mockResolvedValue([makeGroup({ collapsed: false })]);
+    vi.spyOn(api, "deleteGroup").mockRejectedValue(new Error("the server said no"));
+    useDashboardStore.setState({
+      groups: [makeGroup({ collapsed: false })],
+      workspaces: [makeWorkspace({ groupId: 1 })],
+    });
+    const user = userEvent.setup();
+    const { container } = render(<WorkspaceSwitcher />);
+
+    const deleteBtn = container.querySelector(
+      ".ws-group-actions button[title='Delete group']",
+    ) as HTMLElement;
+    expect(deleteBtn).not.toBeNull();
+    await user.click(deleteBtn);
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      const toasts = useDashboardStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe("error");
+      expect(toasts[0].message).toContain("Could not delete the group.");
+    });
+  });
+
+  it("reports nothing when the delete succeeds", async () => {
+    vi.spyOn(api, "deleteWorkspace").mockResolvedValue(undefined);
+    vi.spyOn(api, "listWorkspaces").mockResolvedValue([]);
+    const user = userEvent.setup();
+    const { container } = render(<WorkspaceSwitcher />);
+
+    const deleteBtn = container.querySelector("button[title='Delete workspace']") as HTMLElement;
+    await user.click(deleteBtn);
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(api.deleteWorkspace).toHaveBeenCalled();
+    });
+    expect(useDashboardStore.getState().toasts).toHaveLength(0);
   });
 });

@@ -50,13 +50,24 @@ export function InputSection() {
         title="Key-conflict handling"
         desc="When on, the terminal receives the shortcut instead of the browser."
       />
-      <Row label={<span className="settings-kbd-chip">Ctrl + R</span>} desc="Reverse search">
+      {/* The visible label here is the key chip, not the setting's name — so
+          the accessible name spells both out (WCAG 2.5.3 wants the visible
+          text to be contained in the accessible name). */}
+      <Row
+        label={<span className="settings-kbd-chip">Ctrl + R</span>}
+        desc="Reverse search"
+        ariaLabel="Reverse search (Ctrl + R)"
+      >
         <Toggle
           on={t.keyCapture.ctrlR}
           onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlR: v } } })}
         />
       </Row>
-      <Row label={<span className="settings-kbd-chip">Ctrl + L</span>} desc="Clear screen">
+      <Row
+        label={<span className="settings-kbd-chip">Ctrl + L</span>}
+        desc="Clear screen"
+        ariaLabel="Clear screen (Ctrl + L)"
+      >
         <Toggle
           on={t.keyCapture.ctrlL}
           onChange={(v) => updateSettings({ terminal: { keyCapture: { ctrlL: v } } })}
@@ -65,6 +76,7 @@ export function InputSection() {
       <Row
         label={<span className="settings-kbd-chip">Ctrl + K</span>}
         desc="Reserved for command palette"
+        ariaLabel="Reserved for command palette (Ctrl + K)"
       >
         <Toggle
           on={t.keyCapture.ctrlK}
@@ -79,6 +91,7 @@ export function InputSection() {
       <Row
         label={<span className="settings-kbd-chip">Ctrl + V</span>}
         desc="Paste. Replaces the terminal's own use of Ctrl+V (for example, Visual Block in Vim)."
+        ariaLabel="Paste (Ctrl + V)"
       >
         <Toggle
           on={t.clipboardKeys.ctrlV}
@@ -88,6 +101,7 @@ export function InputSection() {
       <Row
         label={<span className="settings-kbd-chip">Ctrl + C</span>}
         desc="Copy the selection. Still interrupts the running program when nothing is selected."
+        ariaLabel="Copy (Ctrl + C)"
       >
         <Toggle
           on={t.clipboardKeys.ctrlC}

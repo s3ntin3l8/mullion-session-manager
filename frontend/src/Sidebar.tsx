@@ -24,6 +24,7 @@ import {
   EmptyStateIcon,
   EmptyStateTitle,
 } from "./ui/EmptyState.js";
+import { ErrorText } from "./ui/ErrorText.js";
 import { resolveAgentLogo, commandToBinary } from "./cliLogos.js";
 import { PromoteDialog } from "./PromoteDialog.js";
 import {
@@ -34,10 +35,12 @@ import {
   LayersIcon,
   PlusIcon,
   PullIcon,
+  RefreshIcon,
   RenameIcon,
   SearchAlertIcon,
   SearchIcon,
   SkillIcon,
+  WarningTriangleIcon,
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import { taskLinkedSessionIds } from "./boardLanes.js";
@@ -54,6 +57,8 @@ import {
 import { summarizeFileChanges } from "./lib/sidebarStatus.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
+import { sessionIdFromPanelId } from "./panelUtils.js";
+import { describeError } from "./lib/describeError.js";
 import { Header } from "./session-row/Header.js";
 import { Details } from "./session-row/Details.js";
 import { QuotaBadge } from "./session-row/QuotaBadge.js";
@@ -150,6 +155,8 @@ export function Sidebar({
     settingsLoaded,
     hierarchicalView,
     viewMode,
+    projectsLoaded,
+    projectsError,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -162,6 +169,12 @@ export function Sidebar({
       settingsLoaded: s.settingsLoaded,
       hierarchicalView: s.hierarchicalView,
       viewMode: s.viewMode,
+      // The three states an empty project list can be in — still loading,
+      // loaded-and-empty, and failed. Without these, "Welcome to Mullion"
+      // covered all three, so a failed fetch looked like a fresh install
+      // (audit finding 14).
+      projectsLoaded: s.projectsLoaded,
+      projectsError: s.projectsError,
     })),
   );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -220,7 +233,12 @@ export function Sidebar({
 
   useEffect(() => {
     const store = useDashboardStore.getState();
-    void store.refreshProjects();
+    // The projects fetch is the one whose failure is SURFACED (the sidebar
+    // renders the failure state below), so it is caught rather than left
+    // to reject unhandled. The slice records the error itself before
+    // rethrowing (see slices/projects.ts), so the catch here only has to
+    // stop the unhandled rejection.
+    void store.refreshProjects().catch(() => {});
     void store.refreshSessions();
     void store.refreshHosts();
     // Loaded on mount alongside everything else above rather than waiting
@@ -439,7 +457,7 @@ export function Sidebar({
       {phoneSection !== "devices" && (
         <>
           <div className="sidebar-section-header">
-            <span className="sidebar-section-title">Projects</span>
+            <h3 className="sidebar-section-title">Projects</h3>
             <span className="project-session-count">sessions</span>
             <HierarchyToggle />
             <button
@@ -451,6 +469,15 @@ export function Sidebar({
               <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
             </button>
           </div>
+          {/* The list below is the last-known-good one when a refresh
+              failed, which is the right thing to keep on screen — but the
+              user has to be told it is stale, or a project added on another
+              device silently never appears here. */}
+          {projectsError && projects.length > 0 && (
+            <ErrorText style={{ margin: "0 0 6px" }}>
+              Could not refresh projects — showing the last known list. {projectsError}
+            </ErrorText>
+          )}
           {/* U3 — sticky at the top of the scrollable sidebar (see
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
@@ -496,29 +523,63 @@ export function Sidebar({
             </div>
           )}
           {projects.length === 0 ? (
-            <EmptyState>
-              <MullionMark size={32} className="ui-empty-state-mark" />
-              <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
-              <EmptyStateBody>
-                Add a project folder to start — sessions run there and survive across restarts.
-              </EmptyStateBody>
-              <EmptyStateActions>
-                <button
-                  className="ui-empty-state-btn-primary"
-                  onClick={() => setAddProjectOpen(true)}
-                >
-                  <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                  Add a project
-                </button>
-                <button
-                  className="ui-empty-state-btn-secondary"
-                  onClick={() => setDiscoverCollapsed(false)}
-                >
-                  <SearchIcon size={12} strokeWidth={2} />
-                  Scan for repos
-                </button>
-              </EmptyStateActions>
-            </EmptyState>
+            projectsError ? (
+              // The fetch FAILED — not "you have no projects". This used to
+              // render the "Welcome to Mullion" first-run state forever,
+              // which told a user with a working dashboard and a flaky
+              // connection that they had never added a project (audit
+              // finding 14).
+              <EmptyState>
+                <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
+                <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
+                <EmptyStateActions>
+                  <button
+                    className="ui-empty-state-btn-primary"
+                    onClick={() => {
+                      void useDashboardStore
+                        .getState()
+                        .refreshProjects()
+                        .catch(() => {});
+                    }}
+                  >
+                    <RefreshIcon size={12} strokeWidth={2} />
+                    Retry
+                  </button>
+                </EmptyStateActions>
+              </EmptyState>
+            ) : !projectsLoaded ? (
+              // Still loading — the first run's "Welcome to Mullion" is the
+              // wrong thing to show for a list that is on its way.
+              <EmptyState>
+                <MullionMark size={32} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Loading projects…</EmptyStateTitle>
+              </EmptyState>
+            ) : (
+              <EmptyState>
+                <MullionMark size={32} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+                <EmptyStateBody>
+                  Add a project folder to start — sessions run there and survive across restarts.
+                </EmptyStateBody>
+                <EmptyStateActions>
+                  <button
+                    className="ui-empty-state-btn-primary"
+                    onClick={() => setAddProjectOpen(true)}
+                  >
+                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                    Add a project
+                  </button>
+                  <button
+                    className="ui-empty-state-btn-secondary"
+                    onClick={() => setDiscoverCollapsed(false)}
+                  >
+                    <SearchIcon size={12} strokeWidth={2} />
+                    Scan for repos
+                  </button>
+                </EmptyStateActions>
+              </EmptyState>
+            )
           ) : (
             <>
               {/* U3 — the live GitHub CI subscription used to live inside
@@ -999,6 +1060,8 @@ function ProjectHeader({
                 label: "Edit",
                 icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: () => setEditOpen(true),
+                // Opens the Edit-project modal, which traps focus itself.
+                opensOverlay: true,
               },
               {
                 key: "git-pull",
@@ -1612,6 +1675,13 @@ export function SessionRow({
   // eventsClient.ts), scoped to just this session's list. Selector-based so
   // a live event for a DIFFERENT session's list doesn't re-render this row.
   const sessionEvents = useDashboardStore((s) => s.events[session.id]);
+  // Which session is currently open in a pane. `aria-current` marks it for a
+  // screen reader ("you are here"), and the `.active` class gives the row
+  // the visual state it never had — before this, the sidebar showed no
+  // indication at all of which session you were looking at.
+  const isActiveSession = useDashboardStore(
+    (s) => sessionIdFromPanelId(s.activePanelId) === session.id,
+  );
   const agentLogo = resolveAgentLogo(session.command, theme);
   const agentBinary = commandToBinary(session.command);
   // Issue #29 — the Runway quota chip. The snapshot is fetched ONCE for the
@@ -1878,7 +1948,10 @@ export function SessionRow({
   return (
     <>
       <div
-        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}`}
+        className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}${
+          isActiveSession ? " active" : ""
+        }`}
+        aria-current={isActiveSession ? "true" : undefined}
         // CSS custom property, not a computed inline margin — styles.css
         // owns the actual indent math (base + depth * step), same "component
         // supplies data, CSS supplies presentation" split as every other
@@ -1938,7 +2011,16 @@ export function SessionRow({
           onOpenAsFloat={onOpenAsFloat}
           onPromote={() => setPromoteOpen(true)}
           onRename={(value) => {
-            void renameSession(session.id, value);
+            // The store rolls the optimistic rename back on a rejected
+            // PATCH (see slices/sessions.ts's renameSession), so the row
+            // stops showing a name the server never accepted. The user
+            // still has to be TOLD — that rejection used to be dropped
+            // here, silently, at all three rename call sites.
+            void renameSession(session.id, value).catch((err) => {
+              useDashboardStore
+                .getState()
+                .reportError("Could not rename the session.", describeError(err));
+            });
           }}
           childCount={childCount}
           confirmBeforeKill={confirmBeforeKill}

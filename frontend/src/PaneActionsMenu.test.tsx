@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { api } from "./api/index.js";
@@ -63,12 +63,16 @@ const requestSplit = vi.fn();
 // toggle call; `mutedSessionIds` is mutable so the label reflects mute state.
 const toggleSessionMute = vi.fn();
 let mutedSessionIds: number[] = [];
+// Stable spies for the kill path: the store's deleteSession and the
+// app-wide failure channel (store/slices/toasts.ts).
+const deleteSession = vi.fn();
+const reportError = vi.fn();
 
 function storeState() {
   return {
     sessions: [session],
     projects,
-    deleteSession: vi.fn().mockResolvedValue(undefined),
+    deleteSession,
     theme: "dark",
     settings: {
       sessions: { confirmBeforeKill: false },
@@ -80,6 +84,7 @@ function storeState() {
     requestSplit,
     mutedSessionIds,
     toggleSessionMute,
+    reportError,
   };
 }
 
@@ -166,6 +171,9 @@ beforeEach(() => {
   promoteSessionMock = vi.fn();
   requestSplit.mockClear();
   toggleSessionMute.mockClear();
+  deleteSession.mockReset();
+  deleteSession.mockResolvedValue(undefined);
+  reportError.mockClear();
   mutedSessionIds = [];
   canResetTiledGroupWidths.mockClear();
   canResetTiledGroupWidths.mockReturnValue(true);
@@ -506,6 +514,7 @@ describe("PaneActionsMenu", () => {
         cwd: "/home/x/mullion",
         hostId: "local",
         placement: "pinned",
+        hostCwds: {},
         devServerUrl: null,
         detectedDevServerPort: null,
         currentBranch: "main",
@@ -562,6 +571,7 @@ describe("PaneActionsMenu", () => {
         cwd: "/home/x/mullion",
         hostId: "local",
         placement: "pinned",
+        hostCwds: {},
         devServerUrl: null,
         detectedDevServerPort: null,
         currentBranch: "main",
@@ -862,5 +872,56 @@ describe("PaneActionsMenu — visual-viewport pan (issue #1399)", () => {
       restore();
       uninstallFakeVisualViewport();
     }
+  });
+});
+
+// Audit finding 11 — the pane-overflow kill closed the pane FIRST and
+// then logged the failure to the console only. The pane is already gone
+// by then, so the console was the only place the failure could surface:
+// the user was told nothing while the session kept running on the host.
+describe("failed kill (audit finding 11)", () => {
+  it("reports the failure to the user", async () => {
+    deleteSession.mockRejectedValue(new Error("the host said no"));
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(screen.getByText("Kill session"));
+
+    await waitFor(() => {
+      expect(reportError).toHaveBeenCalledWith(
+        "Could not kill the session.",
+        expect.stringContaining("the host said no"),
+      );
+    });
+  });
+
+  it("reports nothing when the kill succeeds", async () => {
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    await user.click(screen.getByText("Kill session"));
+
+    await waitFor(() => {
+      expect(deleteSession).toHaveBeenCalledWith(session.id);
+    });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

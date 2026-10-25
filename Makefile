@@ -80,5 +80,5 @@ wt: ## Create a developer worktree off origin/main: make wt name=<slug>
 git-safe: ## Make this clone safe for concurrent agents (turns git's auto-gc off; issue #1836)
 	node scripts/git-safe-clone.mjs
 
-git-doctor: ## Report git object damage in this clone; add APPLY=1 to repair it
-	node scripts/git-doctor.mjs $(if $(filter 1 yes true,$(APPLY)),--apply) $(if $(filter 1 yes true,$(FORCE)),--force)
+git-doctor: ## Report git object damage in a clone; APPLY=1 repairs it, DIR=<path> names another clone
+	node --import tsx scripts/git-doctor.mjs $(if $(filter 1 yes true,$(APPLY)),--apply) $(if $(filter 1 yes true,$(FORCE)),--force) $(if $(DIR),$(DIR),.)

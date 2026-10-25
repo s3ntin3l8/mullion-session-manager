@@ -103,6 +103,101 @@ does is skip the _warning_, not the _action_.
   dock-preview worktrees, agent-created ones, and hand-made `git worktree
 add` ones alike, none of which share a common prefix.
 
+## The background "tidy-up" git does on its own
+
+Sometimes, after a command like `git fetch` or `git commit`, git asks itself
+_"while I'm here, should I tidy up this repository?"_ — and sometimes the
+answer is yes. It then starts a **background** job that packs and reorganises
+the repository's internal files.
+
+That is a git feature, and it is on by default. It is normally harmless. It
+becomes a problem in one narrow situation: **if something writes to the
+repository at the same moment.** The tidy-up can delete a file that a
+half-finished commit is in the middle of writing, and the commit then fails
+with a confusing message — _"missing object"_ — pointing at a file that is not
+really missing, just eaten ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
+
+Your own git does exactly this. Mullion does not introduce the behaviour — but
+it adds triggers, and it adds them **on a timer**: the background auto-fetch
+runs every `gitAutoFetchIntervalSeconds` (300 by default) in every project
+whose auto-fetch is on, whether or not you are looking.
+
+### What Mullion does about it
+
+Every git command Mullion runs — the auto-fetch sweep, the **Fetch** and
+**Pull** buttons, the fetch before a push, the WIP commit in a task worktree
+— carries `-c gc.auto=0`, which answers "no" to the tidy-up question **for
+that one command**. Nothing is written anywhere: not your repository's
+config, not your global config, not your files. Your own git keeps tidying up
+exactly as it does today.
+
+The same override rides in the environment of an agent session, so an agent's
+own `git commit` does not trigger the tidy-up either. That one is scoped to
+the session — it ends with it. The cost is that your repository does not
+auto-tidy for the length of a session, so it accumulates loose objects until
+your own git packs them later.
+
+### What it does NOT cover
+
+- **Your own git.** If you run `git fetch` or `git commit` in your terminal
+  while Mullion is working in the same repository, your command can still
+  trigger the tidy-up. Mullion cannot prevent that without changing your
+  repository's settings, which is your call, not ours.
+- **Other tools** that write to the repository.
+
+If you want the tidy-up off in a repository you share with Mullion, turn it
+off yourself — one command, in that repository:
+
+```sh
+git config gc.auto 0
+```
+
+and run `git gc` by hand when you want it, ideally when nothing else is
+writing.
+
+### Finding out whether it happened
+
+If a repository does get damaged — by your own git, or by another tool — the
+Git panel has a **Check** button. It runs a read-only health check on the
+repository and says plainly whether it is whole, and if not, what is wrong with
+it (how many zero-byte objects, how many `git fsck` errors).
+
+It never changes anything. The repair moves files and rewrites indexes, so it
+stays a deliberate action you run yourself, on the machine that holds the
+clone:
+
+```sh
+make git-doctor APPLY=1 DIR=/path/to/the/clone
+```
+
+`DIR` is the clone to work on; it defaults to the current directory, so
+`make git-doctor` from inside a clone inspects that clone. The repair never
+deletes anything — a damaged object is MOVED into a `gc-quarantine-*`
+directory inside the clone's git directory, where it can still be recovered by
+hand.
+
+In a **release install** there is no `make` and no `tsx`; the script itself is
+in the install, and the compiled doctor sits next to it in `dist/`:
+
+```sh
+node scripts/git-doctor.mjs --apply /path/to/the/clone
+```
+
+For a clone on a remote host, run it there (the same Mullion checkout, on
+that host).
+
+### Turning Mullion's fetches off entirely
+
+If you would rather Mullion did not fetch in a repository at all, that is
+already a setting:
+
+- **per project** — the auto-fetch toggle in the Git panel (`autoFetch: false`);
+- **everywhere** — set `gitAutoFetchIntervalSeconds` to `0` in Settings →
+  Projects.
+
+Mullion still fetches when you click **Fetch** or **Pull**, and before it
+pushes a branch.
+
 ## Relationship to Task Master's own worktree lifecycle
 
 Task Master's `mullion-task-<id>` worktrees already have their own

@@ -69,11 +69,30 @@
     padding-bottom: env(safe-area-inset-bottom);
     z-index: 45;
     transform: translateX(-101%);
-    transition: transform 0.24s ease;
+    /* The closed drawer is off-screen but not inert in browsers without
+       `inert` support (Safari < 15.5), so its session rows, filter input
+       and kebab menus would still be tabbable and still be read by a
+       screen reader. `visibility: hidden` takes them out of both: an
+       element that is not visible is not focusable.
+
+       `visibility` rather than `display: none` on purpose — the drawer's
+       scroll container is what the session list's virtualizer measures, and
+       `display: none` would give it a zero-height box and break the row
+       count. The delayed visibility transition keeps the drawer visible for
+       the length of the slide-out, so closing still animates. */
+    visibility: hidden;
+    transition:
+      transform 0.24s ease,
+      visibility 0s linear 0.24s;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
   }
   &.sb-open .sidebar-wrapper {
     transform: none;
+    visibility: visible;
+    /* No delay on the way in — the drawer must be visible as it slides. */
+    transition:
+      transform 0.24s ease,
+      visibility 0s;
   }
   &.sb-open .cmux-scrim {
     display: block !important;
@@ -208,6 +227,10 @@
   color: var(--dim);
   font-weight: 700;
   flex: 1;
+  /* This is an <h3> — the sidebar's section headings — and nothing resets
+     the UA's heading margins, so the default `margin: 1em 0` has to go or
+     the header row gains a gap above and below the title. */
+  margin: 0;
 }
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
    on `.sidebar-section-header`, same "own modifier class, not the shared
@@ -259,6 +282,12 @@
   border: none;
   outline: none;
   font-family: inherit;
+}
+/* The filter input suppressed the UA outline and the wrapper's border does
+   not react to focus, so keyboard focus was invisible. */
+.sidebar-filter-search input:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
 }
 .sidebar-filter-search input::placeholder {
   color: var(--muted);
@@ -428,7 +457,8 @@
 }
 .workspace-item.active {
   color: #fff;
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
 }
 .workspace-item-icon {
   flex-shrink: 0;
@@ -621,7 +651,8 @@
   padding: 0;
   border-radius: 6px;
   border: 1px solid var(--accent-solid);
-  background: var(--accent-solid);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
   color: #fff;
   cursor: pointer;
 }
@@ -732,7 +763,8 @@
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  background: var(--ring);
+  /* --accent-fill: white-on-fill background (10px white text), not --ring. */
+  background: var(--accent-fill);
   color: #fff;
   border-radius: 999px;
   font-size: 10px;
@@ -803,6 +835,18 @@
 }
 .session-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+/* The session currently open in a pane. Before this the sidebar gave no
+   indication of which session you were looking at — the `.active` class
+   did not exist on this row at all (the phone tier's own
+   `.mobile-session-row.active` is a separate rule for a separate list).
+
+   A left accent bar plus a faint fill, matching the shape of the
+   attention state below it so the two read as the same kind of marker
+   rather than two unrelated decorations. */
+.session-item.active {
+  background: color-mix(in srgb, var(--fg) 9%, transparent);
+  box-shadow: inset 2px 0 0 var(--fg);
 }
 .session-item.status-attention {
   background: color-mix(in srgb, var(--ring) 13%, transparent);
@@ -1736,7 +1780,8 @@
   font-weight: 600;
   line-height: 1;
   color: #fff;
-  background: var(--ring);
+  /* --accent-fill: white-on-fill background, not the text-role accent. */
+  background: var(--accent-fill);
 }
 
 .mobile-session-backdrop {
@@ -1965,6 +2010,12 @@
   overflow: auto;
   -webkit-user-select: text;
   user-select: text;
+}
+/* The copy-mode textarea suppressed the UA outline with nothing in its
+   place, so a keyboard user got no focus indicator. */
+.copy-mode-text:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
 }
 .copy-mode-actions {
   display: grid;
@@ -2375,4 +2426,36 @@
 .mobile-notif-sheet .notif-timeline-btn {
   min-height: 44px;
   font-size: 13px;
+}
+
+/* ============================================================ */
+/* Device rows — the sidebar's inline failure line              */
+/* ============================================================ */
+/* A device row (SidebarDevices.tsx) is `.sidebar-tasks-entry`: a flex ROW of
+   icon / label / status dot / Start-Stop actions. A failed start/stop now
+   renders INLINE under that row instead of only in its `title` tooltip, so
+   the row has to be allowed to give the error a line of its own.
+
+   `row-gap` (not `gap`) is what tightens the vertical spacing between the
+   two lines — the horizontal gap between the first line's own items is left
+   exactly as it was. Both declarations are scoped to the compound selector
+   so they win over `.sidebar-tasks-entry`'s own `gap: 8px` (empty-states.css,
+   which is imported LATER than this file) without that file having to
+   change. The class is only added to a row that HAS an error, so every
+   other row keeps the layout it always had. */
+.sidebar-tasks-entry.sidebar-device-row-wrap {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+/* The error line itself: the full width of the row's content box, so it sits
+   UNDER the row rather than squeezing the label. ErrorText's own inline
+   styles carry the size and the red; this only shapes the box. */
+.sidebar-device-error {
+  flex: 0 0 100%;
+  min-width: 0;
+  /* Never let a long message overflow the row: the sidebar wrapper scrolls
+     horizontally once its content is wider than the wrapper is (see the
+     .sidebar-resize-handle comment above), and a long unbreakable token
+     (a path, a URL) would otherwise do exactly that. */
+  overflow-wrap: anywhere;
 }

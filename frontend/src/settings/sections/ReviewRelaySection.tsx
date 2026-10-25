@@ -382,7 +382,7 @@ export function ReviewRelaySection() {
           />
           <TextSettingRow
             label="Reviewer bot login"
-            desc="The GitHub login of the bot that posts the review. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree."
+            desc="The GitHub login of the bot that posts the review and the triage comment. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree — and only its comments count as a triage reply. Empty accepts any bot."
             key={`relay-reviewerBotLogin:${relay.reviewerBotLogin}`}
             value={relay.reviewerBotLogin}
             placeholder="name[bot]"

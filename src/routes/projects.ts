@@ -43,6 +43,7 @@ import {
   type GitDiffStats,
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
+import { inspectGitClone } from "../services/git-doctor.js";
 import { runGitPull } from "../services/git-pull.js";
 import { runGitInit } from "../services/git-init.js";
 import {
@@ -141,6 +142,8 @@ import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
+import { parseHostCwds, serializeHostCwds } from "../services/placement.js";
+import { listHosts } from "../services/host-registry.js";
 
 interface CreateProjectBody {
   name: string;
@@ -150,6 +153,11 @@ interface CreateProjectBody {
   // this project's sessions land on an eligible host of its own; absent means
   // the column's "pinned" default (every session on the project's own host).
   placement?: PlacementMode;
+  // Issue #1724 / roadmap 8.10 — where this project lives on OTHER hosts, as
+  // `{ "<hostId>": "<absolute path>" }`. A host with no entry does not have the
+  // project, so it is not a placement candidate. Absent means "this project
+  // lives on its own host and nowhere else".
+  hostCwds?: Record<string, string> | null;
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
   // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
@@ -181,6 +189,11 @@ interface UpdateProjectBody {
   // host is chosen per session; see services/placement.ts). The opt-in is
   // explicit and per project: nothing changes until someone sets it.
   placement?: PlacementMode;
+  // Issue #1724 / roadmap 8.10 — where this project lives on OTHER hosts, as
+  // `{ "<hostId>": "<absolute path>" }`. `null` clears the map (the project
+  // lives on its own host and nowhere else). The paths are ABSOLUTE paths ON
+  // THAT HOST — the same directory the session will be spawned in.
+  hostCwds?: Record<string, string> | null;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
   // see schema.ts's own doc comment on these two columns.
@@ -232,6 +245,28 @@ interface DiscoveredProject extends DiscoveredCandidate {
   isRegistered: boolean;
 }
 
+/**
+ * The per-host cwd map's keys must name hosts we KNOW about.
+ *
+ * A typo in a host id would sit in the map forever: the host it names
+ * would never become a placement candidate (so the map would look like it
+ * did nothing), and if a host with that id were ever registered, it would
+ * silently start being one — with a path meant for something else.
+ *
+ * Returns the offending host id, or null when the map is fine.
+ */
+function unknownHostInCwds(
+  app: FastifyInstance,
+  map: Record<string, string> | null | undefined,
+): string | null {
+  if (map === null || map === undefined) return null;
+  const known = new Set(listHosts(app).map((host) => host.id));
+  for (const hostId of Object.keys(map)) {
+    if (!known.has(hostId)) return hostId;
+  }
+  return null;
+}
+
 const createProjectSchema = {
   body: {
     type: "object",
@@ -245,6 +280,17 @@ const createProjectSchema = {
       // placement; absent means the column's "pinned" default. The modes
       // come from PLACEMENT_MODES, the shared declaration.
       placement: { type: "string", enum: [...PLACEMENT_MODES] },
+      // Issue #1724 — the per-host cwd map. An object of ABSOLUTE paths, one
+      // per host; `null` means "this project lives on its own host only".
+      //
+      // The paths are absolute because they become a session's working
+      // directory on THAT host: a relative one would resolve against
+      // whatever the agent's cwd happened to be.
+      hostCwds: {
+        type: ["object", "null"],
+        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
+        maxProperties: 32,
+      },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
     },
@@ -262,6 +308,12 @@ const updateProjectSchema = {
       // Issue #1723 / roadmap 8.9 — the placement opt-in; see the column's
       // own comment in schema.ts.
       placement: { type: "string", enum: [...PLACEMENT_MODES] },
+      // Issue #1724 — the per-host cwd map; see the column's own comment.
+      hostCwds: {
+        type: ["object", "null"],
+        additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
+        maxProperties: 32,
+      },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
@@ -1031,6 +1083,11 @@ export async function projectsRoute(app: FastifyInstance) {
             );
         return {
           ...row,
+          // Issue #1724 — the per-host cwd map, as an OBJECT on the way out
+          // (the column holds JSON; the API speaks the same shape it
+          // accepts, so the client never has to know the column's
+          // encoding).
+          hostCwds: { ...parseHostCwds(row.hostCwds) },
           currentBranch,
           ruleFiles,
           conventionsDrifted,
@@ -1153,7 +1210,16 @@ export async function projectsRoute(app: FastifyInstance) {
       // project's own when it does not.
       const placement = (request.query.placement ?? project.placement) as PlacementMode;
       const decision = previewPlacement(app, {
-        project: { hostId: project.hostId, placement },
+        // Issue #1724 — the project's own path and its per-host map travel
+        // with the question: a host the project is not on cannot host a
+        // session for it, so the preview has to know WHERE the project is
+        // to answer the same thing the spawn path would.
+        project: {
+          hostId: project.hostId,
+          placement,
+          cwd: project.cwd,
+          hostCwds: project.hostCwds,
+        },
       });
       return { placement, ...decision };
     },
@@ -1183,6 +1249,10 @@ export async function projectsRoute(app: FastifyInstance) {
       // about a machine Mullion does not know — say so rather than guess.
       if (!getHostRow(app, hostId)) return reply.notFound(`Unknown host ${hostId}`);
       const placement = request.body.placement ?? "pinned";
+      // Issue #1724 — a project that does not exist yet has no per-host map:
+      // it lives on the host it is being created on, and nowhere else. That
+      // is the honest answer for a would-be project, and it is the same one
+      // the spawn path will give once the row is saved.
       const decision = previewPlacement(app, { project: { hostId, placement } });
       return { placement, ...decision };
     },
@@ -3436,6 +3506,44 @@ export async function projectsRoute(app: FastifyInstance) {
       properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
     },
   };
+  // Issue #1851 — a read-only health check on this project's clone: is it
+  // whole, or has a background `git gc` damaged it? It never mutates
+  // anything; the repair stays a deliberate, operator-run action.
+  //
+  // The doctor lives in src/services/git-doctor.ts so the CLI
+  // (scripts/git-doctor.mjs) and this route share one implementation.
+  app.post<{ Params: { id: string } }>(
+    "/api/projects/:id/git-health",
+    { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      if (project.hostId === LOCAL_HOST_ID) {
+        return await inspectGitClone(project.cwd);
+      }
+
+      try {
+        return await getRemoteHostClient(app, project.hostId).resolveGitHealth(project.cwd);
+      } catch (err) {
+        // An agent that REJECTED the request is alive and answering: a 400 for
+        // a cwd outside its PROJECTS_ROOTS, or a 404 from an agent that
+        // predates /internal/git-health (the mixed-version fleet case, #244
+        // and #527). "Unreachable" is a different fact, and the wrong one
+        // here — the 503 stays, but the message says which it was.
+        const message =
+          err instanceof HostRequestError
+            ? `Host ${project.hostId} rejected the health check: ${err.message}`
+            : `Host ${project.hostId} is unreachable`;
+        app.log.warn({ hostId: project.hostId, projectId, err }, message);
+        return reply.serviceUnavailable(message);
+      }
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     "/api/projects/:id/git-fetch",
     { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
@@ -3664,7 +3772,11 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const { name, cwd, createDir, gitInit, placement } = request.body;
+      const { name, cwd, createDir, gitInit, placement, hostCwds } = request.body;
+      const unknownHost = unknownHostInCwds(app, hostCwds);
+      if (unknownHost !== null) {
+        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+      }
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
       if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
@@ -3746,6 +3858,9 @@ export async function projectsRoute(app: FastifyInstance) {
           name,
           cwd: resolvedCwd,
           hostId,
+          // Issue #1724 — the per-host cwd map, serialized. Null/empty means
+          // "this project lives on its own host and nowhere else".
+          hostCwds: serializeHostCwds(hostCwds),
           // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
           // column's default), so an existing project is untouched.
           ...(placement === undefined ? {} : { placement }),
@@ -3762,9 +3877,14 @@ export async function projectsRoute(app: FastifyInstance) {
       // own doc comment for the one-shot/human-wins contract.
       const withReleasePleaseDefault = await maybeAutoEnableConventionalTitles(app, created);
       reply.code(201);
-      return createDir
-        ? { ...withReleasePleaseDefault, dirCreated, gitInitialized }
-        : withReleasePleaseDefault;
+      // Issue #1724 — the per-host cwd map, as an OBJECT (the column holds
+      // JSON; the API speaks the shape it accepts, so the client never has
+      // to know the encoding).
+      const response = {
+        ...withReleasePleaseDefault,
+        hostCwds: { ...parseHostCwds(withReleasePleaseDefault.hostCwds) },
+      };
+      return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
   );
 
@@ -3802,7 +3922,12 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold,
         createDir,
         gitInit,
+        hostCwds,
       } = request.body;
+      const unknownHost = unknownHostInCwds(app, hostCwds);
+      if (unknownHost !== null) {
+        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+      }
       if (
         devServerUrl !== undefined &&
         devServerUrl !== null &&
@@ -3852,6 +3977,7 @@ export async function projectsRoute(app: FastifyInstance) {
         defaultAgent === undefined &&
         defaultReviewAgent === undefined &&
         placement === undefined &&
+        hostCwds === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         maxAutoReturnRounds === undefined &&
@@ -3863,7 +3989,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -3919,6 +4045,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
           // Issue #1723 / roadmap 8.9 — the placement opt-in.
           ...(placement !== undefined ? { placement } : {}),
+          // Issue #1724 — the per-host cwd map. `null` clears it.
+          ...(hostCwds !== undefined ? { hostCwds: serializeHostCwds(hostCwds) } : {}),
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
@@ -3952,7 +4080,10 @@ export async function projectsRoute(app: FastifyInstance) {
       // behavior (github-webhook.ts) means re-registering an unchanged
       // repo is a harmless no-op, not a duplicate hook.
       if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated[0]);
-      return createDir ? { ...updated[0], dirCreated, gitInitialized } : updated[0];
+      // Issue #1724 — the per-host cwd map, as an OBJECT (see the create
+      // handler's own comment).
+      const response = { ...updated[0], hostCwds: { ...parseHostCwds(updated[0].hostCwds) } };
+      return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
   );
 

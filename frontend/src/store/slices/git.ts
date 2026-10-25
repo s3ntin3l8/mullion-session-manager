@@ -245,6 +245,12 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
     get().bumpGitRefreshTrigger();
   },
 
+  // Issue #1851 — a READ-ONLY health check on a project's clone: has a
+  // background `git gc` damaged it? Never mutates anything.
+  checkProjectGitHealth: async (projectId: number) => {
+    return await api.postProjectGitHealth(projectId);
+  },
+
   // Issue #745 — Manual fast-forward git pull for a project.
   pullProjectGit: async (projectId: number) => {
     const res = await api.postProjectGitPull(projectId);

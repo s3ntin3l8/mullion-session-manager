@@ -58,19 +58,38 @@ export function TerminalToasts({
   voiceError,
 }: TerminalToastsProps) {
   return (
-    <>
+    // The live region.
+    //
+    // These toasts were previously silent to assistive technology: "Copied"
+    // after a clipboard write, "Upload failed", a rejected copy, a voice
+    // error — none of them were announced, so a screen-reader user had no
+    // idea the copy had landed or failed.
+    //
+    // The wrapper has to be PERMANENT rather than the toast elements
+    // carrying `role="status"` themselves: a live region only announces
+    // content that CHANGES inside it, so a region inserted into the DOM
+    // together with its content is not reliably announced. This element is
+    // always mounted, and the toasts come and go inside it.
+    //
+    // `role="status"` implies `aria-live="polite"`; the error variants
+    // below carry `role="alert"` (assertive) so a failure interrupts
+    // rather than waiting for a pause.
+    <div className="terminal-toasts" role="status" aria-live="polite">
       {copied && (
         <div key={copyToastKey} className="terminal-copy-indicator">
           Copied
         </div>
       )}
       {copyFailedMessage && (
-        <div key={copyFailedToastKey} className="terminal-copy-indicator error">
+        <div key={copyFailedToastKey} className="terminal-copy-indicator error" role="alert">
           {copyFailedMessage}
         </div>
       )}
       {uploadState !== "idle" && (
-        <div className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}>
+        <div
+          className={`terminal-upload-indicator ${uploadState === "error" ? "error" : ""}`}
+          role={uploadState === "error" ? "alert" : undefined}
+        >
           {uploadState === "uploading" ? "Uploading…" : "Upload failed"}
         </div>
       )}
@@ -80,15 +99,20 @@ export function TerminalToasts({
           className={`terminal-upload-indicator error${
             uploadState !== "idle" || uploadNotice ? " stacked" : ""
           }`}
+          role="alert"
         >
           {voiceError}
         </div>
       )}
       {paneTooSmall && (
-        <div className="terminal-too-small-indicator" title="Enlarge this pane to use it normally">
+        <div
+          className="terminal-too-small-indicator"
+          title="Enlarge this pane to use it normally"
+          role="alert"
+        >
           Pane too small
         </div>
       )}
-    </>
+    </div>
   );
 }

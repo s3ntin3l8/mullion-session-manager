@@ -1,5 +1,5 @@
 import { schema as envSchema } from "../plugins/env.js";
-import { GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
+import { GIT_CONFIG_COUNT_KEY, GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
 import { getUserShellPath, mergePaths } from "./user-shell-env.js";
 
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
@@ -129,6 +129,33 @@ export const HOST_DISPLAY_ENV_KEYS: readonly string[] = [
 ];
 
 /**
+ * The env form of `-c gc.auto=0` — issue #1851.
+ *
+ * GIT_NO_AUTO_GC (git-env.ts) stops MULLION's own git commands from
+ * triggering a background gc. An agent CLI's own `git commit` in the user's
+ * clone triggers the same one, and Mullion is what launches the agent — so
+ * Mullion controls the environment it inherits, and the override goes here.
+ *
+ * Env-scoped, so the user's clone config is untouched and it ends with the
+ * session. The cost: the clone does not auto-gc for the session's duration,
+ * so loose objects accumulate until the user's own git packs them later.
+ * That is the intended trade — the alternative is the corruption (#1836).
+ *
+ * COUNT is set to 1, not inherited: git reads only indices 0..COUNT-1, so a
+ * leaked GIT_CONFIG_KEY_1/VALUE_1 from a hook cannot reach git.
+ *
+ * The env form needs git >= 2.31 (October 2020). The argv form in
+ * git-env.ts works on every git and covers Mullion's own commands either
+ * way, so this is belt-and-braces — a silent no-op on an ancient git is
+ * acceptable.
+ */
+export const GIT_CONFIG_NO_AUTO_GC_ENV = {
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "gc.auto",
+  GIT_CONFIG_VALUE_0: "0",
+} as const;
+
+/**
  * Returns a copy of `base` (defaults to `process.env`) with every
  * Mullion-owned config key in {@link SERVER_ENV_KEYS} and every
  * {@link HOST_DISPLAY_ENV_KEYS} entry removed, `COLORTERM`
@@ -144,6 +171,13 @@ export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.P
   for (const key of HOST_DISPLAY_ENV_KEYS) {
     delete env[key];
   }
+  // The env form of `-c key=value` (GIT_CONFIG_COUNT plus numbered
+  // GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n pairs). git reads only indices
+  // 0..COUNT-1, so removing COUNT disables the whole mechanism — an ambient
+  // pair must not reach a session's git. It is removed here rather than
+  // through SERVER_ENV_KEYS because the session env deliberately SETS its own
+  // pair below.
+  delete env[GIT_CONFIG_COUNT_KEY];
   // Issue #91: pty-manager.ts spawns every session with TERM=xterm-256color
   // (node-pty's `name` option) but nothing ever set COLORTERM, so a session
   // only ever advertised 256-color support even though xterm.js can render
@@ -165,6 +199,10 @@ export function buildSessionEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.P
   // force this the same way COLORTERM is forced above rather than passing
   // through the server's own (possibly absent) TERM.
   env.TERM = "xterm-256color";
+  // Issue #1851 — the gc.auto override for the session. Set AFTER the
+  // scrub above, which removed any ambient GIT_CONFIG_COUNT, so this is
+  // the only pair git can see. See GIT_CONFIG_NO_AUTO_GC_ENV's comment.
+  Object.assign(env, GIT_CONFIG_NO_AUTO_GC_ENV);
   // PATH entries the user's interactive rc adds (~/.zshrc, ~/.bashrc) — the
   // `-lc` shells Mullion spawns never read them. See user-shell-env.ts.
   const userPath = getUserShellPath();

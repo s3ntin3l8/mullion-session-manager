@@ -10,6 +10,7 @@ import type {
   GitRefsBatchResult,
   GitFileDiffResponse,
   GitPullResult,
+  CloneHealth,
   GitLogResponse,
   GitCommitDetail,
 } from "./types.js";
@@ -104,6 +105,14 @@ export const gitApi = {
   // Manual git fetch trigger — runs `git fetch origin` for this project now.
   postProjectGitFetch: (projectId: number) =>
     request<{ success: boolean; error?: string }>(`/api/projects/${projectId}/git-fetch`, {
+      method: "POST",
+    }),
+
+  // Issue #1851 — a READ-ONLY health check on this project's clone: has a
+  // background `git gc` damaged it? It never mutates anything — the repair
+  // stays a deliberate, operator-run action.
+  postProjectGitHealth: (projectId: number) =>
+    request<CloneHealth>(`/api/projects/${projectId}/git-health`, {
       method: "POST",
     }),
 

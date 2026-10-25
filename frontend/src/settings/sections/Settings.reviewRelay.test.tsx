@@ -299,7 +299,7 @@ describe("Settings -> Integrations -> Review relay", () => {
     useDashboardStore.setState({ settings: DEFAULT_SETTINGS });
     const user = userEvent.setup();
     await renderCard();
-    await user.click(screen.getByRole("button", { name: "Hermes" }));
+    await user.click(screen.getByRole("radio", { name: "Hermes" }));
     await waitFor(() =>
       expect(settingsPatches).toContainEqual({ reviewRelay: { provider: "hermes" } }),
     );

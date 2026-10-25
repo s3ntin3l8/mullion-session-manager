@@ -43,6 +43,7 @@ import { canTransition, recordTaskTransition, type TaskStatus } from "./task-sta
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { resolveTaskWorkerHost } from "./session-live-info.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-approve.js";
 
@@ -264,15 +265,23 @@ async function runSync(
 export async function computeTaskDiffStat(
   app: FastifyInstance,
   task: TaskRow,
+  // Issue #1724 — the diff is measured in the task's worktree, whose host
+  // comes from the worker session; the project's host is the fallback (and
+  // the authority for it, so the project row passed in is used rather than
+  // re-read).
   project: ProjectRef,
 ): Promise<GitDiffStats | undefined> {
   if (!task.worktreePath || !task.baseSha) return undefined;
-  if (project.hostId === LOCAL_HOST_ID) {
+  // Issue #1724 — the diff is measured in the task's WORKTREE, which
+  // lives on the host its worker session was placed on — not necessarily
+  // the project's own host.
+  const worktreeHostId = resolveTaskWorkerHost(app, task, project);
+  if (worktreeHostId === LOCAL_HOST_ID) {
     const stats = await getDiffStats(task.worktreePath, task.baseSha);
     return stats ?? undefined;
   }
   try {
-    const { stats } = await getRemoteHostClient(app, project.hostId).resolveGitDiffStats(
+    const { stats } = await getRemoteHostClient(app, worktreeHostId).resolveGitDiffStats(
       task.worktreePath,
       task.baseSha,
     );
@@ -443,7 +452,7 @@ export async function syncClosedIssueToLocal(
       // not just reachability of this branch — both the webhook handler and
       // the poll sweep can call this function for the same issue close, and
       // only the pass that actually won the CAS may run cleanup once.
-      cleanupTaskWorktree(app, { worktreePath: task.worktreePath }, project);
+      cleanupTaskWorktree(app, task, project);
       cleanupTaskSessions(app, task);
     }
   } catch (err) {

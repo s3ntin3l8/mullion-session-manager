@@ -3113,6 +3113,46 @@ describe("Dock", () => {
 
         expect(await screen.findByText("Failed to start — try again")).toBeInTheDocument();
       });
+
+      // Audit finding 10 — the kill path was the ONE sibling in this file
+      // that did not report its failure: `void
+      // useDashboardStore.getState().deleteSession(running.id)` with no
+      // catch at all, so a failed kill rejected unhandled and the row just
+      // sat there looking alive. Its two siblings — "Failed to start — try
+      // again" and "Failed to switch — try again" — already reported
+      // theirs.
+      it("surfaces an inline error when killing a monitor fails, instead of an unhandled rejection", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const deleteSession = vi.fn().mockRejectedValue(new Error("Host is unreachable"));
+        setupStore({
+          deleteSession,
+          gitBranchesByProject: {},
+          settings: {
+            ...DEFAULT_SETTINGS,
+            sessions: { ...DEFAULT_SETTINGS.sessions, confirmBeforeKill: false },
+          },
+        });
+        const runningSession: Session = makeSession({
+          id: 99,
+          command: "npm run dev",
+          cwd: null,
+          env: null,
+          kind: "dock",
+          activity: "idle",
+          sessionStatus: "idle",
+          sessionStatusSeverity: "dormant",
+        });
+        useDashboardStore.setState({ sessions: [runningSession] });
+
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        const onTag = await screen.findByText("on");
+        await user.click(onTag);
+
+        expect(deleteSession).toHaveBeenCalledWith(99);
+        expect(await screen.findByText("Failed to kill — try again")).toBeInTheDocument();
+      });
     });
 
     // Hermes review round 1 (suggestion) — the toggleGenRef generation

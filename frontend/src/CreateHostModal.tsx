@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import { HostsIcon, CloseIcon } from "./ui/icons.js";
+import { HostsIcon } from "./ui/icons.js";
 import { ErrorText } from "./ui/ErrorText.js";
+import { Modal } from "./ui/Modal.js";
 
 interface CreateHostModalProps {
   onClose: () => void;
@@ -39,6 +40,15 @@ export function CreateHostModal({
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const confirm = () => {
+    // Re-entry guard. `saving` is state, so it is still `false` inside
+    // this closure until React re-renders — but a second Enter press is a
+    // separate event, and React flushes between two events, so the second
+    // one does see `saving === true`. Without this, a double Enter
+    // registered the same host twice (audit finding 18).
+    //
+    // `CreateProjectModal.tsx` has the same guard on its own `submitting`
+    // flag, and the same shape.
+    if (saving) return;
     const trimmedName = name.trim();
     const trimmedBaseUrl = baseUrl.trim();
     if (!trimmedName || !trimmedBaseUrl) {
@@ -61,82 +71,18 @@ export function CreateHostModal({
   };
 
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
-      <div className="create-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="create-modal-header">
-          <span className="create-modal-icon">
-            <HostsIcon size={16} />
-          </span>
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">{isEdit ? "Edit host" : "Add host"}</span>
-            <span className="create-modal-subtitle">
-              {isEdit
-                ? "Update this host's name, address, or token."
-                : "Register a remote Mullion agent this dashboard can run sessions on."}
-            </span>
-          </span>
-          <button className="create-modal-close" onClick={onClose}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
-
-        <div className="create-modal-body">
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Name</span>
-            <span className="create-modal-input-row">
-              <input
-                ref={nameInputRef}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="home-server"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
-                }}
-              />
-            </span>
-          </label>
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Base URL</span>
-            <span className="create-modal-input-row">
-              <input
-                className="mono"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="http://192.168.1.20:4000"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
-                }}
-              />
-            </span>
-            <span className="create-modal-field-hint">
-              Where this agent's Mullion process is reachable (MULLION_ROLE=agent).
-            </span>
-          </label>
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Token</span>
-            <span className="create-modal-input-row">
-              <input
-                className="mono"
-                type="password"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-                placeholder={isEdit && hasToken ? "Leave blank to keep the current token" : ""}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirm();
-                }}
-              />
-            </span>
-            <span className="create-modal-field-hint">
-              Must match the agent's MULLION_AGENT_TOKEN exactly.
-            </span>
-          </label>
-
-          {error && <ErrorText>{error}</ErrorText>}
-        </div>
-
-        <div className="create-modal-footer">
+    <Modal
+      onClose={onClose}
+      icon={<HostsIcon size={16} />}
+      title={isEdit ? "Edit host" : "Add host"}
+      subtitle={
+        isEdit
+          ? "Update this host's name, address, or token."
+          : "Register a remote Mullion agent this dashboard can run sessions on."
+      }
+      initialFocusRef={nameInputRef}
+      footer={
+        <>
           <span className="create-modal-footer-hint">
             {isEdit
               ? "Existing sessions on this host keep working; a rotated token applies immediately."
@@ -148,8 +94,62 @@ export function CreateHostModal({
           <button className="create-modal-submit" onClick={confirm} disabled={saving}>
             {isEdit ? "Save changes" : "Add host"}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Name</span>
+        <span className="create-modal-input-row">
+          <input
+            ref={nameInputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="home-server"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+        </span>
+      </label>
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Base URL</span>
+        <span className="create-modal-input-row">
+          <input
+            className="mono"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="http://192.168.1.20:4000"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+        </span>
+        <span className="create-modal-field-hint">
+          Where this agent's Mullion process is reachable (MULLION_ROLE=agent).
+        </span>
+      </label>
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Token</span>
+        <span className="create-modal-input-row">
+          <input
+            className="mono"
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={isEdit && hasToken ? "Leave blank to keep the current token" : ""}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirm();
+            }}
+          />
+        </span>
+        <span className="create-modal-field-hint">
+          Must match the agent's MULLION_AGENT_TOKEN exactly.
+        </span>
+      </label>
+
+      {error && <ErrorText>{error}</ErrorText>}
+    </Modal>
   );
 }

@@ -1,5 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 import type { GitPullReason, GitPullResult } from "../shared/types.js";
 
@@ -29,7 +29,7 @@ function runGit(cwd: string, args: string[], timeoutMs = 10_000): Promise<GitRes
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, ...args], {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       env: gitEnv(),
     });

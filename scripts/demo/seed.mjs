@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { gitEnv } from "../git-env.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "../git-env.mjs";
 import { ptySizeFile } from "./geometry.mjs";
 
 /**
@@ -25,7 +25,10 @@ const DEMO_IDENTITY = {
 };
 
 async function git(cwd, ...args) {
-  await execFileAsync("git", args, { cwd, env: { ...gitEnv(), ...DEMO_IDENTITY } });
+  await execFileAsync("git", [...GIT_NO_AUTO_GC, ...args], {
+    cwd,
+    env: { ...gitEnv(), ...DEMO_IDENTITY },
+  });
 }
 
 async function seedGitRepo(dir, { readme, files, commitMessages }) {

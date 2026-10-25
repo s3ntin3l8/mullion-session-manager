@@ -7,7 +7,12 @@ import { projects, tasks } from "../db/schema.js";
 // those files' own doc comments for the createSessionRecord/killSession and
 // buildLiveInfo/withLiveInfo/withLiveStatus split.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { resolveSessionHostId, withLiveStatus } from "./session-live-info.js";
+import {
+  resolveSessionHostId,
+  resolveTaskWorkerHost,
+  withLiveStatus,
+} from "./session-live-info.js";
+import { parseHostCwds, projectCwdOnHost, resolvePlacement } from "./placement.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -268,7 +273,79 @@ export async function dispatchClaimedTask(
   const seedCapable = commandSupportsSeed(command);
 
   const branchName = task.branchName ?? deriveTaskBranchName(task);
-  const predictedWorktreePath = task.worktreePath ?? deriveWorktreePath(project.cwd, branchName);
+
+  // The placement is decided HERE, once, because the worktree is cut on
+  // the chosen host (#1724) — so the orphan check below has to ask THAT
+  // host whether a previous attempt left something behind, and the
+  // predicted path has to be the one under THAT host's project root.
+  // Deciding it here and passing the host down also means the decision is
+  // made once, not twice (the fleet's readings could change between two
+  // calls, and the worktree and the session must agree on the host).
+  const placement = resolvePlacement(app, {
+    project: {
+      hostId: project.hostId,
+      placement: project.placement,
+      cwd: project.cwd,
+      hostCwds: project.hostCwds,
+    },
+    unattended: true,
+  });
+  // The project root ON THE PLACEMENT HOST. Null would mean the placement
+  // chose a host this project is not on — unreachable in practice (the
+  // policy only ever chooses a host the project is mapped on), but the
+  // session would have no directory to run in, so refuse rather than
+  // guess: the project's own root is a path that host does not have.
+  const placementCwd = projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds));
+  if (placementCwd === null) {
+    // Refusing without RECORDING anything leaves the task exactly where it
+    // was, so the sweep picks it up again on the next tick and the only
+    // trace is a log line. The failure reason goes on the task, where the
+    // user and the board can see it.
+    const detail = `the placement host ${placement.hostId} has no path for this project`;
+    app.log.warn(
+      { taskId, hostId: placement.hostId },
+      `task dispatch: ${detail} — refusing to claim`,
+    );
+    const updated = app.db
+      .update(tasks)
+      .set({ status: "failed", failureReason: detail })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .run();
+    // The transition record is what the activity feed and the issue sync
+    // hang off — a bare status write reaches neither, so the failure
+    // would be invisible in both. `retryTask`'s own release() makes the
+    // same `claimed -> failed` write and records it the same way.
+    if (updated.changes > 0) {
+      recordTaskTransition(app, {
+        taskId,
+        projectId: project.id,
+        from: "claimed",
+        to: "failed",
+        via: "placement-refusal",
+        context: { reason: detail, hostId: placement.hostId },
+      });
+      // Fire-and-forget, same posture as every other sync on this path —
+      // the transition is already committed, and a GitHub-side problem
+      // must not unwind it.
+      void syncTaskTransition(
+        app,
+        { ...task, status: "failed", failureReason: detail },
+        project,
+        "failed",
+      );
+    }
+    return { ok: false, reason: "worktree-failed", detail };
+  }
+  // The predicted path is derived from the PLACEMENT root — the path the
+  // worktree is about to be created at. NOT the task row's stamped
+  // `worktreePath`: that one was stamped at CLAIM time from the project's
+  // root, on the project's host, and for an "auto" project that is a
+  // different directory on a different machine — so asking the placement
+  // host about it would look at a path it does not have, and every placed
+  // task's first dispatch would be released as "a previous attempt left an
+  // unclean worktree". (The row's own worktreePath is corrected to the
+  // real path further down, once the worktree exists.)
+  const predictedWorktreePath = deriveWorktreePath(placementCwd, branchName);
 
   const taskMasterConfig = resolveTaskMasterConfig(app);
   const maxConcurrent = taskMasterConfig.maxConcurrent;
@@ -365,10 +442,12 @@ export async function dispatchClaimedTask(
   // The one place that is NOT project-scoped is the live-status read after
   // the spawn — the row exists by then, so it uses the SESSION's host.
   try {
-    const backend = resolveBackend(app, project.hostId);
+    // The PLACEMENT host — the worktree is cut there, so that is where a
+    // previous attempt would have left one.
+    const backend = resolveBackend(app, placement.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
     const clearResult = await backend.clearOrphanedTaskWorktree(
-      project.cwd,
+      placementCwd,
       predictedWorktreePath,
       branchName,
     );
@@ -411,7 +490,9 @@ export async function dispatchClaimedTask(
         ? taskCommitTitlePath(
             await resolveSessionsDirWithFallback(app, backend, {
               taskId: task.id,
-              hostId: project.hostId,
+              // Issue #1724 — the session's OWN sessions dir, on the host
+              // the session RUNS (the placement host), not the project's.
+              hostId: placement.hostId,
             }),
             task.id,
           )
@@ -460,12 +541,23 @@ export async function dispatchClaimedTask(
       nameLocked: true,
       model,
       smallModel,
+      // Issue #1724 — the host and the reason decided above, so the
+      // worktree, the session and the row all agree on one host and one
+      // explanation.
+      hostId: placement.hostId,
+      placementReason: placement.reason,
       // Mark this session as an unattended Task Master worker so the
       // opencode and codex adapters deny superpowers skills that gate on
       // a human in the loop (brainstorming / writing-plans /
       // finishing-a-development-branch — verified failing in branchdam-
       // mobile tasks #66 / #67).
       taskId: task.id,
+      // Issue #1724 / roadmap 8.10 — the placement policy scores an
+      // unattended session differently: no local bonus, because the goal
+      // is to drain the primary onto the least-loaded eligible host. This
+      // is the spawn that CREATES the worktree, so the placement also
+      // decides where the worktree is cut from.
+      unattended: true,
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
@@ -476,14 +568,16 @@ export async function dispatchClaimedTask(
       return { ok: false, reason: "spawn-failed" };
     }
 
+    // Issue #1724 — the host that RAN the spawn is the placement host, so
+    // that is the host whose version skew matters here.
     const seedDelivered = resolveSeedDelivered(
       seedCapable,
-      project.hostId,
+      placement.hostId,
       result.initialPromptApplied,
     );
     if (seedCapable && !seedDelivered) {
       app.log.warn(
-        { taskId, hostId: project.hostId, command },
+        { taskId, hostId: placement.hostId, command },
         "task dispatch: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew (the remote agent build may not support initialPrompt yet)",
       );
     }
@@ -741,9 +835,9 @@ export async function retryTask(
   // worktree cleanup below is PROJECT-scoped (the task's worktree), and
   // the spawn host is the placement decision #1724 owns.
   async function release(reason: string, worktreeToClean?: { path: string }): Promise<void> {
-    if (worktreeToClean) {
-      await resolveBackend(app, project.hostId)
-        .removeWorktreeIfClean(worktreeToClean.path, project.cwd)
+    if (worktreeToClean && workerCwd !== null) {
+      await resolveBackend(app, workerHostId)
+        .removeWorktreeIfClean(worktreeToClean.path, workerCwd)
         .catch((err: unknown) => {
           app.log.warn(
             { err, taskId, worktreePath: worktreeToClean.path },
@@ -772,6 +866,25 @@ export async function retryTask(
 
   const branchName = reservation.branchName;
 
+  // Issue #1724 — the task's worktree was cut on the host its WORKER was
+  // placed on, which is not necessarily the project's own host. So the
+  // retry resumes it THERE, from the project root as it is there — the
+  // repo-level git operations stay on the project's host (that is where the
+  // repository lives), but the checkout this session works in has to be on
+  // the machine the session runs on.
+  const workerHostId = resolveTaskWorkerHost(app, task);
+  // The project root ON THE WORKER'S HOST. Null when the project is not
+  // mapped there — and then there is no directory to resume the worktree
+  // in, which is a failure rather than something to paper over with the
+  // project's own path (that path does not exist on this host).
+  const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
+  if (workerCwd === null) {
+    app.log.warn(
+      { taskId: task.id, hostId: workerHostId },
+      "task retry: the worker's host has no path for this project — the worktree cannot be resumed there",
+    );
+  }
+
   let committed = false;
   // Hoisted out of the try block (rather than a `const` declared inside
   // it) so the catch block below can also clean it up if anything between a
@@ -787,9 +900,17 @@ export async function retryTask(
     // resolveWithinRoots 400, not just a missing route), so this checks
     // `statusCode === 404` specifically rather than the class alone; any
     // other HostRequestError falls through to the generic catch below.
-    const backend = resolveBackend(app, project.hostId);
+    if (workerCwd === null) {
+      // The worker's host has no path for this project, so there is no
+      // directory to resume the worktree in. Retrying against a path that
+      // does not exist there would fail as a missing branch, which says
+      // nothing about the real cause; say the real cause instead.
+      await release("the worker's host has no path for this project");
+      return { ok: false, reason: "worktree-failed" };
+    }
+    const backend = resolveBackend(app, workerHostId);
     try {
-      worktree = await backend.resumeTaskWorktree(project.cwd, branchName);
+      worktree = await backend.resumeTaskWorktree(workerCwd, branchName);
     } catch (err) {
       if (err instanceof HostRequestError && err.statusCode === 404) {
         await release("this host's agent build doesn't support retrying a remote-hosted task yet");
@@ -843,7 +964,10 @@ export async function retryTask(
         ? taskCommitTitlePath(
             await resolveSessionsDirWithFallback(app, backend, {
               taskId: task.id,
-              hostId: project.hostId,
+              // Issue #1724 — the retry runs on the host that holds the
+              // task's worktree, so that is the host whose sessions dir
+              // the commit title path belongs to.
+              hostId: workerHostId,
             }),
             task.id,
           )
@@ -864,19 +988,25 @@ export async function retryTask(
       // plans / finishing-a-development-branch denials too (an opencode
       // worker respawned mid-task can hit the same failure mode).
       taskId: task.id,
+      // Issue #1724 — the retry reuses the task's EXISTING worktree
+      // (`cwd: worktree.path`), which lives on the host the worker was
+      // placed on. So the retry JOINS that host rather than being placed
+      // again: a session cannot run in a directory that is not on its
+      // machine.
+      unattended: true,
+      hostId: resolveTaskWorkerHost(app, task),
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);
       return { ok: false, reason: "spawn-failed" };
     }
 
-    // Local-hosted only (this function refuses remote projects outright,
-    // above) — no version-skew risk, so resolveSeedDelivered's remote
-    // branch is unreachable here. Used anyway for one consistent definition
-    // of "seedDelivered" across every spawn site.
+    // Issue #1724 — the retry runs on the worker host (it resumes the
+    // task's worktree, which lives there), so that is the host whose
+    // version skew matters here.
     const seedDelivered = resolveSeedDelivered(
       seedCapable,
-      project.hostId,
+      workerHostId,
       result.initialPromptApplied,
     );
 

@@ -399,6 +399,23 @@ export function panelSessionId(panel: IDockviewPanel): number | undefined {
   return typeof id === "number" ? id : undefined;
 }
 
+/**
+ * The session id encoded in a dockview panel id, or null.
+ *
+ * Panel ids are `<kind>-<sessionId>` for the kinds that belong to a
+ * session — `session-12`, `timeline-12`, `browserPane-12`. Used to answer
+ * "is this session the one currently open?" without needing the panel
+ * object, which the sidebar's rows do not have.
+ *
+ * Same shape as BrowserPanel.tsx's own `activePanelId` parse; extracted here
+ * so both read the one definition of the id format.
+ */
+export function sessionIdFromPanelId(panelId: string | null | undefined): number | null {
+  if (!panelId) return null;
+  const match = panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 // #98 item 4's auto-focus-on-attention effect (App.tsx) — which panel ids
 // should be brought into view for a live-refresh poll tick, given the set
 // of session ids that already had `attention` the *previous* tick (so this

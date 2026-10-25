@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
 import { api } from "./api/index.js";
@@ -73,6 +73,11 @@ const ackAttention = vi.fn();
 // "Split down" items (a fallback for PaneHeaderActions.tsx's header-level
 // buttons, which hide entirely below a certain group width) read this.
 const requestSplit = vi.fn();
+// Stable spies for the rename path: the store's renameSession and the
+// app-wide failure channel (store/slices/toasts.ts) the rejected rename
+// is reported through.
+const renameSession = vi.fn();
+const reportError = vi.fn();
 
 function storeState() {
   return {
@@ -87,8 +92,9 @@ function storeState() {
     lastSeenSeq,
     dismissedEventKeys,
     mutedSessionIds,
-    renameSession: vi.fn(),
+    renameSession,
     deleteSession: vi.fn().mockResolvedValue(undefined),
+    reportError,
     theme: "dark",
     settings: {
       sessions: { confirmBeforeKill: false },
@@ -240,6 +246,9 @@ beforeEach(() => {
   mutedSessionIds = [];
   markEventSeen.mockClear();
   requestSplit.mockClear();
+  renameSession.mockReset();
+  renameSession.mockResolvedValue(undefined);
+  reportError.mockClear();
   ackAttention.mockClear();
   vi.stubGlobal(
     "ResizeObserver",
@@ -380,6 +389,7 @@ describe("PaneTab", () => {
           cwd: "/home/x/mullion",
           hostId: "local",
           placement: "pinned",
+          hostCwds: {},
           devServerUrl: null,
           detectedDevServerPort: null,
           currentBranch: "main",
@@ -823,6 +833,7 @@ describe("PaneTab", () => {
           cwd: "/home/x/mullion",
           hostId: "local",
           placement: "pinned",
+          hostCwds: {},
           devServerUrl: null,
           detectedDevServerPort: null,
           currentBranch: "main",
@@ -1103,5 +1114,49 @@ describe("PaneTab overflow menu — focus management (P11)", () => {
 
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(props.api.close).toHaveBeenCalled();
+  });
+});
+
+// Audit finding 9 — the rename was optimistic with no rollback, and the
+// rejection was dropped by the call site (`void renameSession(...)`), so a
+// failed rename left the tab showing a name the server never accepted and
+// told the user nothing.
+describe("failed rename (audit finding 9)", () => {
+  async function renameTo(newName: string) {
+    const props = makeProps();
+    render(<PaneTab {...props} />);
+    await userEvent.dblClick(screen.getByText("claude code"));
+    const input = screen.getByDisplayValue("claude code") as HTMLInputElement;
+    await userEvent.clear(input);
+    await userEvent.type(input, newName);
+    await userEvent.keyboard("{Enter}");
+    return props;
+  }
+
+  it("reports the failure to the user", async () => {
+    renameSession.mockRejectedValue(new Error("server said no"));
+    await renameTo("renamed");
+    await waitFor(() => {
+      expect(reportError).toHaveBeenCalledWith(
+        "Could not rename the session.",
+        expect.stringContaining("server said no"),
+      );
+    });
+  });
+
+  it("puts the dockview tab title back", async () => {
+    renameSession.mockRejectedValue(new Error("server said no"));
+    const props = await renameTo("renamed");
+    await waitFor(() => {
+      expect(props.api.setTitle).toHaveBeenLastCalledWith("claude code");
+    });
+  });
+
+  it("leaves the optimistic title in place when the rename succeeds", async () => {
+    const props = await renameTo("renamed");
+    await waitFor(() => {
+      expect(props.api.setTitle).toHaveBeenCalledWith("renamed");
+    });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

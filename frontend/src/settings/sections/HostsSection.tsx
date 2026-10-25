@@ -8,7 +8,7 @@ import { deriveHostStatus, type PingState } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
-import { CloseIcon, GearIcon, HostsIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
+import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
 import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
@@ -63,6 +63,22 @@ function HostCapacityLine({ host }: { host: Host }) {
 
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
+
+  // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
+  //
+  // Parking is a FLAG, not an action: the host keeps running, keeps its
+  // sessions, and stays usable for manual placement. What it changes is
+  // that the placement policy stops CHOOSING it for new work.
+  const toggleDrain = (host: Host) => {
+    setDrainError(null);
+    // The failure is SURFACED: the KebabMenu just calls onClick() with no
+    // error handling of its own, so a park that does not reach the server
+    // would otherwise leave the row unchanged with nothing said — the user
+    // would think the switch worked.
+    void updateHost(host.id, { drained: !host.drained }).catch((err: unknown) => {
+      setDrainError(err instanceof Error ? err.message : String(err));
+    });
+  };
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
@@ -72,6 +88,9 @@ export function HostsSection() {
   // own error message already names the project count.
   const [cascadePrompt, setCascadePrompt] = useState<{ id: string; message: string } | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Issue #1725 — a failed park/unpark says so, rather than leaving the
+  // row unchanged with nothing said.
+  const [drainError, setDrainError] = useState<string | null>(null);
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -278,6 +297,24 @@ export function HostsSection() {
           trailing={
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: 10.5, color: "var(--dim)" }}>always online</span>
+              {/* Issue #1725 — the primary can be parked too: parking it is
+                  how you drain it. The local host takes no other edits, but
+                  this one is a placement decision rather than an edit of
+                  the host's identity. */}
+              {localHost?.drained && (
+                <span
+                  style={{ fontSize: 10.5, color: "var(--y)" }}
+                  title="Parked: this machine takes no new work. Nothing on it is stopped."
+                >
+                  parked
+                </span>
+              )}
+              <SecondaryButton
+                onClick={() => localHost && toggleDrain(localHost)}
+                disabled={!localHost}
+              >
+                {localHost?.drained ? "Unpark" : "Park"}
+              </SecondaryButton>
               <SecondaryButton
                 onClick={() => setViewingConfig({ id: LOCAL_HOST_ID, name: "This machine" })}
               >
@@ -309,6 +346,17 @@ export function HostsSection() {
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     {display.label && (
                       <span style={{ fontSize: 10.5, color: display.color }}>{display.label}</span>
+                    )}
+                    {/* Issue #1725 — the parked state, visible next to the
+                        health: the host is up, it is just taking no new
+                        work. */}
+                    {host.drained && (
+                      <span
+                        style={{ fontSize: 10.5, color: "var(--y)" }}
+                        title="Parked: this host takes no new work. Nothing on it is stopped."
+                      >
+                        parked
+                      </span>
                     )}
                     {(() => {
                       const info = updateInfo[host.id];
@@ -360,12 +408,24 @@ export function HostsSection() {
                           label: "View config",
                           icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => setViewingConfig({ id: host.id, name: host.name }),
+                          // Opens the host-config modal, which traps focus
+                          // itself.
+                          opensOverlay: true,
                         },
                         {
                           key: "edit",
                           label: "Edit",
                           icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => setEditing(host),
+                        },
+                        {
+                          // Issue #1725 — park / un-park. The label says what
+                          // it DOES, not what it looks like: the host keeps
+                          // running and keeps its sessions.
+                          key: "drain",
+                          label: host.drained ? "Unpark host" : "Park host (take no new work)",
+                          icon: <MoonIcon size={14} style={{ color: "var(--muted)" }} />,
+                          onClick: () => toggleDrain(host),
                         },
                         {
                           key: "delete",
@@ -396,6 +456,7 @@ export function HostsSection() {
           </div>
         </div>
       )}
+      {drainError && <ErrorText style={{ marginTop: 8 }}>{drainError}</ErrorText>}
       {deleteError && !cascadePrompt && (
         <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>
       )}

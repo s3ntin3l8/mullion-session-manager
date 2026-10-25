@@ -1,7 +1,7 @@
 import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 // GitBranchInfo/GitWorktreeInfo now physically live in src/shared/types.ts
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
@@ -43,7 +43,7 @@ function runGit(cwd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const child = spawnChild("git", ["-C", cwd, ...args], {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });

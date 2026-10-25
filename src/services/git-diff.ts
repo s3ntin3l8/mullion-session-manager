@@ -1,6 +1,6 @@
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import path from "node:path";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isGitRepo } from "./git-status.js";
 // GitDiffStats now physically lives in src/shared/types.ts (hand-mirrored
 // 1:1 on the frontend — see frontend/src/api.ts's own re-export).
@@ -47,7 +47,7 @@ function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null
     const args = baseRef
       ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--numstat"]
       : ["-C", cwd, "diff", "HEAD", "--numstat"];
-    const child = spawnChild("git", args, {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });
@@ -131,7 +131,7 @@ export function getDefaultBaseRef(cwd: string): string | null {
   if (!isGitRepo(cwd)) return null;
 
   const tryRef = (ref: string): string | null => {
-    const result = spawnSync("git", ["-C", cwd, "rev-parse", "--verify", ref], {
+    const result = spawnSync("git", [...GIT_NO_AUTO_GC, "-C", cwd, "rev-parse", "--verify", ref], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });
@@ -140,10 +140,14 @@ export function getDefaultBaseRef(cwd: string): string | null {
 
   // Step 1: symbolic-ref gives us the authoritative default (e.g.,
   // "refs/remotes/origin/main" → "origin/main" after stripping prefix).
-  const sym = spawnSync("git", ["-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"], {
-    stdio: ["ignore", "pipe", "ignore"],
-    env: gitEnv(),
-  });
+  const sym = spawnSync(
+    "git",
+    [...GIT_NO_AUTO_GC, "-C", cwd, "symbolic-ref", "refs/remotes/origin/HEAD"],
+    {
+      stdio: ["ignore", "pipe", "ignore"],
+      env: gitEnv(),
+    },
+  );
   if (sym.status === 0 && sym.stdout) {
     const match = sym.stdout.toString("utf8").match(/^refs\/remotes\/(.+)$/m);
     if (match) return match[1];
@@ -228,7 +232,7 @@ function runDiffProcess(args: string[]): Promise<{ out: string | null; code: num
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
-    const child = spawnChild("git", args, {
+    const child = spawnChild("git", [...GIT_NO_AUTO_GC, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
     });

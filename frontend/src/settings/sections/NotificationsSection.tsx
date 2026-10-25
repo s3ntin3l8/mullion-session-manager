@@ -226,6 +226,7 @@ export function NotificationsSection() {
                       </div>
                       <Toggle
                         size="small"
+                        ariaLabel={`${pres.label}: notify`}
                         testId={`notif-matrix-${status}-notify`}
                         on={matrix.notify}
                         onChange={(v) =>
@@ -240,6 +241,7 @@ export function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        ariaLabel={`${pres.label}: sound`}
                         testId={`notif-matrix-${status}-sound`}
                         on={matrix.sound}
                         onChange={(v) =>
@@ -254,6 +256,7 @@ export function NotificationsSection() {
                       />
                       <Toggle
                         size="small"
+                        ariaLabel={`${pres.label}: focus the window`}
                         testId={`notif-matrix-${status}-autoFocus`}
                         on={matrix.autoFocus}
                         onChange={(v) =>

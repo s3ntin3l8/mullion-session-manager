@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { GIT_ENV_KEYS_TO_STRIP } from "../../src/services/git-env.js";
+import {
+  GIT_CONFIG_COUNT_KEY,
+  GIT_ENV_KEYS_TO_STRIP,
+  GIT_NO_AUTO_GC,
+} from "../../src/services/git-env.js";
 // @ts-expect-error -- plain-JS script module, no type declarations
 import * as scriptEnv from "../../scripts/git-env.mjs";
 import { execFileSync } from "node:child_process";
@@ -19,6 +23,25 @@ import {
 describe("scripts/git-env.mjs", () => {
   it("strips exactly the keys src/services/git-env.ts does", () => {
     expect([...scriptEnv.GIT_ENV_KEYS_TO_STRIP].sort()).toEqual([...GIT_ENV_KEYS_TO_STRIP].sort());
+  });
+
+  // Issue #1851 — the gc.auto override and the config-carrier key are part of
+  // the same contract, so the twin has to carry them too.
+  it("carries the same gc.auto override and config-carrier key", () => {
+    expect(scriptEnv.GIT_NO_AUTO_GC).toEqual([...GIT_NO_AUTO_GC]);
+    expect(scriptEnv.GIT_CONFIG_COUNT_KEY).toBe(GIT_CONFIG_COUNT_KEY);
+  });
+
+  it("removes the config-carrier key from the ambient env", () => {
+    const saved = process.env[GIT_CONFIG_COUNT_KEY];
+    process.env[GIT_CONFIG_COUNT_KEY] = "3";
+    try {
+      expect(scriptEnv.gitEnv()[GIT_CONFIG_COUNT_KEY]).toBeUndefined();
+      expect(gitEnv()[GIT_CONFIG_COUNT_KEY]).toBeUndefined();
+    } finally {
+      if (saved === undefined) delete process.env[GIT_CONFIG_COUNT_KEY];
+      else process.env[GIT_CONFIG_COUNT_KEY] = saved;
+    }
   });
 
   it("removes every key from the ambient env and pins LC_ALL=C", () => {

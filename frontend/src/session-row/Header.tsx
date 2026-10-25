@@ -227,6 +227,8 @@ export function Header({
                 label: "Promote to worktree…",
                 icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
                 onClick: onPromote,
+                // Opens the promote dialog, which traps focus itself.
+                opensOverlay: true,
               } as const,
               {
                 key: "mute",

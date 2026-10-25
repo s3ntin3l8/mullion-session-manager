@@ -7,6 +7,7 @@ import { usePolling } from "./hooks/usePolling.js";
 import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { describeError } from "./lib/describeError.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -209,8 +210,19 @@ export function BrowserPanel({
       .then((urls: ProjectUrl[]) => {
         if (!cancelled) setFavoriteUrls(urls);
       })
-      .catch(() => {
-        console.warn("[BrowserPanel] Failed to fetch favorites");
+      .catch((err) => {
+        // This used to be console-only, and the effect of that was that a
+        // failed fetch looked exactly like "you have no favorites" — the
+        // dropdown button simply never renders, with nothing to say why
+        // (audit finding 30). The panel itself still works, so this is not
+        // an inline panel error; it is a transient background failure, and
+        // the app-wide toast is the surface for exactly that.
+        console.warn("[BrowserPanel] Failed to fetch favorites", err);
+        if (!cancelled) {
+          useDashboardStore
+            .getState()
+            .reportError("Could not load your favorites.", describeError(err));
+        }
       });
     return () => {
       cancelled = true;

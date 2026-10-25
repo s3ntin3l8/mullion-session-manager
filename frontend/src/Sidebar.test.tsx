@@ -27,6 +27,10 @@ let showTaskSessions: boolean;
 let tasks: Task[];
 let viewMode: string;
 let gitStatuses: Record<number, GitStatus | null>;
+// The project list's three states — still loading, loaded-and-empty, and
+// failed (audit finding 14).
+let projectsLoaded: boolean;
+let projectsError: string | null;
 const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
@@ -45,6 +49,9 @@ const subscribeToGitHubProject = vi.fn();
 const unsubscribeFromGitHubProject = vi.fn();
 const setHierarchicalView = vi.fn();
 const setViewMode = vi.fn();
+// The app-wide failure channel (store/slices/toasts.ts) — the sidebar
+// reports a failed rename through it.
+const reportError = vi.fn();
 
 function storeState() {
   return {
@@ -86,6 +93,9 @@ function storeState() {
     unsubscribeFromGitHubProject,
     mutedSessionIds: [],
     toggleSessionMute: vi.fn(),
+    projectsLoaded,
+    projectsError,
+    reportError,
   };
 }
 
@@ -225,6 +235,11 @@ beforeEach(() => {
   showTaskSessions = false;
   viewMode = "list";
   gitStatuses = {};
+  projectsLoaded = true;
+  projectsError = null;
+  reportError.mockClear();
+  renameSession.mockReset();
+  renameSession.mockResolvedValue(undefined);
   setViewMode.mockClear();
   refreshGitStatuses.mockClear();
   refreshGitRefs.mockClear();
@@ -1170,5 +1185,107 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.queryByText("Projects")).toBeNull();
     expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+  });
+});
+
+// Audit finding 14 — the sidebar's empty project list used to render the
+// same "Welcome to Mullion" first-run state whether the list was still
+// loading or the fetch had FAILED, so a user with a working dashboard and
+// a flaky connection was told they had never added a project.
+describe("project list load state (audit finding 14)", () => {
+  it("shows the first-run state once the list has loaded and is empty", () => {
+    projects = [];
+    projectsLoaded = true;
+    projectsError = null;
+    renderSidebar();
+    expect(screen.getByText("Welcome to Mullion")).toBeInTheDocument();
+    expect(screen.queryByText(/Loading projects/)).toBeNull();
+    expect(screen.queryByText(/Could not load your projects/)).toBeNull();
+  });
+
+  it("does not claim the dashboard is empty while the list is still loading", () => {
+    projects = [];
+    projectsLoaded = false;
+    projectsError = null;
+    renderSidebar();
+    expect(screen.queryByText("Welcome to Mullion")).toBeNull();
+    expect(screen.getByText(/Loading projects/)).toBeInTheDocument();
+  });
+
+  it("says the list could not be loaded when the fetch failed", () => {
+    projects = [];
+    projectsLoaded = true;
+    projectsError = "the server said no";
+    renderSidebar();
+    expect(screen.getByText(/Could not load your projects/)).toBeInTheDocument();
+    expect(screen.getByText("the server said no")).toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Mullion")).toBeNull();
+  });
+
+  it("re-fetches the project list when the failure's Retry is clicked", async () => {
+    projects = [];
+    projectsLoaded = true;
+    projectsError = "the server said no";
+    renderSidebar();
+    await userEvent.click(screen.getByRole("button", { name: /Retry/ }));
+    expect(refreshProjects).toHaveBeenCalled();
+  });
+
+  // The list on screen is the last-known-good one, which is the right
+  // thing to keep — but the user has to be told it is stale.
+  it("marks a stale list when a refresh failed but projects are known", () => {
+    projects = [PROJECT];
+    projectsLoaded = true;
+    projectsError = "the server said no";
+    renderSidebar();
+    expect(screen.getByText(/Could not refresh projects/)).toBeInTheDocument();
+  });
+
+  it("does not mark a stale list when the refresh succeeded", () => {
+    projects = [PROJECT];
+    projectsLoaded = true;
+    projectsError = null;
+    renderSidebar();
+    expect(screen.queryByText(/Could not refresh projects/)).toBeNull();
+  });
+});
+
+// Audit finding 9 — the rename was optimistic with no rollback, and this
+// call site dropped the rejection, so a failed rename left the row
+// showing a name the server never accepted and told the user nothing.
+describe("failed rename (audit finding 9)", () => {
+  async function renameTo(newName: string) {
+    const user = userEvent.setup();
+    const { container } = renderSidebar();
+    const nameEl = container.querySelector(".session-name") as HTMLElement;
+    await user.dblClick(nameEl);
+    const input = container.querySelector(".session-rename-input") as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, newName);
+    await user.keyboard("{Enter}");
+  }
+
+  it("reports the failure to the user", async () => {
+    sessions = [makeSession({ id: 1, command: "claude code" })];
+    renameSession.mockRejectedValueOnce(new Error("the server said no"));
+    await renameTo("renamed");
+
+    await waitFor(() => {
+      expect(reportError).toHaveBeenCalledWith(
+        "Could not rename the session.",
+        expect.stringContaining("the server said no"),
+      );
+    });
+  });
+
+  it("reports nothing when the rename succeeds", async () => {
+    sessions = [makeSession({ id: 1, command: "claude code" })];
+    renameSession.mockResolvedValueOnce(undefined);
+    await renameTo("renamed");
+
+    await waitFor(() => {
+      expect(renameSession).toHaveBeenCalledWith(1, "renamed");
+    });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

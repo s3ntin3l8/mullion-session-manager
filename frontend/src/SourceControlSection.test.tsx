@@ -33,6 +33,7 @@ function makeProject(overrides: Partial<Project>): Project {
     cwd: "/home/x/demo",
     hostId: LOCAL_HOST_ID,
     placement: "pinned",
+    hostCwds: {},
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,
@@ -536,5 +537,73 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     });
     rerender(<SourceControlSection onOpenGit={vi.fn()} />);
     expect(screen.getByText("Source Control")).toBeTruthy();
+  });
+});
+
+// Audit finding 29 — the fetch's failure was console-only, while its
+// SIBLING right next to it — the pull — sets a visible error. So a failed
+// fetch was invisible and a failed pull was not.
+describe("failed fetch (audit finding 29)", () => {
+  it("shows the failure instead of swallowing it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitFetch).mockRejectedValue(new Error("the remote said no"));
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+    await user.click(screen.getByText(/Fetch/));
+
+    await waitFor(() => {
+      expect(screen.getByText(/the remote said no/)).toBeInTheDocument();
+    });
+  });
+
+  it("clears a previous failure when the next fetch succeeds", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitFetch).mockRejectedValueOnce(new Error("the remote said no"));
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+    await user.click(screen.getByText(/Fetch/));
+    await waitFor(() => {
+      expect(screen.getByText(/the remote said no/)).toBeInTheDocument();
+    });
+
+    vi.mocked(api.postProjectGitFetch).mockResolvedValue({ success: true });
+    await user.click(screen.getByText(/Fetch/));
+    await waitFor(() => {
+      expect(screen.queryByText(/the remote said no/)).not.toBeInTheDocument();
+    });
+  });
+
+  // The failure must be ANNOUNCED, not just drawn. The same class of
+  // failure goes through ErrorText (role="alert") everywhere else in the
+  // app — a bare <div> is silent to a screen reader, so the user only
+  // finds out if they happen to be looking at that panel.
+  it("announces the failure to assistive technology", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.postProjectGitFetch).mockRejectedValue(new Error("the remote said no"));
+    useDashboardStore.setState({
+      projects: [PROJECT_A],
+      sessions: [],
+      activePanelId: null,
+      gitStatuses: { [PROJECT_A.id]: statusWith({}) },
+    });
+    render(<SourceControlSection onOpenGit={vi.fn()} />);
+    await user.click(screen.getByText("Source Control"));
+    await user.click(screen.getByText(/Fetch/));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("the remote said no");
+    });
   });
 });

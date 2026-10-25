@@ -4,7 +4,19 @@ import { render, screen } from "@testing-library/react";
 import { TerminalToasts } from "./TerminalToasts.js";
 
 describe("TerminalToasts", () => {
-  it("renders nothing when idle, not copied, and not too small", () => {
+  // The component renders a permanent live region (the toasts come and go
+  // INSIDE it — a live region only announces content that changes inside
+  // it, so a region inserted together with its content is not reliably
+  // announced). So "nothing to show" means "no toast element", not "no
+  // element at all".
+  const noToasts = (container: HTMLElement) =>
+    expect(
+      container.querySelector(
+        ".terminal-copy-indicator, .terminal-upload-indicator, .terminal-too-small-indicator",
+      ),
+    ).toBeNull();
+
+  it("renders no toast when idle, not copied, and not too small", () => {
     const { container } = render(
       <TerminalToasts
         copied={false}
@@ -15,7 +27,7 @@ describe("TerminalToasts", () => {
         paneTooSmall={false}
       />,
     );
-    expect(container).toBeEmptyDOMElement();
+    noToasts(container);
   });
 
   it("renders the copy toast when copied", () => {
@@ -167,6 +179,6 @@ describe("TerminalToasts", () => {
         voiceError={null}
       />,
     );
-    expect(container).toBeEmptyDOMElement();
+    noToasts(container);
   });
 });

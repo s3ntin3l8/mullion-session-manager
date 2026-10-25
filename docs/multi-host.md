@@ -168,20 +168,46 @@ moved. Automatic placement ([#1723](https://github.com/s3ntin3l8/mullion-session
   choice is recorded on the session row (`sessions.hostId`), so where a
   session ended up is visible afterwards rather than being re-derived.
 
-  **This mode is not in effect yet.** The policy and the opt-in are in
-  place, but nothing calls them at spawn time — that is
-  [#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724).
-  Until then a session still runs on its project's host whatever the mode
-  says, and the decision and its reason live in the server log rather than
-  in an API response.
+  **This mode is in effect** (roadmap 8.10,
+  [#1724](https://github.com/s3ntin3l8/mullion-session-manager/issues/1724)):
+  every session created for an `auto` project is placed when it is created,
+  and the decision and its reason are recorded on the session row
+  (`sessions.hostId`, `sessions.placementReason`), so where a session ended
+  up — and why — can be read back afterwards.
 
 Set it with the project API — `placement: "auto"` on `POST /api/projects`, or
 on `PATCH /api/projects/:id` to switch a project in or out.
 
 **What makes a host eligible.** It has to be _online_ per the heartbeat, not
-_drained_, and it has to have _reported a capacity_ (the load, cores and
-memory the fleet reads in `GET /api/hosts`). A host that has never reported
-a capacity is not a failure — it is simply not a candidate.
+_drained_, it has to have _reported a capacity_ (the load, cores and
+memory the fleet reads in `GET /api/hosts`), and it has to have **the
+project** — see below. A host that has never reported a capacity is not a
+failure — it is simply not a candidate.
+
+**A host has to have the project.** A session runs in a directory, so a host
+that does not have the project cannot host a session for it: the checkout
+would have to be materialized there first, which is a different feature. So
+each project records where it lives on the hosts it may be placed on:
+
+```json
+{ "mgmt": "/srv/checkouts/my-project" }
+```
+
+That map is `hostCwds` on the project (`POST`/`PATCH /api/projects`). The
+project's **own** host is not in it — `projects.cwd` _is_ its path there, and
+`projects.hostId` is its host. A host with no entry in the map does not have
+the project, so it is never a candidate and the session stays where it
+would have been.
+
+The worktree follows the session: it is cut from the project root **on the
+host the session runs on**, so the agent's working directory always exists
+where the agent is. The repo-level git operations — the base ref the branch
+is cut from — still happen on the project's own host, because that is where
+the repository lives.
+
+A task's sessions share one host. The worker decides it (the placement
+decides), and the reviewer and the rebase worker join it, because they read
+the worker's worktree.
 
 **How the choice is made.**
 
@@ -201,13 +227,18 @@ a capacity is not a failure — it is simply not a candidate.
 **Placement never fails a spawn.** If no host is eligible, the project's own
 host is used and the session starts anyway — a placement is an optimization,
 never a gate. Every decision records why it was made (_"least loaded:
-mac-mini at 1.2 load on 12 cores (0.10 per core)"_), in the server log, so
-it can be explained rather than guessed at.
+mac-mini at 1.2 load on 12 cores (0.10 per core)"_), on the session row
+and in the server log, so it can be explained rather than guessed at.
 
-The drain flag the policy consults (a host that is parked and takes no new
-work) arrives with
-[#1725](https://github.com/s3ntin3l8/mullion-session-manager/issues/1725);
-until then no host is ever drained.
+**Parking a host.** A host can be _parked_: it takes no new work, so the
+placement policy stops choosing it. Parking is a **flag, not an action** —
+no session is killed, no worktree removed, no agent contacted, and a parked
+host stays perfectly usable for **manual** placement (a project still pinned
+to it, or a session you start there yourself). It is a column, so the
+decision survives a primary restart.
+
+Park one from **Settings → Hosts** (the row's kebab menu), or over the
+API: `PATCH /api/hosts/:id` with `{"drained": true}`.
 
 ### Seeing it in the UI
 
@@ -453,6 +484,19 @@ Docker detection are all cross-platform. The macOS **launchd** deployment —
 `deploy/launchd/com.mullion.primary.plist` — is the counterpart of the
 systemd unit, and `deploy/install.sh` picks it from `uname -s` and skips the
 systemd prerequisite checks on darwin.
+
+**Installing a Mac needs no clone.** The release tarball ships `deploy/`, so
+a Mac (like any host) can be installed straight from a published release:
+
+```sh
+curl -fsSL -o mullion-install.sh \
+  https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
+sh mullion-install.sh --role primary ~/opt/mullion
+```
+
+The bootstrap fetches the release, verifies its checksum, and runs the
+`deploy/install.sh` inside it — the same installer the clone path runs. See
+[`deploy/README.md`](../deploy/README.md)'s "Installing without a clone".
 
 **What is different.** A macOS primary's **local** sessions run under the
 darwin scope backend — the same detached `dtach` backend an agent's sessions

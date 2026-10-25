@@ -604,6 +604,48 @@ If you run inside containers, test scratchpads, or manage the systemd service in
 
 This installs the release package, node_modules, and `.env`, but skips writing `~/.config/systemd/user/` and invoking `systemctl`. On macOS the same flag skips writing `~/Library/LaunchAgents/` and invoking `launchctl`.
 
+## Installing without a clone (the bootstrap)
+
+The steps above need a checkout only because `install.sh` lives in one. The
+release tarball now ships `deploy/` as well, so you can install straight from
+a published release — no clone, no build toolchain:
+
+```sh
+curl -fsSL -o mullion-install.sh \
+  https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
+less mullion-install.sh          # it is a shell script — read it before running it
+sh mullion-install.sh --role agent ~/opt/mullion
+```
+
+`sh`, not `./mullion-install.sh`: a GitHub release asset is a plain file and
+loses its executable bit on download.
+
+What the bootstrap does — and, just as importantly, what it does not do:
+
+- It resolves the **latest published release**, downloads the tarball and its
+  `.sha256`, and **verifies the checksum before extracting anything**. A
+  mismatch aborts the run with nothing installed.
+- It extracts the tarball and runs the `deploy/install.sh` that is **inside
+  that release**. There is one installer, versioned with the code it
+  installs — the bootstrap only decides _which_ release to install.
+- It forwards every argument verbatim, so `--role`, the install root and the
+  optional `owner/repo` mean exactly what they mean to `install.sh`.
+- It installs nothing itself. The layout under the install root, the launchd
+  job (macOS) or the systemd unit (Linux), the `.env` and the update path
+  are all still `install.sh`'s, unchanged.
+
+Two things worth knowing:
+
+- The URL always serves the **newest** release's copy of the script, and the
+  script installs the **newest release at the time it runs**. A copy
+  downloaded today and run next month installs next month's release.
+- The bootstrap downloads the tarball once to verify it and `install.sh`
+  downloads it again into the install root (~9 MB in total). That is the
+  price of keeping `install.sh` free of a second code path.
+
+The clone path stays supported — it is the automation path (Ansible, config
+management) and the one the repo's own tests exercise.
+
 ## macOS: the launchd deployment (issue #1718 / roadmap 8.4)
 
 On macOS the app runs as a **launchd agent** instead of a `systemd --user`
@@ -614,6 +656,24 @@ platform:
 ./deploy/install.sh --role primary ~/opt/mullion      # primary
 ./deploy/install.sh --role agent   ~/opt/mullion      # agent
 ```
+
+From a published release, with no clone at all, use the bootstrap above
+(`sh mullion-install.sh --role agent ~/opt/mullion`) — it runs this same
+`install.sh`, out of the release tarball.
+
+**There is no `.pkg`, and there is not going to be one.** The install model is
+user-level on purpose: the job (`~/Library/LaunchAgents/…`, running as the
+logged-in user) and the CLI link (`~/.local/bin/mullion`) live under the user's
+own home, and the install root and the `.env` follow whatever root the operator
+passes (`~/opt/mullion` in the documented commands) — all of it owned by, and
+writable by, the logged-in user. A `.pkg` is a **system-wide, root-owned**
+install — it would move the job to `/Library/LaunchDaemons` (as root, or with
+`UserName=`), move the `.env` into a root-owned directory, and put the
+**updater** behind a privilege it does not have today, which is the one thing
+that has to keep working unattended. Mullion is deployed on a user-logged-in
+system, so the user-level model is the model, and the packaging follows it
+rather than the other way round. (Tracked and decided in
+[#1867](https://github.com/s3ntin3l8/mullion-session-manager/issues/1867).)
 
 What changes:
 

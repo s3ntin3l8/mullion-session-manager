@@ -82,7 +82,7 @@
 // stays unresolved, and git treats the bare lease as an ordinary push in
 // that case (verified) — no separate no-lease fallback needed for it.
 import { spawn as spawnChild } from "node:child_process";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 
 // 120s, not 30s: sized for a real push over a slow link now that
 // `--no-verify` means the timeout is no longer also budget for an arbitrary
@@ -140,7 +140,7 @@ function runGitCommand(
 
     const child = spawnChild(
       "git",
-      ["-C", cwd, "-c", `http.extraHeader=${headerValue}`, ...args],
+      [...GIT_NO_AUTO_GC, "-C", cwd, "-c", `http.extraHeader=${headerValue}`, ...args],
       // `detached: true` puts `child` in its own process group so the
       // timeout handler below can kill the whole group, not just the `git`
       // process itself — a pre-push hook's own children (e.g. `go test`,

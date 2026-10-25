@@ -45,6 +45,7 @@ import type {
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
+import type { CloneHealth } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
 import type {
@@ -201,6 +202,16 @@ const GIT_BASE_REF_REQUEST_TIMEOUT_MS = 60_000;
 const GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS = 20_000;
 /** git-status.ts's GIT_TIMEOUT_MS is 5s (one `git status`). */
 const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
+
+// Issue #1851 — the clone health check runs `git fsck --connectivity-only` on
+// the agent's own filesystem, and git-doctor.ts's per-call budget for it is
+// 30s. The default REQUEST_TIMEOUT_MS's 5s would abandon the request while
+// the agent is still checking, and the caller would report the host as
+// unreachable — for a host that is perfectly alive, doing a slow but
+// perfectly normal job. 2x the agent-side budget plus round-trip headroom,
+// following the same "real, non-error delay this proxy must not preempt"
+// reasoning as the other git constants above.
+const GIT_HEALTH_REQUEST_TIMEOUT_MS = 75_000;
 
 // Issue #345 — a dock-preview worktree's checkout/force-remove/sync
 // (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
@@ -1000,6 +1011,19 @@ export class RemoteHostClient {
    * from a host-reachability 5xx. */
   resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
     return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
+  }
+
+  /** Issue #1851 — the READ-ONLY clone health check on this agent's
+   * filesystem. Returns the doctor's CloneHealth shape.
+   *
+   * Its own timeout: the agent-side check runs `git fsck`, which has a 30s
+   * budget of its own — see GIT_HEALTH_REQUEST_TIMEOUT_MS above. */
+  resolveGitHealth(cwd: string): Promise<CloneHealth> {
+    return this.request(
+      `/internal/git-health?cwd=${encodeURIComponent(cwd)}`,
+      undefined,
+      GIT_HEALTH_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).

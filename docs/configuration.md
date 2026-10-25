@@ -42,6 +42,27 @@ rc file. If an rc file misbehaves without a TTY, set `MULLION_RESOLVE_INTERACTIV
 in the service environment to skip this; anything on `PATH` via `~/.zshenv` or
 `~/.profile` is always picked up regardless.
 
+## Git in your projects
+
+Mullion fetches in your project repositories — the background auto-fetch sweep
+(every `gitAutoFetchIntervalSeconds`, 300 seconds by default, in every project
+whose auto-fetch is on), the **Fetch** and **Pull** buttons, and the fetch
+before a push. Both of those settings live in the **Settings → Projects**
+panel rather than in the environment, so they are not in the table below:
+
+| Setting                       | Default | Description                                                                                                                              |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `gitAutoFetchIntervalSeconds` | `300`   | how often the background auto-fetch runs; `0` disables it everywhere, and the per-project auto-fetch toggle overrides it for one project |
+| `autoFetch` (per project)     | inherit | `true`/`false` override the global interval for one project; `null` (the default) inherits it                                            |
+
+A fetch also asks git whether it should tidy up the repository in the
+background, and that background job can interfere with a write happening at the
+same moment. Mullion answers "no" to it for its own commands, and never writes
+to your repository's settings — see
+[`git-panel.md`](git-panel.md#the-background-tidy-up-git-does-on-its-own) for
+what that covers, what it does not, and the one command to run if you want the
+tidy-up off in a repository you share with Mullion.
+
 ## Database and sessions
 
 | Variable                        | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

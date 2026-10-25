@@ -23,7 +23,7 @@ import { createSessionRecord } from "./session-lifecycle.js";
 // cleanupPreviewWorktree is a no-op here regardless — a task worker session
 // is never registered in the preview-worktree map — so only this one matters.
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveSessionHostId } from "./session-live-info.js";
+import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -153,6 +153,11 @@ export async function reseedTaskIfSessionExited(
     // tasks #66 / #67) if the brainstorming skill gates on a clarifying
     // question the worker can't answer.
     taskId: task.id,
+    // Issue #1724 — the re-seed reuses the task's EXISTING worktree
+    // (`cwd: task.worktreePath`), which lives on the host the worker was
+    // placed on, so the re-seed joins that host.
+    unattended: true,
+    hostId: resolveTaskWorkerHost(app, task),
   });
   if (!result.ok) {
     app.log.warn(
@@ -167,9 +172,12 @@ export async function reseedTaskIfSessionExited(
   }
   // Same version-skew guard as task-claim.ts's own — see
   // resolveSeedDelivered's doc comment.
+  // Issue #1724 — the re-seed runs on the host that holds the task's
+  // worktree, so that is the host whose version skew matters here.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const seedDelivered = resolveSeedDelivered(
     seedCapable,
-    project.hostId,
+    workerHostId,
     result.initialPromptApplied,
   );
   if (!seedDelivered) {
@@ -178,7 +186,7 @@ export async function reseedTaskIfSessionExited(
         taskId: task.id,
         newSessionId: result.row.id,
         command: task.agentCommand,
-        hostId: project.hostId,
+        hostId: workerHostId,
         seedCapable,
       },
       seedCapable

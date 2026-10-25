@@ -12,7 +12,7 @@ import {
   refreshDefaultBranchCi,
   setRepoPRsStatus,
 } from "./github.js";
-import { gitEnv } from "./git-env.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { ActivityTracker } from "./github-activity-tracker.js";
 import { enrichPrsWithReviewState } from "./github-pr-reviews.js";
 import { annotateRelayReviewState } from "./relay-review-state.js";
@@ -34,11 +34,15 @@ const execFileAsync = promisify(execFile);
 
 async function checkoutBranch(cwd: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", cwd, "symbolic-ref", "--short", "HEAD"], {
-      timeout: 3_000,
-      // git honors GIT_DIR/GIT_WORK_TREE before -C, so scrub the ambient env.
-      env: gitEnv(),
-    });
+    const { stdout } = await execFileAsync(
+      "git",
+      [...GIT_NO_AUTO_GC, "-C", cwd, "symbolic-ref", "--short", "HEAD"],
+      {
+        timeout: 3_000,
+        // git honors GIT_DIR/GIT_WORK_TREE before -C, so scrub the ambient env.
+        env: gitEnv(),
+      },
+    );
     return stdout.trim() || null;
   } catch {
     return null;

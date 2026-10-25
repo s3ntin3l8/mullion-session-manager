@@ -499,8 +499,9 @@ export interface AppSettings {
      * difference here means the two entry points stop deduplicating against
      * each other. The same login decides whether a review "landed" in the
      * relay's status (the pill and `review status`), so another bot's review
-     * of the head does not show as the relay's. Empty = any bot's review
-     * counts (the old rule).
+     * of the head does not show as the relay's. It decides the same for the
+     * triage reply (`triage status`): only this bot's issue comment counts.
+     * Empty = any bot's review or comment counts (the old rule).
      */
     reviewerBotLogin: string;
   };

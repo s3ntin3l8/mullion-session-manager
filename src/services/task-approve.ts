@@ -7,6 +7,8 @@
 // HTTP-status mapper over this function's own discriminated-union outcome;
 // see routes/tasks.ts's approve handler for that mapping.
 import type { FastifyInstance } from "fastify";
+import { resolveTaskWorkerHost } from "./session-live-info.js";
+import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 import { and, eq } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
 import { promoteTaskToPR } from "./task-promote.js";
@@ -36,12 +38,37 @@ type ProjectRow = typeof projects.$inferSelect;
 // structurally, so nothing else changes.
 export function cleanupTaskWorktree(
   app: FastifyInstance,
-  task: { worktreePath: string | null },
-  project: { id?: number; cwd: string; hostId: string },
+  task: { worktreePath: string | null; sessionId?: number | null; projectId?: number },
+  project: { id?: number; cwd: string; hostId: string; hostCwds?: string | null },
 ): void {
   if (!task.worktreePath) return;
-  void resolveBackend(app, project.hostId)
-    .removeWorktreeIfClean(task.worktreePath, project.cwd)
+  // Issue #1724 — the worktree lives on the host its worker session was
+  // PLACED on, which is not necessarily the project's own host. The
+  // project's host is the fallback for a task whose worker session is gone
+  // — and for every task from before placement existed.
+  const hostId =
+    task.sessionId !== undefined && task.sessionId !== null && task.projectId !== undefined
+      ? resolveTaskWorkerHost(
+          app,
+          { sessionId: task.sessionId, projectId: task.projectId },
+          project,
+        )
+      : project.hostId;
+  // The parent directory the worktree sits under, ON THAT HOST. Null when
+  // the project is not mapped there — in which case that host cannot be
+  // holding the worktree, so there is nothing to remove. The project's own
+  // root is NOT a stand-in here: it is a path that host does not have, and
+  // removing against it fails silently and leaks the worktree.
+  const cwdOnHost = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
+  if (cwdOnHost === null) {
+    app.log.warn(
+      { projectId: project.id, hostId },
+      "task cleanup: no path for this project on that host — the worktree there cannot be removed",
+    );
+    return;
+  }
+  void resolveBackend(app, hostId)
+    .removeWorktreeIfClean(task.worktreePath, cwdOnHost)
     .catch((err) => {
       app.log.warn(
         { err, worktreePath: task.worktreePath, projectId: project.id },
@@ -122,7 +149,7 @@ export async function approveTask(
   project: ProjectRow,
   via: "approve" | "auto-approve",
 ): Promise<ApproveOutcome> {
-  const promotion = await promoteTaskToPR(app, task, project);
+  const promotion = await promoteTaskToPR(app, task, project, resolveTaskWorkerHost(app, task));
   if (!promotion.ok) return promotion;
 
   const [updated] = app.db

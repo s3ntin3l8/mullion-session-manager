@@ -89,6 +89,9 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     cwd: "/home/x/demo",
     hostId: "local",
     placement: "pinned",
+    // Issue #1724 — no per-host paths by default: the project lives on its
+    // own host and nowhere else.
+    hostCwds: {},
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,
@@ -195,6 +198,8 @@ export function makeHost(overrides: Partial<Host> = {}): Host {
     health: "pending",
     lastSeenAt: null,
     lastCheckedAt: null,
+    // Issue #1725 — the drain flag: every host carries it.
+    drained: false,
     ...overrides,
   };
 }

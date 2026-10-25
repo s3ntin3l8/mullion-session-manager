@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
-import { FolderIcon, CloseIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
+import { FolderIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
 import type { Host, Launcher, PlacementMode, PlacementPreview } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
+import { Modal } from "./ui/Modal.js";
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -393,385 +394,19 @@ export function CreateProjectModal({
   };
 
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
-      <div className="create-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="create-modal-header">
-          <span className="create-modal-icon">
-            <FolderIcon size={16} />
-          </span>
-          <span className="create-modal-header-text">
-            <span className="create-modal-title">{isEdit ? "Edit project" : "Add project"}</span>
-            <span className="create-modal-subtitle">
-              {isEdit
-                ? "Update this project's name or path."
-                : "Point Mullion at a local repository."}
-            </span>
-          </span>
-          <button className="create-modal-close" onClick={onClose}>
-            <CloseIcon size={15} />
-          </button>
-        </div>
-
-        <div className="create-modal-body">
-          {/* Issue #1726 / roadmap 8.12 — the placement control.
-              "Pinned" is today's behaviour exactly (every session runs on
-              the project's own host); "automatic" opts the project into the
-              placement policy. The control is shown in both modes — a
-              project may be switched to automatic before a second host
-              exists, and the preview below then explains the fallback
-              honestly instead of hiding the option. */}
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Where sessions run</span>
-            <span
-              className="create-modal-input-row"
-              role="radiogroup"
-              aria-label="Where sessions run"
-            >
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="radio"
-                  name="project-placement"
-                  checked={placement === "pinned"}
-                  onChange={() => setPlacement("pinned")}
-                />
-                On a chosen host
-              </label>
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="radio"
-                  name="project-placement"
-                  checked={placement === "auto"}
-                  onChange={() => setPlacement("auto")}
-                />
-                Automatic
-              </label>
-            </span>
-            <span className="create-modal-field-hint">
-              {placement === "auto"
-                ? "Mullion picks the least loaded eligible host for each new session."
-                : "Every session under this project runs on the project's own host."}
-            </span>
-            {placement === "auto" && (
-              <span className="create-modal-field-hint">
-                {previewError ? (
-                  <>Couldn't read the placement preview — {previewError}.</>
-                ) : preview ? (
-                  <>
-                    Right now a new session would land on{" "}
-                    <strong>{previewHostName(preview.hostId)}</strong> — {preview.reason}.
-                  </>
-                ) : (
-                  "Reading where a new session would land…"
-                )}
-              </span>
-            )}
-          </label>
-
-          {!isEdit && remoteHosts.length > 0 && placement === "pinned" && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Host</span>
-              <span className="create-modal-input-row">
-                <HostsIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-                <Dropdown
-                  value={hostId}
-                  onChange={setHostId}
-                  options={[
-                    { value: LOCAL_HOST_ID, label: "This machine" },
-                    ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
-                  ]}
-                />
-              </span>
-              <span className="create-modal-field-hint">
-                The path below is resolved on the selected host, not this browser's machine.
-              </span>
-            </label>
-          )}
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Repository path</span>
-            <span className="create-modal-input-row">
-              <FolderIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-              <input
-                ref={pathInputRef}
-                className="mono"
-                value={path}
-                onChange={(e) => handlePathInput(e.target.value)}
-                placeholder="~/code/my-project"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void confirm();
-                }}
-              />
-              <button type="button" className="create-modal-browse-btn" onClick={browse}>
-                Browse…
-              </button>
-            </span>
-          </label>
-
-          {error && (
-            <div className="create-modal-dir-confirm">
-              <span className="create-modal-field-hint error">{error.message}</span>
-              {error.code === CREATE_DIR_CODE && (
-                <>
-                  <label className="create-modal-dir-confirm-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={gitInit}
-                      onChange={(e) => setGitInit(e.target.checked)}
-                    />
-                    Initialize a git repository
-                  </label>
-                  <button
-                    type="button"
-                    className="create-modal-dir-confirm-btn"
-                    disabled={submitting}
-                    onClick={() => void confirm({ createDir: true })}
-                  >
-                    Create folder and add project
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-
-          {gitInitFailed && (
-            <span className="create-modal-field-hint error">
-              {isEdit ? "Project updated" : "Project added"}, but `git init` failed — you can
-              initialize it manually later.
-            </span>
-          )}
-
-          <label className="create-modal-field">
-            <span className="create-modal-field-label">Display name</span>
-            <span className="create-modal-input-row">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={namePlaceholder}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void confirm();
-                }}
-              />
-            </span>
-            <span className="create-modal-field-hint">
-              Defaults to the folder name if left blank.
-            </span>
-          </label>
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Dev server</span>
-              <span className="create-modal-input-row">
-                <GlobeIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-                <input
-                  className="mono"
-                  value={devServerUrl}
-                  onChange={(e) => setDevServerUrl(e.target.value)}
-                  placeholder="5173"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void confirm();
-                  }}
-                />
-              </span>
-              <span className="create-modal-field-hint">
-                Port or full URL — powers the browser preview pane. Leave blank to clear.
-              </span>
-              {/* Derived at render time, not stored in state — a pure
-                  comparison of two already-tracked values needs no effect,
-                  and re-deriving on every render is what keeps this in sync
-                  if `detectedDevServerPort` changes while the modal's open
-                  (e.g. the dock session finishes starting up) without ever
-                  touching `devServerUrl` itself. */}
-              {detectedDevServerPort !== null &&
-                detectedDevServerPort.trim() !== devServerUrl.trim() && (
-                  <button
-                    type="button"
-                    className="create-modal-detected-devserver"
-                    onClick={() => setDevServerUrl(detectedDevServerPort)}
-                  >
-                    Detected dev server on port {detectedDevServerPort} — use it?
-                  </button>
-                )}
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Default agent</span>
-              <span className="create-modal-input-row">
-                <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-                <Dropdown
-                  value={defaultAgent}
-                  onChange={setDefaultAgent}
-                  options={optionsWithCurrentValue(
-                    [{ value: UNSET_AGENT, label: "Use global default" }, ...agentOptions],
-                    defaultAgent,
-                  )}
-                />
-              </span>
-              <span className="create-modal-field-hint">
-                Which agent Phase 6 task claims spawn for this project, overriding the global
-                default.
-              </span>
-              {launchersLoadError && (
-                <span className="create-modal-field-hint error">
-                  Couldn't load this project's detected agents — only the currently configured value
-                  is shown.{" "}
-                  <button
-                    type="button"
-                    className="create-modal-detected-devserver"
-                    onClick={() => setLaunchersRetryToken((t) => t + 1)}
-                  >
-                    Retry
-                  </button>
-                </span>
-              )}
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Default review agent</span>
-              <span className="create-modal-input-row">
-                <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-                <Dropdown
-                  value={defaultReviewAgent}
-                  onChange={setDefaultReviewAgent}
-                  options={optionsWithCurrentValue(
-                    [
-                      {
-                        value: UNSET_AGENT,
-                        label: `Use global default (${globalDefaultReviewAgent})`,
-                      },
-                      ...agentOptions,
-                    ],
-                    defaultReviewAgent,
-                  )}
-                />
-              </span>
-              <span className="create-modal-field-hint">
-                Optional advisory agent that reviews a task's diff once its worker's turn ends.
-              </span>
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Merge on approve</span>
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="checkbox"
-                  checked={mergeOnApprove}
-                  onChange={(e) => setMergeOnApprove(e.target.checked)}
-                />
-                Merge a task's PR automatically once it's approved
-              </label>
-              <span className="create-modal-field-hint">
-                Approving a task requests a merge; it lands once GitHub's checks are green and the
-                branch is up to date. Off by default — approving still just opens the PR otherwise.
-              </span>
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Auto-approve</span>
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="checkbox"
-                  checked={autoApprove}
-                  onChange={(e) => setAutoApprove(e.target.checked)}
-                />
-                Approve a task automatically on a clean review and green CI
-              </label>
-              <span className="create-modal-field-hint">
-                Needs a review agent configured above — no review agent means no verdict, so a task
-                never auto-approves. Combined with merge on approve, a task can go from claimed to
-                merged with no human click.
-              </span>
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Max automatic rounds</span>
-              <input
-                type="number"
-                min={1}
-                placeholder="2 (install default)"
-                value={maxAutoReturnRounds}
-                onChange={(e) => setMaxAutoReturnRounds(e.target.value)}
-              />
-              <span className="create-modal-field-hint">
-                How many times a task may be sent back to its worker automatically — a
-                changes-requested review, a red required CI check, or an unresolved PR comment.
-                Blank uses the install default (currently 2).
-              </span>
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Conventional Commits PR titles</span>
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="checkbox"
-                  checked={conventionalCommitTitles}
-                  onChange={(e) => setConventionalCommitTitles(e.target.checked)}
-                />
-                Let the worker write the PR title
-              </label>
-              {/* Issue #1034 — manual re-check of the release-please
-                  auto-enable sweep. The sweep is one-shot, so a repo that
-                  adopts release-please AFTER first detection never gets
-                  re-probed automatically; this button forces a fresh probe
-                  via POST /api/projects/:id/release-please/recheck. Sits
-                  next to the checkbox (not as the field's own row), since
-                  it's an action on this project, not a property of it. */}
-              <button
-                type="button"
-                className="create-modal-browse-btn"
-                disabled={recheckInFlight}
-                onClick={() => void handleRecheck()}
-              >
-                {recheckInFlight ? "Re-checking…" : "Re-check now"}
-              </button>
-              {recheckError && (
-                <span className="create-modal-field-hint error">{recheckError}</span>
-              )}
-              <span className="create-modal-field-hint">
-                Task PRs are squash-merged, so the PR title becomes the commit message on main. Off:
-                the title is the GitHub issue title, verbatim — if that isn't prefixed feat:/fix:/…
-                , release-please skips it and cuts no release. On: the worker writes a "type(scope):
-                description" title for what it actually changed; an issue title that's already
-                conventional is kept either way. Mullion turns this on automatically for a repo it
-                detects using release-please — turning it off here sticks, even for that repo. Use
-                "Re-check now" after the repo adopts release-please to pick up the change without
-                waiting for a fresh install.
-              </span>
-            </label>
-          )}
-
-          {isEdit && (
-            <label className="create-modal-field">
-              <span className="create-modal-field-label">Auto-tag release</span>
-              <label className="create-modal-dir-confirm-checkbox">
-                <input
-                  type="checkbox"
-                  checked={autoTagRelease}
-                  onChange={(e) => setAutoTagRelease(e.target.checked)}
-                />
-                Trigger release-please automatically after a task's PR merges
-              </label>
-              <span className="create-modal-field-hint">
-                Off by default — an unattended release trigger is an explicit opt-in. Requires the
-                repo to have a release-please Actions workflow, AND "Merge on approve" above — a
-                task's PR merging is what arms this; with merge-on-approve off, nothing ever does.
-              </span>
-            </label>
-          )}
-        </div>
-
-        <div className="create-modal-footer">
+    <Modal
+      onClose={onClose}
+      icon={<FolderIcon size={16} />}
+      title={isEdit ? "Edit project" : "Add project"}
+      subtitle={
+        isEdit ? "Update this project's name or path." : "Point Mullion at a local repository."
+      }
+      // The repository path is the field the dialog exists to fill in, so
+      // it takes initial focus rather than the close button the focus trap
+      // would otherwise pick (it comes first in DOM order).
+      initialFocusRef={pathInputRef}
+      footer={
+        <>
           <span className="create-modal-footer-hint">
             {isEdit
               ? "Already-open sessions keep their current directory until restarted."
@@ -801,8 +436,356 @@ export function CreateProjectModal({
               </button>
             </>
           )}
+        </>
+      }
+    >
+      {/* Issue #1726 / roadmap 8.12 — the placement control.
+              "Pinned" is today's behaviour exactly (every session runs on
+              the project's own host); "automatic" opts the project into the
+              placement policy. The control is shown in both modes — a
+              project may be switched to automatic before a second host
+              exists, and the preview below then explains the fallback
+              honestly instead of hiding the option. */}
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Where sessions run</span>
+        <span className="create-modal-input-row" role="radiogroup" aria-label="Where sessions run">
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="radio"
+              name="project-placement"
+              checked={placement === "pinned"}
+              onChange={() => setPlacement("pinned")}
+            />
+            On a chosen host
+          </label>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="radio"
+              name="project-placement"
+              checked={placement === "auto"}
+              onChange={() => setPlacement("auto")}
+            />
+            Automatic
+          </label>
+        </span>
+        <span className="create-modal-field-hint">
+          {placement === "auto"
+            ? "Mullion picks the least loaded eligible host for each new session."
+            : "Every session under this project runs on the project's own host."}
+        </span>
+        {placement === "auto" && (
+          <span className="create-modal-field-hint">
+            {previewError ? (
+              <>Couldn't read the placement preview — {previewError}.</>
+            ) : preview ? (
+              <>
+                Right now a new session would land on{" "}
+                <strong>{previewHostName(preview.hostId)}</strong> — {preview.reason}.
+              </>
+            ) : (
+              "Reading where a new session would land…"
+            )}
+          </span>
+        )}
+      </label>
+
+      {!isEdit && remoteHosts.length > 0 && placement === "pinned" && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Host</span>
+          <span className="create-modal-input-row">
+            <HostsIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+            <Dropdown
+              value={hostId}
+              onChange={setHostId}
+              options={[
+                { value: LOCAL_HOST_ID, label: "This machine" },
+                ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
+              ]}
+            />
+          </span>
+          <span className="create-modal-field-hint">
+            The path below is resolved on the selected host, not this browser's machine.
+          </span>
+        </label>
+      )}
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Repository path</span>
+        <span className="create-modal-input-row">
+          <FolderIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+          <input
+            ref={pathInputRef}
+            className="mono"
+            value={path}
+            onChange={(e) => handlePathInput(e.target.value)}
+            placeholder="~/code/my-project"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirm();
+            }}
+          />
+          <button type="button" className="create-modal-browse-btn" onClick={browse}>
+            Browse…
+          </button>
+        </span>
+      </label>
+
+      {error && (
+        <div className="create-modal-dir-confirm">
+          <span className="create-modal-field-hint error">{error.message}</span>
+          {error.code === CREATE_DIR_CODE && (
+            <>
+              <label className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={gitInit}
+                  onChange={(e) => setGitInit(e.target.checked)}
+                />
+                Initialize a git repository
+              </label>
+              <button
+                type="button"
+                className="create-modal-dir-confirm-btn"
+                disabled={submitting}
+                onClick={() => void confirm({ createDir: true })}
+              >
+                Create folder and add project
+              </button>
+            </>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+
+      {gitInitFailed && (
+        <span className="create-modal-field-hint error">
+          {isEdit ? "Project updated" : "Project added"}, but `git init` failed — you can initialize
+          it manually later.
+        </span>
+      )}
+
+      <label className="create-modal-field">
+        <span className="create-modal-field-label">Display name</span>
+        <span className="create-modal-input-row">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={namePlaceholder}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void confirm();
+            }}
+          />
+        </span>
+        <span className="create-modal-field-hint">Defaults to the folder name if left blank.</span>
+      </label>
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Dev server</span>
+          <span className="create-modal-input-row">
+            <GlobeIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+            <input
+              className="mono"
+              value={devServerUrl}
+              onChange={(e) => setDevServerUrl(e.target.value)}
+              placeholder="5173"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void confirm();
+              }}
+            />
+          </span>
+          <span className="create-modal-field-hint">
+            Port or full URL — powers the browser preview pane. Leave blank to clear.
+          </span>
+          {/* Derived at render time, not stored in state — a pure
+                  comparison of two already-tracked values needs no effect,
+                  and re-deriving on every render is what keeps this in sync
+                  if `detectedDevServerPort` changes while the modal's open
+                  (e.g. the dock session finishes starting up) without ever
+                  touching `devServerUrl` itself. */}
+          {detectedDevServerPort !== null &&
+            detectedDevServerPort.trim() !== devServerUrl.trim() && (
+              <button
+                type="button"
+                className="create-modal-detected-devserver"
+                onClick={() => setDevServerUrl(detectedDevServerPort)}
+              >
+                Detected dev server on port {detectedDevServerPort} — use it?
+              </button>
+            )}
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Default agent</span>
+          <span className="create-modal-input-row">
+            <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+            <Dropdown
+              value={defaultAgent}
+              onChange={setDefaultAgent}
+              options={optionsWithCurrentValue(
+                [{ value: UNSET_AGENT, label: "Use global default" }, ...agentOptions],
+                defaultAgent,
+              )}
+            />
+          </span>
+          <span className="create-modal-field-hint">
+            Which agent Phase 6 task claims spawn for this project, overriding the global default.
+          </span>
+          {launchersLoadError && (
+            <span className="create-modal-field-hint error">
+              Couldn't load this project's detected agents — only the currently configured value is
+              shown.{" "}
+              <button
+                type="button"
+                className="create-modal-detected-devserver"
+                onClick={() => setLaunchersRetryToken((t) => t + 1)}
+              >
+                Retry
+              </button>
+            </span>
+          )}
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Default review agent</span>
+          <span className="create-modal-input-row">
+            <BotIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+            <Dropdown
+              value={defaultReviewAgent}
+              onChange={setDefaultReviewAgent}
+              options={optionsWithCurrentValue(
+                [
+                  {
+                    value: UNSET_AGENT,
+                    label: `Use global default (${globalDefaultReviewAgent})`,
+                  },
+                  ...agentOptions,
+                ],
+                defaultReviewAgent,
+              )}
+            />
+          </span>
+          <span className="create-modal-field-hint">
+            Optional advisory agent that reviews a task's diff once its worker's turn ends.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Merge on approve</span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={mergeOnApprove}
+              onChange={(e) => setMergeOnApprove(e.target.checked)}
+            />
+            Merge a task's PR automatically once it's approved
+          </label>
+          <span className="create-modal-field-hint">
+            Approving a task requests a merge; it lands once GitHub's checks are green and the
+            branch is up to date. Off by default — approving still just opens the PR otherwise.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Auto-approve</span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={autoApprove}
+              onChange={(e) => setAutoApprove(e.target.checked)}
+            />
+            Approve a task automatically on a clean review and green CI
+          </label>
+          <span className="create-modal-field-hint">
+            Needs a review agent configured above — no review agent means no verdict, so a task
+            never auto-approves. Combined with merge on approve, a task can go from claimed to
+            merged with no human click.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Max automatic rounds</span>
+          <input
+            type="number"
+            min={1}
+            placeholder="2 (install default)"
+            value={maxAutoReturnRounds}
+            onChange={(e) => setMaxAutoReturnRounds(e.target.value)}
+          />
+          <span className="create-modal-field-hint">
+            How many times a task may be sent back to its worker automatically — a changes-requested
+            review, a red required CI check, or an unresolved PR comment. Blank uses the install
+            default (currently 2).
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Conventional Commits PR titles</span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={conventionalCommitTitles}
+              onChange={(e) => setConventionalCommitTitles(e.target.checked)}
+            />
+            Let the worker write the PR title
+          </label>
+          {/* Issue #1034 — manual re-check of the release-please
+                  auto-enable sweep. The sweep is one-shot, so a repo that
+                  adopts release-please AFTER first detection never gets
+                  re-probed automatically; this button forces a fresh probe
+                  via POST /api/projects/:id/release-please/recheck. Sits
+                  next to the checkbox (not as the field's own row), since
+                  it's an action on this project, not a property of it. */}
+          <button
+            type="button"
+            className="create-modal-browse-btn"
+            disabled={recheckInFlight}
+            onClick={() => void handleRecheck()}
+          >
+            {recheckInFlight ? "Re-checking…" : "Re-check now"}
+          </button>
+          {recheckError && <span className="create-modal-field-hint error">{recheckError}</span>}
+          <span className="create-modal-field-hint">
+            Task PRs are squash-merged, so the PR title becomes the commit message on main. Off: the
+            title is the GitHub issue title, verbatim — if that isn't prefixed feat:/fix:/… ,
+            release-please skips it and cuts no release. On: the worker writes a "type(scope):
+            description" title for what it actually changed; an issue title that's already
+            conventional is kept either way. Mullion turns this on automatically for a repo it
+            detects using release-please — turning it off here sticks, even for that repo. Use
+            "Re-check now" after the repo adopts release-please to pick up the change without
+            waiting for a fresh install.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Auto-tag release</span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={autoTagRelease}
+              onChange={(e) => setAutoTagRelease(e.target.checked)}
+            />
+            Trigger release-please automatically after a task's PR merges
+          </label>
+          <span className="create-modal-field-hint">
+            Off by default — an unattended release trigger is an explicit opt-in. Requires the repo
+            to have a release-please Actions workflow, AND "Merge on approve" above — a task's PR
+            merging is what arms this; with merge-on-approve off, nothing ever does.
+          </span>
+        </label>
+      )}
+    </Modal>
   );
 }

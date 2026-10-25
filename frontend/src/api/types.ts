@@ -16,6 +16,7 @@ import type {
   GitStatus,
   GitPullReason,
   GitPullResult,
+  CloneHealth,
   ProjectReleaseStatus,
   ReleaseDetectionResult,
   ReleaseWorkflowInfo,
@@ -35,7 +36,7 @@ import type {
 } from "../../../src/shared/types.js";
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
-export type { GitPullReason, GitPullResult };
+export type { GitPullReason, GitPullResult, CloneHealth };
 export type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,
@@ -223,6 +224,13 @@ export interface Project {
   // The type itself is the shared one (src/shared/types.ts), so a mode
   // added on the backend cannot drift here.
   placement: PlacementMode;
+  // Issue #1724 / roadmap 8.10 — where this project lives on OTHER hosts, as
+  // `{ "<hostId>": "<absolute path>" }`. A host with no entry does not have the
+  // project, so it is never a placement candidate. Always an object here (the
+  // API speaks the shape it accepts — the column behind it holds JSON).
+  //
+  // NOT optional: the API always sends it, empty when there is no map.
+  hostCwds: Record<string, string>;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -359,6 +367,15 @@ export interface Host {
   // numbers were measured, so a stale reading can be shown as stale — the
   // UI work is #1726.
   capacity?: HostCapacity | null;
+  // Issue #1725 / roadmap 8.11 — whether this host is PARKED: it takes no
+  // new work (the placement policy stops choosing it), but nothing about
+  // it is torn down and it stays usable for manual placement.
+  //
+  // NOT optional: the column is notNull with a default, so every host
+  // carries it. Required here too — `drained?: boolean` would make
+  // `undefined` a THIRD state, and every reader (`!host.drained`)
+  // would silently read it as "not parked".
+  drained: boolean;
 }
 
 // Mirrors src/services/host-capacity.ts's HostCapacity 1:1 — issue #1721,
@@ -2163,7 +2180,8 @@ export interface AppSettings {
      * The GitHub login of the bot that posts the review. Only its landed
      * reviews set the delta base of the next round — the shared workflow
      * applies the same rule, and the two must agree or their idempotency
-     * keys diverge. Empty = any bot's review counts.
+     * keys diverge. It also decides which review, and which triage issue
+     * comment, shows as the relay's. Empty = any bot's counts.
      */
     reviewerBotLogin: string;
   };

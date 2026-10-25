@@ -6,7 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
-import { mockFetch } from "../../test/mockFetch.js";
+import { mockFetch, type RouteTable } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
 
 // Closes the gap Hermes flagged on PR #35 (issue #26, phase 4): "the
@@ -43,6 +43,8 @@ describe("Settings -> Hosts", () => {
         health: "pending",
         lastSeenAt: null,
         lastCheckedAt: null,
+        // Issue #1725 — the drain flag: every host carries it.
+        drained: false,
         hasProjects: true,
       },
     ];
@@ -59,7 +61,17 @@ describe("Settings -> Hosts", () => {
       },
     };
 
-    ({ fetchMock, unexpectedCalls } = mockFetch({
+    ({ fetchMock, unexpectedCalls } = mockFetch(baseRoutes()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The store is a module-level singleton — reset it so a previous
+    // test's DELETE doesn't leak into this one.
+    resetStore({ hosts: [] });
+  });
+
+  /** The fake backend's route table; a test can extend it. */
+  function baseRoutes(): RouteTable {
+    return {
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, hostsDb),
       "GET /api/projects": () => jsonResponse(200, []),
@@ -77,6 +89,14 @@ describe("Settings -> Hosts", () => {
         }
         hostsDb = hostsDb.filter((h) => h.id !== params.id);
         return jsonResponse(204);
+      },
+      // Issue #1725 — the drain flag (park / un-park).
+      "PATCH /api/hosts/:id": ({ params, init }) => {
+        const host = hostsDb.find((h) => h.id === params.id);
+        if (!host) return jsonResponse(404, { message: "not found" });
+        const body = init?.body ? (JSON.parse(init.body as string) as { drained?: boolean }) : {};
+        if (typeof body.drained === "boolean") host.drained = body.drained;
+        return jsonResponse(200, host);
       },
       "POST /api/hosts/:id/ping": () => jsonResponse(200, { online: false }),
       "GET /api/hosts/:id/config": ({ params }) =>
@@ -97,13 +117,8 @@ describe("Settings -> Hosts", () => {
         };
         return jsonResponse(202, { phase: "downloading", version: "0.2.20" });
       },
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    // The store is a module-level singleton — reset it so a previous
-    // test's DELETE doesn't leak into this one.
-    resetStore({ hosts: [] });
-  });
+    };
+  }
 
   afterEach(() => {
     expect(unexpectedCalls).toEqual([]);
@@ -155,6 +170,66 @@ describe("Settings -> Hosts", () => {
     const row = await screen.findByTestId("host-row-remote-1");
     expect(within(row).getByText(/load 1\.23/)).toBeInTheDocument();
     expect(within(row).getByText(/reading from 5 min ago/)).toBeInTheDocument();
+  });
+
+  // Issue #1725 / roadmap 8.11 — the drain switch. Parking is a flag, not
+  // an action, so the row keeps everything else; what changes is that the
+  // host stops being chosen for new work.
+  describe("the drain switch", () => {
+    it("shows a parked host as parked, and un-parks it from the kebab menu", async () => {
+      const user = userEvent.setup();
+      hostsDb[0].drained = true;
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await waitFor(() => expect(within(row).getByText("parked")).toBeInTheDocument());
+
+      await user.click(within(row).getByTitle("More…"));
+      await user.click(await screen.findByText("Unpark host"));
+
+      await waitFor(() => expect(hostsDb[0].drained).toBe(false));
+    });
+
+    it("parks an unparked host from the kebab menu", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await waitFor(() => expect(within(row).queryByText("parked")).not.toBeInTheDocument());
+
+      await user.click(within(row).getByTitle("More…"));
+      await user.click(await screen.findByText("Park host (take no new work)"));
+
+      await waitFor(() => expect(hostsDb[0].drained).toBe(true));
+    });
+
+    it("surfaces a failed park instead of leaving the row unchanged in silence", async () => {
+      // The KebabMenu calls onClick() with no error handling of its own, so
+      // a park that never reached the server would leave the user thinking
+      // it had worked.
+      const user = userEvent.setup();
+      const { fetchMock: failing } = mockFetch({
+        ...baseRoutes(),
+        "PATCH /api/hosts/:id": () => jsonResponse(503, { message: "host unreachable" }),
+      });
+      vi.stubGlobal("fetch", failing);
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await user.click(within(row).getByTitle("More…"));
+      await user.click(await screen.findByText("Park host (take no new work)"));
+
+      expect(await screen.findByText(/host unreachable/i)).toBeInTheDocument();
+    });
+
+    it("offers the switch on the primary's own row — parking it is how you drain it", async () => {
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      await screen.findByTestId("host-row-remote-1");
+      // The remote row's switch lives in its kebab menu (closed), so the
+      // only "Park" button on screen is the primary's own.
+      expect(screen.getByRole("button", { name: "Park" })).toBeInTheDocument();
+    });
   });
 
   it("prompts to cascade-delete when the host still owns projects, then removes it on confirm", async () => {
