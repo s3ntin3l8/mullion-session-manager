@@ -40,6 +40,15 @@ export function CreateHostModal({
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   const confirm = () => {
+    // Re-entry guard. `saving` is state, so it is still `false` inside
+    // this closure until React re-renders — but a second Enter press is a
+    // separate event, and React flushes between two events, so the second
+    // one does see `saving === true`. Without this, a double Enter
+    // registered the same host twice (audit finding 18).
+    //
+    // `CreateProjectModal.tsx` has the same guard on its own `submitting`
+    // flag, and the same shape.
+    if (saving) return;
     const trimmedName = name.trim();
     const trimmedBaseUrl = baseUrl.trim();
     if (!trimmedName || !trimmedBaseUrl) {
