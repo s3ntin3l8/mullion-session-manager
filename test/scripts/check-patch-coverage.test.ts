@@ -1,13 +1,17 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   cli,
   deletedFiles,
+  fallbackExecutableLines,
+  isNonExecutableLine,
   isSourceFile,
   evaluatePatchCoverage,
   loadCoverageReports,
+  nonExecutableLines,
   parseGitDiffHunks,
   resolveBaseRef,
   runPatchCoverageCheck,
@@ -216,6 +220,106 @@ diff --git a/docs/README.md b/docs/README.md
     // All lines in types.ts are imports/types/interfaces, so 0 executable lines
     expect(summary.totalExecutableLines).toBe(0);
     expect(summary.overallPercent).toBe(100);
+  });
+
+  // Issue #1899 — the fallback guessed "is this line executable?" from the
+  // line's OWN first characters, so the BODY of a multi-line type
+  // declaration counted as uncovered executable code, and so did the
+  // continuation lines of a multi-line import. A type-only module reported
+  // "0/6 uncovered" for six lines that hold no executable statement at all.
+  it("nonExecutableLines marks a multi-line type declaration's body, not just its first line", () => {
+    const source = [
+      "export interface Example {",
+      "  a: string;",
+      "  b: number;",
+      "}",
+      "",
+      "export const real = 1;",
+    ].join("\n");
+
+    const lines = nonExecutableLines(source, "src/example.ts");
+    expect([...lines].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    // The statement below it is executable, and must NOT be marked.
+    expect(lines.has(6)).toBe(false);
+  });
+
+  it("nonExecutableLines marks the continuation lines of a multi-line import", () => {
+    const source = [
+      "import type {",
+      "  Alpha,",
+      "  Beta,",
+      '} from "./somewhere.js";',
+      "",
+      "const real = 1;",
+    ].join("\n");
+
+    const lines = nonExecutableLines(source, "src/example.ts");
+    expect([...lines].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+    expect(lines.has(6)).toBe(false);
+  });
+
+  it("nonExecutableLines marks a type alias body and a type-only export", () => {
+    const source = [
+      "export type Alias = {",
+      "  c: boolean;",
+      "};",
+      "",
+      "export type { Alpha, Beta };",
+      "",
+      "const real = 1;",
+    ].join("\n");
+
+    const lines = nonExecutableLines(source, "src/example.ts");
+    expect([...lines].sort((a, b) => a - b)).toEqual([1, 2, 3, 5]);
+    expect(lines.has(7)).toBe(false);
+  });
+
+  it("nonExecutableLines marks a plain value import, and leaves a statement alone", () => {
+    const source = ["import { thing } from './thing.js';", "", "thing();"].join("\n");
+    const lines = nonExecutableLines(source, "src/example.ts");
+    expect([...lines].sort((a, b) => a - b)).toEqual([1]);
+    expect(lines.has(3)).toBe(false);
+  });
+
+  it("fallbackExecutableLines does not count a type declaration's body as executable", () => {
+    const source = ["export interface Example {", "  a: string;", "}"].join("\n");
+    expect(fallbackExecutableLines(source, "src/example.ts", [1, 2, 3])).toEqual([]);
+  });
+
+  it("fallbackExecutableLines still counts a real statement in a no-coverage file", () => {
+    // The gate must not get weaker: code that was never measured is still
+    // uncovered.
+    const source = [
+      "export interface Example {",
+      "  a: string;",
+      "}",
+      "",
+      "export const real = 1;",
+    ].join("\n");
+    expect(fallbackExecutableLines(source, "src/example.ts", [1, 2, 3, 5])).toEqual([5]);
+  });
+
+  it("evaluatePatchCoverage reports a type-only file as having no executable lines", () => {
+    // The bug's exact symptom, end to end: a file the coverage provider
+    // never loaded (every import of a type-only module is erased), whose
+    // changed lines are all inside type declarations.
+    const relPath = "test/fixtures/patch-coverage-type-only.ts";
+    const lineCount = readFileSync(path.join(root, relPath), "utf8").split("\n").length;
+    const changed = new Set(Array.from({ length: lineCount }, (_, i) => i + 1));
+
+    const summary = evaluatePatchCoverage(new Map([[relPath, changed]]), {});
+    expect(summary.totalExecutableLines).toBe(0);
+    expect(summary.overallPercent).toBe(100);
+  });
+
+  it("isNonExecutableLine keeps the original line heuristic", () => {
+    expect(isNonExecutableLine("")).toBe(true);
+    expect(isNonExecutableLine("  // a comment")).toBe(true);
+    expect(isNonExecutableLine("import { x } from './x.js';")).toBe(true);
+    expect(isNonExecutableLine("export type X = string;")).toBe(true);
+    expect(isNonExecutableLine("export interface X {")).toBe(true);
+    expect(isNonExecutableLine("}")).toBe(true);
+    expect(isNonExecutableLine("export const x = 1;")).toBe(false);
   });
 
   it("resolveBaseRef returns sanitized explicitRef if provided", () => {
