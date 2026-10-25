@@ -76,7 +76,7 @@ export function extractSessionIds(layout: Record<string, unknown> | null): Set<n
         // (plural, an array) since its own prop was widened to support a
         // task's multiple sessions (worker + optional review). Matched here
         // too so a workspace's timeline panel still counts toward
-        // findSessionWorkspace/cross-workspace lookups.
+        // findSessionWorkspaces/cross-workspace lookups.
         else if (key === "sessionIds" && Array.isArray(val)) {
           for (const v of val) if (typeof v === "number") ids.add(v);
         } else visit(val);
@@ -87,11 +87,24 @@ export function extractSessionIds(layout: Record<string, unknown> | null): Set<n
   return ids;
 }
 
-export function findSessionWorkspace(sessionId: number, workspaces: Workspace[]): number | null {
+// Issue #1883 — a session can be tiled into MORE THAN ONE workspace's saved
+// layout, so "which workspace is this session in?" has no single answer. The
+// old `findSessionWorkspace` returned the FIRST match and stopped, which made
+// every caller's answer depend on the order the workspaces happened to
+// arrive in — the server's own row order (`select().from(workspaces).all()`
+// with no ORDER BY), not the user's. Two workspaces claiming the same
+// session therefore produced a coin flip the user could neither predict nor
+// influence.
+//
+// This returns EVERY workspace that claims the session, so a caller can
+// state which one it means (see usePanelOpener.ts's cross-workspace branch)
+// instead of inheriting an arbitrary one.
+export function findSessionWorkspaces(sessionId: number, workspaces: Workspace[]): number[] {
+  const ids: number[] = [];
   for (const ws of workspaces) {
-    if (extractSessionIds(ws.layout).has(sessionId)) return ws.id;
+    if (extractSessionIds(ws.layout).has(sessionId)) ids.push(ws.id);
   }
-  return null;
+  return ids;
 }
 
 // Issue #730 — a terminal can only be launched from a workspace (list view),

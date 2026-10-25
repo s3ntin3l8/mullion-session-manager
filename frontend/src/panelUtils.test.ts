@@ -40,6 +40,7 @@ import {
   planAutoOpenChildren,
   shouldAutoOpenChildPanels,
   extractSessionIds,
+  findSessionWorkspaces,
   canLaunchTerminal,
   resolveActiveProjectId,
   parseDeepLinkSessionId,
@@ -51,6 +52,7 @@ import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockvi
 import { DEFAULT_SETTINGS } from "./api/index.js";
 import type { LayoutContext } from "./lib/layoutTier.js";
 import type { Session, Task, Device } from "./api/index.js";
+import { makeWorkspace } from "./test/fixtures.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
 // decide float-vs-dock (issue #121): "grid" for anything actually tiled
@@ -1035,6 +1037,56 @@ describe("extractSessionIds", () => {
 
   it("returns an empty set for a null layout", () => {
     expect(extractSessionIds(null)).toEqual(new Set());
+  });
+});
+
+// Issue #1883 — a session can be tiled into MORE THAN ONE workspace's saved
+// layout, so the old single-match lookup could not answer "which workspace
+// is this session in?" at all: it returned whichever workspace came first in
+// the array (the server's own row order), which is a coin flip the user
+// could neither predict nor influence. This returns EVERY claimant, so the
+// caller can state which one it means.
+describe("findSessionWorkspaces", () => {
+  const claiming = (id: number, sessionId: number) =>
+    makeWorkspace({ id, layout: { sessionId } as Record<string, unknown> });
+
+  // The claimants' order is not part of the contract, so every assertion
+  // compares sorted ids. See the order note below.
+  const sorted = (ids: number[]) => [...ids].sort((a, b) => a - b);
+
+  it("returns every workspace whose saved layout claims the session", () => {
+    const workspaces = [
+      makeWorkspace({ id: 1, layout: null }),
+      claiming(2, 7),
+      makeWorkspace({ id: 3, layout: { sessionId: 9 } as Record<string, unknown> }),
+      claiming(4, 7),
+    ];
+    expect(sorted(findSessionWorkspaces(7, workspaces))).toEqual([2, 4]);
+  });
+
+  it("returns an empty array when no workspace claims the session", () => {
+    const workspaces = [makeWorkspace({ id: 1, layout: null }), claiming(2, 9)];
+    expect(findSessionWorkspaces(7, workspaces)).toEqual([]);
+  });
+
+  // The ORDER of the claimants is deliberately not asserted. Order is exactly
+  // what this issue calls arbitrary — the whole point is that no caller may
+  // depend on it — so a test that pinned an order would make a future
+  // `ORDER BY` on the server look like a regression. Membership is the
+  // contract; the order is not.
+  it("returns every claimant regardless of the workspaces' order", () => {
+    const workspaces = [claiming(9, 7), claiming(3, 7), claiming(5, 7)];
+    expect(sorted(findSessionWorkspaces(7, workspaces))).toEqual([3, 5, 9]);
+  });
+
+  it("matches a timeline panel's sessionIds array too, not just a plain sessionId", () => {
+    const workspaces = [
+      makeWorkspace({
+        id: 4,
+        layout: { views: [{ params: { sessionIds: [7, 8] } }] } as Record<string, unknown>,
+      }),
+    ];
+    expect(findSessionWorkspaces(7, workspaces)).toEqual([4]);
   });
 });
 
