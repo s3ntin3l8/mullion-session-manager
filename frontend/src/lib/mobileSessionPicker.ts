@@ -1,7 +1,7 @@
 import type { NotificationEvent, Project, Session, Workspace } from "../api/index.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import { isListedSession, sessionDisplayTitle } from "./sessionDisplay.js";
-import { findSessionWorkspaces } from "../panelUtils.js";
+import { buildSessionWorkspaceIndex } from "../panelUtils.js";
 
 // Issue #1882 — the workspace a session's panel lives in.
 //
@@ -70,7 +70,7 @@ export interface PickerInput {
   activeWorkspaceId: number | null;
 }
 
-// Issue #1882 — which workspace holds a session.
+// Which workspace, if any, a row's session lives in.
 //
 // A session can be tiled into more than one workspace's saved layout, so in
 // general there is no single home. The chip only claims one when the answer
@@ -85,27 +85,21 @@ export interface PickerInput {
 // removed exactly that kind of pick): the chip says nothing, and the tap
 // opens the session locally rather than swapping the layout — which is what
 // the opener does for an ambiguous session anyway.
-function workspaceHomes(
-  sessions: Session[],
-  workspaces: Workspace[],
+function workspaceFor(
+  claims: number[] | undefined,
+  byId: Map<number, Workspace>,
   activeWorkspaceId: number | null,
-): Map<number, PickerWorkspace> {
-  const byId = new Map(workspaces.map((ws) => [ws.id, ws] as const));
-  const homes = new Map<number, PickerWorkspace>();
-  for (const session of sessions) {
-    // findSessionWorkspaces (issue #1883) already answers "which workspaces
-    // claim this session" — every one of them, in no particular order.
-    const claims = findSessionWorkspaces(session.id, workspaces);
-    if (claims.length === 0) continue;
-    const current = activeWorkspaceId !== null ? byId.get(activeWorkspaceId) : undefined;
-    if (current && claims.includes(current.id)) {
-      homes.set(session.id, { id: current.id, name: current.name, isCurrent: true });
-    } else if (claims.length === 1) {
-      const only = byId.get(claims[0]);
-      if (only) homes.set(session.id, { id: only.id, name: only.name, isCurrent: false });
-    }
+): PickerWorkspace | null {
+  if (!claims || claims.length === 0) return null;
+  const current = activeWorkspaceId !== null ? byId.get(activeWorkspaceId) : undefined;
+  if (current && claims.includes(current.id)) {
+    return { id: current.id, name: current.name, isCurrent: true };
   }
-  return homes;
+  if (claims.length === 1) {
+    const only = byId.get(claims[0]);
+    if (only) return { id: only.id, name: only.name, isCurrent: false };
+  }
+  return null;
 }
 
 // The workspace the user is looking at, if it is still among the known ones.
@@ -132,7 +126,10 @@ function currentWorkspace(
 // when it has an open tiled panel — an open pane must always be switchable.
 export function buildPickerSections(input: PickerInput): PickerSection[] {
   const muted = new Set(input.mutedSessionIds);
-  const homes = workspaceHomes(input.sessions, input.workspaces, input.activeWorkspaceId);
+  // One pass over the workspaces' layouts answers "which workspaces claim
+  // this session" for every session at once (issue #1882).
+  const claims = buildSessionWorkspaceIndex(input.workspaces);
+  const byId = new Map(input.workspaces.map((ws) => [ws.id, ws] as const));
   const current = currentWorkspace(input.workspaces, input.activeWorkspaceId);
   const sessionById = new Map(input.sessions.map((s) => [s.id, s] as const));
   const panelBySession = new Map<number, PickerPanel>();
@@ -191,7 +188,9 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       // grid is in the current workspace's layout, full stop — the opener
       // would focus that panel, never swap — so the live layout wins over
       // any stale saved layout that also mentions the session.
-      workspace: panel ? current : (homes.get(session.id) ?? null),
+      workspace: panel
+        ? current
+        : workspaceFor(claims.get(session.id), byId, input.activeWorkspaceId),
     };
   };
 
