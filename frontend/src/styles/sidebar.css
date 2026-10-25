@@ -232,6 +232,29 @@
      the header row gains a gap above and below the title. */
   margin: 0;
 }
+/* The section caption: the count of what the section holds, then its unit
+   (issue #1889 — this caption used to be the bare word "sessions", a label
+   with no number).
+
+   The number wears the sidebar's mono count face (`.sidebar-section-count-
+   value`, declared together with `.project-session-count` — the same kind of
+   number, a different thing); the unit word wears the UI face, because a
+   word in a mono face reads as an identifier rather than as a caption.
+
+   The space between the number and the word is a text node, not the `gap`
+   alone: a screen reader reads the caption's text, and "2sessions" is not
+   a number and a word. CSS ignores a whitespace-only text node between
+   flex items, so the `gap` still sets the visual distance. */
+.sidebar-section-count {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sidebar-section-count-unit {
+  font-size: 10.5px;
+  color: var(--dim);
+}
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
    on `.sidebar-section-header`, same "own modifier class, not the shared
    base" posture as `.source-control-header` (empty-states.css) — Devices'
@@ -795,7 +818,14 @@
   justify-content: center;
   flex-shrink: 0;
 }
-.project-session-count {
+/* The count face: the mono, dim, small count the sidebar shows for a
+   project's session count (`.project-session-count`) and for the section
+   header's own total (`.sidebar-section-count-value`, issue #1889). Two
+   names, one set of declarations — the two counts are the same kind of
+   thing, but they are not the same thing, and a rule that later changes
+   one of them should not silently change the other. */
+.project-session-count,
+.sidebar-section-count-value {
   font-size: 11px;
   color: var(--dim);
   font-family: "Geist Mono", monospace;

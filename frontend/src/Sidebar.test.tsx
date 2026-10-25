@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
+import type { SidebarProps } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 import type {
@@ -154,7 +155,9 @@ const NOOP_PROPS = {
 // (see its own comment in Sidebar.tsx), so tests reproduce that same
 // wrapping to match. Harmless for the below-threshold tests, which never
 // mount VirtualizedProjectTree at all.
-function renderSidebar(props: Partial<typeof NOOP_PROPS> = {}) {
+function renderSidebar(
+  props: Partial<typeof NOOP_PROPS> & Pick<SidebarProps, "phoneSection"> = {},
+) {
   return render(
     <div className="sidebar-wrapper">
       <Sidebar {...NOOP_PROPS} {...props} />
@@ -1005,6 +1008,100 @@ describe("Sidebar declutter — project header trim", () => {
 
     const name = screen.getByText(PROJECT.name);
     expect(name.getAttribute("title")).toBe(PROJECT.cwd);
+  });
+});
+
+describe("Sidebar section header count (issue #1889)", () => {
+  // The Projects header's caption used to be the bare word "sessions" — a
+  // label with no number. It is the count now, with its unit.
+  it("states the session count, with its unit", () => {
+    projects = [PROJECT];
+    sessions = [makeSession({ id: 1 }), makeSession({ id: 2 })];
+    renderSidebar();
+
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("2 sessions");
+  });
+
+  it("shows no caption at all when the section holds no sessions", () => {
+    // The same declutter rule the per-project badge follows: a zero does not
+    // earn its place in a header.
+    projects = [PROJECT];
+    sessions = [];
+    renderSidebar();
+
+    expect(document.querySelector(".sidebar-section-count")).toBeNull();
+    // And the stray word goes with it — no bare "sessions" label is left in
+    // the header.
+    expect(document.querySelector(".sidebar-section-header")?.textContent).not.toContain(
+      "sessions",
+    );
+  });
+
+  it("is the sum of the per-project numbers beneath it", () => {
+    projects = [PROJECT, makeProject({ id: 2, name: "other", cwd: "/home/x/other" })];
+    sessions = [
+      makeSession({ id: 1, projectId: 1 }),
+      makeSession({ id: 2, projectId: 1 }),
+      makeSession({ id: 3, projectId: 2 }),
+    ];
+    renderSidebar();
+
+    const perProject = Array.from(
+      document.querySelectorAll(".project-row-header .project-session-count"),
+    ).map((el) => el.textContent);
+    expect(perProject).toEqual(["2", "1"]);
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("3 sessions");
+  });
+
+  it("counts the projects the section is actually listing", async () => {
+    // With a filter active, a project the filter matched nothing in is not
+    // listed at all — so its sessions are not counted either, and the header
+    // still equals the sum of the per-project numbers on screen.
+    projects = [PROJECT, makeProject({ id: 2, name: "other", cwd: "/home/x/other" })];
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "npm run build" }),
+      makeSession({ id: 2, projectId: 1, command: "npm run test" }),
+      makeSession({ id: 3, projectId: 2, command: "claude code" }),
+    ];
+    const user = userEvent.setup();
+    const { container } = renderSidebar();
+
+    await user.type(screen.getByLabelText("Filter sessions"), "npm");
+
+    expect(container.querySelectorAll(".project-row-header")).toHaveLength(1);
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("2 sessions");
+  });
+
+  it("counts a partly-matched project's WHOLE count, not just its matches", async () => {
+    // The deliberate choice, pinned: the per-project number is the project's
+    // own session count — its "base" list, ignoring the search box — so the
+    // header does too. A project of three sessions, one of which matches,
+    // contributes three to the caption while one row shows.
+    //
+    // (The alternative — counting only the rows on screen — would make the
+    // caption a different quantity from the numbers beneath it, and would
+    // change every time the search box changed.)
+    projects = [PROJECT];
+    sessions = [
+      makeSession({ id: 1, command: "npm run build" }),
+      makeSession({ id: 2, command: "npm run test" }),
+      makeSession({ id: 3, command: "claude code" }),
+    ];
+    const user = userEvent.setup();
+    const { container } = renderSidebar();
+
+    await user.type(screen.getByLabelText("Filter sessions"), "npm");
+
+    expect(container.querySelectorAll(".session-item")).toHaveLength(2);
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("3 sessions");
+  });
+
+  it("counts the phone's Projects section too", () => {
+    projects = [PROJECT];
+    sessions = [makeSession({ id: 1 })];
+    renderSidebar({ phoneSection: "projects" });
+
+    expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("1 session");
   });
 });
 
