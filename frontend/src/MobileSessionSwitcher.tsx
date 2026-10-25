@@ -29,7 +29,21 @@ export interface MobileSessionRow {
   agentLogo: string | null;
   unreadCount: number;
   needsYou: boolean;
+  // Where this session's panel lives — the workspace holding it — or null when
+  // it is in no workspace (issue #1882).
+  workspace: MobileSessionWorkspace | null;
   searchFields: string[];
+}
+
+// The workspace a row's session lives in, and whether that is the workspace
+// the user is looking at right now. Issue #1882: on the phone tier the
+// workspace was invisible, so opening a session from another workspace
+// swapped the whole layout with nothing on screen saying so — and no way
+// back, because the phone has no workspace switcher.
+export interface MobileSessionWorkspace {
+  id: number;
+  name: string;
+  isCurrent: boolean;
 }
 
 export interface MobileSessionSection {
@@ -63,6 +77,8 @@ export function MobileSessionSwitcher({
   onRenameDraftChange,
   onRenameCommit,
   onRenameCancel,
+  showWorkspaceChip,
+  onSelectWorkspace,
   contextLabel,
   sheetClassName,
 }: {
@@ -92,6 +108,13 @@ export function MobileSessionSwitcher({
   onRenameDraftChange: (value: string) => void;
   onRenameCommit: () => void;
   onRenameCancel: () => void;
+  // Issue #1882 — the phone tier has no workspace switcher, so a row names
+  // the workspace its session lives in, and a row whose session lives
+  // elsewhere offers to go there. Absent on the tablet tier, which HAS a
+  // workspace switcher (in the navigator's Projects tab) and so has no blind
+  // spot to cover.
+  showWorkspaceChip?: boolean;
+  onSelectWorkspace?: (workspaceId: number) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -339,6 +362,38 @@ export function MobileSessionSwitcher({
                           )}
                         </button>
                       )}
+                      {showWorkspaceChip &&
+                        !pinned &&
+                        row.workspace &&
+                        (row.workspace.isCurrent ? (
+                          // Here already: the session lives in the layout the
+                          // user is looking at. Plain text — there is nowhere
+                          // to go. The hidden prefix says what the name is;
+                          // it still contains the visible text, so the
+                          // accessible name keeps it (WCAG 2.5.3).
+                          <span
+                            className="mobile-session-workspace"
+                            title={`In workspace ${row.workspace.name}`}
+                          >
+                            <span className="visually-hidden">In workspace </span>
+                            {row.workspace.name}
+                          </span>
+                        ) : (
+                          // Elsewhere. This is the swap the audit called
+                          // invisible: the row says which workspace the
+                          // session lives in, and the button is the way back
+                          // to it (or there) without opening the session.
+                          <button
+                            className="mobile-session-workspace mobile-session-workspace--other"
+                            aria-label={`Go to workspace ${row.workspace.name}`}
+                            onClick={() => {
+                              closeSheet();
+                              onSelectWorkspace?.(row.workspace!.id);
+                            }}
+                          >
+                            {row.workspace.name}
+                          </button>
+                        ))}
                       {isActive && renamingId !== row.panelId && renderActiveActions()}
                       {!pinned && row.panelId !== null && (
                         <button

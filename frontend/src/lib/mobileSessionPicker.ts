@@ -1,6 +1,20 @@
-import type { NotificationEvent, Project, Session } from "../api/index.js";
+import type { NotificationEvent, Project, Session, Workspace } from "../api/index.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import { isListedSession, sessionDisplayTitle } from "./sessionDisplay.js";
+import { extractSessionIds } from "../panelUtils.js";
+
+// Issue #1882 — the workspace a session's panel lives in.
+//
+// The phone tier has no workspace switcher and no other way to see which
+// workspace it is looking at, so a session opened from another workspace
+// used to swap the whole layout with nothing on screen saying so, and no
+// way back. The chip this carries is the signal, and the way back.
+export interface PickerWorkspace {
+  id: number;
+  name: string;
+  // True when this is the workspace the user is looking at right now.
+  isCurrent: boolean;
+}
 
 // The panel facts the picker needs — a structural subset of IDockviewPanel so
 // the model stays pure and testable without a live dockview.
@@ -21,6 +35,10 @@ export interface PickerRow {
   title: string;
   unreadCount: number;
   needsYou: boolean;
+  // Where this session's panel lives — the workspace whose saved layout holds
+  // it — or null when it is in no workspace's layout. See workspaceHomes for
+  // why the answer is sometimes absent.
+  workspace: PickerWorkspace | null;
   // Text the switcher's search box matches (title, raw command, project name)
   // — the same fields sessionMatchesSearch uses for the sidebar filter.
   searchFields: string[];
@@ -45,6 +63,64 @@ export interface PickerInput {
   hideEndedSessions: boolean;
   showTaskSessions: boolean;
   taskSessionIds: ReadonlySet<number>;
+  // The workspaces whose saved layouts hold the sessions, and the one the user
+  // is looking at — issue #1882's chip needs both to say where a session lives
+  // and whether that is here.
+  workspaces: Workspace[];
+  activeWorkspaceId: number | null;
+}
+
+// Issue #1882 — which workspace holds a session.
+//
+// A session can be tiled into more than one workspace's saved layout, so in
+// general there is no single home. The chip only claims one when the answer
+// is UNAMBIGUOUS:
+//
+//   - the CURRENT workspace wins over any other claimant — the user is
+//     looking at it, and a session tiled there is here;
+//   - otherwise exactly one other workspace claims it, and that one is it.
+//
+// With several other claimants and no current one, there is no home to name.
+// That is not a gap to paper over with an arbitrary pick (issue #1883
+// removed exactly that kind of pick): the chip says nothing, and the tap
+// opens the session locally rather than swapping the layout — which is what
+// the opener does for an ambiguous session anyway.
+function workspaceHomes(
+  workspaces: Workspace[],
+  activeWorkspaceId: number | null,
+): Map<number, PickerWorkspace> {
+  const claimants = new Map<number, Workspace[]>();
+  for (const ws of workspaces) {
+    for (const sessionId of extractSessionIds(ws.layout)) {
+      const list = claimants.get(sessionId);
+      if (list) list.push(ws);
+      else claimants.set(sessionId, [ws]);
+    }
+  }
+  const homes = new Map<number, PickerWorkspace>();
+  for (const [sessionId, list] of claimants) {
+    const current = list.find((ws) => ws.id === activeWorkspaceId);
+    if (current) {
+      homes.set(sessionId, { id: current.id, name: current.name, isCurrent: true });
+    } else if (list.length === 1) {
+      homes.set(sessionId, { id: list[0].id, name: list[0].name, isCurrent: false });
+    }
+  }
+  return homes;
+}
+
+// The workspace the user is looking at, if it is still among the known ones.
+// A session open in the current layout belongs to it even when no saved
+// layout mentions the session — the phone tier never writes its layout back
+// (issue #1426), so an open session is routinely in no workspace's saved
+// layout at all.
+function currentWorkspace(
+  workspaces: Workspace[],
+  activeWorkspaceId: number | null,
+): PickerWorkspace | null {
+  const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+  if (!ws) return null;
+  return { id: ws.id, name: ws.name, isCurrent: true };
 }
 
 // Builds the phone session picker's sections, in order:
@@ -57,6 +133,8 @@ export interface PickerInput {
 // when it has an open tiled panel — an open pane must always be switchable.
 export function buildPickerSections(input: PickerInput): PickerSection[] {
   const muted = new Set(input.mutedSessionIds);
+  const homes = workspaceHomes(input.workspaces, input.activeWorkspaceId);
+  const current = currentWorkspace(input.workspaces, input.activeWorkspaceId);
   const sessionById = new Map(input.sessions.map((s) => [s.id, s] as const));
   const panelBySession = new Map<number, PickerPanel>();
   const paneRows: PickerRow[] = [];
@@ -79,6 +157,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
         title: panel.title,
         unreadCount: 0,
         needsYou: false,
+        workspace: null,
         searchFields: [panel.title],
       });
     }
@@ -109,6 +188,10 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       searchFields,
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),
+      // Where this session lives (issue #1882). A session open in the current
+      // layout is here by definition, so it carries the current workspace's
+      // label even when no saved layout mentions it.
+      workspace: homes.get(session.id) ?? (panel ? current : null),
     };
   };
 

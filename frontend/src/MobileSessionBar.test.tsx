@@ -90,6 +90,9 @@ beforeEach(() => {
     lastSeenSeq: {},
     dismissedEventKeys: {},
     theme: "dark",
+    // Issue #1882 — the workspaces whose saved layouts hold the sessions.
+    workspaces: [],
+    activeWorkspaceId: null,
     renameSession,
     reportError,
   };
@@ -295,5 +298,24 @@ describe("failed rename (audit finding 9)", () => {
     await waitFor(() => {
       expect(panels[0].api.setTitle).toHaveBeenLastCalledWith("shell");
     });
+  });
+
+  // Issue #1882 — the phone tier has no workspace switcher, so a picker row
+  // names the workspace its session lives in. Tablet HAS a workspace
+  // switcher (in its navigator's Projects tab), so it needs no chip.
+  it("names the workspace on the phone tier only", async () => {
+    storeState.workspaces = [
+      { id: 1, name: "Default", layout: { sessionId: 3 } },
+      { id: 2, name: "Work", layout: null },
+    ];
+    storeState.activeWorkspaceId = 1;
+
+    renderBar("session-1", { tier: "phone" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /shell/ }));
+    // Session 3 lives in the current workspace's saved layout.
+    expect(screen.getAllByText("Default").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /Close session list/i }));
   });
 });
