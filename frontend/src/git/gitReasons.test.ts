@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import type { GitPullReason } from "../api/types.js";
 import { pullReasonMessage, reasonMessage } from "./gitReasons.js";
 
-// The pull refusals have their own renderer (frontend/src/git/gitReasons.ts)
-// and their own copy — the sidebar's one-line slot needs different words.
-// This file is that copy's guard.
+// The pull refusals have their own renderer — pullReasonMessage, the Git
+// panel's — and their own copy, because the sidebar's one-line slot needs
+// different words. This file is THAT copy's guard: the sidebar's copy has its
+// own table in Sidebar.test.tsx.
 //
 // The table is a Record over GitPullReason, so it is EXHAUSTIVE by type: a
 // new member of the union with no row here is a COMPILE error, not a silent

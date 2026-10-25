@@ -79,7 +79,9 @@ export function reasonMessage(reason: string | undefined, detail: string | undef
 export function pullReasonMessage(reason: GitPullReason | undefined, detail?: string): string {
   switch (reason) {
     case undefined:
-      return "Action failed.";
+      // A refusal with no reason at all: the pull did not run and nothing
+      // says why. The same words the sidebar uses for the same case.
+      return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
     case "not-a-repo":
       // Shared with the branch/worktree refusals — one copy of that copy.
       return reasonMessage(reason, detail);
