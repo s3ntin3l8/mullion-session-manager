@@ -5,6 +5,7 @@ import type { Theme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
 import { BlockedIcon } from "../ui/icons.js";
+import { Skeleton } from "../ui/Skeleton.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — one status column of the
@@ -28,6 +29,7 @@ export function TaskColumn({
   onDragBegin,
   onDragFinish,
   collapsed,
+  loading = false,
 }: {
   title: string;
   tasks: Task[];
@@ -45,6 +47,10 @@ export function TaskColumn({
   // (title + count) rather than removing it, so the count stays visible
   // without needing to hunt through a hidden column.
   collapsed?: boolean;
+  // First task fetch hasn't landed. An empty column would say "No tasks"
+  // before we know that, which is the same lie as the board-level "No
+  // tasks yet." flash. Card-shaped bones keep the column's shape instead.
+  loading?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
 
@@ -55,6 +61,8 @@ export function TaskColumn({
   // scrolling past it — a column-level count makes "how many of these can I
   // actually work on" answerable at a glance, without opening each card.
   const blockedCount = tasks.filter((t) => t.blockedState === "blocked").length;
+  // Not an empty column yet — we haven't been told there are no tasks.
+  const pending = loading && tasks.length === 0;
 
   const header = (
     <div className="kanban-column-header">
@@ -79,7 +87,9 @@ export function TaskColumn({
   }
 
   return (
-    <div className={`kanban-column${tasks.length === 0 ? " kanban-column-is-empty" : ""}`}>
+    <div
+      className={`kanban-column${tasks.length === 0 && !pending ? " kanban-column-is-empty" : ""}`}
+    >
       {header}
       <div
         className={`kanban-column-body${dropTarget ? " kanban-card-drop-target" : ""}`}
@@ -99,7 +109,12 @@ export function TaskColumn({
           onDrop(draggedId, tasks.length);
         }}
       >
-        {tasks.length === 0 ? (
+        {pending ? (
+          <>
+            <Skeleton height={72} radius={9} />
+            <Skeleton height={48} radius={9} />
+          </>
+        ) : tasks.length === 0 ? (
           <div className="kanban-column-empty">No tasks</div>
         ) : (
           tasks.map((task, index) => (

@@ -20,6 +20,7 @@ import { ChevronDownIcon, GitHubIcon } from "./ui/icons.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { Skeleton, SkeletonRegion } from "./ui/Skeleton.js";
 
 export interface GitHubPanelParams {
   projectId: number;
@@ -612,7 +613,23 @@ export function GitHubPanel({
   }, [params.projectId, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
 
   if (status === undefined && prsStatus === undefined) {
-    return <EmptyStateNote>Loading…</EmptyStateNote>;
+    // The loaded panel leads with a repo title, a section label, and rows.
+    // Bones in that order keep the shape so the list doesn't jump in from
+    // a single word. The region announces loading; the bones are hidden.
+    return (
+      <SkeletonRegion
+        className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}
+        label="Loading GitHub"
+      >
+        <div className="ui-skeleton-stack">
+          <Skeleton width={168} height={14} />
+          <Skeleton width={88} height={10} />
+          <Skeleton height={34} radius={8} />
+          <Skeleton height={34} radius={8} />
+          <Skeleton height={34} radius={8} />
+        </div>
+      </SkeletonRegion>
+    );
   }
 
   if (status === null && prsStatus === null) {

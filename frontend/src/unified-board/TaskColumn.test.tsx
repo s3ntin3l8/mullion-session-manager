@@ -100,9 +100,9 @@ beforeEach(() => {
   projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
   tasks = [];
   // Defaults to "loaded" — this file's own concern is the board's rendered
-  // content, not the loading-skeleton transition, which store.tasksLoaded.test.ts
-  // covers directly. Individual tests override this to false where the
-  // pre-load state matters.
+  // content. The pre-load skeleton is the test further down; the flag's own
+  // semantics live in store.tasksLoaded.test.ts. Individual tests override
+  // this to false where the pre-load state matters.
   tasksLoaded = true;
   taskMasterEnabled = true;
   kanbanOrder = {};
@@ -169,6 +169,28 @@ describe("UnifiedBoard task columns", () => {
         selector: ".kanban-column-title",
       }),
     ).toHaveLength(7);
+  });
+
+  // Issue #1885 — before the first fetch lands the columns used to read as
+  // empty ("No tasks"), which is the same premature answer as "No tasks
+  // yet." Card-shaped bones keep the board's shape, and the word
+  // "Loading…" is not what stands in for them.
+  it("renders a skeleton instead of the word Loading… before the first task fetch lands", () => {
+    tasks = [];
+    tasksLoaded = false;
+    const { container } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText("No tasks")).not.toBeInTheDocument();
+    const bones = container.querySelectorAll(".ui-skeleton");
+    // One column, two bones — seven columns on the desktop board.
+    expect(bones.length).toBe(14);
+    for (const bone of bones) {
+      expect(bone).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(container.querySelector(".kanban-unified-tasks")).toHaveAttribute("aria-busy", "true");
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("visually-hidden");
+    expect(status).toHaveTextContent("Loading tasks");
   });
 
   it("calls refreshTasks on mount", () => {

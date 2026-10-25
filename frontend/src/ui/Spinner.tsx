@@ -9,6 +9,9 @@ import { SpinnerIcon } from "./icons.js";
 // terminal-connecting spinner vocabulary... instead of inventing a second
 // loading affordance," and the refactor plan's PR 25 entry names only the
 // two empty-state class families, not this one.
+// Settings' chunk-load fallback used to be one of those sites. It is a
+// skeleton now (issue #1885): a spinner in an empty modal doesn't keep
+// the panel's shape. The other sites still want this spinner.
 export function Spinner({
   variant = "connecting",
   size = 22,

@@ -198,6 +198,24 @@ describe("GitHubPanel", () => {
     useDashboardStore.setState({ prsByProject: {} });
   });
 
+  it("shows a skeleton instead of the word Loading… while GitHub status is in flight", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const { container } = render(<GitHubPanel params={{ projectId: 1 }} />);
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    const bones = container.querySelectorAll(".ui-skeleton");
+    expect(bones.length).toBeGreaterThan(0);
+    for (const bone of bones) {
+      expect(bone).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("visually-hidden");
+    expect(status).toHaveTextContent("Loading GitHub");
+  });
+
   it("lists pull requests and issues with titles and links once loaded", async () => {
     vi.stubGlobal("fetch", mockFetch({ status: STATUS, prs: PRS_LOADED }));
     render(<GitHubPanel params={{ projectId: 1 }} />);

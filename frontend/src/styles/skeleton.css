@@ -1,0 +1,67 @@
+/* Issue #1885 — the loading bone. Fill and edge are theme tokens only
+   (--fg mixed onto transparency, --border) so a light theme and a dark
+   theme both read a quiet block without a hardcoded grey. The sweep is a
+   highlight passing over that fill: motion that exists only to say "still
+   working", not to convey information.
+
+   The shimmer is its own class, not the base rule, so Skeleton.tsx can
+   leave it off when prefers-reduced-motion is set and the bone stays a
+   static block. The media query below is the same decision in CSS, for a
+   first paint that happens before the media query has been read in JS.
+   tokens.css's universal reset only collapses duration to one 0.01ms
+   iteration — it does not remove the highlight — so `animation: none`
+   here is what actually stops the sweep. `!important` is required to beat
+   that reset's own !important longhands; the selector is more specific
+   than `*`, and this file is imported last. */
+.ui-skeleton {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.ui-skeleton-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--fg) 16%, transparent) 50%,
+    transparent 80%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: ui-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+@keyframes ui-skeleton-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton-shimmer {
+    animation: none !important;
+    background-image: none;
+  }
+}
+
+/* The accessible-hidden group SkeletonRegion wraps bones in. Width is
+   explicit so a bone's percentage width resolves against the panel, not
+   against a shrink-to-fit anonymous box. */
+.ui-skeleton-bones {
+  width: 100%;
+  min-width: 0;
+}
+.ui-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}

@@ -53,11 +53,18 @@ describe("Settings -> Server", () => {
   // Audit finding 13 — `info === null` used to mean both "still loading"
   // and "the request failed", so a failed fetch rendered "Loading…"
   // forever and the user was never told anything was wrong.
-  it("shows the loading state while the server status is still in flight", () => {
+  it("shows a skeleton instead of the word Loading… while the server status is still in flight", () => {
     setup();
     vi.spyOn(api, "getServerInfo").mockReturnValue(new Promise(() => {}));
-    render(<ServerInfoSection />);
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    const { container } = render(<ServerInfoSection />);
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    const bones = container.querySelectorAll(".ui-skeleton");
+    expect(bones.length).toBeGreaterThan(0);
+    for (const bone of bones) {
+      expect(bone).toHaveAttribute("aria-hidden", "true");
+    }
+    expect(container.querySelector("[aria-busy='true']")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveClass("visually-hidden");
   });
 
   it("shows an error instead of the loading state when the server status can't be loaded", async () => {
@@ -66,6 +73,7 @@ describe("Settings -> Server", () => {
     render(<ServerInfoSection />);
     expect(await screen.findByText(/Could not load the server status/)).toBeInTheDocument();
     expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(document.querySelector(".ui-skeleton")).not.toBeInTheDocument();
   });
 
   it("retries the failed server status and shows the data once the retry succeeds", async () => {

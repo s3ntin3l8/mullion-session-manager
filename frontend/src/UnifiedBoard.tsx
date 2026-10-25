@@ -681,7 +681,19 @@ export function UnifiedBoard({
         ref={mainRef}
         style={{ "--task-drawer-width": `${drawerWidth}px` } as CSSProperties}
       >
-        <div className="kanban-unified-tasks">
+        <div
+          className="kanban-unified-tasks"
+          // The task fetch, not the session lane below. aria-busy lives on
+          // this region; a visually-hidden status is the announcement,
+          // because the columns also hold real controls (the toolbar) and
+          // a role="status" on the whole region would read all of them out.
+          aria-busy={tasksLoaded ? undefined : true}
+        >
+          {!tasksLoaded && (
+            <span className="visually-hidden" role="status">
+              Loading tasks
+            </span>
+          )}
           <TasksToolbar
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}
@@ -875,6 +887,7 @@ export function UnifiedBoard({
                   onDragBegin={setDraggingId}
                   onDragFinish={() => setDraggingId(null)}
                   collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                  loading={!tasksLoaded}
                 />
               );
             })}
