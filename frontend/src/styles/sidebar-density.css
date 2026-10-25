@@ -522,3 +522,22 @@
 .files-sidebar-view {
   min-height: 100%; /* the whole pane is a drop-to-upload target, empty space included */
 }
+.file-editor-image-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 12px;
+  /* a checkerboard so transparent PNG/SVG edges stay visible on any theme */
+  background-image:
+    linear-gradient(45deg, color-mix(in srgb, var(--fg) 6%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--fg) 6%, transparent) 25%, transparent 25%);
+  background-size: 16px 16px;
+}
+.file-editor-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

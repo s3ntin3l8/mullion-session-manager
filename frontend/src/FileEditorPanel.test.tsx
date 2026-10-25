@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FileEditorPanel } from "./FileEditorPanel.js";
-import type { ProjectDirEntry } from "./api/index.js";
+import { api, ApiError, type ProjectDirEntry } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
 
@@ -603,7 +603,7 @@ describe("FileEditorPanel", () => {
     );
     expect(await screen.findByLabelText("editor:.env")).toBeInTheDocument();
     await user.click(screen.getByText("big.bin"));
-    await screen.findByText(/isn't a UTF-8 text file/);
+    await screen.findByText(/Not a UTF-8 text file/);
     const before = calls.filter((c) => c.url.includes("/file?path=.env")).length;
 
     rerender(<FileEditorPanel params={{ projectId: 1, path: ".env", rev: 2 }} />);
@@ -631,7 +631,7 @@ describe("FileEditorPanel", () => {
     const user = userEvent.setup();
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByText("big.bin"));
-    expect(await screen.findByText(/isn't a UTF-8 text file/)).toBeInTheDocument();
+    expect(await screen.findByText(/Not a UTF-8 text file/)).toBeInTheDocument();
   });
 
   it("handles a 409 conflict: Overwrite re-saves without the mtime guard", async () => {
@@ -732,5 +732,306 @@ describe("FileEditorPanel", () => {
     await waitFor(() =>
       expect(calls.filter((c) => c.url.endsWith("/files?path=")).length).toBeGreaterThanOrEqual(2),
     );
+  });
+
+  describe("transfer", () => {
+    it("offers a Download for an open text file and for each file row (not folders)", async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      await screen.findByLabelText("editor:.env");
+      const header = screen.getByRole("link", { name: "Download file" });
+      expect(header).toHaveAttribute("href", "/api/projects/1/files/download?path=.env");
+      expect(header).toHaveAttribute("download");
+      expect(screen.getByRole("link", { name: "Download .env" })).toHaveAttribute(
+        "href",
+        "/api/projects/1/files/download?path=.env",
+      );
+      expect(screen.queryByRole("link", { name: "Download src" })).toBeNull();
+    });
+
+    it("carries the session on download links when rooted at a session", async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1, sessionId: 9, path: ".env" }} />);
+      await screen.findByLabelText("editor:.env");
+      expect(screen.getByRole("link", { name: "Download file" })).toHaveAttribute(
+        "href",
+        "/api/projects/1/files/download?path=.env&sessionId=9",
+      );
+    });
+
+    it("a binary file gets a download and a note instead of an editor", async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("big.bin"));
+      expect(await screen.findByText(/Not a UTF-8 text file/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Download file" })).toHaveAttribute(
+        "href",
+        "/api/projects/1/files/download?path=big.bin",
+      );
+      expect(screen.queryByRole("img")).toBeNull();
+    });
+
+    it("a file over the edit limit says so and still offers a download", async () => {
+      const { fn } = mockFetch({
+        extra: (method, url) =>
+          method === "GET" && url.includes("/file?path=big.bin")
+            ? jsonResponse(413, { message: "too big", code: "too_large" })
+            : undefined,
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("big.bin"));
+      expect(await screen.findByText(/too large to edit here/)).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Download file" })).toBeInTheDocument();
+    });
+
+    describe("image preview", () => {
+      const withPng = (downloadResponse: () => Response) =>
+        mockFetch({
+          extra: (method, url) => {
+            if (method !== "GET") return undefined;
+            if (
+              url.includes("/files?path=") &&
+              new URL(url, "http://x").searchParams.get("path") === ""
+            )
+              return jsonResponse(200, { path: "", entries: [file("pic.png")], truncated: false });
+            if (url.includes("/file?path=pic.png"))
+              return jsonResponse(415, { message: "not text", code: "binary" });
+            if (url.includes("/files/download?path=pic.png")) return downloadResponse();
+            return undefined;
+          },
+        });
+
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it("renders an image inline via a blob URL and revokes it on leaving", async () => {
+        const create = vi.fn(() => "blob:preview-1");
+        const revoke = vi.fn();
+        vi.stubGlobal(
+          "URL",
+          Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }),
+        );
+        const { fn } = withPng(
+          () => new Response("PNGDATA", { status: 200, headers: { "content-length": "7" } }),
+        );
+        vi.stubGlobal("fetch", fn);
+        const user = userEvent.setup();
+        const { unmount } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByText("pic.png"));
+        const img = await screen.findByRole("img", { name: "pic.png" });
+        expect(img).toHaveAttribute("src", "blob:preview-1");
+        const blob = (create.mock.calls[0] as unknown as [Blob])[0];
+        expect(blob.type).toBe("image/png");
+        unmount();
+        expect(revoke).toHaveBeenCalledWith("blob:preview-1");
+      });
+
+      it("says 'too large to preview' for an image over the preview cap", async () => {
+        const { fn } = withPng(
+          () =>
+            new Response("x", {
+              status: 200,
+              headers: { "content-length": String(26 * 1024 * 1024) },
+            }),
+        );
+        vi.stubGlobal("fetch", fn);
+        const user = userEvent.setup();
+        render(<FileEditorPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByText("pic.png"));
+        expect(await screen.findByText(/Too large to preview/)).toBeInTheDocument();
+        expect(screen.queryByRole("img")).toBeNull();
+        expect(screen.getByRole("link", { name: "Download file" })).toBeInTheDocument();
+      });
+
+      it("falls back to a note when the preview can't be fetched", async () => {
+        const { fn } = withPng(() => jsonResponse(500, { message: "boom" }));
+        vi.stubGlobal("fetch", fn);
+        const user = userEvent.setup();
+        render(<FileEditorPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByText("pic.png"));
+        expect(await screen.findByText(/Couldn't load a preview/)).toBeInTheDocument();
+      });
+    });
+
+    it("deleting the open non-text file clears the view", async () => {
+      let deleted = false;
+      const { fn } = mockFetch({
+        extra: (method, url) => {
+          if (method === "DELETE") {
+            deleted = true;
+            return jsonResponse(200, { path: "big.bin" });
+          }
+          if (deleted && url.includes("/files?path=") && !url.includes("src"))
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file(".env")],
+              truncated: false,
+            });
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("big.bin"));
+      await screen.findByText(/Not a UTF-8 text file/);
+      const del = screen.getAllByTitle(/Delete big\.bin\?/)[0];
+      await user.click(del);
+      await user.click(screen.getAllByTitle(/Delete big\.bin\?|Confirm/i)[0] ?? del);
+      expect(await screen.findByText("big.bin was deleted.")).toBeInTheDocument();
+      expect(screen.queryByText(/Not a UTF-8 text file/)).toBeNull();
+    });
+
+    it("renaming the open non-text file reopens it under the new name", async () => {
+      let renamed = false;
+      const { fn } = mockFetch({
+        extra: (method, url) => {
+          if (method === "POST" && url.endsWith("/files/rename")) {
+            renamed = true;
+            return jsonResponse(200, { path: "big2.bin" });
+          }
+          if (renamed && url.includes("/files?path=") && !url.includes("src"))
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file("big2.bin")],
+              truncated: false,
+            });
+          if (renamed && url.includes("/file?path=big2.bin"))
+            return jsonResponse(415, { message: "not text", code: "binary" });
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("big.bin"));
+      await screen.findByText(/Not a UTF-8 text file/);
+      await user.click(screen.getByLabelText("Rename big.bin"));
+      const input = screen.getByRole("textbox", { name: "Rename big.bin" });
+      await user.clear(input);
+      await user.type(input, "big2.bin{Enter}");
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: "Download file" })).toHaveAttribute(
+          "href",
+          "/api/projects/1/files/download?path=big2.bin",
+        ),
+      );
+    });
+  });
+
+  describe("upload", () => {
+    const fileEntry = (name: string, f: File) => ({
+      isFile: true,
+      isDirectory: false,
+      name,
+      file: (cb: (x: File) => void) => cb(f),
+    });
+    const dropOf = (entries: unknown[], files: File[]) => ({
+      dataTransfer: {
+        types: ["Files"],
+        files,
+        items: entries.map((entry) => ({
+          kind: "file",
+          getAsFile: () => files[0] ?? null,
+          webkitGetAsEntry: () => entry,
+        })),
+        dropEffect: "none",
+      },
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("uploads picked files into the selected folder and re-lists it", async () => {
+      const upload = vi.spyOn(api, "uploadProjectFile").mockResolvedValue({ path: "x", size: 1 });
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1, sessionId: 5 }} />);
+      await user.click(await screen.findByText("src"));
+      const f = new File(["x"], "new.ts");
+      await user.upload(screen.getByLabelText("Upload files"), f);
+      await waitFor(() =>
+        expect(upload).toHaveBeenCalledWith(
+          1,
+          "src/new.ts",
+          f,
+          expect.objectContaining({ sessionId: 5 }),
+        ),
+      );
+      await waitFor(() =>
+        expect(calls.filter((c) => c.url.includes("/files?path=src")).length).toBeGreaterThan(1),
+      );
+    });
+
+    it("the Upload buttons open the pickers", async () => {
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("src");
+      const files = screen.getByLabelText("Upload files") as HTMLInputElement;
+      const folder = screen.getByLabelText("Upload folder") as HTMLInputElement;
+      const clickFiles = vi.spyOn(files, "click");
+      const clickFolder = vi.spyOn(folder, "click");
+      await user.click(screen.getByRole("button", { name: "Upload" }));
+      await user.click(screen.getByRole("button", { name: "Upload folder" }));
+      expect(clickFiles).toHaveBeenCalledTimes(1);
+      expect(clickFolder).toHaveBeenCalledTimes(1);
+    });
+
+    it("uploads a file dropped on a folder row into that folder", async () => {
+      const upload = vi.spyOn(api, "uploadProjectFile").mockResolvedValue({ path: "x", size: 1 });
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const row = (await screen.findByText("src")).closest("button") as HTMLElement;
+      const f = new File(["d"], "d.txt");
+      fireEvent.dragOver(row, dropOf([fileEntry("d.txt", f)], [f]));
+      expect(row.className).toContain("file-drop-target");
+      fireEvent.drop(row, dropOf([fileEntry("d.txt", f)], [f]));
+      await waitFor(() =>
+        expect(upload).toHaveBeenCalledWith(1, "src/d.txt", f, expect.anything()),
+      );
+    });
+
+    it("uploads a file dropped on a file row next to it, and on the tree background", async () => {
+      const upload = vi.spyOn(api, "uploadProjectFile").mockResolvedValue({ path: "x", size: 1 });
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const { container } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const row = (await screen.findByText(".env")).closest("button") as HTMLElement;
+      const a = new File(["a"], "a.txt");
+      fireEvent.drop(row, dropOf([fileEntry("a.txt", a)], [a]));
+      await waitFor(() => expect(upload).toHaveBeenCalledWith(1, "a.txt", a, expect.anything()));
+      await waitFor(() => expect(screen.queryByText(/Uploading/)).toBeNull());
+      const b = new File(["b"], "b.txt");
+      fireEvent.drop(
+        container.querySelector(".file-editor-tree") as HTMLElement,
+        dropOf([fileEntry("b.txt", b)], [b]),
+      );
+      await waitFor(() => expect(upload).toHaveBeenCalledWith(1, "b.txt", b, expect.anything()));
+    });
+
+    it("lists a refused name in the tree and lets it be dismissed", async () => {
+      vi.spyOn(api, "uploadProjectFile").mockRejectedValue(new ApiError("exists", 409, "conflict"));
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("src");
+      await user.upload(screen.getByLabelText("Upload files"), new File(["x"], "dup.txt"));
+      expect(await screen.findByText("dup.txt already exists")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Dismiss upload errors" }));
+      expect(screen.queryByText("dup.txt already exists")).toBeNull();
+    });
   });
 });

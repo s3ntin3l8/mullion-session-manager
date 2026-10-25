@@ -89,13 +89,19 @@ export const filesApi = {
   fetchProjectFileBlob: async (
     projectId: number,
     filePath: string,
-    opts: { sessionId?: number; type?: string; signal?: AbortSignal } = {},
+    opts: { sessionId?: number; type?: string; signal?: AbortSignal; maxBytes?: number } = {},
   ): Promise<Blob> => {
     const res = await fetch(filesApi.projectFileDownloadUrl(projectId, filePath, opts.sessionId), {
       credentials: "same-origin",
       signal: opts.signal,
     });
     if (!res.ok) throw await apiErrorFromResponse(res.status, await res.text().catch(() => ""));
+    // Refuse before reading the body: a preview must not pull a huge file into memory.
+    const length = Number(res.headers.get("content-length"));
+    if (opts.maxBytes !== undefined && Number.isFinite(length) && length > opts.maxBytes) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new ApiError("Too large to preview", 413, "too_large");
+    }
     const blob = await res.blob();
     // The server serves everything as an opaque attachment; the caller picks
     // the type it is willing to render.

@@ -89,15 +89,20 @@ export function useProjectUploads(opts: {
           current = item.relativePath;
           publish();
           try {
-            await api.uploadProjectFile(projectId, joinPath(targetDir, item.relativePath), item.file, {
-              sessionId,
-              mkdirs: item.relativePath.includes("/"),
-              signal: controller.signal,
-              onProgress: (done) => {
-                loaded[index] = done;
-                publish();
+            await api.uploadProjectFile(
+              projectId,
+              joinPath(targetDir, item.relativePath),
+              item.file,
+              {
+                sessionId,
+                mkdirs: item.relativePath.includes("/"),
+                signal: controller.signal,
+                onProgress: (done) => {
+                  loaded[index] = done;
+                  publish();
+                },
               },
-            });
+            );
             loaded[index] = item.file.size;
           } catch (err) {
             if (controller.signal.aborted) return;
