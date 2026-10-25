@@ -283,6 +283,35 @@ describe("github-write service", () => {
       expect(await list()).toEqual([]);
     });
 
+    it("keeps the markers it read when one commit's check runs cannot be read", async () => {
+      // One failed read (a 5xx, a timeout) loses that commit only, not the whole
+      // answer: the base is then older, so the round over-reviews instead of
+      // degrading to the re-pointed commit_id.
+      serve(["aaa", "bad", "ccc"], { aaa: [checkRun({ id: 1 })], ccc: [checkRun({ id: 3 })] });
+      const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+      fetchMock.mockImplementation(async (url: string) =>
+        String(url).includes("/commits/bad/check-runs") ? jsonResponse(500, {}) : inner(url),
+      );
+      const onError = vi.fn();
+      const markers = await listReviewMarkers(
+        "pr-tok",
+        "checks-tok",
+        "owner",
+        "repo",
+        9,
+        "Hermes review",
+        onError,
+      );
+      expect(markers.map((m) => m.oid)).toEqual(["aaa", "ccc"]);
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("bad"));
+    });
+
+    it("still fails when the PR's commits cannot be read at all", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(500, {}));
+      await expect(list()).rejects.toBeInstanceOf(GitHubApiError);
+    });
+
     it("searches only the newest 50 commits of a long PR, across pages", async () => {
       const shas = Array.from({ length: 130 }, (_, i) => `c${i}`);
       serve(shas, {

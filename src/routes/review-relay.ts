@@ -1066,7 +1066,16 @@ export function reviewReader(
           reviews: await reviews(),
           reviewerBotLogin,
           markers: ledgerToken
-            ? () => listReviewMarkers(token, ledgerToken, owner, repo, prNumber, REVIEW_MARKER_NAME)
+            ? () =>
+                listReviewMarkers(
+                  token,
+                  ledgerToken,
+                  owner,
+                  repo,
+                  prNumber,
+                  REVIEW_MARKER_NAME,
+                  onError,
+                )
             : undefined,
           committedAt: async (sha) => (await commitInfo(sha)).committedAt,
           onError,

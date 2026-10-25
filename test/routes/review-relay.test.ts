@@ -625,6 +625,7 @@ describe("review-request routes", () => {
         "widgets",
         expect.any(Number),
         "Hermes review",
+        expect.any(Function), // onError: a failed commit read is logged, not swallowed
       );
     });
 

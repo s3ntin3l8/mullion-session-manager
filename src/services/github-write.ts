@@ -930,6 +930,10 @@ const MARKER_FETCH_CONCURRENCY = 10;
  * answers GraphQL `pullRequest.commits` — and REST `/pulls/{n}/commits` —
  * with FORBIDDEN for it on a private repository. Its own check-run reads work.
  * (It is the same split `readRememberedSession` relies on.)
+ *
+ * Cost: up to 3 requests for the PR's commits plus one per commit of the
+ * window (50), in batches of 10 — `base()` runs on every relay dispatch, and
+ * the window is what sizes it.
  */
 export async function listReviewMarkers(
   prToken: string,
@@ -938,6 +942,12 @@ export async function listReviewMarkers(
   repo: string,
   prNumber: number,
   markerName: string,
+  /**
+   * Told about each commit whose check runs could not be read. Those commits
+   * are skipped and the rest are kept: a base derived from fewer commits is
+   * older, so the round over-reviews rather than under-reviews.
+   */
+  onError?: (detail: string) => void,
 ): Promise<ReviewMarker[]> {
   // The PR's commits, oldest first; only the newest window is searched.
   const commits: string[] = [];
@@ -956,11 +966,20 @@ export async function listReviewMarkers(
   const out: ReviewMarker[] = [];
   for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {
     const batch = window.slice(i, i + MARKER_FETCH_CONCURRENCY);
-    const runs = await Promise.all(
+    // Not atomic: one commit's failed read (a 5xx, a timeout, a rate limit)
+    // must not throw away the markers the other reads already returned.
+    const runs = await Promise.allSettled(
       batch.map((sha) => listCommitCheckRuns(checksToken, owner, repo, sha)),
     );
     batch.forEach((sha, j) => {
-      for (const run of runs[j] ?? []) {
+      const result = runs[j];
+      if (!result || result.status === "rejected") {
+        onError?.(
+          `check runs of ${sha} unreadable, skipping it: ${result?.status === "rejected" ? String(result.reason?.message ?? result.reason) : "no result"}`,
+        );
+        return;
+      }
+      for (const run of result.value) {
         if (run.name === markerName && run.conclusion === "success" && run.startedAt) {
           out.push({ oid: sha, id: run.id, startedAt: run.startedAt });
         }
