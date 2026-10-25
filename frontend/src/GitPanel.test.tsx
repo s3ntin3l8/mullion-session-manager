@@ -30,11 +30,31 @@ function mockFetch(opts: {
   pull?: () => Response | Promise<Response>;
   fetch?: () => Response | Promise<Response>;
   health?: () => Response | Promise<Response>;
+  // Issue #1896 — the repair endpoint answers differently with and without
+  // `confirm`, so the mock is handed the parsed body.
+  repair?: (body: { confirm?: boolean }) => Response | Promise<Response>;
   fileDiff?: (url: string) => Response | Promise<Response>;
   log?: () => Response | Promise<Response>;
 }) {
-  return vi.fn((input: RequestInfo | URL) => {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+    if (url.includes("/git-repair")) {
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { confirm?: boolean })
+        : ({} as { confirm?: boolean });
+      return Promise.resolve(
+        opts.repair
+          ? opts.repair(body)
+          : jsonResponse(200, {
+              gitDir: "/tmp/x/.git",
+              quarantine: [],
+              willFetch: false,
+              indexesToRebuild: ["/tmp/x"],
+              indexesToSkip: [],
+              actionable: false,
+            }),
+      );
+    }
     if (url.includes("/git-health")) {
       return Promise.resolve(
         opts.health
@@ -389,6 +409,99 @@ describe("GitPanel", () => {
 
   // A failed check must not leave its error on screen next to a later
   // successful one.
+  // Issue #1896 — the clone REPAIR. The plan is on screen BEFORE the
+  // confirmation, and the repair only runs on the second click.
+  const DAMAGED_HEALTH = {
+    healthy: false,
+    gitDir: "/tmp/x/.git",
+    zeroByteObjects: ["ab/cdef"],
+    otherZeroByteFiles: [],
+    fsckErrors: ["error: invalid sha1 pointer in cache-tree of .git/index"],
+    timedOut: false,
+  };
+  const REPAIR_PLAN = {
+    gitDir: "/tmp/x/.git",
+    quarantine: ["abcdef"],
+    willFetch: true,
+    indexesToRebuild: ["/tmp/x"],
+    indexesToSkip: [],
+    actionable: true,
+  };
+
+  it("offers no repair when the clone is healthy", async () => {
+    vi.stubGlobal("fetch", mockFetch({ status: () => jsonResponse(200, CLEAN_STATUS) }));
+    render(<GitPanel params={{ projectId: 15 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    expect(await screen.findByText("This repository is healthy.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /repair/i })).toBeNull();
+  });
+
+  it("shows the plan before the repair is confirmed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () => jsonResponse(200, DAMAGED_HEALTH),
+        repair: () => jsonResponse(200, REPAIR_PLAN),
+      }),
+    );
+    render(<GitPanel params={{ projectId: 16 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+
+    // The plan is on screen, and so is the button that will act on it.
+    expect(await screen.findByText(/quarantine 1 damaged object\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText(/fetch from origin/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /repair/i })).toBeInTheDocument();
+  });
+
+  it("runs the repair only after the confirmation, and reports what it did", async () => {
+    const bodies: { confirm?: boolean }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        status: () => jsonResponse(200, CLEAN_STATUS),
+        health: () => jsonResponse(200, DAMAGED_HEALTH),
+        repair: (body) => {
+          bodies.push(body);
+          return body.confirm
+            ? jsonResponse(200, {
+                ...DAMAGED_HEALTH,
+                healthy: true,
+                quarantine: "/tmp/x/.git/gc-quarantine-1",
+                quarantined: ["abcdef"],
+                recovered: [],
+                unrecovered: [],
+                refsRestored: true,
+                indexesRebuilt: ["/tmp/x"],
+                indexesSkipped: [],
+                whole: true,
+              })
+            : jsonResponse(200, REPAIR_PLAN);
+        },
+      }),
+    );
+    render(<GitPanel params={{ projectId: 17 }} />);
+    await screen.findByText("main");
+
+    await userEvent.click(screen.getByRole("button", { name: /check/i }));
+    const repairButton = await screen.findByRole("button", { name: /repair/i });
+
+    // The first click arms the button; nothing has run yet.
+    await userEvent.click(repairButton);
+    expect(bodies.filter((b) => b.confirm === true)).toHaveLength(0);
+
+    // The second one confirms.
+    await userEvent.click(repairButton);
+    expect(await screen.findByText(/the clone is whole again/)).toBeInTheDocument();
+    expect(bodies.filter((b) => b.confirm === true)).toHaveLength(1);
+    expect(await screen.findByText(/1 damaged object\(s\) moved into/)).toBeInTheDocument();
+  });
+
   it("clears a previous failure when a later check succeeds", async () => {
     let calls = 0;
     vi.stubGlobal(

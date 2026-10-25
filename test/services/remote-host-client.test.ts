@@ -1712,4 +1712,68 @@ describe("RemoteHostClient", () => {
       await expect(client().resolveGitHealth("/x/y")).rejects.toBeInstanceOf(HostRequestError);
     });
   });
+
+  // Issue #1896 — the clone REPAIR on the agent that hosts the clone, and
+  // the read-only plan of what it would do.
+  describe("resolveGitRepair (issue #1896)", () => {
+    it("asks the agent for the plan, without confirming anything", async () => {
+      const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          gitDir: "/x/.git",
+          quarantine: ["abc"],
+          willFetch: true,
+          indexesToRebuild: ["/x/y"],
+          indexesToSkip: [],
+          actionable: true,
+        }),
+      );
+      try {
+        const plan = await client().resolveGitRepair("/x/y");
+        expect((plan as { actionable: boolean }).actionable).toBe(true);
+        expect(fetchMock.mock.calls[0][0]).toBe("http://example.invalid:1234/internal/git-repair");
+        const [, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+        expect(init.method).toBe("POST");
+        expect(JSON.parse(init.body)).toEqual({ cwd: "/x/y", confirm: false });
+        // The repair does more than the check — quarantine, a fetch, the
+        // index rebuild and a second fsck — so it needs a bigger budget than
+        // even the check's 75s.
+        expect(timeoutSpy).toHaveBeenLastCalledWith(180_000);
+      } finally {
+        timeoutSpy.mockRestore();
+      }
+    });
+
+    it("confirms the repair when asked to", async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, {
+          gitDir: "/x/.git",
+          zeroByteObjects: [],
+          otherZeroByteFiles: [],
+          fsckErrors: [],
+          healthy: true,
+          timedOut: false,
+          quarantine: "/x/.git/gc-quarantine-1",
+          quarantined: ["abc"],
+          recovered: [],
+          unrecovered: [],
+          refsRestored: true,
+          indexesRebuilt: ["/x/y"],
+          indexesSkipped: [],
+          whole: true,
+        }),
+      );
+      const outcome = await client().resolveGitRepair("/x/y", { confirm: true });
+      expect((outcome as { whole: boolean }).whole).toBe(true);
+      const [, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+      expect(JSON.parse(init.body)).toEqual({ cwd: "/x/y", confirm: true });
+    });
+
+    it("surfaces an agent that REJECTED the repair as a HostRequestError", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(404, "no such route"));
+      await expect(client().resolveGitRepair("/x/y", { confirm: true })).rejects.toBeInstanceOf(
+        HostRequestError,
+      );
+    });
+  });
 });

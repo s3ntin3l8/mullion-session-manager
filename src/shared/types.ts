@@ -241,11 +241,17 @@ export interface GitPullResult {
 }
 
 // ---------------------------------------------------------------------------
-// services/git-doctor.ts — CloneHealth (issue #1851)
+// services/git-doctor.ts — CloneHealth, RepairPlan, RepairOutcome
+// (issues #1851 and #1896)
 //
-// The READ-ONLY half of the doctor: what a health check on a project's clone
-// found. It never mutates anything — the repair is a deliberate, operator-run
-// action (scripts/git-doctor.mjs --apply).
+// CloneHealth is what the READ-ONLY half of the doctor found. It never
+// mutates anything.
+//
+// RepairPlan is what the repair WOULD do, computed from reads only — the app
+// shows it before asking for the confirmation, because the repair moves
+// files inside `.git/objects` and rewrites worktree indexes.
+//
+// RepairOutcome is what the repair DID.
 
 export interface CloneHealth {
   /** The shared git dir, or null when this is not a git checkout. */
@@ -262,6 +268,49 @@ export interface CloneHealth {
   /** True when `git fsck` did not finish — the check's verdict is UNKNOWN,
    * which is NOT the same as "damaged". */
   timedOut: boolean;
+}
+
+/** What the repair would do — computed from reads only, so showing it
+ * changes nothing. */
+export interface RepairPlan {
+  /** The shared git dir, or null when this is not a git checkout. */
+  gitDir: string | null;
+  /** The zero-byte loose objects that would be quarantined, by sha. */
+  quarantine: string[];
+  /** Whether `git fetch origin --prune` would run (there is an origin). */
+  willFetch: boolean;
+  /** The worktrees whose index would be rebuilt. */
+  indexesToRebuild: string[];
+  /** The worktrees whose index would be SKIPPED, and the paths responsible —
+   * staged content that is not in the working tree, which re-staging would
+   * discard. */
+  indexesToSkip: { path: string; paths: string[] }[];
+  /** True when the repair has damaged objects to move aside.
+   *
+   * NOT the same as "the clone is healthy": a clone whose object was deleted
+   * outright (rather than left zero-byte) has nothing to quarantine, and the
+   * fetch is what helps it. */
+  actionable: boolean;
+}
+
+/** What a repair did. */
+export interface RepairOutcome extends CloneHealth {
+  /** Where the moved-aside files went. */
+  quarantine: string | null;
+  /** The shas that were quarantined. */
+  quarantined: string[];
+  /** The shas that read fine again (they were only shadowed). */
+  recovered: string[];
+  /** The shas that are genuinely gone — never committed, not on the remote. */
+  unrecovered: string[];
+  /** Whether the remote refs were restored. */
+  refsRestored: boolean;
+  /** The worktrees whose index was rebuilt. */
+  indexesRebuilt: string[];
+  /** The worktrees whose index was left alone, and why. */
+  indexesSkipped: string[];
+  /** True when the clone is consistent again. */
+  whole: boolean;
 }
 
 // ---------------------------------------------------------------------------

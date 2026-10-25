@@ -96,7 +96,7 @@ import {
   searchProjectFiles,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
-import { inspectGitClone } from "../services/git-doctor.js";
+import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { getCachedAgents } from "../services/agent-detect.js";
@@ -170,6 +170,7 @@ import {
   gitWorktreePruneMetadataSchema,
   gitPullSchema,
   gitPushSchema,
+  gitRepairSchema,
   gitWorktreeResumeSchema,
   readFilesSchema,
   writeFilesSchema,
@@ -205,6 +206,7 @@ import type {
   GitWorktreePruneMetadataBody,
   GitPullBody,
   GitPushBody,
+  GitRepairBody,
   GitWorktreeResumeBody,
   ReadFilesBody,
   WriteFilesBody,
@@ -1266,6 +1268,38 @@ export async function internalRoutes(app: FastifyInstance) {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await inspectGitClone(resolvedCwd);
+    },
+  );
+
+  // Issue #1896 — the clone REPAIR on this agent's own filesystem, and the
+  // read-only PLAN of what it would do.
+  //
+  // Without `confirm` this returns the plan, computed from reads only —
+  // nothing is touched. With `confirm: true` the repair runs: it moves the
+  // damaged objects into a quarantine directory inside the git dir (nothing
+  // is ever deleted), fetches from origin and rebuilds the worktree
+  // indexes. The primary asks for that only after the user confirmed it.
+  //
+  // Like every other filesystem-touching route in this file, it goes through
+  // requireWithinRoots — the repair's cwd must be inside this agent's
+  // PROJECTS_ROOTS, exactly like the check's.
+  //
+  // The request body is NOT logged: it names a path, and this file's other
+  // routes keep their bodies out of the log for the same reason.
+  app.post<{ Body: GitRepairBody }>(
+    "/internal/git-repair",
+    { ...INTERNAL_RATE_LIMIT, schema: gitRepairSchema },
+    async (request, reply) => {
+      const { cwd, confirm } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      if (confirm !== true) {
+        return await planRepair(resolvedCwd);
+      }
+      const lines: string[] = [];
+      const outcome = await repairGitClone(resolvedCwd, { log: (line) => lines.push(line) });
+      app.log.info({ lines }, "git repair finished");
+      return outcome;
     },
   );
 

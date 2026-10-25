@@ -870,6 +870,100 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #1896 — the clone REPAIR on this agent's own filesystem, and the
+  // read-only PLAN of what it would do.
+  it("returns a plan for a git-repair request, and changes nothing", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "repair-plan-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+    // A zero-byte loose object — the #1836 damage.
+    const tree = execFileSync("git", ["-C", repo, "rev-parse", "HEAD^{tree}"], {
+      env: gitEnv(),
+      encoding: "utf8",
+    }).trim();
+    const loose = path.join(repo, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+    fs.rmSync(loose, { force: true });
+    fs.writeFileSync(loose, "");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: repo },
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.quarantine).toEqual([tree]);
+    expect(body.actionable).toBe(true);
+    // The plan is a READ: the damaged object is still exactly where it was.
+    expect(fs.statSync(loose).size).toBe(0);
+    expect(
+      fs.readdirSync(path.join(repo, ".git")).some((n) => n.startsWith("gc-quarantine-")),
+    ).toBe(false);
+    await app.close();
+  });
+
+  it("repairs the clone when a git-repair request confirms it", async () => {
+    const app = await buildApp();
+    const repo = path.join(projectsRoot, "repair-run-repo");
+    execFileSync("git", ["init", "-q", repo], { env: gitEnv() });
+    fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
+    execFileSync("git", ["-C", repo, "add", "-A"], { env: gitEnv() });
+    execFileSync("git", ["-C", repo, "commit", "-q", "-m", "one"], { env: gitEnv() });
+    const tree = execFileSync("git", ["-C", repo, "rev-parse", "HEAD^{tree}"], {
+      env: gitEnv(),
+      encoding: "utf8",
+    }).trim();
+    const loose = path.join(repo, ".git", "objects", tree.slice(0, 2), tree.slice(2));
+    fs.rmSync(loose, { force: true });
+    fs.writeFileSync(loose, "");
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: repo, confirm: true },
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.quarantined).toEqual([tree]);
+    expect(body.quarantine).toContain("gc-quarantine-");
+    // The damaged object was MOVED out of objects/ — never deleted.
+    expect(fs.existsSync(loose)).toBe(false);
+    await app.close();
+  });
+
+  it("rejects a git-repair request with no cwd", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: {},
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("rejects a git-repair request for a cwd outside this agent's PROJECTS_ROOTS", async () => {
+    const app = await buildApp();
+    const outsideRoots = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-repair-outside-"));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/git-repair",
+      payload: { cwd: outsideRoots },
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(400);
+
+    fs.rmSync(outsideRoots, { recursive: true, force: true });
+    await app.close();
+  });
+
   // Issue #604 — resolveWithinRoots used to compare only the LEXICAL cwd
   // against PROJECTS_ROOTS, so a symlink planted inside a root (something
   // an authenticated caller with filesystem access to a project could do)

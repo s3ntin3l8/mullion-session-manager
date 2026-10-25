@@ -11,6 +11,8 @@ import type {
   GitFileDiffResponse,
   GitPullResult,
   CloneHealth,
+  RepairOutcome,
+  RepairPlan,
   GitLogResponse,
   GitCommitDetail,
 } from "./types.js";
@@ -114,6 +116,16 @@ export const gitApi = {
   postProjectGitHealth: (projectId: number) =>
     request<CloneHealth>(`/api/projects/${projectId}/git-health`, {
       method: "POST",
+    }),
+
+  // Issue #1896 — the clone REPAIR, and the read-only PLAN of what it would
+  // do. Without `confirm` the server returns the plan and touches nothing;
+  // with it, the repair runs (it moves files inside .git/objects and
+  // rewrites the worktree indexes), so the caller confirms it explicitly.
+  postProjectGitRepair: (projectId: number, body: { confirm?: boolean } = {}) =>
+    request<RepairPlan | RepairOutcome>(`/api/projects/${projectId}/git-repair`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   // Issue #745 — Manual fast-forward git pull trigger (`git merge --ff-only @{u}`).

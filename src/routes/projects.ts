@@ -43,7 +43,7 @@ import {
   type GitDiffStats,
 } from "../services/git-diff.js";
 import { runGitFetch } from "../services/git-fetch.js";
-import { inspectGitClone } from "../services/git-doctor.js";
+import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
 import { runGitPull } from "../services/git-pull.js";
 import { runGitInit } from "../services/git-init.js";
 import {
@@ -933,6 +933,29 @@ export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Pro
     });
     return run;
   };
+}
+
+/**
+ * The message for a remote host that could not answer a git request.
+ *
+ * An agent that REJECTED the request is alive and answering: a 400 for a cwd
+ * outside its PROJECTS_ROOTS, or a 404 from an agent that predates the route
+ * (the mixed-version fleet case, #244 and #527). "Unreachable" is a different
+ * fact, and the wrong one here — the 503 stays, but the message says which
+ * it was.
+ */
+function remoteHostFailureMessage(
+  app: FastifyInstance,
+  hostId: string,
+  err: unknown,
+  what: string,
+): string {
+  const message =
+    err instanceof HostRequestError
+      ? `Host ${hostId} rejected ${what}: ${err.message}`
+      : `Host ${hostId} is unreachable`;
+  app.log.warn({ hostId, err }, message);
+  return message;
 }
 
 export async function projectsRoute(app: FastifyInstance) {
@@ -3529,17 +3552,91 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         return await getRemoteHostClient(app, project.hostId).resolveGitHealth(project.cwd);
       } catch (err) {
-        // An agent that REJECTED the request is alive and answering: a 400 for
-        // a cwd outside its PROJECTS_ROOTS, or a 404 from an agent that
-        // predates /internal/git-health (the mixed-version fleet case, #244
-        // and #527). "Unreachable" is a different fact, and the wrong one
-        // here — the 503 stays, but the message says which it was.
-        const message =
-          err instanceof HostRequestError
-            ? `Host ${project.hostId} rejected the health check: ${err.message}`
-            : `Host ${project.hostId} is unreachable`;
-        app.log.warn({ hostId: project.hostId, projectId, err }, message);
-        return reply.serviceUnavailable(message);
+        return reply.serviceUnavailable(
+          remoteHostFailureMessage(app, project.hostId, err, "the health check"),
+        );
+      }
+    },
+  );
+
+  // Issue #1896 — the REPAIR, for a clone the health check found damage in.
+  //
+  // Two phases in one endpoint, because the plan and the repair must be the
+  // same decision: without `confirm` this returns the PLAN (computed from
+  // reads only — nothing is touched), and with `confirm: true` it runs the
+  // repair and returns what it actually did.
+  //
+  // The repair moves files inside `.git/objects` and rewrites the index of
+  // every worktree of the clone, so it is behind an explicit confirmation in
+  // the UI, and two repairs for one project cannot run at once: they would
+  // mean two quarantine directories and two index rebuilds over the same tree.
+  const gitRepairParamsSchema = {
+    params: {
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
+    },
+    body: {
+      // `["object", "null"]`, not `object`: a request with NO body is the
+      // PLAN (nothing confirmed, nothing touched), and Fastify rejects a
+      // missing body outright when the schema says `object`.
+      type: ["object", "null"],
+      properties: { confirm: { type: "boolean" } },
+      additionalProperties: false,
+    },
+  };
+  // The projects with a repair in flight. A second concurrent repair for the
+  // same project is refused rather than allowed to interleave.
+  const repairsInFlight = new Set<number>();
+  app.post<{ Params: { id: string }; Body: { confirm?: boolean } }>(
+    "/api/projects/:id/git-repair",
+    { schema: gitRepairParamsSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      // The plan is a READ. Only the confirmed repair mutates anything, and
+      // only that one takes the in-flight slot.
+      if (request.body?.confirm !== true) {
+        if (project.hostId === LOCAL_HOST_ID) {
+          return await planRepair(project.cwd);
+        }
+        try {
+          return await getRemoteHostClient(app, project.hostId).resolveGitRepair(project.cwd, {
+            confirm: false,
+          });
+        } catch (err) {
+          return reply.serviceUnavailable(
+            remoteHostFailureMessage(app, project.hostId, err, "the repair"),
+          );
+        }
+      }
+
+      if (repairsInFlight.has(projectId)) {
+        return reply.conflict("A repair is already running for this project.");
+      }
+      repairsInFlight.add(projectId);
+      try {
+        if (project.hostId === LOCAL_HOST_ID) {
+          const lines: string[] = [];
+          const outcome = await repairGitClone(project.cwd, { log: (line) => lines.push(line) });
+          app.log.info({ projectId, lines }, "git repair finished");
+          return outcome;
+        }
+        try {
+          return await getRemoteHostClient(app, project.hostId).resolveGitRepair(project.cwd, {
+            confirm: true,
+          });
+        } catch (err) {
+          return reply.serviceUnavailable(
+            remoteHostFailureMessage(app, project.hostId, err, "the repair"),
+          );
+        }
+      } finally {
+        repairsInFlight.delete(projectId);
       }
     },
   );

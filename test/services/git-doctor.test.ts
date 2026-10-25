@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
+  planRepair,
   inspectGitClone,
   isLooseObjectPath,
   repairGitClone,
@@ -230,6 +231,73 @@ describe("git-doctor — the loose-object path helpers", () => {
     const sha = "abcdef0123456789abcdef0123456789abcdef01"; // pragma: allowlist secret
     expect(shaOfLoosePath(`ab/${sha.slice(2)}`)).toBe(sha);
     expect(shaOfLoosePath(`ab\\${sha.slice(2)}`)).toBe(sha);
+  });
+});
+
+describe("git-doctor — the plan", () => {
+  // The plan is what the app shows BEFORE it asks for the confirmation. It is
+  // computed from reads only, so asking for it must change nothing at all.
+  it("has nothing to do on a healthy clone", async () => {
+    const plan = await planRepair(repo);
+    expect(plan.gitDir).toBe(path.join(repo, ".git"));
+    expect(plan.quarantine).toEqual([]);
+    expect(plan.actionable).toBe(false);
+    // No origin in the fixture, so the repair would not fetch.
+    expect(plan.willFetch).toBe(false);
+    expect(plan.indexesToRebuild).toEqual([repo]);
+    expect(plan.indexesToSkip).toEqual([]);
+  });
+
+  it("names the damaged objects it would quarantine", async () => {
+    const tree = damageTheStagedTree();
+
+    const plan = await planRepair(repo);
+    expect(plan.quarantine).toEqual([tree]);
+    expect(plan.actionable).toBe(true);
+  });
+
+  it("changes nothing — it is a read", async () => {
+    const tree = damageTheStagedTree();
+
+    await planRepair(repo);
+
+    // The damaged object is still exactly where it was…
+    expect(fs.existsSync(objectPath(tree))).toBe(true);
+    expect(zeroByteObjects()).toHaveLength(1);
+    // …and no quarantine directory was created.
+    expect(
+      fs.readdirSync(path.join(repo, ".git")).some((n) => n.startsWith("gc-quarantine-")),
+    ).toBe(false);
+  });
+
+  it("knows whether the repair would fetch from origin", async () => {
+    git(["remote", "add", "origin", "/nonexistent-remote-for-the-test"]);
+    const plan = await planRepair(repo);
+    expect(plan.willFetch).toBe(true);
+  });
+
+  it("counts every worktree of the clone", async () => {
+    const linked = fs.mkdtempSync(path.join(os.tmpdir(), "git-doctor-plan-linked-"));
+    try {
+      git(["worktree", "add", "-q", linked, "-b", "side"]);
+
+      const plan = await planRepair(repo);
+      expect(plan.indexesToRebuild).toHaveLength(2);
+      expect(plan.indexesToRebuild).toContain(repo);
+      expect(plan.indexesToRebuild).toContain(linked);
+    } finally {
+      fs.rmSync(linked, { recursive: true, force: true });
+    }
+  });
+
+  it("says which index it would leave alone, and why", async () => {
+    stageThenDamageThenEditAgain();
+
+    const plan = await planRepair(repo);
+    expect(plan.indexesToSkip).toHaveLength(1);
+    expect(plan.indexesToSkip[0].path).toBe(repo);
+    expect(plan.indexesToSkip[0].paths).toEqual(["a.txt"]);
+    expect(plan.indexesToRebuild).not.toContain(repo);
   });
 });
 

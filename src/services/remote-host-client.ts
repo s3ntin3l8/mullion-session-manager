@@ -45,7 +45,7 @@ import type {
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
-import type { CloneHealth } from "./git-doctor.js";
+import type { CloneHealth, RepairOutcome, RepairPlan } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
 import type {
@@ -212,6 +212,13 @@ const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
 // following the same "real, non-error delay this proxy must not preempt"
 // reasoning as the other git constants above.
 const GIT_HEALTH_REQUEST_TIMEOUT_MS = 75_000;
+
+// Issue #1896 — the clone REPAIR, on the agent that hosts the clone. The
+// repair does more than the check — quarantine, `git fetch origin --prune`,
+// the index rebuild and a second `git fsck` — and the doctor's per-git-call
+// budget is 30s, so the worst case is several calls' worth. 180s, in family
+// with GIT_PUSH_REQUEST_TIMEOUT_MS below.
+const GIT_REPAIR_REQUEST_TIMEOUT_MS = 180_000;
 
 // Issue #345 — a dock-preview worktree's checkout/force-remove/sync
 // (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
@@ -1023,6 +1030,29 @@ export class RemoteHostClient {
       `/internal/git-health?cwd=${encodeURIComponent(cwd)}`,
       undefined,
       GIT_HEALTH_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Issue #1896 — the clone REPAIR on this agent's filesystem, and the
+   * read-only PLAN of what it would do.
+   *
+   * Without `confirm` the agent returns the plan (computed from reads only —
+   * nothing is touched); with `confirm: true` it runs the repair and returns
+   * what it actually did.
+   *
+   * Its own timeout: the repair does more than the check — quarantine, a
+   * `git fetch origin --prune`, the index rebuild and a second `git fsck` —
+   * and the doctor's per-git-call budget is 30s, so the worst case is several
+   * calls' worth. The default 5s would abandon the request and report a
+   * healthy host as unreachable — see GIT_REPAIR_REQUEST_TIMEOUT_MS above. */
+  resolveGitRepair(
+    cwd: string,
+    opts: { confirm?: boolean } = {},
+  ): Promise<RepairPlan | RepairOutcome> {
+    return this.request(
+      "/internal/git-repair",
+      { method: "POST", body: JSON.stringify({ cwd, confirm: opts.confirm === true }) },
+      GIT_REPAIR_REQUEST_TIMEOUT_MS,
     );
   }
 

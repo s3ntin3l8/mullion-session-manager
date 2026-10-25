@@ -162,13 +162,41 @@ Git panel has a **Check** button. It runs a read-only health check on the
 repository and says plainly whether it is whole, and if not, what is wrong with
 it (how many zero-byte objects, how many `git fsck` errors).
 
-It never changes anything. The repair moves files and rewrites indexes, so it
-stays a deliberate action you run yourself, on the machine that holds the
-clone:
+### Repairing it from the panel
+
+When the check finds damage, the panel offers a **Repair** button. It is
+never a one-click button: it arms first, and before you arm it the panel
+shows what the repair would do —
+
+> Repair will quarantine 3 damaged object(s), fetch from origin, and rebuild
+> 2 index(es). Damaged objects are MOVED into a quarantine directory inside
+> the git directory — nothing is deleted.
+
+— and only the second click runs it. A damaged object is **moved**, never
+deleted, so the clone's object store can be put back by hand if the repair
+turns out to have been the wrong idea.
+
+The repair reports what it actually did: how many objects were moved (and
+where), whether the refs came back from origin, which indexes were rebuilt,
+which were left alone (and why), and whether the clone is whole again. An
+object that was never committed and is not on the remote cannot be recovered
+by anything — the panel says so plainly rather than calling the clone whole.
+
+For a project on a **remote host**, the repair runs on that host, on the
+agent that owns the clone.
+
+### Repairing it by hand
+
+The same repair is available from the command line, on the machine that holds
+the clone:
 
 ```sh
 make git-doctor APPLY=1 DIR=/path/to/the/clone
 ```
+
+The command line is also the only way to force the index rebuild when the
+staged content is not in the working tree — the panel never offers that,
+because `--force` discards what you staged.
 
 `DIR` is the clone to work on; it defaults to the current directory, so
 `make git-doctor` from inside a clone inspects that clone. The repair never
