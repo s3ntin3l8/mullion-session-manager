@@ -14,12 +14,19 @@
  *   C3  the rendered contrast of the text-role tokens (--dim, --muted, --fg)
  *       over the tinted and hovered backgrounds (the shipped guard compares
  *       token against token, so it cannot see a semi-transparent tint layered
- *       over a surface)
+ *       over a surface), plus three targets asserted BY NAME, so the fixes
+ *       this series shipped stay guarded even though they moved their targets
+ *       off `--dim` and out of the token sweep
  *   C4  whether the 1040x720 Settings modal clips content at 200% zoom
  *   C5  that a failed Dock kill is visibly reported on the row (PR2's
  *       `showCheckStatus` change)
  *
  *   make verify-ui
+ *
+ * C3's arithmetic lives in scripts/lib/color-math.mjs and is pinned by
+ * test/scripts/color-math.test.ts: a parser that quietly stops understanding
+ * the `color(srgb …)` form Chromium reports `color-mix()` as would drop every
+ * tinted surface from the measurement, and the run would still say "pass".
  *
  * Boots a throwaway Mullion (scripts/demo/instance.mjs: scratch DB, scratch
  * SESSIONS_DIR/HOME, clean env, its own loopback ports), drives it with real
@@ -42,6 +49,7 @@ import path from "node:path";
 import { parseArgs } from "node:util";
 import { startDemo } from "./demo/instance.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
+import { judgeStates, parseColor, renderSample } from "./lib/color-math.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -79,6 +87,67 @@ const DOCK_CONTROL = {
   title: "UI Verify Logs",
   command: "sleep 600",
 };
+
+/** The threshold WCAG asks for, by what the sample paints. */
+const thresholdFor = (kind) => (kind === "text" ? 4.5 : 3);
+
+/** Round a ratio to two decimals, the precision the report quotes. */
+const round2 = (n) =>
+  typeof n === "number" && Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+
+/**
+ * The elements whose contrast this check is specifically responsible for.
+ *
+ * The token sweep only sees elements painted in `--dim`, `--muted` or `--fg`.
+ * The two fixes this series shipped deliberately moved their targets OFF
+ * `--dim` — the keycap chips to `--fg`, the active row's drag handle to
+ * plain white — so once fixed they leave the token sample set entirely. A
+ * full revert is caught (the colour goes back to `--dim`), but a PARTIAL
+ * revert is not: dropping only the `opacity: 1` from the active row's drag
+ * handle leaves a white icon at 40% over the emerald fill, 2.10:1, and
+ * nothing in the token sweep would ever look at it.
+ *
+ * So these targets are asserted by name, against a stated minimum, in every
+ * theme — and they are judged on the state they are ACTUALLY painted in, with
+ * no "the fade lifts on hover" allowance. That is what makes the shipped
+ * fixes actually guarded.
+ */
+const GUARDED_TARGETS = [
+  {
+    id: "active-workspace-drag-handle",
+    selector: ".workspace-item.active .ws-drag-handle",
+    kind: "graphics",
+    minRatio: 3,
+    scopes: ["app"],
+    what: "the active workspace row's drag handle",
+  },
+  {
+    id: "kbd-chip",
+    selector: ".kbd",
+    kind: "text",
+    minRatio: 4.5,
+    scopes: ["app", "command palette"],
+    what: "the keycap chip (the toolbar's shortcut hint and the palette's)",
+  },
+  {
+    id: "kbd-btn",
+    selector: ".kbd-btn",
+    kind: "text",
+    minRatio: 4.5,
+    scopes: ["command palette"],
+    what: "the keycap button in the palette footer",
+  },
+];
+
+/**
+ * A scope that measures fewer samples than this is not measuring anything
+ * useful — and a sweep that silently stopped finding elements would still
+ * report "all clear". C4 has the same floor for the same reason.
+ */
+const MIN_SAMPLES_PER_SCOPE = 25;
+
+/** Two themes x two scopes. */
+const EXPECTED_SCOPE_COUNT = 4;
 
 /**
  * Load the app and wait until it has actually rendered.
@@ -150,75 +219,9 @@ function installDimHelpers() {
   probe.remove();
   const dimColor = tokenColors["--dim"];
 
-  /**
-   * Parse a computed colour.
-   *
-   * The `color(srgb …)` form matters: Chromium reports a `color-mix()` with
-   * `transparent` — which is exactly how every tinted and hovered surface in
-   * this app is written — as `color(srgb 0.929412 0.929412 0.929412 / 0.09)`,
-   * NOT as `rgba()`. A parser that only understands `rgb()`/`rgba()` silently
-   * drops every one of those layers and measures the plain surface behind
-   * them, which is the very gap this check exists to close.
-   */
-  const parseColor = (value) => {
-    if (!value) return null;
-    const v = value.trim().toLowerCase();
-    if (v === "transparent") return null;
-    let m = /^rgba?\(([^)]+)\)$/.exec(v);
-    if (m) {
-      const parts = m[1]
-        .split(/[\s,/]+/)
-        .filter(Boolean)
-        .map(Number);
-      if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN)) return null;
-      return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
-    }
-    m = /^color\(srgb\s+([^)]+)\)$/.exec(v);
-    if (m) {
-      const parts = m[1]
-        .split(/[\s/]+/)
-        .filter(Boolean)
-        .map(Number);
-      if (parts.length < 3 || parts.slice(0, 3).some(Number.isNaN)) return null;
-      return {
-        r: Math.round(parts[0] * 255),
-        g: Math.round(parts[1] * 255),
-        b: Math.round(parts[2] * 255),
-        a: parts.length > 3 ? parts[3] : 1,
-      };
-    }
-    m = /^#([0-9a-f]{6})$/.exec(v);
-    if (m) {
-      const n = parseInt(m[1], 16);
-      return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 };
-    }
-    return null;
-  };
-
-  const over = (fg, bg) => {
-    const a = fg.a + bg.a * (1 - fg.a);
-    if (a <= 0) return { r: 255, g: 255, b: 255, a: 0 };
-    return {
-      r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
-      g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
-      b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
-      a,
-    };
-  };
-
-  const luminance = (c) => {
-    const f = (v) => {
-      const s = v / 255;
-      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-    };
-    return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
-  };
-
-  const contrast = (a, b) => {
-    const l1 = luminance(a);
-    const l2 = luminance(b);
-    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-  };
+  // The colour arithmetic itself lives in Node (scripts/lib/color-math.mjs),
+  // where it can be pinned against known WCAG pairs without a browser. The
+  // page only COLLECTS raw colour strings and layer lists.
 
   const cssPath = (el) => {
     const parts = [];
@@ -253,33 +256,27 @@ function installDimHelpers() {
     return o;
   };
 
-  /** The background actually painted behind `el`, composited layer by layer. */
-  const effectiveBackground = (el) => {
+  /**
+   * The background layers painted behind `el`, innermost first.
+   *
+   * Returned as raw computed colour strings — the compositing happens in Node
+   * (scripts/lib/color-math.mjs) where it can be unit-tested against known
+   * WCAG pairs. The innermost layer is the one painted on top of the others.
+   */
+  const backgroundLayers = (el) => {
     const layers = [];
     let hasImage = false;
     let node = el;
     while (node) {
       const cs = globalThis.getComputedStyle(node);
-      const c = parseColor(cs.backgroundColor);
-      if (c && c.a > 0) layers.push(c);
+      layers.push(cs.backgroundColor);
       if (cs.backgroundImage && cs.backgroundImage !== "none") {
         hasImage = true;
         break;
       }
       node = node.parentElement;
     }
-    // layers[0] is the innermost (painted on top).
-    let baseIdx = -1;
-    for (let i = layers.length - 1; i >= 0; i--) {
-      if (layers[i].a >= 0.999) {
-        baseIdx = i;
-        break;
-      }
-    }
-    let current = baseIdx >= 0 ? layers[baseIdx] : { r: 255, g: 255, b: 255, a: 1 };
-    const start = baseIdx >= 0 ? baseIdx - 1 : layers.length - 1;
-    for (let i = start; i >= 0; i--) current = over(layers[i], current);
-    return { color: current, hasImage, layerCount: layers.length };
+    return { layers, hasImage };
   };
 
   const isRendered = (el) => {
@@ -355,22 +352,72 @@ function installDimHelpers() {
     return null;
   };
 
-  /** The threshold WCAG asks for, by what the sample paints. */
-  const thresholdFor = (kind) => (kind === "text" ? 4.5 : 3);
+  /**
+   * The raw painting facts about one element.
+   *
+   * Deliberately uninterpreted: the page hands back colour strings and layer
+   * lists, and Node does the arithmetic (scripts/lib/color-math.mjs), where it
+   * can be pinned against known WCAG pairs.
+   */
+  const describe = (el, key) => {
+    const bg = backgroundLayers(el);
+    return {
+      key,
+      kind: sampleKind(el),
+      token: el.getAttribute("data-ui-verify-token"),
+      path: cssPath(el),
+      text: (el.textContent || "").trim().slice(0, 40),
+      color: globalThis.getComputedStyle(el).color,
+      opacity: effectiveOpacity(el),
+      layers: bg.layers,
+      hasImage: bg.hasImage,
+    };
+  };
 
   globalThis.__uiVerifyDim = {
     dimColor,
-    /** Mark every rendered `--dim` element with a stable id. */
-    mark() {
+    /**
+     * Mark the elements to measure.
+     *
+     * Two populations:
+     *  - every rendered element painted in one of the three text-role tokens
+     *    (`--dim`, `--muted`, `--fg`), and
+     *  - the explicitly GUARDED targets, whose colour is deliberately NOT a
+     *    token (the fixes moved them off `--dim`), so the token sweep on its
+     *    own would never see them again.
+     *
+     * `rootSelector` scopes the sweep to ONE surface. It matters: with the
+     * command palette open, the app chrome behind it is covered by the
+     * palette's backdrop, so it cannot be hovered and the user cannot see
+     * it — measuring it there would judge the same element differently in
+     * two scopes (its de-emphasis lifts on hover in the app scope, and
+     * cannot lift behind an overlay). The app chrome is measured in the app
+     * scope, where it is visible; the palette is measured in the palette
+     * scope.
+     */
+    mark(rootSelector, guards) {
       globalThis.document
-        .querySelectorAll("[data-ui-verify-dim], [data-ui-verify-hover], [data-ui-verify-token]")
+        .querySelectorAll(
+          "[data-ui-verify-dim], [data-ui-verify-hover], [data-ui-verify-token], [data-ui-verify-guard]",
+        )
         .forEach((el) => {
           el.removeAttribute("data-ui-verify-dim");
           el.removeAttribute("data-ui-verify-hover");
           el.removeAttribute("data-ui-verify-token");
+          el.removeAttribute("data-ui-verify-guard");
         });
+      const root = globalThis.document.querySelector(rootSelector);
+      if (!root) {
+        return {
+          dimColor,
+          marked: 0,
+          hoverTargets: [],
+          guarded: [],
+          error: `no ${rootSelector} in the DOM`,
+        };
+      }
       const hoverTargets = new Map();
-      const elements = Array.from(globalThis.document.querySelectorAll("*")).filter(
+      const elements = Array.from(root.querySelectorAll("*")).filter(
         (el) =>
           isRendered(el) &&
           Object.values(tokenColors).includes(globalThis.getComputedStyle(el).color) &&
@@ -393,53 +440,47 @@ function installDimHelpers() {
           hoverTarget.setAttribute("data-ui-verify-hover", String(hoverTargets.size - 1));
         }
       });
+
+      const guarded = [];
+      for (const guard of guards ?? []) {
+        const found = Array.from(root.querySelectorAll(guard.selector)).filter((el) =>
+          isRendered(el),
+        );
+        found.forEach((el, index) => {
+          const key = `${guard.id}#${index}`;
+          el.setAttribute("data-ui-verify-guard", key);
+          guarded.push({ id: guard.id, key, path: cssPath(el) });
+        });
+      }
       return {
         dimColor,
         marked: elements.length,
         hoverTargets: [...hoverTargets.entries()].map(([el, id]) => ({ id, path: cssPath(el) })),
+        guarded,
       };
     },
-    /** Measure the marked elements in their CURRENT painted state. */
-    measure() {
+    /** Collect the raw painting facts for everything marked, as painted NOW. */
+    collect() {
       const samples = [];
       for (const el of globalThis.document.querySelectorAll("[data-ui-verify-dim]")) {
-        const id = Number(el.getAttribute("data-ui-verify-dim"));
-        const bg = effectiveBackground(el);
-        const fg = parseColor(globalThis.getComputedStyle(el).color);
-        const alpha = effectiveOpacity(el);
-        const kind = sampleKind(el);
-        // A deliberate fade (opacity < 1) is the design's own de-emphasis —
-        // the element returns to full opacity when the user engages with it,
-        // and that fully-opaque state is the one that carries its meaning. So
-        // a faded element is judged on its unfaded colour; an unfaded element
-        // is judged exactly as painted.
-        const judgeAlpha = alpha < 1 ? 1 : alpha;
-        const rendered = fg ? over({ ...fg, a: judgeAlpha }, bg.color) : null;
-        samples.push({
-          id,
-          kind,
-          threshold: thresholdFor(kind),
-          token: el.getAttribute("data-ui-verify-token") ?? "--dim",
-          path: cssPath(el),
-          text: (el.textContent || "").trim().slice(0, 40),
-          color: globalThis.getComputedStyle(el).color,
-          opacity: Math.round(alpha * 100) / 100,
-          foregroundResolved: fg !== null,
-          background: `rgb(${Math.round(bg.color.r)}, ${Math.round(bg.color.g)}, ${Math.round(bg.color.b)})`,
-          backgroundLayers: bg.layerCount,
-          ratio: rendered ? Math.round(contrast(rendered, bg.color) * 100) / 100 : null,
-          hasImage: bg.hasImage,
-        });
+        samples.push(describe(el, `d${el.getAttribute("data-ui-verify-dim")}`));
       }
-      return samples;
+      const guards = [];
+      for (const el of globalThis.document.querySelectorAll("[data-ui-verify-guard]")) {
+        guards.push(describe(el, el.getAttribute("data-ui-verify-guard")));
+      }
+      return { samples, guards };
     },
     clear() {
       globalThis.document
-        .querySelectorAll("[data-ui-verify-dim], [data-ui-verify-hover], [data-ui-verify-token]")
+        .querySelectorAll(
+          "[data-ui-verify-dim], [data-ui-verify-hover], [data-ui-verify-token], [data-ui-verify-guard]",
+        )
         .forEach((el) => {
           el.removeAttribute("data-ui-verify-dim");
           el.removeAttribute("data-ui-verify-hover");
           el.removeAttribute("data-ui-verify-token");
+          el.removeAttribute("data-ui-verify-guard");
         });
       delete globalThis.__uiVerifyDim;
     },
@@ -659,13 +700,43 @@ const CHECKS = [
       await openApp(page, demo, { waitForData: true });
 
       const scopes = [];
+      const preconditions = [];
+      const themes = ["dark", "light"];
+
+      /**
+       * Turn one collected sample into its rendered ratio.
+       *
+       * The page hands back raw colour strings; the arithmetic happens here,
+       * in Node, where `scripts/lib/color-math.mjs` can be pinned against
+       * known WCAG pairs by `test/scripts/color-math.test.ts`.
+       */
+      const render = (raw) => {
+        const rendered = renderSample({
+          color: raw.color,
+          layers: raw.layers.map(parseColor),
+          opacity: raw.opacity,
+        });
+        return {
+          ...raw,
+          ratio: round2(rendered.ratio),
+          foregroundResolved: rendered.resolved,
+          background: rendered.background
+            ? `rgb(${Math.round(rendered.background.r)}, ${Math.round(rendered.background.g)}, ${Math.round(rendered.background.b)})`
+            : null,
+          backgroundLayers: raw.layers.length,
+        };
+      };
 
       /**
        * Measure the current DOM. The hover sweep re-measures with each hover
        * target hovered, so a `:hover` rule that repaints the background is
        * measured as painted, not as authored.
+       *
+       * `rootSelector` scopes the sweep to ONE surface — see the note on
+       * `mark()`: the app chrome behind the open palette is covered by the
+       * palette's backdrop, so it is measured in the app scope instead.
        */
-      const measure = async (themeName, scopeName) => {
+      const measure = async (themeName, scopeName, rootSelector) => {
         const installed = await page.evaluate(installDimHelpers);
         if (!installed) {
           return {
@@ -673,11 +744,47 @@ const CHECKS = [
             scope: scopeName,
             error: "no .cmux-root in the DOM",
             samples: [],
+            guards: [],
           };
         }
-        const marked = await page.evaluate(() => globalThis.__uiVerifyDim.mark());
-        const base = await page.evaluate(() => globalThis.__uiVerifyDim.measure());
-        const byId = new Map(base.map((s) => [s.id, s]));
+        const marked = await page.evaluate(
+          ({ root, guards }) => globalThis.__uiVerifyDim.mark(root, guards),
+          {
+            root: rootSelector,
+            guards: GUARDED_TARGETS.map((g) => ({ id: g.id, selector: g.selector })),
+          },
+        );
+        if (marked.error) {
+          return {
+            theme: themeName,
+            scope: scopeName,
+            error: marked.error,
+            samples: [],
+            guards: [],
+          };
+        }
+        const base = await page.evaluate(() => globalThis.__uiVerifyDim.collect());
+
+        // Per-element state lists: the base state first, then every state
+        // observed while something was hovered.
+        const sampleStates = new Map();
+        const guardStates = new Map();
+        for (const raw of base.samples) {
+          const rendered = render(raw);
+          sampleStates.set(raw.key, {
+            raw,
+            rendered,
+            states: [{ ratio: rendered.ratio, opacity: raw.opacity }],
+          });
+        }
+        for (const raw of base.guards) {
+          const rendered = render(raw);
+          guardStates.set(raw.key, {
+            raw,
+            rendered,
+            states: [{ ratio: rendered.ratio, opacity: raw.opacity }],
+          });
+        }
 
         let hovered = 0;
         let confirmed = 0;
@@ -705,26 +812,76 @@ const CHECKS = [
           }, target.id);
           if (applied) confirmed++;
           hoverResults.push({ id: target.id, path: target.path, hovered: applied, reason: "" });
-          // Re-measure the SAME marked elements, so the id still identifies
+          // Re-collect the SAME marked elements, so the key still identifies
           // the same element even if the DOM shifted while hovering.
-          const after = await page.evaluate(() => globalThis.__uiVerifyDim.measure());
-          for (const sample of after) {
-            const known = byId.get(sample.id);
-            if (!known || known.ratio === null || sample.ratio === null) continue;
-            if (sample.ratio < known.ratio) {
-              known.hoverRatio = sample.ratio;
-              known.hoverBackground = sample.background;
-            }
-          }
+          const after = await page.evaluate(() => globalThis.__uiVerifyDim.collect());
+          const fold = (raw, into) => {
+            const entry = into.get(raw.key);
+            if (!entry) return;
+            const rendered = render(raw);
+            if (rendered.ratio === null) return;
+            entry.states.push({ ratio: rendered.ratio, opacity: raw.opacity });
+          };
+          for (const raw of after.samples) fold(raw, sampleStates);
+          for (const raw of after.guards) fold(raw, guardStates);
         }
         await page.evaluate(() => globalThis.__uiVerifyDim.clear());
 
-        const samples = base.map((s) => ({
-          ...s,
-          hoverRatio: s.hoverRatio ?? null,
-          hoverBackground: s.hoverBackground ?? null,
-          worstRatio: s.ratio === null ? null : Math.min(s.ratio, s.hoverRatio ?? s.ratio),
-        }));
+        // The token sweep. Each element is judged on the state it is meant to
+        // be read in: its highest observed opacity. A de-emphasis that lifts
+        // on hover is judged engaged; a fade that NEVER lifts is judged
+        // exactly as painted, because that is the state it lives in.
+        const samples = [...sampleStates.values()].map((entry) => {
+          const judged = judgeStates(entry.states);
+          return {
+            id: entry.raw.key,
+            kind: entry.raw.kind,
+            threshold: thresholdFor(entry.raw.kind),
+            token: entry.raw.token ?? "--dim",
+            path: entry.raw.path,
+            text: entry.raw.text,
+            color: entry.raw.color,
+            opacity: Math.round(entry.raw.opacity * 100) / 100,
+            foregroundResolved: entry.rendered.foregroundResolved,
+            background: entry.rendered.background,
+            backgroundLayers: entry.rendered.backgroundLayers,
+            hasImage: entry.raw.hasImage,
+            ratio: entry.rendered.ratio,
+            // The ratio the verdict is based on.
+            judgedRatio: round2(judged.judgedRatio),
+            // The ratio as painted at rest, and the ratio at full strength.
+            paintedRatio: round2(judged.paintedRatio),
+            engagedRatio: round2(judged.engagedRatio),
+            // Did the de-emphasis ever lift? If not, the painted ratio IS
+            // the judged one.
+            lifts: judged.lifts,
+            // The strictest state seen at all — reported, not judged.
+            worstRatio: round2(Math.min(...entry.states.map((s) => s.ratio))),
+          };
+        });
+
+        // The guarded targets are judged on the STRICTEST state they were
+        // seen in, with no lift allowance at all: that is what makes the
+        // shipped fixes actually guarded.
+        const guards = [...guardStates.values()].map((entry) => {
+          const guard = GUARDED_TARGETS.find((g) => entry.raw.key.startsWith(`${g.id}#`));
+          return {
+            id: guard?.id ?? entry.raw.key,
+            what: guard?.what ?? "",
+            minRatio: guard?.minRatio ?? null,
+            kind: entry.raw.kind,
+            expectedKind: guard?.kind ?? null,
+            path: entry.raw.path,
+            text: entry.raw.text,
+            color: entry.raw.color,
+            opacity: Math.round(entry.raw.opacity * 100) / 100,
+            background: entry.rendered.background,
+            ratio: entry.rendered.ratio,
+            strictestRatio: round2(Math.min(...entry.states.map((s) => s.ratio))),
+            states: entry.states.length,
+          };
+        });
+
         return {
           theme: themeName,
           scope: scopeName,
@@ -736,30 +893,48 @@ const CHECKS = [
           confirmedHoverTargets: confirmed,
           hoverResults,
           samples,
+          guards,
+          markedGuards: marked.guarded,
         };
       };
 
       const themeButton = page.locator(".toolbar-theme-btn");
 
-      for (const theme of ["dark", "light"]) {
+      for (const theme of themes) {
         if (theme === "light") {
+          const titleBefore = await themeButton.first().getAttribute("title");
           await themeButton.first().click();
-          await page
+          // The theme switch is a PRECONDITION, not something to swallow. If
+          // the click did not switch the theme, the "light" pass would just
+          // re-measure the dark theme and the run would look like it covered
+          // both themes while covering one twice.
+          const switched = await page
             .locator(".cmux-root.light")
             .waitFor({ state: "attached", timeout: 10_000 })
-            .catch(() => {});
+            .then(() => true)
+            .catch(() => false);
           await page.waitForTimeout(700);
+          const titleAfter = await themeButton.first().getAttribute("title");
+          preconditions.push({
+            precondition: "the theme toggle switches to the light theme",
+            ok: switched,
+            titleBefore,
+            titleAfter,
+          });
+          if (!switched) break;
         }
         // Scope 1: the app's own chrome (sidebar, dock, panes).
-        scopes.push(await measure(theme, "app"));
+        scopes.push(await measure(theme, "app", ".cmux-root"));
 
         // Scope 2: the command palette — the densest source of `--dim` over
         // TINTED surfaces (the accent-tinted target strip and the project
-        // picker) and of hovered rows (`.cmd-row:hover`).
+        // picker) and of hovered rows (`.cmd-row:hover`). Scoped to the
+        // palette's own subtree: the app chrome behind it is covered by the
+        // palette's backdrop, so it is measured in the app scope above.
         await page.keyboard.press("ControlOrMeta+k");
         await page.locator(".cmd-palette").waitFor({ state: "visible", timeout: 15_000 });
         await page.waitForTimeout(700);
-        scopes.push(await measure(theme, "command palette"));
+        scopes.push(await measure(theme, "command palette", ".cmd-palette"));
         await page.keyboard.press("Escape");
         await page.locator(".cmd-palette").waitFor({ state: "detached", timeout: 10_000 });
         await page.waitForTimeout(400);
@@ -767,35 +942,145 @@ const CHECKS = [
 
       await page.close();
 
+      // The two themes must actually be two themes: if they resolved the
+      // same `--dim`, the "light" pass measured the dark theme twice.
+      const darkScope = scopes.find((s) => s.theme === "dark" && s.scope === "app");
+      const lightScope = scopes.find((s) => s.theme === "light" && s.scope === "app");
+      const themesDiffer =
+        darkScope && lightScope ? darkScope.dimColor !== lightScope.dimColor : false;
+      preconditions.push({
+        precondition: "the two themes resolve different --dim values",
+        ok: themesDiffer,
+        dark: darkScope?.dimColor ?? null,
+        light: lightScope?.dimColor ?? null,
+      });
+
       const failures = scopes.flatMap((t) =>
         t.samples
           .filter(
             (s) =>
-              s.worstRatio !== null && s.worstRatio < s.threshold && s.kind !== null && !s.hasImage,
+              s.judgedRatio !== null &&
+              s.judgedRatio < s.threshold &&
+              s.kind !== null &&
+              !s.hasImage,
           )
           .map((s) => ({ ...s, theme: t.theme, scope: t.scope })),
       );
       const notMeasurable = scopes.flatMap((t) =>
         t.samples.filter((s) => s.hasImage).map((s) => ({ ...s, theme: t.theme, scope: t.scope })),
       );
+
+      // The guarded targets: present in every theme and scope they are
+      // expected in, and clear of their stated minimum in the strictest state
+      // they were seen in.
+      const guardMissing = [];
+      const guardFailures = [];
+      for (const guard of GUARDED_TARGETS) {
+        for (const scopeName of guard.scopes) {
+          for (const theme of themes) {
+            const scope = scopes.find((s) => s.theme === theme && s.scope === scopeName);
+            const found = (scope?.guards ?? []).filter((g) => g.id === guard.id);
+            if (!found.length) {
+              guardMissing.push({
+                id: guard.id,
+                theme,
+                scope: scopeName,
+                minRatio: guard.minRatio,
+                what: guard.what,
+              });
+              continue;
+            }
+            for (const g of found) {
+              const kindMismatch = g.kind !== guard.kind;
+              const tooLow = g.strictestRatio !== null && g.strictestRatio < guard.minRatio;
+              if (kindMismatch || tooLow) {
+                guardFailures.push({
+                  ...g,
+                  theme,
+                  scope: scopeName,
+                  minRatio: guard.minRatio,
+                  kindMismatch,
+                  tooLow,
+                });
+              }
+            }
+          }
+        }
+      }
+
       const measured = scopes.reduce((n, t) => n + t.total, 0);
+      const guardsMeasured = scopes.reduce((n, t) => n + (t.guards?.length ?? 0), 0);
       const unresolved = scopes.reduce((n, t) => n + t.unresolvedForeground, 0);
-      // A check that cannot resolve the foreground colour is measuring
-      // nothing — fail loudly rather than reporting a bogus constant ratio.
-      const ok = failures.length === 0 && measured > 0 && unresolved === 0;
+      // A scope that measures almost nothing is not measuring anything — and
+      // a sweep that silently stopped finding elements would still report
+      // "all clear". C4 has the same floor for the same reason.
+      const thinScopes = scopes
+        .filter((t) => t.total < MIN_SAMPLES_PER_SCOPE)
+        .map((t) => ({ theme: t.theme, scope: t.scope, total: t.total }));
+      const scopeCountOk = scopes.length === EXPECTED_SCOPE_COUNT;
+      const preconditionsOk = preconditions.every((p) => p.ok);
+
+      const reasons = [];
+      if (!preconditionsOk) {
+        reasons.push(
+          `a precondition failed (${preconditions
+            .filter((p) => !p.ok)
+            .map((p) => p.precondition)
+            .join("; ")})`,
+        );
+      }
+      if (!scopeCountOk) {
+        reasons.push(
+          `only ${scopes.length} of ${EXPECTED_SCOPE_COUNT} scope/theme combinations were measured`,
+        );
+      }
+      if (thinScopes.length) {
+        reasons.push(
+          `${thinScopes.length} scope(s) measured fewer than ${MIN_SAMPLES_PER_SCOPE} samples ` +
+            `(${thinScopes.map((t) => `${t.theme}/${t.scope}=${t.total}`).join(", ")})`,
+        );
+      }
+      if (unresolved > 0) {
+        reasons.push(
+          `${unresolved} samples had an unresolvable foreground colour — the measurement is not trustworthy`,
+        );
+      }
+      if (guardMissing.length) {
+        reasons.push(
+          `${guardMissing.length} guarded target(s) were not found ` +
+            `(${guardMissing.map((g) => `${g.id} in ${g.theme}/${g.scope}`).join(", ")})`,
+        );
+      }
+      if (guardFailures.length) {
+        reasons.push(
+          `${guardFailures.length} guarded target(s) fell below their minimum ` +
+            `(worst ${Math.min(...guardFailures.map((g) => g.strictestRatio ?? Infinity))}:1)`,
+        );
+      }
+      if (failures.length) {
+        reasons.push(
+          `${failures.length} of ${measured} text-role samples fall below their WCAG threshold ` +
+            `(worst ${Math.min(...failures.map((f) => f.judgedRatio))}:1)`,
+        );
+      }
+
+      const ok = reasons.length === 0;
 
       return {
         status: ok ? "pass" : "fail",
         detail: ok
-          ? `${measured} text-role samples across ${scopes.length} scope/theme combinations, all clear of their WCAG threshold`
-          : unresolved > 0
-            ? `${unresolved} samples had an unresolvable foreground colour — the measurement is not trustworthy`
-            : `${failures.length} of ${measured} text-role samples fall below their WCAG threshold ` +
-              `(worst ${Math.min(...failures.map((f) => f.worstRatio))}:1)`,
+          ? `${measured} text-role samples across ${scopes.length} scope/theme combinations, all clear of ` +
+            `their WCAG threshold; ${guardsMeasured} guarded targets clear of their minimums`
+          : reasons.join("; "),
         evidence: {
           thresholds: { text: 4.5, graphics: 3 },
           measured,
+          guardsMeasured,
           unresolvedForeground: unresolved,
+          scopeCount: scopes.length,
+          minSamplesPerScope: MIN_SAMPLES_PER_SCOPE,
+          preconditions,
+          guardedTargets: GUARDED_TARGETS,
           scopes: scopes.map((t) => ({
             theme: t.theme,
             scope: t.scope,
@@ -807,8 +1092,8 @@ const CHECKS = [
             hoverResults: t.hoverResults?.filter((h) => !h.hovered).slice(0, 8),
             error: t.error,
             worst: [...(t.samples ?? [])]
-              .filter((s) => s.worstRatio !== null)
-              .sort((a, b) => a.worstRatio - b.worstRatio)
+              .filter((s) => s.judgedRatio !== null)
+              .sort((a, b) => a.judgedRatio - b.judgedRatio)
               .slice(0, 8)
               .map((s) => ({
                 path: s.path,
@@ -816,18 +1101,34 @@ const CHECKS = [
                 kind: s.kind,
                 threshold: s.threshold,
                 ratio: s.ratio,
-                hoverRatio: s.hoverRatio,
+                judgedRatio: s.judgedRatio,
+                paintedRatio: s.paintedRatio,
+                engagedRatio: s.engagedRatio,
+                lifts: s.lifts,
                 opacity: s.opacity,
                 background: s.background,
-                hoverBackground: s.hoverBackground,
               })),
+            guards: (t.guards ?? []).map((g) => ({
+              id: g.id,
+              what: g.what,
+              minRatio: g.minRatio,
+              kind: g.kind,
+              ratio: g.ratio,
+              strictestRatio: g.strictestRatio,
+              opacity: g.opacity,
+              background: g.background,
+              path: g.path,
+            })),
             samples: (t.samples ?? []).map((s) => ({
               path: s.path,
               text: s.text,
               kind: s.kind,
               threshold: s.threshold,
               ratio: s.ratio,
-              hoverRatio: s.hoverRatio,
+              judgedRatio: s.judgedRatio,
+              paintedRatio: s.paintedRatio,
+              engagedRatio: s.engagedRatio,
+              lifts: s.lifts,
               opacity: s.opacity,
               background: s.background,
             })),
@@ -841,11 +1142,28 @@ const CHECKS = [
             path: f.path,
             text: f.text,
             ratio: f.ratio,
-            hoverRatio: f.hoverRatio,
+            judgedRatio: f.judgedRatio,
+            paintedRatio: f.paintedRatio,
+            engagedRatio: f.engagedRatio,
+            lifts: f.lifts,
             opacity: f.opacity,
             background: f.background,
-            hoverBackground: f.hoverBackground,
           })),
+          guardFailures: guardFailures.slice(0, 20).map((g) => ({
+            id: g.id,
+            theme: g.theme,
+            scope: g.scope,
+            minRatio: g.minRatio,
+            kind: g.kind,
+            expectedKind: g.expectedKind,
+            kindMismatch: g.kindMismatch,
+            path: g.path,
+            ratio: g.ratio,
+            strictestRatio: g.strictestRatio,
+            opacity: g.opacity,
+            background: g.background,
+          })),
+          guardMissing,
           notMeasurable: notMeasurable.slice(0, 20).map((n) => ({
             theme: n.theme,
             scope: n.scope,

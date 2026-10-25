@@ -230,8 +230,9 @@ verification below found two places where that mattered — a keycap chip and
 the active workspace row — both of which sat under 4.5:1 once their real
 painted background was composited. `scripts/verify-ui-runtime.mjs`
 (`make verify-ui`) is the guard for that layer: it measures the composited,
-hovered result in a real browser. Neither guard subsumes the other, and
-the token guard stays the one that runs on every push.
+hovered result in a real browser, and asserts the two fixed targets **by
+name**, so a partial revert of either fix fails it. Neither guard subsumes
+the other, and the token guard stays the one that runs on every push.
 
 ---
 
@@ -311,9 +312,13 @@ env, its own loopback ports), drives it with real Chromium, and tears
 everything down again — including the demo's session scopes.
 
 The script is committed and re-runnable, and it exits non-zero when a check
-fails, so it works as a manual gate. It is deliberately **not** wired into
-CI: it needs a browser binary and a demo instance, exactly like the opt-in
-`make test-e2e` suite, which is likewise not a required status check.
+fails, so it works as a manual gate. Its contrast arithmetic lives in
+`scripts/lib/color-math.mjs` and is pinned by
+`test/scripts/color-math.test.ts`, so a change to the maths fails the
+ordinary test suite rather than silently changing what the browser check
+measures. It is deliberately **not** wired into CI: it needs a browser binary
+and a demo instance, exactly like the opt-in `make test-e2e` suite, which is
+likewise not a required status check.
 
 ### 1. Focus after a palette-initiated workspace switch — the defect is real
 
@@ -356,24 +361,98 @@ transparent)`.
 
 Measuring the painted result instead — compositing every translucent layer
 over its ancestors, then re-measuring each hoverable ancestor while it is
-genuinely hovered — found **two** defects the token-level figures missed:
+genuinely hovered — found **two** defects the token-level figures missed.
+Both rows below quote the **dark theme**, which is the worse of the two for
+the chips; the drag handle's "was" is worse still in the light theme, at
+1.00:1:
 
-| Where                                  | Was                         | Now    | Why                                                                                                                                                                                                     |
-| -------------------------------------- | --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.kbd` / `.kbd-btn` keycap chips       | **3.92:1** (3.13:1 hovered) | 13.4:1 | The chip's own fill is a tint of `--fg`, so it moves the background _toward_ whatever text colour sits on it. `--dim` on it cannot clear 4.5:1; the chip's text is now `--fg`.                          |
-| The active workspace row's drag handle | **1.15:1**                  | 5.36:1 | The active row is a _fill_ surface (`--accent-fill` under white text), not a flat one. `--dim` on it was invisible; it is now white, like the row's own text and its kebab/danger actions already were. |
+| Where                                  | Was                         | Now                          | Why                                                                                                                                                                                                     |
+| -------------------------------------- | --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.kbd` / `.kbd-btn` keycap chips       | **3.92:1** (3.12:1 hovered) | **11.45:1** (9.11:1 hovered) | The chip's own fill is a tint of `--fg`, so it moves the background _toward_ whatever text colour sits on it. `--dim` on it cannot clear 4.5:1; the chip's text is now `--fg`.                          |
+| The active workspace row's drag handle | **1.15:1**                  | **5.35:1**                   | The active row is a _fill_ surface (`--accent-fill` under white text), not a flat one. `--dim` on it was invisible; it is now white, like the row's own text and its kebab/danger actions already were. |
 
 Both are CSS-only fixes (`styles/toolbar.css`, `styles/sidebar.css`); no token
 value changed, because the tokens themselves were never the problem. The
 check now measures all three text-role tokens (`--dim`, `--muted`, `--fg`)
-across the app chrome _and_ the command palette, in both themes: **474
-samples, every one clear of its WCAG threshold** (4.5:1 for text, 3:1 for a
-graphical object).
+across the app chrome _and_ the command palette, in both themes: **293
+samples across the four scope/theme combinations, every one clear of its WCAG
+threshold** (4.5:1 for text, 3:1 for a graphical object).
 
-The browser check is what guards these two fixes. A stylesheet-content
-lint rule cannot: `jsdom` does not resolve `var()`, and no static rule can
-know that `.ws-drag-handle` is painted on top of `--accent-fill` without
-matching selectors against a real DOM.
+#### What actually guards the two fixes
+
+A stylesheet-content lint rule cannot guard them: `jsdom` does not resolve
+`var()`, and no static rule can know that `.ws-drag-handle` is painted on top
+of `--accent-fill` without matching selectors against a real DOM. The browser
+check can — but only if it is told what to look at, and the token sweep alone
+is not enough.
+
+The token sweep sees elements painted in `--dim`, `--muted` or `--fg`. Both
+fixes deliberately moved their targets **off** `--dim`: the chips to `--fg`,
+the active row's handle to plain white. So once fixed, they leave the token
+sample set entirely. A full revert is still caught (the colour goes back to
+`--dim`), but a **partial** revert is not: dropping only the `opacity: 1`
+from the active row's drag handle leaves a white icon at 40 % over the
+emerald fill — 2.10:1 in the dark theme, 2.29:1 in the light one, both under
+the 3:1 WCAG 1.4.11 asks of a graphical object — and nothing in the token
+sweep would ever look at it.
+
+So three targets are asserted **by name**, against a stated minimum, in every
+theme, and judged on the state they are **actually painted in** with no
+allowance for a de-emphasis that lifts on hover:
+
+| Target                                   | What it paints              | Minimum |
+| ---------------------------------------- | --------------------------- | ------- |
+| `.workspace-item.active .ws-drag-handle` | a graphical object (an SVG) | 3:1     |
+| `.kbd`                                   | text                        | 4.5:1   |
+| `.kbd-btn`                               | text                        | 4.5:1   |
+
+Both reverts are verified to fail the check: dropping `opacity: 1` reports
+the handle at 2.10:1 (dark) / 2.29:1 (light), and putting `--dim` back on the
+chips reports them at 3.92:1 — caught by the guards _and_ by the token sweep.
+
+#### How a faded element is judged
+
+An element's `opacity` is part of what it paints, so it reaches the ratio: an
+element at `opacity: 0.4` is measured at 40 % strength, not as if it were
+opaque. But a deliberate de-emphasis — this app drops an inactive workspace
+row's drag handle to `opacity: 0.4` until the row is hovered — is a
+reversible presentation state, so it is judged in the state it is meant to be
+read in. The rule is therefore: **judge on the worst state at the element's
+highest observed opacity**. A de-emphasis that lifts on hover is judged
+engaged; a fade that never lifts is judged exactly as painted, because that
+is the state it lives in.
+
+Before this rule the opacity never reached the ratio at all, and a fade that
+never lifted was reported as a pass.
+
+#### The arithmetic is pinned by tests
+
+The contrast maths is the deliverable of this check, so it lives in its own
+module — `scripts/lib/color-math.mjs` — and `test/scripts/color-math.test.ts`
+pins it against known WCAG pairs and against the real token values: the
+`color(srgb …)` form Chromium reports `color-mix()` as (which is the form the
+whole tinted-surface argument depends on), the compositing of translucent
+layers, the ratios for `--dim` on `--accent-fill` (1.57:1), white on it
+(5.35:1) and white at 40 % opacity on it (2.10:1), and the judgement rule
+itself. A parse regression there would otherwise fail silently as "all clear".
+
+#### The check asserts its own preconditions
+
+A check that silently measures the wrong thing is worse than no check, so:
+
+- The theme toggle must actually switch to the light theme, and the two
+  themes must resolve different `--dim` values — otherwise the "light" pass
+  would re-measure the dark theme and the run would look like it covered both
+  themes while covering one twice.
+- Every scope must contribute at least 25 samples, and all four scope/theme
+  combinations must have been measured — a sweep that stopped finding
+  elements would otherwise still report "all clear".
+- Each scope measures ONE surface. With the command palette open, the app
+  chrome behind it is covered by the palette's backdrop: it cannot be hovered
+  and the user cannot see it, so it is measured in the app scope instead.
+  Without that, the same element would be judged differently in the two
+  scopes — its de-emphasis lifts on hover in the app scope and cannot lift
+  behind an overlay.
 
 ### 4. The Settings modal at 200 % zoom — does not clip
 
@@ -419,8 +498,15 @@ implying more:
 - The dock-control check writes a `.crs/dock.json` into the demo project, so
   it exercises a **config**-sourced control. Docker-sourced controls (which
   need a Docker daemon) are not exercised.
-- The contrast check measures the app chrome and the command palette. A
-  surface that only exists behind a specific user action — a long settings
-  section, a populated task board — is not opened and measured.
+- The contrast check measures the app chrome and the command palette, each as
+  its own scope. A surface that only exists behind a specific user action — a
+  long settings section, a populated task board — is not opened and measured.
+- The **inactive** workspace row's drag handle is deliberately de-emphasised
+  to `opacity: 0.4` until the row is hovered, so at rest it paints at
+  **1.88:1** (dark) / **1.74:1** (light) over `--sidebar` — under the 3:1
+  WCAG 1.4.11 asks of a graphical object. The check judges it in its engaged
+  state (4.60:1 / 4.63:1), which is the state it carries meaning in, and
+  reports the resting ratio rather than hiding it. Filed as
+  [#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908).
 - The 200 %-zoom check covers the two viewport regimes above, not every
   window size at every zoom level.
