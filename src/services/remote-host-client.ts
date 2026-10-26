@@ -448,6 +448,9 @@ export interface AgentConfig {
   projectsRootsSource?: "env" | "override";
   projectsRootsEnv?: string[];
   projectsRootsLocked?: boolean;
+  // A saved override exists but the lock keeps it from applying — see
+  // routes/internal.ts's buildAgentConfig.
+  projectsRootsOverrideIgnored?: boolean;
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;
@@ -670,8 +673,6 @@ export class RemoteHostClient {
     return this.request("/internal/discover");
   }
 
-  // Issue #247 / roadmap 7.4 — see internal.ts's GET /internal/config for
-  // what's (and isn't — no idle timeout, no DB-backed anything) included.
   /**
    * Issue #1951 follow-up — saves (or, with `null`, removes) this agent's
    * project-roots override. The agent answers a refusal (locked, an unsafe or
@@ -690,6 +691,8 @@ export class RemoteHostClient {
     );
   }
 
+  // Issue #247 / roadmap 7.4 — see internal.ts's GET /internal/config for
+  // what's (and isn't — no idle timeout, no DB-backed anything) included.
   resolveConfig(): Promise<AgentConfig> {
     return this.request("/internal/config");
   }

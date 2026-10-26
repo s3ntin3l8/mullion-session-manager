@@ -106,6 +106,7 @@ import { pushBranch } from "../services/git-push.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import {
   effectiveProjectsRoots,
+  protectedAgentDirs,
   resolveEffectiveProjectsRoots,
   validateProjectsRoots,
   writeProjectsRootsOverride,
@@ -537,6 +538,9 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     projectsRootsSource: projectsRoots.source,
     projectsRootsEnv: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
     projectsRootsLocked: app.config.PROJECTS_ROOTS_LOCKED,
+    // A saved override that the operator's lock is keeping from applying: the
+    // dialog offers to clear it (clearing only moves toward the pinned value).
+    projectsRootsOverrideIgnored: projectsRoots.overrideIgnored,
     sessionsDir: app.config.SESSIONS_DIR,
     crsConfigDir: app.config.CRS_CONFIG_DIR,
     browserEnabled: app.config.BROWSER_ENABLED,
@@ -821,7 +825,12 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/projects-roots",
     { ...PROJECTS_ROOTS_RATE_LIMIT, schema: projectsRootsSchema },
     async (request, reply) => {
-      if (app.config.PROJECTS_ROOTS_LOCKED) {
+      const requested = request.body.roots;
+      // Pinned: the primary may not SET roots, but clearing a stale saved
+      // override is allowed — it only moves toward the value the operator
+      // pinned, and without it an override saved before the lock would sit
+      // there, ignored, until someone unlocks the host and it springs back.
+      if (app.config.PROJECTS_ROOTS_LOCKED && requested !== null) {
         reply.code(422);
         return {
           status: 409,
@@ -829,13 +838,12 @@ export async function internalRoutes(app: FastifyInstance) {
             "this host's project roots are pinned by its operator (PROJECTS_ROOTS_LOCKED) and cannot be changed from the primary",
         };
       }
-      const requested = request.body.roots;
       if (requested === null) {
         writeProjectsRootsOverride(null);
         app.log.warn("project roots: the saved override was removed by the primary");
         return buildAgentConfig(app);
       }
-      const checked = validateProjectsRoots(requested);
+      const checked = validateProjectsRoots(requested, { protectedDirs: protectedAgentDirs(app) });
       if (!checked.ok) {
         reply.code(422);
         return { status: 400, error: checked.error };

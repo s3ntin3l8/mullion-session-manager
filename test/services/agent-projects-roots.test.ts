@@ -147,6 +147,24 @@ describe("validateProjectsRoots", () => {
     }
   });
 
+  it("refuses a root that is, contains or sits inside one of Mullion's own directories", () => {
+    const install = mkdir("home", "me", "opt", "mullion");
+    const inside = mkdir("home", "me", "opt", "mullion", "data");
+    const parent = path.dirname(install);
+    for (const dir of [install, inside, parent]) {
+      expect(validateProjectsRoots([dir], { protectedDirs: [install] })).toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/Mullion's own/),
+      });
+    }
+    // An unrelated sibling is fine.
+    const sibling = mkdir("home", "me", "opt", "other");
+    expect(validateProjectsRoots([sibling], { protectedDirs: [install] })).toEqual({
+      ok: true,
+      roots: [sibling],
+    });
+  });
+
   it("allows an ordinary directory inside home", () => {
     const code = mkdir("home", "me", "code");
     expect(validateProjectsRoots([code])).toEqual({ ok: true, roots: [code] });
@@ -186,6 +204,22 @@ describe("the saved override", () => {
     }
   });
 
+  it("re-validates what it reads: a hand-edited file naming something unsafe is no override", () => {
+    const install = mkdir("home", "me", "opt", "mullion");
+    mkdirSync(path.dirname(resolveAgentProjectsRootsPath()), { recursive: true });
+    for (const roots of [
+      [path.parse(sandbox).root],
+      [home],
+      [install],
+      [path.join(sandbox, "gone")],
+    ]) {
+      writeFileSync(resolveAgentProjectsRootsPath(), JSON.stringify({ version: 1, roots }));
+      const future = new Date(Date.now() + 10_000 + Math.random() * 1000);
+      utimesSync(resolveAgentProjectsRootsPath(), future, future);
+      expect(readProjectsRootsOverride([install])).toBeNull();
+    }
+  });
+
   it("serves a repeated read from the mtime cache but notices an edit", () => {
     const a = mkdir("work", "a");
     const b = mkdir("work", "b");
@@ -201,6 +235,7 @@ describe("resolveEffectiveProjectsRoots", () => {
     expect(resolveEffectiveProjectsRoots(app("/srv/a, /srv/b"))).toEqual({
       roots: ["/srv/a", "/srv/b"],
       source: "env",
+      overrideIgnored: false,
     });
   });
 
@@ -210,15 +245,21 @@ describe("resolveEffectiveProjectsRoots", () => {
     expect(resolveEffectiveProjectsRoots(app("/srv/a"))).toEqual({
       roots: [a],
       source: "override",
+      overrideIgnored: false,
     });
   });
 
-  it("ignores a saved override when the host's operator pinned the roots", () => {
+  it("ignores a saved override when the host's operator pinned the roots, and says so", () => {
     const a = mkdir("work", "a");
     writeProjectsRootsOverride([a]);
     expect(resolveEffectiveProjectsRoots(app("/srv/a", true))).toEqual({
       roots: ["/srv/a"],
       source: "env",
+      overrideIgnored: true,
     });
+  });
+
+  it("does not report an ignored override when there is none", () => {
+    expect(resolveEffectiveProjectsRoots(app("/srv/a", true)).overrideIgnored).toBe(false);
   });
 });

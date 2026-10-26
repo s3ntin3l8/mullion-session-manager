@@ -16,6 +16,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion } from "./server-info.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
@@ -301,7 +302,7 @@ export async function hostsRoute(app: FastifyInstance) {
                 {
                   type: "array",
                   minItems: 1,
-                  maxItems: 16,
+                  maxItems: MAX_PROJECTS_ROOTS,
                   items: { type: "string", minLength: 1, maxLength: 1024 },
                 },
               ],

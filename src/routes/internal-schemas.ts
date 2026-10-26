@@ -1,5 +1,6 @@
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
+import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 
 // The JSON Schema bodies/params for `internalRoutes` (internal.ts) — the
 // DB-less agent's own token-gated API. Extracted from internal.ts, which
@@ -256,7 +257,7 @@ export const projectsRootsSchema = {
           {
             type: "array",
             minItems: 1,
-            maxItems: 16,
+            maxItems: MAX_PROJECTS_ROOTS,
             items: { type: "string", minLength: 1, maxLength: 1024 },
           },
         ],

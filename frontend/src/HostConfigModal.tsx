@@ -152,10 +152,29 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
                   </span>
                 )}
                 {hostId !== LOCAL_HOST_ID && config.projectsRootsLocked === true && (
-                  <span className="create-modal-field-hint">
-                    Pinned by that host's operator (PROJECTS_ROOTS_LOCKED) — it cannot be changed
-                    from here.
-                  </span>
+                  <>
+                    <span className="create-modal-field-hint">
+                      Pinned by that host's operator (PROJECTS_ROOTS_LOCKED) — it cannot be changed
+                      from here.
+                    </span>
+                    {config.projectsRootsOverrideIgnored && (
+                      <>
+                        <span className="create-modal-field-hint">
+                          A roots list saved from here earlier is being ignored while the host is
+                          pinned; it would apply again if the pin were lifted.
+                        </span>
+                        <span className="create-modal-input-row">
+                          <button
+                            className="create-modal-cancel"
+                            disabled={rootsSaving}
+                            onClick={() => void saveRoots(null)}
+                          >
+                            Reset to default
+                          </button>
+                        </span>
+                      </>
+                    )}
+                  </>
                 )}
                 {hostId !== LOCAL_HOST_ID && config.projectsRootsLocked === false && (
                   <>

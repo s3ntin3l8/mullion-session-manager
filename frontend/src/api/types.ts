@@ -445,6 +445,8 @@ export interface HostConfig {
   projectsRootsSource?: "env" | "override";
   projectsRootsEnv?: string[];
   projectsRootsLocked?: boolean;
+  // A saved override exists but the host's lock keeps it from applying.
+  projectsRootsOverrideIgnored?: boolean;
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;

@@ -182,6 +182,24 @@ describe("HostConfigModal — editable projects roots", () => {
     expect(screen.queryByRole("button", { name: "Edit roots" })).toBeNull();
   });
 
+  it("offers to clear a saved override that the pin is ignoring", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getHostConfig).mockResolvedValue(
+      editable({ projectsRootsLocked: true, projectsRootsOverrideIgnored: true }),
+    );
+    vi.mocked(api.setHostProjectsRoots).mockResolvedValue(
+      editable({ projectsRootsLocked: true, projectsRootsOverrideIgnored: false }),
+    );
+    renderRemote();
+    expect(await screen.findByText(/being ignored while the host is pinned/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit roots" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Reset to default" }));
+    await waitFor(() => expect(api.setHostProjectsRoots).toHaveBeenCalledWith("mac-1", null));
+    await waitFor(() =>
+      expect(screen.queryByText(/being ignored while the host is pinned/)).toBeNull(),
+    );
+  });
+
   it("says to upgrade a host whose Mullion predates the field", async () => {
     vi.mocked(api.getHostConfig).mockResolvedValue(
       makeConfig({ projectsRoots: ["/Users/x/mullion-projects"] }),

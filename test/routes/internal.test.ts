@@ -4676,6 +4676,51 @@ describe("internal routes (agent role, issue #26)", () => {
         projectsRoots: [projectsRoot],
         projectsRootsSource: "env",
         projectsRootsLocked: true,
+        // ... and it says the saved list is being ignored, so it can be cleared.
+        projectsRootsOverrideIgnored: true,
+      });
+
+      // Clearing is allowed while pinned: it only moves toward the pinned value,
+      // and without it the old override would spring back the day the pin lifts.
+      const cleared = await put(app, null);
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsOverrideIgnored: false,
+      });
+      expect(
+        fs.existsSync(path.join(process.env.HOME!, ".mullion", "agent-projects-roots.json")),
+      ).toBe(false);
+      await app.close();
+    });
+
+    it("does not trust a hand-edited override: a file rewritten to name '/' falls back to the env roots", async () => {
+      const first = await buildApp();
+      expect((await put(first, [newRoot])).statusCode).toBe(200);
+      await first.close();
+      // What an attacker with file-write reach into ~/.mullion would try.
+      const file = path.join(process.env.HOME!, ".mullion", "agent-projects-roots.json");
+      fs.writeFileSync(file, JSON.stringify({ version: 1, roots: ["/"] }));
+      const future = new Date(Date.now() + 10_000);
+      fs.utimesSync(file, future, future);
+
+      const app = await buildApp();
+      expect((await get(app, "/internal/config")).json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsSource: "env",
+      });
+      await app.close();
+    });
+
+    it("refuses a root that overlaps Mullion's own data (~/.mullion holds this very override)", async () => {
+      const app = await buildApp();
+      const own = path.join(process.env.HOME!, ".mullion");
+      fs.mkdirSync(own, { recursive: true });
+      const res = await put(app, [own]);
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({
+        status: 400,
+        error: expect.stringMatching(/Mullion's own/),
       });
       await app.close();
     });
