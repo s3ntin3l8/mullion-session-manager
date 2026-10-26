@@ -118,6 +118,36 @@ the Homebrew build and BSD `ps` match: the socket path visible in `ps`, the
 four-field `pid ppid pgid command` shape, harmless probe connections, and the
 stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
 
+**The Windows backend (`scope/windows.ts` + `src/pty-host/`, issue #1728).**
+A third implementation, selected on `win32`. Windows has no `dtach`, so
+`src/pty-host/` is a small Node stand-in for it: `pty-host.mjs -n <endpoint>
+<program...>` takes dtach's argument shape, launches a **detached master**
+that holds the program in a ConPTY (via node-pty) and serves it on the
+session's endpoint, and exits once the master is serving — so the session
+outlives the process that started it. The backend runs the launch plan's
+`dtach -n …` argv with `node pty-host.mjs` in dtach's place, so nothing above
+the seam changes. Endpoints are **named pipes** on Windows
+(`src/cli/ipc-path.mjs` maps every socket path to one, issue #1728's first
+PR).
+
+- _Attach_: a session on a pipe attaches through `src/services/pty-host-client.ts`
+  — an in-process client with the five `IPty` methods a `Session` drives —
+  instead of spawning `dtach -a` (a second ConPTY around the first would
+  re-render and garble a TUI). The wire format is `src/pty-host/protocol.mjs`:
+  length-prefixed DATA/RESIZE/EXIT/HELLO frames.
+- _Access_: the master serves only clients whose first frame carries the
+  session's token (`pty-host-token.ts`, a file in the sessions dir, handed to
+  the master in its environment and removed from the program's) — the
+  second gate behind the pipe's OS access control, as the hook and control
+  sockets' handshake tokens are for theirs.
+- _Liveness_ is the same `probeSocket()` as macOS, on the pipe (a missing
+  pipe is ENOENT → `dead`). _Teardown_ and the _process inventory_ find the
+  `--serve <endpoint>` master in the CIM process table
+  (`Get-CimInstance Win32_Process`) and `taskkill /T /F` its tree; per-session
+  job objects, which would also reach orphaned grandchildren, are issue #2076.
+- The master itself is platform-neutral (a unix socket elsewhere), which is
+  what lets `test/pty-host/` run a real one on Linux CI.
+
 - `src/app.ts` — the app factory (`buildApp()`); registers plugins then
   routes. `src/server.ts` calls it and handles listen + graceful shutdown
   (`SIGINT`/`SIGTERM`).

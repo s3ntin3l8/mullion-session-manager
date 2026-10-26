@@ -2,6 +2,7 @@ import path from "node:path";
 import fsPromises from "node:fs/promises";
 import { stateFilePath } from "./session-state-file.js";
 import { hookTokenPath } from "./hook-token.js";
+import { ptyHostTokenPath } from "./pty-host-token.js";
 import { sessionAgentGuidePath } from "./agent-guide.js";
 import { sessionBriefingPath } from "./project-briefing.js";
 import { sessionWorkflowConventionsPath } from "./workflow-conventions.js";
@@ -44,6 +45,9 @@ export async function cleanupSessionFiles(sessionsDir: string, id: string): Prom
     fsPromises.unlink(opencodeSeedPath(sessionsDir, id)),
     fsPromises.rm(opencodeConfigDir(sessionsDir, id), { recursive: true, force: true }),
     fsPromises.rm(sessionTmpDirPath(sessionsDir, id), { recursive: true, force: true }),
+    // The pty-host session token (Windows, #1728) — the backend's stop()
+    // removes it too; this covers a session whose stop never ran.
+    fsPromises.unlink(ptyHostTokenPath(sessionsDir, id)),
   ]);
 }
 

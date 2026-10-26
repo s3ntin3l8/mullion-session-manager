@@ -1,5 +1,6 @@
 import * as pty from "node-pty";
-import type { IPty } from "node-pty";
+import { attachPtyHost, type AttachClient } from "./pty-host-client.js";
+import { readPtyHostToken } from "./pty-host-token.js";
 import { mkdirSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -582,7 +583,7 @@ export class Session {
   private readonly env: Record<string, string>;
   readonly projectId: number | null;
 
-  private ptyProcess: IPty | null = null;
+  private ptyProcess: AttachClient | null = null;
   private cols: number;
   private rows: number;
   // The byte-level ring buffer itself — see scrollback-buffer.ts's own header
@@ -1592,7 +1593,22 @@ export class Session {
     // spawnInternal's own checks: attachClient is the one place a pty
     // actually gets created, so guard it directly too).
     if (this.retired) return;
-    const ptyProcess = pty.spawn(
+    // A named-pipe endpoint (Windows) is served by a pty-host master, not a
+    // dtach one: attach to it in-process instead of through `dtach -a` —
+    // see pty-host-client.ts for why it is not a second pseudo-terminal.
+    const ptyProcess: AttachClient = isPipePath(this.socketPath)
+      ? attachPtyHost(
+          this.socketPath,
+          { cols: this.cols, rows: this.rows },
+          readPtyHostToken(this.sessionsDir, this.id),
+        )
+      : this.spawnDtachClient();
+    this.wireAttachClient(ptyProcess);
+  }
+
+  /** The `dtach -a` attach client every platform with dtach uses. */
+  private spawnDtachClient(): AttachClient {
+    return pty.spawn(
       "dtach",
       [
         "-a",
@@ -1625,7 +1641,10 @@ export class Session {
         env: buildSessionEnv(),
       },
     );
+  }
 
+  /** Routes an attach client's output and exit into this session. */
+  private wireAttachClient(ptyProcess: AttachClient): void {
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see
