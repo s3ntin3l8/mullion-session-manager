@@ -423,50 +423,6 @@ export async function dispatchClaimedTask(
     }
   }
 
-  // The terminal sibling of `release()`: for a failure that retrying cannot
-  // fix (the placement host's agent is too old to resolve a base ref), so
-  // looping it through the dispatch backoff would only hide the reason on a
-  // `claimed` row, where `failureReason` is never shown. Fails the task, so
-  // the reason reaches the board and the issue sync.
-  async function failDispatch(reason: string): Promise<void> {
-    const now = new Date();
-    const updated = app.db
-      .update(tasks)
-      .set({
-        status: "failed",
-        failureReason: reason,
-        completedAt: now,
-        claimedAt: null,
-        startedAt: null,
-        baseSha: null,
-        seedDelivered: null,
-        // The failure came BEFORE the worktree was cut, so the predicted
-        // branch/path on the row name nothing that exists. Clearing them makes
-        // a Retry refuse cleanly ("no worktree to resume") instead of trying
-        // to resume a worktree that was never created.
-        worktreePath: null,
-        branchName: null,
-      })
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)))
-      .run();
-    if (updated.changes > 0) {
-      recordTaskTransition(app, {
-        taskId,
-        projectId: project.id,
-        from: "in_progress",
-        to: "failed",
-        via: "dispatch-failure",
-        context: { reason, hostId: placement.hostId },
-      });
-      void syncTaskTransition(
-        app,
-        { ...task, status: "failed", failureReason: reason, completedAt: now },
-        project,
-        "failed",
-      );
-    }
-  }
-
   // Same throw/rollback posture as the old claimTask — see its own doc
   // comment (still on enqueueTask above) for why this try/catch exists and
   // what `committed` guards.
@@ -515,17 +471,21 @@ export async function dispatchClaimedTask(
     // the placement host never fetched, and `git worktree add` from it
     // fails (or, with a bare ref, cuts from a stale one). Resolving there
     // also fetches THAT clone first (`resolveDefaultBaseRef`), so the SHA
-    // is one the cutting clone has. The old fallback to a bare `HEAD` is
-    // gone: it is the stale ref this issue is about.
+    // is one the cutting clone has.
+    //
+    // A host that cannot ANSWER (unreachable, or an agent too old to have the
+    // route) no longer falls back to a bare `HEAD` on a clone nobody asked:
+    // the task is released with the reason recorded and the dispatch backoff
+    // retries it, so it recovers by itself once the host is back or upgraded.
+    // (A clone that answers but has no resolvable origin default still
+    // resolves to its own `HEAD` — `resolveDefaultBaseRef`'s documented
+    // worst case, the same for a local project.)
     const baseRefResult = await resolveHostBaseRef(app, placement.hostId, placementCwd);
     if (!baseRefResult.ok) {
-      if (baseRefResult.reason === "unsupported") {
-        const detail = `host ${placement.hostId} is too old to resolve a base ref — upgrade it`;
-        await failDispatch(detail);
-        return { ok: false, reason: "worktree-failed", detail };
-      }
-      // Unreachable is transient: record why and let the backoff retry.
-      const detail = `could not resolve the base ref on host ${placement.hostId}: ${baseRefResult.detail}`;
+      const detail =
+        baseRefResult.reason === "unsupported"
+          ? `host ${placement.hostId} is too old to resolve a base ref — upgrade it`
+          : `could not resolve the base ref on host ${placement.hostId}: ${baseRefResult.detail}`;
       await release(detail);
       return { ok: false, reason: "worktree-failed", detail };
     }

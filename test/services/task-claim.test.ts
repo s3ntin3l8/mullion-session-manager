@@ -1069,7 +1069,7 @@ describe("claimTask", () => {
       await app.close();
     });
 
-    it("fails the task, visibly, when the placement host's agent is too old to resolve a base ref", async () => {
+    it("releases for retry, recording why, when the placement host's agent is too old to resolve a base ref", async () => {
       const app = await buildApp();
       const project = remoteProject(app, "baseref-unsupported-p");
       const task = insertReadyTask(app, project.id, 83);
@@ -1080,37 +1080,37 @@ describe("claimTask", () => {
         ok: false,
         reason: "unsupported",
       });
-      const infoSpy = vi.spyOn(app.log, "info");
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(outcome).toMatchObject({
+        ok: false,
+        reason: "worktree-failed",
+        detail: "host mac-1 is too old to resolve a base ref — upgrade it",
+      });
+      // Not failed: an upgrade is a minutes-long ops fix, and a failed task
+      // with no branch to resume could not be retried afterwards. It stays
+      // queued, so the dispatch backoff picks it up once the host is upgraded.
       const row = getTask(app, task.id);
-      expect(row.status).toBe("failed");
+      expect(row.status).toBe("claimed");
+      expect(row.sessionId).toBeNull();
       expect(row.failureReason).toBe("host mac-1 is too old to resolve a base ref — upgrade it");
-      // A terminal failure: stamped complete, reservation fields cleared, and
-      // no predicted branch left behind for a Retry to try to resume.
-      expect(row.completedAt).not.toBeNull();
-      expect(row.claimedAt).toBeNull();
-      expect(row.baseSha).toBeNull();
-      expect(row.branchName).toBeNull();
-      expect(row.worktreePath).toBeNull();
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          taskId: task.id,
-          from: "in_progress",
-          to: "failed",
-          via: "dispatch-failure",
-        }),
-        "task transition",
-      );
-      expect(mockSyncTaskTransition).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ status: "failed" }),
-        expect.anything(),
-        "failed",
-      );
       expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      // ...and it dispatches normally the next time the host can answer.
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+      vi.mocked(fakeBackend.createWorktree).mockResolvedValue({
+        created: true,
+        path: `${MAC_CWD}/.mullion-worktrees/mullion-task-x`,
+        branch: "x",
+      });
+      vi.mocked(fakeBackend.spawn).mockResolvedValue({ initialPromptApplied: true });
+      const retried = await dispatchClaimedTask(app, task.id);
+      expect(retried.ok).toBe(true);
+      expect(getTask(app, task.id).status).toBe("in_progress");
 
       await app.close();
     });

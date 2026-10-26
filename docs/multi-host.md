@@ -204,9 +204,10 @@ host the session runs on**, so the agent's working directory always exists
 where the agent is. So is the base ref the branch is cut from: it is resolved
 **on that same host**, against that host's own clone (which is fetched first),
 so a worktree is never cut from a SHA its clone has never seen. If that host
-cannot be asked, a Task Master claim is not cut from a guessed `HEAD`: it waits
-and retries with the reason recorded, or — when the host's agent is too old to
-resolve a base ref at all — fails with an "upgrade it" reason on the task.
+cannot answer — it is unreachable, or its agent is too old to resolve a base
+ref at all ("upgrade it") — a Task Master claim is not cut from a guessed
+`HEAD`: the task waits in the queue with the reason recorded, and is retried
+until the host can.
 
 A task's sessions share one host. The worker decides it (the placement
 decides), and the reviewer and the rebase worker join it, because they read
