@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { RelayReviewState } from "../shared/types.js";
 import type { PROrWithChecks } from "./github.js";
 import { listPullRequestReviews, listReviewMarkers } from "./github-write.js";
+import { resolveMarkerTokens } from "./github-integration.js";
 import { withRelay } from "./review-summary.js";
 import type { PullRequestReviewSummary, ReviewMarker } from "./github-write.js";
 import { getReviewRunForPr } from "./hermes-review.js";
@@ -317,10 +318,13 @@ const bareLogin = (login: string) => login.toLowerCase().replace(/\[bot\]$/, "")
 
 const REHYDRATE_HIT_TTL_MS = LANDED_RECHECK_MS;
 const REHYDRATE_MISS_TTL_MS = 60_000;
-const rehydrateMemos = new WeakMap<
-  FastifyInstance,
-  Map<string, { at: number; state: RelayReviewState | null }>
->();
+interface RehydrateMemoEntry {
+  at: number;
+  state: RelayReviewState | null;
+  /** The in-flight read, shared by concurrent callers (the detail asks twice). */
+  pending?: Promise<RelayReviewState | null>;
+}
+const rehydrateMemos = new WeakMap<FastifyInstance, Map<string, RehydrateMemoEntry>>();
 
 /**
  * The relay's landed review, rebuilt from GitHub alone — for after a restart,
@@ -345,11 +349,34 @@ export async function rehydrateLandedFromMarker(
   const key = `${t.owner}/${t.repo}#${t.prNumber}`;
   const now = Date.now();
   const hit = memo.get(key);
+  if (hit?.pending) return hit.pending;
   if (hit && now - hit.at < (hit.state ? REHYDRATE_HIT_TTL_MS : REHYDRATE_MISS_TTL_MS)) {
     return hit.state;
   }
 
-  let state: RelayReviewState | null = null;
+  const entry: RehydrateMemoEntry = { at: now, state: null };
+  entry.pending = readLandedFromMarker(app, token, t, reviewerBotLogin, ledgerName)
+    .then((state) => {
+      // A failed read (null with `failed`) is remembered only as briefly as a miss.
+      entry.state = state;
+      return state;
+    })
+    .finally(() => {
+      entry.at = Date.now();
+      delete entry.pending;
+    });
+  memo.set(key, entry);
+  if (memo.size > MAX_LANDED_MEMO_ENTRIES) memo.delete(memo.keys().next().value!);
+  return entry.pending;
+}
+
+async function readLandedFromMarker(
+  app: FastifyInstance,
+  token: string,
+  t: { owner: string; repo: string; prNumber: number },
+  reviewerBotLogin: string,
+  ledgerName: string,
+): Promise<RelayReviewState | null> {
   try {
     const reviews = await listPullRequestReviews(token, t.owner, t.repo, t.prNumber);
     const landed = reviews.filter(
@@ -359,44 +386,43 @@ export async function rehydrateLandedFromMarker(
         LANDED_REVIEW_STATES.has(r.state) &&
         r.submittedAt,
     );
-    if (landed.length > 0) {
-      const markers = await listReviewMarkers(
-        token,
-        token,
-        t.owner,
-        t.repo,
-        t.prNumber,
-        ledgerName,
-        (detail) =>
-          app.log.warn({ detail, ...t }, "relay-state: ledger read degraded while rehydrating"),
-      );
-      for (const review of landed.reverse()) {
-        const marker = markers
-          .filter((m) => markerCoversTime(m, Date.parse(review.submittedAt as string)))
-          .sort((a, b) => a.id - b.id)
-          .at(-1);
-        if (!marker) continue;
-        state = {
-          state: "landed",
-          runId: `marker-${marker.id}`,
-          dispatchedAt: marker.startedAt,
-          landedChecked: true,
-          author: review.author,
-          verdict: review.state,
-          ...(review.body !== undefined ? { body: review.body } : {}),
-          ...(review.bodyTruncated ? { bodyTruncated: true } : {}),
-          ...(review.htmlUrl !== undefined ? { htmlUrl: review.htmlUrl } : {}),
-        };
-        break;
-      }
+    if (landed.length === 0) return null;
+    // Check runs need a `checks: read` token: the App's when it has one (the
+    // read token does not), else the user token — the same pick the relay's own
+    // marker read makes (`resolveMarkerTokens`).
+    const { markerReadToken } = await resolveMarkerTokens(app, t, token);
+    const markers = await listReviewMarkers(
+      token,
+      markerReadToken ?? token,
+      t.owner,
+      t.repo,
+      t.prNumber,
+      ledgerName,
+      (detail) =>
+        app.log.warn({ detail, ...t }, "relay-state: ledger read degraded while rehydrating"),
+    );
+    for (const review of landed.reverse()) {
+      const marker = markers
+        .filter((m) => markerCoversTime(m, Date.parse(review.submittedAt as string)))
+        .sort((a, b) => a.id - b.id)
+        .at(-1);
+      if (!marker) continue;
+      return {
+        state: "landed",
+        runId: `marker-${marker.id}`,
+        dispatchedAt: marker.startedAt,
+        landedChecked: true,
+        author: review.author,
+        verdict: review.state,
+        ...(review.body !== undefined ? { body: review.body } : {}),
+        ...(review.bodyTruncated ? { bodyTruncated: true } : {}),
+        ...(review.htmlUrl !== undefined ? { htmlUrl: review.htmlUrl } : {}),
+      };
     }
   } catch (err) {
     app.log.warn({ detail: (err as Error).message, ...t }, "relay-state: rehydrate failed");
-    return null;
   }
-  memo.set(key, { at: now, state });
-  if (memo.size > MAX_LANDED_MEMO_ENTRIES) memo.delete(memo.keys().next().value!);
-  return state;
+  return null;
 }
 
 /**

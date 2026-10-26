@@ -45,6 +45,7 @@ function gqlNode(number: number, over: Record<string, unknown> = {}) {
     mergeStateStatus: "CLEAN",
     reviewDecision: "APPROVED",
     reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", login: "alice" } }] },
+    latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
     latestReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
     comments: { totalCount: 3 },
     ...over,
@@ -126,6 +127,7 @@ describe("enrichPrsWithReviewState", () => {
             reviewDecision: null,
             mergeStateStatus: "BLOCKED",
             reviewRequests: { nodes: [] },
+            latestOpinionatedReviews: { nodes: [] },
             latestReviews: {
               nodes: [
                 {
@@ -145,8 +147,8 @@ describe("enrichPrsWithReviewState", () => {
     await enrichPrsWithReviewState("tok", "o", "r", prs);
 
     expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");
-    expect(fetchMock.mock.calls[0][1].body).not.toContain("latestOpinionatedReviews");
-    expect(prs[0].reviewers).toEqual([{ login: "s3ntin3l8-hermes", state: "COMMENTED" }]);
+    // `reviewers` is merge gating's (opinionated) view: a comment is not in it.
+    expect(prs[0].reviewers).toEqual([]);
     expect(prs[0].prPhase).toBe("reviewed");
     expect(prs[0].reviewSummary).toMatchObject({
       decision: "COMMENTED",
@@ -155,6 +157,28 @@ describe("enrichPrsWithReviewState", () => {
       relay: null,
       latest: [{ author: "s3ntin3l8-hermes", isBot: true, reviewedSha: "old-sha", stale: true }],
     });
+  });
+
+  it("a later COMMENTED review does not erase CHANGES_REQUESTED (merge gating stays blocked)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([
+          gqlNode(1, {
+            reviewDecision: null,
+            latestOpinionatedReviews: {
+              nodes: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }],
+            },
+            latestReviews: {
+              nodes: [{ author: { login: "bob" }, state: "COMMENTED", body: "hm" }],
+            },
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+    expect(prs[0].prPhase).toBe("changes_requested");
+    expect(prs[0].reviewSummary).toMatchObject({ changesRequested: ["bob"], commented: [] });
   });
 
   it("folds a failing non-Actions check (the head's rollup) into ciStatus, idempotently", async () => {

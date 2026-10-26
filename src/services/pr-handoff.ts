@@ -54,14 +54,22 @@ export function buildHandoffPrompt(
     }
     lines.push("");
   }
-  // Each reviewer's latest review that is still a request (changes) or a
-  // remark (a bot's COMMENTED review is all the feedback it gives): an
-  // approval, or a later review, supersedes their earlier text.
+  // Per reviewer: their newest request/remark that has text — unless their
+  // latest review is an approval, which supersedes what they said before. An
+  // inline-only review (no text, its threads are listed above) must not hide
+  // the earlier review that did carry the text.
   const latestByAuthor = new Map<string, PrDetail["reviews"][number]>();
-  for (const r of pr.reviews) latestByAuthor.set(r.author ?? "", r);
-  const changes = [...latestByAuthor.values()].filter(
-    (r) => (r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED") && r.bodyHtml.trim(),
-  );
+  const textByAuthor = new Map<string, PrDetail["reviews"][number]>();
+  for (const r of pr.reviews) {
+    const who = r.author ?? "";
+    latestByAuthor.set(who, r);
+    if ((r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED") && r.bodyHtml.trim()) {
+      textByAuthor.set(who, r);
+    }
+  }
+  const changes = [...textByAuthor]
+    .filter(([who]) => latestByAuthor.get(who)?.state !== "APPROVED")
+    .map(([, r]) => r);
   for (const r of changes) {
     const verb = r.state === "CHANGES_REQUESTED" ? "Changes requested by" : "Review comments from";
     lines.push(`${verb} ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`, "");

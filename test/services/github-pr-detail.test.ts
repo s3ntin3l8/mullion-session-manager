@@ -40,6 +40,7 @@ const GQL_PR = {
     ],
   },
   reviewRequests: { nodes: [{ requestedReviewer: { login: "alice" } }, null] },
+  latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }] },
   latestReviews: { nodes: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }] },
   reviews: {
     nodes: [
@@ -117,6 +118,7 @@ describe("getPrDetail", () => {
         ...GQL_PR,
         reviewDecision: null,
         reviewRequests: { nodes: [] },
+        latestOpinionatedReviews: { nodes: [] },
         latestReviews: {
           nodes: [
             {
@@ -148,7 +150,7 @@ describe("getPrDetail", () => {
     });
     const d = await getPrDetail("tok", "o", "r", 5);
     expect(d.reviews).toHaveLength(1);
-    expect(d.reviewers).toEqual([{ login: "s3ntin3l8-hermes", state: "COMMENTED" }]);
+    expect(d.reviewers).toEqual([]);
     expect(d.reviewSummary).toMatchObject({
       decision: "COMMENTED",
       commented: ["s3ntin3l8-hermes"],

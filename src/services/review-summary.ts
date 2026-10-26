@@ -21,12 +21,25 @@ export interface GqlLatestReviewNode {
 }
 
 /** The GraphQL selection both queries use, so they cannot drift. */
-export const LATEST_REVIEWS_SELECTION =
-  "latestReviews(first: 20) { nodes { author { login __typename } state body submittedAt commit { oid } } }";
+export function latestReviewsSelection(first: number): string {
+  return `latestReviews(first: ${first}) { nodes { author { login __typename } state body submittedAt commit { oid } } }`;
+}
+
+/**
+ * The opinionated reviews (APPROVED / CHANGES_REQUESTED / DISMISSED, latest per
+ * author) — what merge gating reads. `latestReviews` is last-per-author, so a
+ * later COMMENTED would erase an author's CHANGES_REQUESTED there; this keeps
+ * it, which is why the phase and the buckets below read this and not that.
+ */
+export const OPINIONATED_REVIEWS_SELECTION =
+  "latestOpinionatedReviews(first: 10) { nodes { author { login } state } }";
 
 export interface ReviewSummaryInput {
   reviewDecision: PrReviewDecision;
+  /** `latestReviews`: every state, one per author — feeds `commented` and `latest`. */
   reviews: readonly (GqlLatestReviewNode | null)[];
+  /** `latestOpinionatedReviews`: feeds `approved`/`changesRequested` (merge gating's view). */
+  opinionated: readonly (GqlLatestReviewNode | null)[];
   requestedReviewers: readonly string[];
   unresolvedThreads: number | null;
   headSha: string;
@@ -62,13 +75,21 @@ export function buildReviewSummary(input: ReviewSummaryInput): ReviewSummary {
   const candidates: ReviewSummaryEntry[] = [];
   const unresolved = input.unresolvedThreads ?? 0;
 
+  for (const n of input.opinionated) {
+    if (!n?.author) continue;
+    if (n.state === "APPROVED") approved.push(n.author.login);
+    else if (n.state === "CHANGES_REQUESTED") changesRequested.push(n.author.login);
+  }
+
   for (const n of input.reviews) {
     if (!n?.author) continue;
     const login = n.author.login;
-    if (n.state === "APPROVED") approved.push(login);
-    else if (n.state === "CHANGES_REQUESTED") changesRequested.push(login);
-    else if (n.state === "COMMENTED") commented.push(login);
-    else continue; // DISMISSED / PENDING say nothing about the PR
+    if (n.state === "COMMENTED") {
+      // An author whose standing opinion is an approval or a block is not just "commented".
+      if (!approved.includes(login) && !changesRequested.includes(login)) commented.push(login);
+    } else if (n.state !== "APPROVED" && n.state !== "CHANGES_REQUESTED") {
+      continue; // DISMISSED / PENDING say nothing about the PR
+    }
     const body = clip((n.body ?? "").trim());
     // Something to read: a body, or an inline-only review while threads are open.
     if (body === "" && !(n.state !== "APPROVED" && unresolved > 0)) continue;

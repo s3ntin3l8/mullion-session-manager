@@ -19,7 +19,8 @@ import {
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
   buildReviewSummary,
-  LATEST_REVIEWS_SELECTION,
+  latestReviewsSelection,
+  OPINIONATED_REVIEWS_SELECTION,
   reviewersOf,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
@@ -86,7 +87,7 @@ export interface PrDetail {
   mergeStateStatus: string | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: string[];
-  /** Latest review per reviewer, every state (COMMENTED included). */
+  /** Latest opinionated review per reviewer — what merge gating reads. */
   reviewers: { login: string; state: string }[];
   /** The same server-computed status the PR list carries (epic #1965, A2). */
   reviewSummary: ReviewSummary;
@@ -160,6 +161,7 @@ interface GqlPr {
     } | null> | null;
   } | null;
   latestReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
+  latestOpinionatedReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
   reviews: {
     nodes: Array<{
       author: GqlAuthor | null;
@@ -199,7 +201,8 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       commits(last: 20) { totalCount nodes { commit { oid messageHeadline committedDate author { name } } } }
       headCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { totalCount nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on StatusContext { context state targetUrl } } } } } } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
-      ${LATEST_REVIEWS_SELECTION}
+      ${OPINIONATED_REVIEWS_SELECTION}
+      ${latestReviewsSelection(20)}
       reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt comments { totalCount } } }
       reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
       comments(last: 50) { nodes { author { login } bodyHTML createdAt } }
@@ -340,6 +343,7 @@ async function partialDetail(
     reviewSummary: buildReviewSummary({
       reviewDecision: null,
       reviews: [],
+      opinionated: [],
       requestedReviewers: [],
       unresolvedThreads: null,
       headSha: rest.head.sha,
@@ -388,6 +392,7 @@ export async function getPrDetail(
     .filter(present);
   const threads = (pr.reviewThreads?.nodes ?? []).filter(present);
   const latestReviews = pr.latestReviews?.nodes ?? [];
+  const opinionated = pr.latestOpinionatedReviews?.nodes ?? [];
 
   const detail: PrDetail = {
     number: pr.number,
@@ -417,10 +422,11 @@ export async function getPrDetail(
     mergeStateStatus: pr.mergeStateStatus,
     reviewDecision: asDecision(pr.reviewDecision),
     requestedReviewers,
-    reviewers: reviewersOf(latestReviews),
+    reviewers: reviewersOf(opinionated),
     reviewSummary: buildReviewSummary({
       reviewDecision: asDecision(pr.reviewDecision),
       reviews: latestReviews,
+      opinionated,
       requestedReviewers,
       unresolvedThreads: threads.filter((t) => !t.isResolved).length,
       headSha: pr.headRefOid,

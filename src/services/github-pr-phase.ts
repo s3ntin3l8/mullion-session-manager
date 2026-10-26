@@ -43,9 +43,12 @@ export interface PrPhaseInput {
   mergeStateStatus: string | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: readonly string[];
-  /** Latest review per reviewer, every state (`reviewDecision` is null on a
+  /** Latest OPINIONATED review per reviewer (`reviewDecision` is null on a
    *  repo with no required-review rule even when someone asked for changes). */
   reviewers: readonly { state: string }[];
+  /** A COMMENTED review landed (from `ReviewSummary.commented`). Only picks
+   *  `reviewed` over `review_pending`; it never affects merge gating. */
+  hasCommentedReview?: boolean;
   ciStatus: GitHubCiStatus;
   /**
    * True when the PR's head runs were actually fetched. A null `ciStatus`
@@ -59,8 +62,7 @@ export interface PrPhaseInput {
 export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // Only a COMMENTED review and no approval: a landed review that did not clear the PR.
   const waiting = (): PrPhase =>
-    pr.reviewers.some((r) => r.state === "COMMENTED") &&
-    !pr.reviewers.some((r) => r.state === "APPROVED")
+    pr.hasCommentedReview === true && !pr.reviewers.some((r) => r.state === "APPROVED")
       ? "reviewed"
       : "review_pending";
   if (pr.isDraft) return "draft";

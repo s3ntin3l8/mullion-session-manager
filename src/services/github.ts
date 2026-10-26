@@ -130,7 +130,7 @@ export interface PROrWithChecks {
   reviewDecision: PrReviewDecision;
   mergeable: PrMergeable;
   mergeStateStatus: string | null;
-  /** Latest review per reviewer in every state (COMMENTED included). */
+  /** Latest opinionated review per reviewer — merge gating's input (see `reviewSummary` for COMMENTED). */
   reviewers: { login: string; state: string }[];
   /**
    * The server-computed review status shared with the PR detail (epic #1965,
@@ -157,7 +157,10 @@ export interface PROrWithChecks {
 
 /** Recomputes `prPhase` from the PR's current CI + review fields, in place. */
 export function applyPrPhase(pr: PROrWithChecks): void {
-  pr.prPhase = derivePrPhase(pr);
+  pr.prPhase = derivePrPhase({
+    ...pr,
+    hasCommentedReview: (pr.reviewSummary?.commented.length ?? 0) > 0,
+  });
 }
 
 export interface GitHubPRsStatus {

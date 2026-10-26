@@ -2332,6 +2332,7 @@ export async function projectsRoute(app: FastifyInstance) {
       reviewDecision: detail.reviewDecision,
       requestedReviewers: detail.requestedReviewers,
       reviewers: detail.reviewers,
+      hasCommentedReview: detail.reviewSummary.commented.length > 0,
       ciStatus,
     });
     // Fold the relay's state into the review summary so the Reviews row is the

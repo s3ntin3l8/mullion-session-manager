@@ -25,7 +25,8 @@ import { isGitHubRateLimited } from "./github-fetch.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
   buildReviewSummary,
-  LATEST_REVIEWS_SELECTION,
+  latestReviewsSelection,
+  OPINIONATED_REVIEWS_SELECTION,
   reviewersOf,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
@@ -37,6 +38,9 @@ const REQUEST_TIMEOUT_MS = 8_000;
 // it self-corrects as soon as the PR sees activity moves it into the page.
 const PR_PAGE = 50;
 const THREADS_PER_PR = 50;
+// Every-state reviews read per PR (bodies feed `ReviewSummary.latest`): one per
+// author, so a handful covers a PR's reviewers.
+const LATEST_REVIEWS_PER_PR = 8;
 // Stop spending points when the hourly budget is nearly gone; resume at reset.
 const LOW_BUDGET_REMAINING = 200;
 const DEFAULT_BACKOFF_MS = 60_000;
@@ -137,6 +141,7 @@ interface GqlPrNode {
     } | null> | null;
   } | null;
   latestReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
+  latestOpinionatedReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
   comments: { totalCount: number } | null;
   // Head commit's check rollup state — only the state (cheap); per-check
   // contexts are fetched by the single-PR detail query.
@@ -152,7 +157,8 @@ const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
       nodes {
         number isDraft updatedAt mergeable mergeStateStatus reviewDecision
         reviewRequests(first: 5) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
-        ${LATEST_REVIEWS_SELECTION}
+        ${OPINIONATED_REVIEWS_SELECTION}
+        ${latestReviewsSelection(LATEST_REVIEWS_PER_PR)}
         comments { totalCount }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
@@ -301,8 +307,9 @@ export async function enrichPrsWithReviewState(
     pr.requestedReviewers = (node.reviewRequests?.nodes ?? [])
       .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
       .filter((v): v is string => v !== null);
-    const latestReviews = node.latestReviews?.nodes ?? [];
-    pr.reviewers = reviewersOf(latestReviews);
+    // `reviewers` stays the OPINIONATED list: it is derivePrPhase's input, and a
+    // later COMMENTED review must not erase someone's CHANGES_REQUESTED.
+    pr.reviewers = reviewersOf(node.latestOpinionatedReviews?.nodes ?? []);
 
     const cached = threadCache.get(keyFor(pr.number));
     if (
@@ -369,6 +376,7 @@ export async function enrichPrsWithReviewState(
       pr.reviewSummary = buildReviewSummary({
         reviewDecision: pr.reviewDecision,
         reviews: node.latestReviews?.nodes ?? [],
+        opinionated: node.latestOpinionatedReviews?.nodes ?? [],
         requestedReviewers: pr.requestedReviewers,
         unresolvedThreads: pr.unresolvedThreads,
         headSha: pr.headSha,

@@ -80,6 +80,24 @@ describe("buildHandoffPrompt", () => {
     expect(text).not.toContain("nothing outstanding");
   });
 
+  it("an inline-only latest review does not hide the author's earlier text", () => {
+    const review = (state: string, bodyHtml: string) => ({
+      author: "hermes",
+      state,
+      bodyHtml,
+      createdAt: "t",
+    });
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        threads: [],
+        reviews: [review("CHANGES_REQUESTED", "<p>fix the race</p>"), review("COMMENTED", "")],
+      },
+      [],
+    );
+    expect(text).toContain("Changes requested by hermes: fix the race");
+  });
+
   it("strips nested/spliced tags and script blocks completely", () => {
     const text = buildHandoffPrompt(
       {

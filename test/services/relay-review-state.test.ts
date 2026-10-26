@@ -6,12 +6,16 @@ import type { PROrWithChecks } from "../../src/services/github.js";
 const mocks = vi.hoisted(() => ({
   listPullRequestReviews: vi.fn(),
   listReviewMarkers: vi.fn(),
+  resolveMarkerTokens: vi.fn(),
   getReviewRunForPr: vi.fn(),
 }));
 
 vi.mock("../../src/services/github-write.js", () => ({
   listPullRequestReviews: mocks.listPullRequestReviews,
   listReviewMarkers: mocks.listReviewMarkers,
+}));
+vi.mock("../../src/services/github-integration.js", () => ({
+  resolveMarkerTokens: mocks.resolveMarkerTokens,
 }));
 vi.mock("../../src/services/hermes-review.js", () => ({
   getReviewRunForPr: mocks.getReviewRunForPr,
@@ -62,6 +66,8 @@ const ask = (app: FastifyInstance) =>
 beforeEach(() => {
   mocks.listPullRequestReviews.mockReset();
   mocks.listReviewMarkers.mockReset();
+  mocks.resolveMarkerTokens.mockReset();
+  mocks.resolveMarkerTokens.mockResolvedValue({ markerToken: null, markerReadToken: "checks-tok" });
   mocks.getReviewRunForPr.mockReset();
   mocks.getReviewRunForPr.mockReturnValue(run());
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -183,6 +189,27 @@ describe("rehydrating the landed state after a restart (no run in memory)", () =
       verdict: "COMMENTED",
       htmlUrl: "https://github.com/r/1",
     });
+  });
+
+  it("reads check runs with the checks-capable token, not the read token", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([hermesReview]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    await ask(makeApp());
+    expect(mocks.resolveMarkerTokens).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ owner: "acme", repo: "widgets" }),
+      "tok",
+    );
+    expect(mocks.listReviewMarkers.mock.calls[0].slice(0, 2)).toEqual(["tok", "checks-tok"]);
+  });
+
+  it("shares one in-flight lookup between concurrent askers", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([hermesReview]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    const app = makeApp();
+    const [a, b] = await Promise.all([ask(app), ask(app)]);
+    expect(a).toEqual(b);
+    expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(1);
   });
 
   it("stays `none` when no marker covers the review, or there is no reviewer review", async () => {

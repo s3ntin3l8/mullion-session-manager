@@ -19,6 +19,7 @@ const hermesCommented: GqlLatestReviewNode = {
 
 const base = {
   reviewDecision: null,
+  opinionated: [] as GqlLatestReviewNode[],
   requestedReviewers: [] as string[],
   unresolvedThreads: 0,
   headSha: "aaa111",
@@ -45,6 +46,13 @@ describe("buildReviewSummary", () => {
     const s = buildReviewSummary({
       ...base,
       requestedReviewers: ["carol"],
+      opinionated: [
+        { author: { login: "a" }, state: "APPROVED" },
+        { author: { login: "b" }, state: "CHANGES_REQUESTED" },
+        { author: { login: "d" }, state: "DISMISSED" },
+        null,
+        { author: null, state: "APPROVED" },
+      ],
       reviews: [
         { author: { login: "a" }, state: "APPROVED" },
         { author: { login: "b" }, state: "CHANGES_REQUESTED" },
@@ -64,12 +72,26 @@ describe("buildReviewSummary", () => {
     });
   });
 
+  it("keeps an author's standing CHANGES_REQUESTED when their latest review is a comment", () => {
+    const s = buildReviewSummary({
+      ...base,
+      opinionated: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }],
+      reviews: [{ author: { login: "bob" }, state: "COMMENTED", body: "one more thing" }],
+    });
+    expect(s).toMatchObject({
+      changesRequested: ["bob"],
+      commented: [],
+      decision: "CHANGES_REQUESTED",
+    });
+    expect(s.latest).toHaveLength(1);
+  });
+
   it("prefers GitHub's own decision and derives one otherwise", () => {
     const approved: GqlLatestReviewNode = { author: { login: "a" }, state: "APPROVED" };
-    expect(buildReviewSummary({ ...base, reviews: [approved] }).decision).toBe("APPROVED");
+    const withApproval = { ...base, reviews: [approved], opinionated: [approved] };
+    expect(buildReviewSummary(withApproval).decision).toBe("APPROVED");
     expect(
-      buildReviewSummary({ ...base, reviewDecision: "REVIEW_REQUIRED", reviews: [approved] })
-        .decision,
+      buildReviewSummary({ ...withApproval, reviewDecision: "REVIEW_REQUIRED" }).decision,
     ).toBe("REVIEW_REQUIRED");
     expect(buildReviewSummary({ ...base, requestedReviewers: ["x"], reviews: [] }).decision).toBe(
       "REVIEW_REQUIRED",
