@@ -615,6 +615,19 @@ describe("MullionClient (issue #271)", () => {
         await client.requestReview(9);
       });
 
+      it("forwards force, and only when it is set", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "dispatched" });
+        await client.requestReview(4, { force: true });
+        expect(spy).toHaveBeenLastCalledWith(
+          "reviews.request",
+          { prNumber: 4, force: true },
+          60_000,
+        );
+        await client.requestReview(4, {});
+        expect(spy).toHaveBeenLastCalledWith("reviews.request", { prNumber: 4 }, 60_000);
+      });
+
       it("forwards repo and branch alongside prNumber, and omits the unset ones", async () => {
         const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
         const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ status: "dispatched" });

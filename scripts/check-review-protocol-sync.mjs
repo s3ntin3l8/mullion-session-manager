@@ -42,8 +42,16 @@ const root =
  * - "10-30 minutes" — how long a review takes, so the agent knows whether
  *   "still running" means "wait" or "something is wrong".
  * - "review_status" — where to look instead of asking again.
+ * - "once the review bot has approved" — an approval's suggestions are applied
+ *   without another round; without it a surface teaches the endless
+ *   re-review cycle the relay now refuses.
  */
-const CLAUSES = ["one review per pull request", "10-30 minutes", "review_status"];
+const CLAUSES = [
+  "one review per pull request",
+  "10-30 minutes",
+  "review_status",
+  "once the review bot has approved",
+];
 
 /**
  * The files that RESTATE the rule in prose, with the label used in the

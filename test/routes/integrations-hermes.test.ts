@@ -245,6 +245,7 @@ describe("Hermes review relay integration routes", () => {
         cooldownMinutes: 10,
         reviewerBotLogin: "s3ntin3l8-hermes[bot]",
         ledgerName: "Hermes review",
+        reReviewAfterApproval: "refuse",
       });
     });
 
@@ -277,6 +278,22 @@ describe("Hermes review relay integration routes", () => {
         applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } }).reviewRelay
           .reviewerBotLogin,
       ).toBe("");
+    });
+
+    it("sanitises reReviewAfterApproval: only 'allow' lifts the guard, anything else refuses", async () => {
+      expect(
+        applySettingsPatch(app, { reviewRelay: { reReviewAfterApproval: "allow" } }).reviewRelay
+          .reReviewAfterApproval,
+      ).toBe("allow");
+      expect(
+        applySettingsPatch(app, {
+          reviewRelay: { reReviewAfterApproval: "sometimes" as unknown as "allow" },
+        }).reviewRelay.reReviewAfterApproval,
+      ).toBe("refuse");
+      expect(
+        applySettingsPatch(app, { reviewRelay: { reReviewAfterApproval: "refuse" } }).reviewRelay
+          .reReviewAfterApproval,
+      ).toBe("refuse");
     });
 
     it("sanitises the ledger name: trimmed, capped at a check run's 100 characters, empty = off", async () => {

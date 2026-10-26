@@ -60,8 +60,8 @@ const SELF_REVIEW_FRAGMENT = "Run a self-review pass on your own diff before dec
  */
 const BOT_REVIEW_ONCE_FRAGMENT =
   "Request an automated/bot review through the review relay (`mullion review`, or the " +
-  "`request_review` tool) — once after opening the pull request, and once per head commit " +
-  "after pushing fixes, then wait for it. A review comment that mentions the review bot is " +
+  "`request_review` tool) — once after opening the pull request, and again per head commit " +
+  "after pushing fixes for a changes-requested review, then wait for it. A review comment that mentions the review bot is " +
   "for humans, not agents; if no relay is set up, tell the human instead. " +
   REVIEW_PROTOCOL_NOTE;
 
@@ -194,7 +194,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
   {
     id: "codeReview",
     question:
-      "Code review process: none required, self-review your own diff before declaring done, request an automated/bot review (plain, or through the review relay once per head commit), or self-review plus a bot review?",
+      "Code review process: none required, self-review your own diff before declaring done, request an automated/bot review (plain, or through the review relay: after opening, and again for each head commit that fixes a changes-requested review), or self-review plus a bot review?",
     options: [
       {
         id: "none",
@@ -218,7 +218,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         // that already answered "bot-review" must keep the text it has.
         id: "bot-review-once",
         label:
-          "Request a review through the review relay — after opening, then once per new head commit, then wait",
+          "Request a review through the review relay — after opening, then per head commit that fixes a changes-requested review, then wait",
         fragment: BOT_REVIEW_ONCE_FRAGMENT,
       },
       {
@@ -229,7 +229,8 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
       },
       {
         id: "self-review-and-bot-review-once",
-        label: "Self-review, and a review through the review relay once per head commit",
+        label:
+          "Self-review, and a review through the review relay (re-requested only for changes-requested fixes)",
         fragment: `${SELF_REVIEW_FRAGMENT}\n\n${BOT_REVIEW_ONCE_FRAGMENT}`,
       },
     ],

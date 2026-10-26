@@ -27,6 +27,7 @@ const SCRIPT = fileURLToPath(
 const NOTE = [
   "One review per pull request at a time: a review that is already running is not re-requested.",
   "A review takes 10-30 minutes; check review_status once instead of asking again.",
+  "Once the review bot has approved, apply its remaining suggestions and push without another review.",
 ].join(" ");
 
 const FIXTURE_FILES: Record<string, string> = {
@@ -76,6 +77,16 @@ describe("check-review-protocol-sync", () => {
   it("fails when a surface drops the rule", async () => {
     const dir = makeFixture({ "AGENTS.md": "- **Get a review.** Ask for one.\n" });
     await expect(run(dir)).rejects.toThrow(/does not carry the review protocol/);
+  });
+
+  it("fails when a surface still teaches re-reviewing every head after an approval", async () => {
+    // The pre-approval-guard wording: carries the rest of the rule, not the new clause.
+    const dir = makeFixture({
+      "docs/cli.md":
+        "### review\n\nOne review per pull request at a time. A review takes 10-30 minutes; " +
+        "check review_status once. After pushing fixes, ask again.\n",
+    });
+    await expect(run(dir)).rejects.toThrow(/once the review bot has approved/);
   });
 
   it("fails when a client keeps its own copy of the wording", async () => {

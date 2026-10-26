@@ -245,6 +245,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cooldownMinutes: 10,
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
     ledgerName: "Hermes review",
+    reReviewAfterApproval: "refuse",
   },
   runway: {
     apiUrl: "",

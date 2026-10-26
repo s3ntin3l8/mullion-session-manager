@@ -131,6 +131,27 @@ export class ReviewAlreadyLandedError extends Error {
   }
 }
 
+/**
+ * The review bot already approved this pull request, so a request for another
+ * round is refused (`reviewRelay.reReviewAfterApproval`).
+ *
+ * Small suggestions that come with an approval are targeted fixes that do not
+ * change the verdict; reviewing each fix produces the next round of nits, and
+ * the cycle never ends. The agent applies the suggestions and pushes. `force`
+ * is for the cases that do need another look: the change grew beyond the
+ * suggestions, or a human asked for it.
+ */
+export class ReviewApprovedError extends Error {
+  constructor(readonly approvedSha: string) {
+    super(
+      `The review bot already approved this pull request (at ${approvedSha.slice(0, 7)}). ` +
+        `Apply its suggestions and push without another review round. ` +
+        `Pass force only if the change grew beyond them, or a human asked for another review`,
+    );
+    this.name = "ReviewApprovedError";
+  }
+}
+
 /** The run id is unknown to this Mullion (never dispatched here, or the server restarted). */
 export class ReviewRunNotFoundError extends Error {
   constructor() {
@@ -259,6 +280,14 @@ export interface RelayTarget {
    * (up to ten pages), and a request the relay refuses must not pay for it.
    */
   resolveBase?: () => Promise<string>;
+  /**
+   * A last chance for the caller to refuse the request (by throwing), run
+   * AFTER the relay's own cheap refusals (a review in flight, the cooldown)
+   * and BEFORE anything is read or dispatched — for a refusal that costs a
+   * GitHub call to decide, which a request the relay was going to refuse
+   * anyway must not pay. A throw gives the cooldown slot back.
+   */
+  beforeDispatch?: () => Promise<void>;
   /**
    * Does the head hold the same content as the reviewed commit (the same
    * commit, or the same tree)? A rewrite that changed nothing has nothing new to
@@ -732,6 +761,8 @@ export interface HermesReviewRequest {
    * RANGE and cannot dispatch it twice.
    */
   resolveBase?: () => Promise<string>;
+  /** See `RelayTarget.beforeDispatch`. */
+  beforeDispatch?: () => Promise<void>;
   /** See `RelayTarget.sameContent`. */
   sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
   /** Dispatching Mullion session, so only it can stop the run. */
@@ -783,6 +814,7 @@ export async function requestHermesReview(
     prNumber,
     headSha,
     resolveBase,
+    beforeDispatch,
     sameContent,
     sessionId,
     githubToken,
@@ -797,6 +829,7 @@ export async function requestHermesReview(
     number: prNumber,
     headSha,
     resolveBase,
+    beforeDispatch,
     sameContent,
     sessionId,
     githubToken,
@@ -913,6 +946,7 @@ export async function requestRelay(
     // last one.
     const bucket =
       cooldownMinutes > 0 ? Math.floor(Date.now() / (cooldownMinutes * 60_000)) : randomUUID();
+    await target.beforeDispatch?.();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
     // An empty range means the reviewed commit holds the head's content (it IS
     // the head, or has its tree — a rewrite that changed nothing, while the

@@ -151,9 +151,12 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   server to relay an automated Hermes review of your PR. It posts to the PR
   within a few minutes; wait for it instead of requesting again. Only works
   once an operator has configured the review relay in Mullion's Settings.
-  A re-review of a **new** commit (after pushing fixes) goes through right
-  away — only a repeat request for the same commit is refused by the
-  cooldown. If a requested review never appears, `mullion review status` (or
+  A re-review of a **new** commit (after pushing fixes to a changes-requested
+  review) goes through right away — only a repeat request for the same commit
+  is refused by the cooldown. Once the review bot has **approved**, don't
+  re-request for its remaining suggestions: apply them and push (the relay
+  refuses with a 409; `--force` / `force` is only for a change that grew
+  beyond them or a human's ask). If a requested review never appears, `mullion review status` (or
   `review_status`) shows the run's state, the bot's reply, whether its
   review landed and the review's own text; `mullion review stop <runId>` (or
   `stop_review`) cancels a run you started. If the PR is in a **different

@@ -130,7 +130,11 @@ describe("buildWorkflowConventionsText", () => {
     // running or landed), so the rule needs no "the repository reviews on its
     // own" exception — and a comment mentioning the bot is the humans' path.
     expect(fragment).toContain("once after opening the pull request");
-    expect(fragment).toContain("once per head commit after pushing fixes");
+    expect(fragment).toContain(
+      "again per head commit after pushing fixes for a changes-requested review",
+    );
+    // An approval's suggestions are applied without another round.
+    expect(fragment).toContain("Once the review bot has approved");
     expect(fragment).toContain("for humans, not agents");
     expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(fragment);
   });

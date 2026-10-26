@@ -239,6 +239,17 @@ describe("Settings -> Integrations -> Review relay", () => {
     );
   });
 
+  it("lets the operator choose between refusing and re-reviewing after an approval", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    // The default refuses: the agent applies the bot's suggestions and pushes.
+    expect(screen.getByRole("radio", { name: "Refuse" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "Re-review" }));
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { reReviewAfterApproval: "allow" } }),
+    );
+  });
+
   it("commits the triage prompt repository and path (#1629)", async () => {
     const user = userEvent.setup();
     await renderCard();

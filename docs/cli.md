@@ -59,7 +59,7 @@ mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
                 download
 mullion project list|actions|dock|tooling
-mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>]
+mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>] [--force]
 mullion review status [--pr <n>] [--repo <owner/name>] [--branch <b>]
 mullion review stop <runId>
 mullion preview create|get|delete|list
@@ -413,7 +413,7 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 
 ### review
 
-- `review [--pr <n>]` — asks the Mullion server to relay a review request
+- `review [--pr <n>] [--force]` — asks the Mullion server to relay a review request
   to the configured reviewer (Settings → Integrations → Review relay;
   currently Hermes, a review-bot that posts under its own GitHub App
   identity) for the PR of the session's project (the `reviews.request` op,
@@ -465,9 +465,17 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   task's own pull request — Task Master runs the task's review; a request
   naming a different pull request, or one made after the task is done or
   failed, is not affected. A request for a
-  **new** head commit — the normal re-review after pushing fixes — is
-  dispatched right away, even inside the cooldown window of the previous
-  one. The confirmation names the run id. A commit that has already been
+  **new** head commit — the normal re-review after pushing fixes to a
+  changes-requested review — is dispatched right away, even inside the
+  cooldown window of the previous one. Once the review bot has approved,
+  the next request is refused with a 409 instead: apply its suggestions and
+  push without another round (small fixes do not change the verdict, and
+  re-reviewing them only breeds more nits). Only the reviewer bot's own
+  newest approving or changes-requesting review counts — a later
+  changes-requested review, a dismissed approval or a human's approval does
+  not — and `reviewRelay.reReviewAfterApproval` (`refuse`, the default, or
+  `allow`) turns the guard off. `--force` (MCP: `force`) asks anyway, for a
+  change that grew beyond the suggestions or a human's request. The confirmation names the run id. A commit that has already been
   reviewed is refused the same way — there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first).
   The relay also writes an in-flight **marker** (a check run named by

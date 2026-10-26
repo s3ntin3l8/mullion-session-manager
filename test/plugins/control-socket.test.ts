@@ -1295,6 +1295,25 @@ describe("controlSocketPlugin (issue #185)", () => {
         });
       });
 
+      it("reviews.request forwards force", async () => {
+        const request = await forwardedTo(
+          "reviews.request",
+          { prNumber: 7, force: true },
+          "review-request",
+        );
+        expect(JSON.parse(String(request!.payload))).toEqual({ prNumber: 7, force: true });
+      });
+
+      it("reviews.status never forwards force (it is a request-only override)", async () => {
+        const status = await forwardedTo(
+          "reviews.status",
+          { prNumber: 7, force: true },
+          "review-request",
+        );
+        expect(status!.url).toContain("prNumber=7");
+        expect(status!.url).not.toContain("force");
+      });
+
       it("reviews.status puts the target fields in the query string, encoded", async () => {
         const forwarded = await forwardedTo(
           "reviews.status",

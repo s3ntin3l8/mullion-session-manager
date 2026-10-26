@@ -1592,8 +1592,13 @@ async function runReview(client, args, opts, io) {
     pr: "string",
     repo: "string",
     branch: "string",
+    force: "boolean",
   });
   const body = {};
+  if (flags.force === true) {
+    if (sub !== "request") throw new CliUsageError("--force only applies to a review request");
+    body.force = true;
+  }
   if (sub !== "stop") {
     if (flags.repo !== undefined) body.repo = flags.repo;
     if (flags.branch !== undefined) body.branch = flags.branch;
@@ -1889,7 +1894,7 @@ Commands:
           [--limit <n>] [--cursor <c>]
   notify --message <text> [--title <t>]
   status <working|done|needs_input> [--message <text>]   (--message is ignored for working)
-  review [--pr <n>]
+  review [--pr <n>] [--force]
   review status [--pr <n>]
   review stop <runId>
   triage --issue <n>
