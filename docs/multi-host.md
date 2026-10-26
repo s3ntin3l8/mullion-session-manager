@@ -312,7 +312,8 @@ in that host's own `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`),
 under the project's **main checkout** — the entry Claude itself writes for a
 worktree — so it covers every worktree cut from that checkout and the next
 spawn finds it already trusted. The write takes the same lock Claude holds on
-that file and never rewrites anything else in it. A launch **without**
+that file and keeps every other entry as it was (the file is re-saved with
+2-space indentation). A launch **without**
 skipped permissions still gets the dialog, and a host where Claude Code has
 never run (no `~/.claude.json` yet) is left alone: its first-run onboarding
 comes first. If the file is locked by a running Claude at that instant, or is

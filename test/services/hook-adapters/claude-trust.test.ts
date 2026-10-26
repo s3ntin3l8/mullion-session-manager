@@ -152,7 +152,7 @@ describe("mergeClaudeTrustedPath", () => {
     }
   });
 
-  it("gives up without writing, and without retrying, while a live process holds the lock", () => {
+  it("gives up without writing while a live process holds the lock", () => {
     writeConfig({ projects: {} });
     const before = readFileSync(configPath, "utf8");
     mkdirSync(`${configPath}.lock`);
@@ -190,10 +190,19 @@ describe("mergeClaudeTrustedPath", () => {
     expect(existsSync(`${real}.lock`)).toBe(false);
   });
 
-  it("completes synchronously — the write is on disk before any await", () => {
+  it("releases the lock and removes its temp file when the write fails", () => {
     writeConfig({ projects: {} });
-    // No await between the call and the read: this is the property
-    // managedInstall depends on to beat the child's own startup read.
+    // A directory where the temp file must go makes the write throw.
+    mkdirSync(`${configPath}.tmp-${process.pid}`);
+
+    expect(() => mergeClaudeTrustedPath(worktree, configPath)).toThrow();
+
+    expect(existsSync(`${configPath}.lock`)).toBe(false);
+    expect(readProjects()).toEqual({});
+  });
+
+  it("replaces a non-object entry for the checkout rather than spreading it", () => {
+    writeConfig({ projects: { [checkout]: "oops" } });
     mergeClaudeTrustedPath(worktree, configPath);
     expect(readProjects()[checkout]?.hasTrustDialogAccepted).toBe(true);
   });

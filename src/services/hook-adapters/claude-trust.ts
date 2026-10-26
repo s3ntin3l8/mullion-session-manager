@@ -6,6 +6,7 @@ import {
   renameSync,
   rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -92,10 +93,13 @@ function gitCheckoutRoot(cwd: string): string | null {
   try {
     const common = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
       encoding: "utf8",
-      timeout: 3000,
+      timeout: 1000,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     const commonDir = path.resolve(cwd, common);
+    // A bare repo or a separate git dir has no `.git` to take the parent of;
+    // treat it as "not a checkout" (the cwd itself is then what gets trusted,
+    // which is at worst one extra entry if Claude keys it differently).
     return path.basename(commonDir) === ".git" ? path.dirname(commonDir) : null;
   } catch {
     return null;
@@ -207,17 +211,33 @@ export function mergeClaudeTrustedPath(
     if (config === null) return "no-config";
     if (isTrusted(config, key, ancestors)) return "already-trusted";
     const projects = config.projects ?? {};
+    const existing = projects[key];
     const merged: ClaudeGlobalConfig = {
       ...config,
       projects: {
         ...projects,
-        [key]: { ...DEFAULT_PROJECT_ENTRY, ...projects[key], hasTrustDialogAccepted: true },
+        [key]: {
+          ...DEFAULT_PROJECT_ENTRY,
+          ...(typeof existing === "object" && existing !== null && !Array.isArray(existing)
+            ? existing
+            : {}),
+          hasTrustDialogAccepted: true,
+        },
       },
     };
     const mode = statSync(realConfig).mode & 0o777;
     const tmp = `${realConfig}.tmp-${process.pid}`;
-    writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, { mode });
-    renameSync(tmp, realConfig);
+    try {
+      writeFileSync(tmp, `${JSON.stringify(merged, null, 2)}\n`, { mode });
+      renameSync(tmp, realConfig);
+    } catch (err) {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // never created, or already renamed — nothing to clean up
+      }
+      throw err;
+    }
     return "written";
   } finally {
     try {
