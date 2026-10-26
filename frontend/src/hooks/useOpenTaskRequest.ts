@@ -43,6 +43,9 @@ export function useOpenTaskRequest({
   // latest onOpenTask (which closes over the current dockview API).
   const unmountedRef = useRef(false);
   const onOpenTaskRef = useRef(onOpenTask);
+  // Bumped per resolved request, so a refresh still in flight for an older
+  // click can't open its task over the one a newer click already opened.
+  const generationRef = useRef(0);
   useEffect(() => {
     onOpenTaskRef.current = onOpenTask;
   }, [onOpenTask]);
@@ -74,6 +77,7 @@ export function useOpenTaskRequest({
     const find = () => useDashboardStore.getState().tasks.find((t) => t.id === taskId);
     const timer = setTimeout(() => {
       resolvedNonceRef.current = nonce;
+      const generation = ++generationRef.current;
       useDashboardStore.getState().clearOpenTaskRequest(nonce);
       const task = find();
       if (task) {
@@ -85,7 +89,9 @@ export function useOpenTaskRequest({
         .refreshTasks()
         .then(() => {
           const fetched = find();
-          if (fetched && !unmountedRef.current) onOpenTaskRef.current(fetched);
+          if (fetched && !unmountedRef.current && generation === generationRef.current) {
+            onOpenTaskRef.current(fetched);
+          }
         });
     }, 0);
     return () => clearTimeout(timer);

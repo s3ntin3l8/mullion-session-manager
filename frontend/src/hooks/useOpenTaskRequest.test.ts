@@ -173,6 +173,34 @@ describe("useOpenTaskRequest", () => {
     expect(clearOpenTaskRequest).toHaveBeenCalledWith(1);
   });
 
+  it("does not open a stale fetched task over a newer request", async () => {
+    let release!: () => void;
+    refreshTasks.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            tasks = [makeTask({ id: 9 }), makeTask({ id: 5 })];
+            resolve();
+          };
+        }),
+    );
+    openTaskRequest = { taskId: 9, nonce: 1 };
+    const onOpenTask = vi.fn();
+    const { rerender } = renderHook(() => useOpenTaskRequest({ ...baseProps, onOpenTask }));
+    await vi.waitFor(() => expect(refreshTasks).toHaveBeenCalledTimes(1));
+    // A second click on a task the store holds opens at once...
+    tasks = [makeTask({ id: 5 })];
+    rerender();
+    openTaskRequest = { taskId: 5, nonce: 1 };
+    rerender();
+    await vi.waitFor(() => expect(onOpenTask).toHaveBeenCalledTimes(1));
+    // ...and the first click's refresh landing afterwards opens nothing.
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onOpenTask.mock.calls.map(([t]) => (t as Task).id)).toEqual([5]);
+  });
+
   it("drops a task that is still missing after the refresh", async () => {
     openTaskRequest = { taskId: 9, nonce: 1 };
     const onOpenTask = vi.fn();
