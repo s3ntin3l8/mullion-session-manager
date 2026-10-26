@@ -778,6 +778,92 @@ describe("PrDetailView", () => {
       },
     );
 
+    // #2019 — a linked session held at Mullion's review gate: badge plus
+    // Approve/Deny in the Mullion card, through POST /api/sessions/:id/review-gate.
+    describe("review gate", () => {
+      const gatedState = (refreshSessions = vi.fn().mockResolvedValue(undefined)) => ({
+        refreshSessions,
+        projects: [makeProject({ id: 1 })],
+        sessions: [
+          makeSession({
+            id: 31,
+            projectId: 1,
+            name: "thing worker",
+            liveBranch: "feat-thing",
+            sessionStatus: "awaiting_review_gate" as const,
+            gatePrompt: "Push to origin?",
+          }),
+        ],
+        prsByProject: {
+          1: {
+            prs: [
+              {
+                number: 12,
+                title: "Add thing",
+                htmlUrl: "u",
+                author: "me",
+                headSha: "abc",
+                headBranch: "feat-thing",
+                baseBranch: "main",
+                ciStatus: "success" as const,
+                actionsRuns: [],
+              },
+            ],
+            prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+          },
+        },
+      });
+      const gateCalls = (fetchMock: ReturnType<typeof vi.fn>) =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes("/review-gate"));
+      afterEach(() => useDashboardStore.setState({ projects: [], sessions: [], prsByProject: {} }));
+
+      it("badges the card and approves the gate", async () => {
+        const fetchMock = stub(PR, (url) =>
+          url.includes("/review-gate") ? new Response(null, { status: 204 }) : null,
+        );
+        const refreshSessions = vi.fn().mockResolvedValue(undefined);
+        useDashboardStore.setState(gatedState(refreshSessions));
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        const mullion = await screen.findByRole("region", { name: "Mullion" });
+        expect(within(mullion).getByText("review gate").title).toContain(
+          "thing worker: Push to origin?",
+        );
+        await userEvent.click(within(mullion).getByRole("button", { name: "Approve" }));
+        await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
+        const [[url, init]] = gateCalls(fetchMock);
+        expect(String(url)).toContain("/api/sessions/31/review-gate");
+        expect(JSON.parse(String(init?.body))).toMatchObject({ decision: "approved" });
+        expect(within(mullion).queryByRole("alert")).toBeNull();
+      });
+
+      it("treats a 409 (nothing pending any more) as a refresh, not an error", async () => {
+        const fetchMock = stub(PR, (url) =>
+          url.includes("/review-gate") ? jsonResponse(409, { message: "No pending gate" }) : null,
+        );
+        const refreshSessions = vi.fn().mockResolvedValue(undefined);
+        useDashboardStore.setState(gatedState(refreshSessions));
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        const mullion = await screen.findByRole("region", { name: "Mullion" });
+        await userEvent.click(within(mullion).getByRole("button", { name: "Deny" }));
+        await waitFor(() => expect(refreshSessions).toHaveBeenCalled());
+        expect(JSON.parse(String(gateCalls(fetchMock)[0][1]?.body))).toMatchObject({
+          decision: "denied",
+        });
+        expect(within(mullion).queryByRole("alert")).toBeNull();
+      });
+
+      it("shows any other failure", async () => {
+        stub(PR, (url) =>
+          url.includes("/review-gate") ? jsonResponse(500, { message: "boom" }) : null,
+        );
+        useDashboardStore.setState(gatedState());
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        const mullion = await screen.findByRole("region", { name: "Mullion" });
+        await userEvent.click(within(mullion).getByRole("button", { name: "Approve" }));
+        expect(await within(mullion).findByRole("alert")).toHaveTextContent("boom");
+      });
+    });
+
     it("shows nothing-linked copy when no session, task or run is linked", async () => {
       stub(PR);
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

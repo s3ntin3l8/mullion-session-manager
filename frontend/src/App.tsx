@@ -59,6 +59,7 @@ import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
+import { useOpenTaskRequest } from "./hooks/useOpenTaskRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useBalanceOnDrop } from "./hooks/useBalanceOnDrop.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
@@ -1060,6 +1061,16 @@ export function App() {
     sessionsLoaded,
     sessions,
     onOpenSession,
+    restoringRef,
+    restoredWorkspaceIdRef,
+  });
+
+  // Issue #2020 — resolves requestOpenTask (a sidebar task chip has no
+  // dockview API of its own). Same ordering contract as the hook above.
+  useOpenTaskRequest({
+    dockviewApi,
+    activeWorkspaceId,
+    onOpenTask,
     restoringRef,
     restoredWorkspaceIdRef,
   });

@@ -544,6 +544,29 @@ describe("clearOpenSessionRequest (issue #1429)", () => {
   });
 });
 
+// Issue #2020 — the task twin of requestOpenSession/clearOpenSessionRequest.
+describe("requestOpenTask / clearOpenTaskRequest (issue #2020)", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ openTaskRequest: null });
+  });
+
+  it("sets openTaskRequest with the given taskId and an incrementing nonce", () => {
+    useDashboardStore.getState().requestOpenTask(5);
+    expect(useDashboardStore.getState().openTaskRequest).toEqual({ taskId: 5, nonce: 1 });
+    useDashboardStore.getState().requestOpenTask(5);
+    expect(useDashboardStore.getState().openTaskRequest).toEqual({ taskId: 5, nonce: 2 });
+  });
+
+  it("clears only the request carrying the given nonce", () => {
+    useDashboardStore.getState().requestOpenTask(5); // nonce 1
+    useDashboardStore.getState().requestOpenTask(6); // nonce 2
+    useDashboardStore.getState().clearOpenTaskRequest(1);
+    expect(useDashboardStore.getState().openTaskRequest).toEqual({ taskId: 6, nonce: 2 });
+    useDashboardStore.getState().clearOpenTaskRequest(2);
+    expect(useDashboardStore.getState().openTaskRequest).toBeNull();
+  });
+});
+
 // Issue #1427 — eventKey() gained a third `ts` segment, so every dismiss
 // test below now seeds `events` with the exact events being dismissed
 // (mirroring every real call site: dismissEvent/dismissEvents are only ever

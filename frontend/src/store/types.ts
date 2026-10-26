@@ -801,6 +801,15 @@ export interface UiSlice {
   // setTimeout(0) being scheduled and it firing (two notifications clicked
   // in quick succession).
   clearOpenSessionRequest: (nonce: number) => void;
+  // Issue #2020 — the same intent shape as openSessionRequest above, for a
+  // task: the right-sidebar views (a PR row's task chip, a branch's owning
+  // task) have no dockview API of their own, so a click asks the app shell
+  // to open the task's detail panel. Resolved by hooks/useOpenTaskRequest.ts
+  // (App.tsx), which owns usePanelOpener's onOpenTask. Same nonce-guarded
+  // clear as clearOpenSessionRequest.
+  openTaskRequest: { taskId: number; nonce: number } | null;
+  requestOpenTask: (taskId: number) => void;
+  clearOpenTaskRequest: (nonce: number) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx

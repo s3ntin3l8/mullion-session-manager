@@ -93,6 +93,15 @@ instead of leaving for GitHub:
   the GitHub URL.
 - A session row's **⋯ → Reveal in Git** opens this view on the session's branch
   detail.
+- A **task chip** (under a PR or issue row, in a PR's or issue's Mullion card,
+  on a branch or worktree row and in branch detail) opens the task's detail
+  panel (#2020).
+- A **review gate** badge marks a PR whose linked session (or one of its child
+  sessions) is held at Mullion's review gate: the session status
+  `awaiting_review_gate`, not a task state (#2019). Its tooltip carries the
+  gate's prompt. The PR detail's Mullion card adds **Approve** / **Deny** for
+  each held session (the same decision the session and the notification bell
+  offer); one answered elsewhere in the meantime just refreshes.
 - Clicking the **GitHub rail icon** while a PR needs attention (failing CI,
   changes requested, conflicts) opens the most urgent such PR; with nothing
   needing attention it opens the list. While GitHub is showing, a click closes it.

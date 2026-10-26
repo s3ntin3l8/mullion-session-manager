@@ -843,6 +843,36 @@ describe("GitHubPanel", () => {
       useDashboardStore.setState({ projects: [], sessions: [], tasks: [] });
     });
 
+    // #2020 / #2019 — the task chip opens the task (not the PR), and a linked
+    // session held at the review gate shows the badge.
+    it("opens the task from its chip and badges a session held at the review gate", async () => {
+      setup({ ...failingPr, taskId: 7, taskStatus: "in_progress" });
+      const requestOpenTask = vi.fn();
+      useDashboardStore.setState({
+        requestOpenTask,
+        projects: [makeProject({ id: 1 })],
+        sessions: [
+          makeSession({
+            id: 31,
+            projectId: 1,
+            name: "attn worker",
+            liveBranch: "fix-attention",
+            sessionStatus: "awaiting_review_gate",
+            gatePrompt: "Push to origin?",
+          }),
+        ],
+      });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      const badge = screen.getByText("review gate");
+      expect(badge.title).toContain("attn worker: Push to origin?");
+      await userEvent.click(screen.getByRole("button", { name: "task #7 · in_progress" }));
+      expect(requestOpenTask).toHaveBeenCalledWith(7);
+      // The chip's click stays on the chip: the PR detail did not open.
+      expect(screen.queryByRole("region", { name: "Mullion" })).toBeNull();
+      useDashboardStore.setState({ projects: [], sessions: [] });
+    });
+
     it("falls back to the task fields the list carries when the store has no task", async () => {
       setup({ ...failingPr, taskId: 7, taskStatus: "in_progress" });
       render(<GitHubPanel params={{ projectId: 1 }} />);

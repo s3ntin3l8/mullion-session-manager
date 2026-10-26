@@ -3,9 +3,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import {
   LinkedActions,
+  ReviewGateChip,
   SessionPills,
   TaskChip,
   decideSessionAction,
+  gatedSessions,
   severityTone,
 } from "./index.js";
 import { buildMullionLinks, type MullionLinkEntry } from "../../hooks/useMullionLinks.js";
@@ -100,6 +102,50 @@ describe("TaskChip", () => {
   ] as const)("%s -> %s", (status, tone) => {
     const { container } = render(<TaskChip task={{ id: 1, status }} />);
     expect(container.querySelector(`.sb-chip--${tone}`)).not.toBeNull();
+  });
+
+  // #2020 — with no onOpen, a click asks the app shell to open the task.
+  it("dispatches requestOpenTask when no onOpen is given", () => {
+    const requestOpenTask = vi.fn();
+    useDashboardStore.setState({ requestOpenTask });
+    render(<TaskChip task={{ id: 4, status: "in_progress" }} />);
+    fireEvent.click(screen.getByRole("button", { name: /task #4/ }));
+    expect(requestOpenTask).toHaveBeenCalledWith(4);
+  });
+});
+
+describe("review gate (#2019)", () => {
+  const link = (id: number, over: Record<string, unknown> = {}, children: unknown[] = []) =>
+    ({ session: makeSession({ id, ...over }), children }) as never;
+
+  it("collects gated sessions, children included", () => {
+    const gated = gatedSessions([
+      link(1, { sessionStatus: "running" }, [link(2, { sessionStatus: "awaiting_review_gate" })]),
+      link(3, { sessionStatus: "awaiting_review_gate" }),
+    ]);
+    expect(gated.map((s) => s.id)).toEqual([2, 3]);
+    expect(gatedSessions(undefined)).toEqual([]);
+  });
+
+  it("renders nothing with no gated session", () => {
+    const { container } = render(<ReviewGateChip sessions={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("names the gate prompt and what releases it", () => {
+    render(
+      <ReviewGateChip
+        sessions={[
+          makeSession({ id: 1, name: "worker", gatePrompt: "Run rm -rf build?" }),
+          makeSession({ id: 2, name: null, gatePrompt: null }),
+        ]}
+      />,
+    );
+    const chip = screen.getByText("review gate · 2");
+    expect(chip.className).toContain("sb-chip--warn");
+    expect(chip.title).toContain("worker: Run rm -rf build?");
+    expect(chip.title).toContain("Session 2");
+    expect(chip.title).toContain("Approve or deny in the session or the notification bell");
   });
 });
 
