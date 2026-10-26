@@ -1294,7 +1294,7 @@ export interface GitHubIssueComment {
   htmlUrl: string;
 }
 
-export interface GitHubIssueDetail extends Omit<GitHubIssueListItem, "taskStatus"> {
+export interface GitHubIssueDetail extends GitHubIssueListItem {
   state: "open" | "closed";
   /** GitHub-rendered HTML — sanitize before inserting. */
   bodyHtml: string;
