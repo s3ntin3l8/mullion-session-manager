@@ -288,7 +288,7 @@ export function RunwaySection() {
       </Row>
       <Row
         label="Provider map"
-        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
+        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
         align="start"
       >
         <ProviderMapField

@@ -1499,9 +1499,12 @@ function normalizeBotLogin(login: string): string {
  * carries keys the base object already has, so it would clamp the map to
  * the default's keys: an added mapping would vanish on load and a removed
  * default would come back. When the raw source carries a map, it replaces
- * the merged one wholesale — the settings form always commits the whole
- * map — and `sanitizeSettings` then cleans it (null prototype, no empty
- * entries). A source without a map leaves the merged value alone.
+ * the merged one wholesale and `sanitizeSettings` then cleans it (null
+ * prototype, no empty entries). That is the contract of `PATCH
+ * /api/settings` too, not just of the settings form: a patch carrying
+ * `runway.providerMap` sets the WHOLE map, so a caller changing one entry
+ * sends the others with it (that is the only way an entry can be removed).
+ * A source without a map leaves the merged value alone.
  */
 function withRawProviderMap(merged: AppSettings, raw: unknown): AppSettings {
   const map = (raw as { runway?: { providerMap?: unknown } } | null)?.runway?.providerMap;

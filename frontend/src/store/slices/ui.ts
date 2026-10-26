@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import { api, DEFAULT_SETTINGS } from "../../api/index.js";
 import type { AppSettings, SettingsPatch } from "../../api/index.js";
-import { deepMerge, mergePartialPatch } from "../../settingsMerge.js";
+import { deepMerge, mergePartialPatch, withWholeProviderMap } from "../../settingsMerge.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
@@ -263,10 +263,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       // infer a field's nullability from it alone. See deepMerge's own doc
       // comment (settingsMerge.ts) for the null <-> value transition bug
       // this fixes.
-      const next = deepMerge(get().settings, patch, DEFAULT_SETTINGS);
+      const next = withWholeProviderMap(deepMerge(get().settings, patch, DEFAULT_SETTINGS), patch);
       applySettings(next);
 
-      pendingPatch = pendingPatch ? mergePartialPatch(pendingPatch, patch) : patch;
+      pendingPatch = pendingPatch
+        ? withWholeProviderMap(mergePartialPatch(pendingPatch, patch), patch)
+        : patch;
       if (patchTimer) clearTimeout(patchTimer);
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
     },

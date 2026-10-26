@@ -249,7 +249,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   runway: {
     apiUrl: "",
-    providerMap: { anthropic: "claude", opencode: "opencode" },
+    providerMap: {
+      anthropic: "claude",
+      opencode: "opencode",
+      chatgpt: "codex",
+      antigravity: "agy",
+      minimax: "mcode",
+    },
     pollSeconds: 60,
   },
   browser: {
