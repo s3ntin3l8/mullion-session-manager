@@ -336,7 +336,7 @@ export function useWorkspacePersistence({
       // (once — several stale panels would just fight over the drawer).
       let openedSourceControl = false;
       closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
-        if (kind !== "git" || openedSourceControl) return;
+        if (kind !== "git" || projectId == null || openedSourceControl) return;
         openedSourceControl = true;
         useDashboardStore.getState().openRightSidebarView("git", projectId);
       });

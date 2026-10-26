@@ -491,6 +491,27 @@ describe("useWorkspacePersistence", () => {
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
   });
 
+  it("does not open Source Control for a swept git panel that names no project", () => {
+    vi.useFakeTimers();
+    openRightSidebarView.mockClear();
+    const { api, addPanel } = makeMockApi();
+    const stale = addPanel("git-x");
+    (stale.api as unknown as { component: string }).component = "git";
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(stale.api.close).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarView).not.toHaveBeenCalled();
+  });
+
   it("does not touch the layout or schedule a save when no legacy project panel is restored", () => {
     vi.useFakeTimers();
     const { api, addPanel } = makeMockApi();
