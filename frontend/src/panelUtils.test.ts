@@ -2335,7 +2335,7 @@ describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
       expect(bottom.api.setSize).not.toHaveBeenCalled();
     });
 
-    it("leaves out a branch with no direct leaf child", () => {
+    it("bails when a branch sibling has no direct leaf child", () => {
       const a = mockGroup("a", "grid", { width: 700, height: 600 });
       const b = mockGroup("b", "grid", { width: 300, height: 600 });
       const x = mockGroup("x", "grid", { width: 100, height: 100 });
@@ -2348,10 +2348,26 @@ describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
         [a, b, x, y],
       );
 
+      expect(balanceSiblingsOf(api, "a")).toBe(false);
+      expect(canBalanceSiblingsOf(api, "a")).toBe(false);
+      expect(a.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("sizes a branch sibling by its direct leaf child, not a deeper leaf", () => {
+      const a = mockGroup("a", "grid", { width: 400, height: 600 });
+      const top = mockGroup("top", "grid", { width: 400, height: 300 });
+      const deep = mockGroup("deep", "grid", { width: 100, height: 300 });
+      const api = mockApi(
+        {
+          root: branch(leaf("a"), branch(branch(leaf("deep")), leaf("top"))),
+          orientation: "HORIZONTAL",
+        },
+        [a, top, deep],
+      );
+
       balanceSiblingsOf(api, "a");
 
-      expect(a.api.setSize).toHaveBeenCalledWith({ width: 500 });
-      expect(x.api.setSize).not.toHaveBeenCalled();
+      expect(a.api.setSize).toHaveBeenCalledWith({ width: 400 });
     });
 
     it("no-ops when maximized, for an only child, or with zero total size", () => {

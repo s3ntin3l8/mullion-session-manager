@@ -1499,9 +1499,7 @@ export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): voi
 // left as a known gap rather than chased here.
 const ROW_HEIGHT_TOLERANCE_PX = 2;
 
-// Shared by restoreTiledGroupWidths/resetTiledGroupWidths and the "Reset
-// pane sizes" menu item's own enablement check (canResetTiledGroupWidths) —
-// a single definition of "is there a single row of tiled groups worth
+// Used by restoreTiledGroupWidths — a single definition of "is there a single row of tiled groups worth
 // redistributing right now," so the menu item can't disagree with what the
 // action it triggers is actually willing to do.
 function eligibleTiledRowGroups(api: DockviewApi): DockviewGroupPanel[] | null {
@@ -1571,19 +1569,11 @@ export function restoreTiledGroupWidths(
 // children: a leaf's size on the parent's axis is its orthogonal size, which
 // `BranchNode` re-emits exactly one level up, so a deeper leaf would not move
 // the branch. Reasoned from the dockview-core source, not integration-verified.
-// A branch with no direct leaf child is left out rather than guessed at. The
+// A branch with no direct leaf child can't be resized, so the whole balance
+// bails rather than dividing its space among the others. The
 // last participant is skipped so it absorbs the rounding, and the near-minimum
 // cascade gap in `restoreTiledGroupWidths`'s header comment applies here too.
 type GridNode = { type: "leaf"; data: { id: string } } | { type: "branch"; data: GridNode[] };
-
-function firstLeafId(node: GridNode): string | null {
-  if (node.type === "leaf") return node.data.id;
-  for (const child of node.data) {
-    const id = firstLeafId(child);
-    if (id !== null) return id;
-  }
-  return null;
-}
 
 export interface ParentBranch {
   axis: "width" | "height";
@@ -1625,11 +1615,13 @@ function balanceParticipants(
       sibling.type === "leaf"
         ? sibling.data.id
         : (sibling.data.find((c) => c.type === "leaf")?.data as { id: string } | undefined)?.id;
-    const readId = firstLeafId(sibling);
-    const resizeGroup = resizeId ? api.getGroup(resizeId) : undefined;
-    const readGroup = readId ? api.getGroup(readId) : undefined;
-    if (!resizeGroup || !readGroup) continue;
-    items.push({ group: resizeGroup, size: readGroup.api[parent.axis] });
+    const group = resizeId ? api.getGroup(resizeId) : undefined;
+    // A sibling we can't resize would be squeezed to the group minimum by the
+    // others absorbing its space, so give up on the whole balance instead.
+    if (!group) return null;
+    // Read the group being resized: a direct leaf child's extent on the
+    // parent's axis equals its branch's, where a deeper leaf's is a fraction.
+    items.push({ group, size: group.api[parent.axis] });
   }
   return items.length > 1 ? { axis: parent.axis, items } : null;
 }

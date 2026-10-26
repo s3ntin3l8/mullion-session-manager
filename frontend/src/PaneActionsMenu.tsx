@@ -329,8 +329,8 @@ export function PaneActionsMenu({
   // cached could disable/enable the "Reset pane sizes" item below against a
   // layout that's since changed underneath it. Skipped while the menu is
   // closed since it's only ever read from the (conditionally rendered) menu
-  // content — `canBalanceSiblingsOf` is cheap and pure either way, but
-  // there's no reason to call it on every render of the trigger button.
+  // content — `canBalanceSiblingsOf` serializes the layout (`toJSON()`), so it
+  // must not run on every render of the trigger button.
   const canReset = overflowOpen && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
 
   // Tablet only: touch can't drag a tab between columns (the strip pans
