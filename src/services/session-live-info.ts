@@ -398,7 +398,10 @@ export async function readSessionLiveInfo(
     info,
     hostReachable: failure === undefined,
     ...(failure === undefined ? {} : { failure, error }),
-    ...(error instanceof HostRequestError ? { hostRefusedStatus: error.statusCode } : {}),
+    // From `failure`, not a second `instanceof` test, so the pair cannot disagree.
+    ...(failure === "refused" && error instanceof HostRequestError
+      ? { hostRefusedStatus: error.statusCode }
+      : {}),
   });
   try {
     const backend = resolveBackend(app, hostId);

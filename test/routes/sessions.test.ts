@@ -1108,7 +1108,14 @@ describe("sessions route", () => {
           return res.json().id as string;
         };
         const refusingHostId = await addHost("rate-limited", `http://127.0.0.1:${port}`);
-        const downHostId = await addHost("sleepy-laptop", "http://127.0.0.1:1");
+        // A real dead peer: an ephemeral port that was listening and is now
+        // closed refuses the connection (port 1 is a fetch "bad port" that is
+        // rejected before any socket is opened).
+        const closed = http.createServer();
+        await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
+        const closedPort = (closed.address() as AddressInfo).port;
+        await new Promise((resolve) => closed.close(resolve));
+        const downHostId = await addHost("sleepy-laptop", `http://127.0.0.1:${closedPort}`);
         const insert = (hostId: string) =>
           app.db
             .insert(sessions)
