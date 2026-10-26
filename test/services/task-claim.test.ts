@@ -99,7 +99,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { enqueueTask, dispatchClaimedTask, retryTask } =
   await import("../../src/services/task-claim.js");
-const { tasks, projects } = await import("../../src/db/schema.js");
+const { tasks, projects, hosts } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const placementModule = await import("../../src/services/placement.js");
@@ -1234,6 +1234,194 @@ describe("claimTask", () => {
         ok: false,
         reason: "no-worktree",
       });
+
+      await app.close();
+    });
+  });
+
+  // Issue #2006 / #1997 — a required host that EXISTS but is not eligible yet
+  // holds the task (still `claimed`, reason on it) instead of failing it; a
+  // dispatch that fails keeps the start of its failure run on the row.
+  describe("a task waiting to dispatch (#2006, #1997)", () => {
+    const MAC_CWD = "/Users/me/proj";
+
+    async function setup(body: string) {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "held-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const mac = res.json().id as string;
+      app.hostHeartbeatTracker?.recordSuccess(mac);
+      app.hostCapacityTracker?.record(mac, {
+        platform: "darwin",
+        logicalCores: 8,
+        loadAverage1m: 1,
+        memory: { totalBytes: 1000, freeBytes: 500 },
+        sessions: { tracked: 0, alive: 0 },
+      });
+      const [project] = app.db
+        .insert(projects)
+        .values({
+          name: "held",
+          cwd: "/srv/local-proj",
+          hostId: "local",
+          placement: "auto",
+          hostCwds: JSON.stringify({ [mac]: MAC_CWD }),
+        })
+        .returning()
+        .all();
+      const task = insertReadyTask(app, project.id, 90 + Math.floor(Math.random() * 1000), body);
+      const fakeBackend = fakeSessionBackend({
+        spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+        createWorktree: vi.fn(async (baseCwd: string) => ({
+          created: true,
+          path: `${baseCwd}/.mullion-worktrees/mullion-task-x`,
+          branch: "x",
+        })),
+      });
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+      return { app, mac, task, fakeBackend };
+    }
+
+    function park(app: Awaited<ReturnType<typeof buildApp>>, hostId: string, drained: boolean) {
+      app.db.update(hosts).set({ drained }).where(eq(hosts.id, hostId)).run();
+    }
+
+    it("holds a task whose required host is parked, then starts it when the host returns", async () => {
+      const { app, mac, task, fakeBackend } = await setup("Platform: darwin");
+      park(app, mac, true);
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      const held = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(held).toMatchObject({ ok: false, reason: "placement-held" });
+      const row = getTask(app, task.id);
+      // Still queued, with the reason where the board can show it.
+      expect(row.status).toBe("claimed");
+      expect(row.failureReason).toContain("requires platform darwin");
+      expect(row.failureReason).toContain("not eligible right now");
+      expect(row.dispatchFailingSince).toBeInstanceOf(Date);
+      expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+      // A hold is not a transition: nothing reached the activity feed.
+      expect(infoSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: task.id, to: "failed" }),
+        "task transition",
+      );
+
+      // The same hold again changes nothing — the clock keeps its start.
+      const since = row.dispatchFailingSince;
+      await expect(dispatchClaimedTask(app, task.id)).resolves.toMatchObject({
+        reason: "placement-held",
+      });
+      expect(getTask(app, task.id).dispatchFailingSince).toEqual(since);
+
+      // The Mac comes back: the very next attempt starts, and the board's
+      // reason and clock are cleared.
+      park(app, mac, false);
+      const started = await dispatchClaimedTask(app, task.id);
+      expect(started.ok).toBe(true);
+      const after = getTask(app, task.id);
+      expect(after.status).toBe("in_progress");
+      expect(after.failureReason).toBeNull();
+      expect(after.dispatchFailingSince).toBeNull();
+
+      await app.close();
+    });
+
+    it("tells the board a hold was recorded, once — not on every unchanged tick", async () => {
+      const { app, mac, task } = await setup("Platform: darwin");
+      park(app, mac, true);
+      const events = await import("../../src/services/task-events.js");
+      const spy = vi.spyOn(events, "broadcastTaskEvent");
+
+      await claimAndDispatch(app, task.id, { auto: false });
+      await dispatchClaimedTask(app, task.id);
+      await dispatchClaimedTask(app, task.id);
+
+      const dispatchEvents = spy.mock.calls.filter(([e]) => e.kind === "dispatch");
+      expect(dispatchEvents).toHaveLength(1);
+      expect(dispatchEvents[0]?.[0]).toMatchObject({ taskId: task.id });
+
+      await app.close();
+    });
+
+    it("still fails at once when NO host could ever match (no host of that platform)", async () => {
+      const { app, task } = await setup("Platform: freebsd");
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.dispatchFailingSince).toBeNull();
+
+      await app.close();
+    });
+
+    it("keeps the start of a failing run across attempts, and clears it when the task dispatches", async () => {
+      const { app, task, fakeBackend } = await setup("Just do the work.");
+      vi.mocked(fakeBackend.createWorktree).mockResolvedValue({
+        created: false,
+        reason: "create-failed",
+        detail: "boom",
+      });
+
+      await expect(claimAndDispatch(app, task.id, { auto: false })).resolves.toMatchObject({
+        reason: "worktree-failed",
+      });
+      const first = getTask(app, task.id);
+      expect(first.status).toBe("claimed");
+      expect(first.failureReason).toContain("worktree creation failed");
+      expect(first.dispatchFailingSince).toBeInstanceOf(Date);
+
+      // Backdate it, so a later attempt overwriting it would be visible.
+      const earlier = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: earlier })
+        .where(eq(tasks.id, task.id))
+        .run();
+      await dispatchClaimedTask(app, task.id);
+      const second = getTask(app, task.id);
+      expect(second.dispatchFailingSince?.getTime()).toBe(
+        Math.floor(earlier.getTime() / 1000) * 1000,
+      );
+
+      vi.mocked(fakeBackend.createWorktree).mockImplementation(async (baseCwd: string) => ({
+        created: true,
+        path: `${baseCwd}/.mullion-worktrees/mullion-task-x`,
+        branch: "x",
+      }));
+      await expect(dispatchClaimedTask(app, task.id)).resolves.toMatchObject({ ok: true });
+      const done = getTask(app, task.id);
+      expect(done.failureReason).toBeNull();
+      expect(done.dispatchFailingSince).toBeNull();
+
+      await app.close();
+    });
+
+    it("does not carry a terminal failure's reason into a re-queued task", async () => {
+      const { app, task } = await setup("Just do the work.");
+      app.db
+        .update(tasks)
+        .set({ failureReason: "budget exceeded", dispatchFailingSince: new Date() })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      const enqueued = await enqueueTask(app, task.id, { auto: false });
+
+      expect(enqueued.ok).toBe(true);
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.failureReason).toBeNull();
+      expect(row.dispatchFailingSince).toBeNull();
 
       await app.close();
     });

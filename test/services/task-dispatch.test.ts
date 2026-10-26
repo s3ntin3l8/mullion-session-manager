@@ -44,10 +44,11 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
-const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
+const { enqueueTask, dispatchClaimedTask, retryTask } =
+  await import("../../src/services/task-claim.js");
 const { dispatchQueuedTasks, resetDispatchBackoffForTests, resetDispatchStateForTests } =
   await import("../../src/services/task-dispatch.js");
-const { tasks, projects } = await import("../../src/db/schema.js");
+const { tasks, projects, hosts } = await import("../../src/db/schema.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-dispatch-test-${process.pid}.db`);
 
@@ -285,6 +286,124 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
     delete process.env.MULLION_TASK_MAX_CONCURRENT;
+  });
+
+  // Issue #2006 — a task held for a required host is looked at again on every
+  // sweep (no backoff), and does not stop the tasks queued behind it.
+  it("does not back off a held task, and still dispatches the tasks behind it", async () => {
+    process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    // First in line, and held: a Mac is registered but parked.
+    const heldRes = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "parked-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const macId = heldRes.json().id as string;
+    app.hostHeartbeatTracker?.recordSuccess(macId);
+    app.db
+      .update(hosts)
+      .set({ drained: true, platform: "darwin" })
+      .where(eq(hosts.id, macId))
+      .run();
+    app.db
+      .update(projects)
+      .set({ hostCwds: JSON.stringify({ [macId]: "/Users/me/proj" }) })
+      .where(eq(projects.id, projectId))
+      .run();
+    const held = insertReadyTask(app, projectId, 30, 0);
+    app.db.update(tasks).set({ body: "Platform: darwin" }).where(eq(tasks.id, held.id)).run();
+    const behind = insertReadyTask(app, projectId, 31, 1);
+    expect((await enqueueTask(app, held.id, { auto: false })).ok).toBe(true);
+    expect((await enqueueTask(app, behind.id, { auto: false })).ok).toBe(true);
+    const dispatchSpy = vi.spyOn(
+      await import("../../src/services/task-claim.js"),
+      "dispatchClaimedTask",
+    );
+
+    await dispatchQueuedTasks(app);
+    expect(getTask(app, held.id).status).toBe("claimed");
+    expect(getTask(app, held.id).failureReason).toContain("not eligible right now");
+    // The task behind it was not blocked by the hold.
+    expect(getTask(app, behind.id).sessionId).not.toBeNull();
+
+    // No backoff: the very next sweep asks about the held task again.
+    const heldCalls = () => dispatchSpy.mock.calls.filter(([, id]) => id === held.id).length;
+    const before = heldCalls();
+    await dispatchQueuedTasks(app);
+    expect(heldCalls()).toBeGreaterThan(before);
+
+    dispatchSpy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+    delete process.env.MULLION_TASK_MAX_CONCURRENT;
+  });
+
+  // Issue #1997 — a dispatch that has been failing for 6 hours stops retrying
+  // and fails the task with the last reason.
+  describe("giving up on a task that cannot be dispatched (#1997)", () => {
+    const HOURS = 60 * 60 * 1000;
+
+    async function failingTask() {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+      const app = await buildApp();
+      const notARepo = fs.mkdtempSync(path.join(os.tmpdir(), "task-dispatch-test-give-up-"));
+      const projectId = await createProject(app, notARepo);
+      const task = insertReadyTask(app, projectId, 40);
+      expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+      await dispatchQueuedTasks(app);
+      expect(getTask(app, task.id).status).toBe("claimed");
+      expect(getTask(app, task.id).dispatchFailingSince).toBeInstanceOf(Date);
+      return { app, notARepo, task };
+    }
+
+    it("keeps retrying a task that has been failing for less than 6 hours", async () => {
+      const { app, notARepo, task } = await failingTask();
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 5 * HOURS) })
+        .where(eq(tasks.id, task.id))
+        .run();
+      resetDispatchBackoffForTests();
+
+      await dispatchQueuedTasks(app);
+
+      expect(getTask(app, task.id).status).toBe("claimed");
+
+      fs.rmSync(notARepo, { recursive: true, force: true });
+      await app.close();
+      delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    });
+
+    it("fails a task that has been failing for 6 hours, with the last reason, and Retry has nothing to resume", async () => {
+      const { app, notARepo, task } = await failingTask();
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * HOURS) })
+        .where(eq(tasks.id, task.id))
+        .run();
+      resetDispatchBackoffForTests();
+
+      await dispatchQueuedTasks(app);
+
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toMatch(/^gave up after 6h of failed dispatch attempts — last: .+/);
+      expect(row.dispatchFailingSince).toBeNull();
+      // No commit block ever ran: nothing for Retry to resume.
+      expect(row.branchName).toBeNull();
+      expect(row.worktreePath).toBeNull();
+      await expect(retryTask(app, task.id)).resolves.toMatchObject({
+        ok: false,
+        reason: "no-worktree",
+      });
+
+      fs.rmSync(notARepo, { recursive: true, force: true });
+      await app.close();
+      delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    });
   });
 
   it("clears backoff on a later successful dispatch, so a task isn't stuck backed off forever", async () => {

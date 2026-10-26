@@ -620,6 +620,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* #1997 — a queued task that is not dispatching yet: warning tone and
+   wrapped (the reason is the useful part), unlike the red nowrap terminal
+   failure. */
+.task-card-dispatch-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  font-size: 0.65625rem;
+  color: var(--y);
+}
 .task-card-review-round {
   font-size: 0.65625rem;
   color: var(--muted);
@@ -789,6 +799,13 @@
   gap: 6px;
   font-size: 0.71875rem;
   color: var(--r);
+}
+.task-detail-dispatch {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.71875rem;
+  color: var(--y);
 }
 .task-detail-sync-error {
   display: flex;

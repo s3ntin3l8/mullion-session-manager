@@ -152,9 +152,12 @@ Matching rules, all eight:
   directive.** A task that needs Xcode or the iOS Simulator should say
   `Platform: darwin`: it then runs only on an online, un-parked host of that
   platform that has the project (the project's "Also lives on" path), and works
-  for a `pinned` project too. If no host qualifies the task is **failed with
-  the reason on it** — it never falls back to a host where it would just
-  break; fix the host (or the path), then move the task back to `ready`. The
+  for a `pinned` project too. It never falls back to a host where it would just
+  break. If a matching host exists but is offline or parked right now, the task
+  **waits** in the queue (the reason shows on its card) and starts when the host
+  is back — or is failed after 6 hours. If no host could ever match (none of that
+  platform, or none with the project's path) the task is **failed at once with
+  the reason on it**; fix the host (or the path), then move it back to `ready`. The
   platform is matched case-insensitively; a value no host reports (`mac`
   instead of `darwin`) matches nothing and is refused naming it. Leave both
   out and placement is the usual load-based choice. **Beware `Host:`** — it is

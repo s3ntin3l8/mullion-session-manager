@@ -261,6 +261,8 @@ const TASK_ROW_COLUMNS = {
   releaseError: tasks.releaseError,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
+  // Issue #1997 — since when a queued task has been failing to dispatch.
+  dispatchFailingSince: tasks.dispatchFailingSince,
   githubSyncError: tasks.githubSyncError,
   dependencyCount: tasks.dependencyCount,
   blockedBy: tasks.blockedBy,

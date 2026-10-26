@@ -1285,6 +1285,14 @@ export const tasks = sqliteTable(
     // once set; a queued-then-dispatched task keeps this as a lifecycle
     // audit timestamp distinct from "when did its current spell start."
     queuedAt: integer("queued_at", { mode: "timestamp" }),
+    // Issue #1997/#2006 — when the CURRENT run of failed (or held) dispatch
+    // attempts began. Stamped by the first attempt that fails while the task
+    // sits "claimed" and kept by every later one; cleared when a worker
+    // spawns and when the task is (re-)enqueued. The dispatcher gives up on a
+    // task that has been failing for 6 hours, and the board shows "since".
+    // A column, not the dispatcher's in-memory backoff map: a redeploy must
+    // not restart the give-up clock.
+    dispatchFailingSince: integer("dispatch_failing_since", { mode: "timestamp" }),
     // Stamped at DISPATCH (the reservation transaction that flips
     // "claimed" -> "in_progress"), not at claim/retry/enqueue time — see
     // queuedAt above. Null while a task sits queued with no session yet.

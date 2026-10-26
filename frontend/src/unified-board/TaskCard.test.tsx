@@ -613,6 +613,47 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText("budget exceeded")).toBeInTheDocument();
   });
 
+  // #1997 — a QUEUED task's last dispatch error, distinct from a terminal failure.
+  it("#1997 — shows why a queued (claimed) task is not dispatching, distinct from a failure", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        failureReason: "could not resolve the base ref on host mac: ECONNREFUSED",
+        dispatchFailingSince: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const note = document.querySelector(".task-card-dispatch-reason");
+    expect(note).not.toBeNull();
+    expect(note?.textContent).toMatch(
+      /Not dispatched yet \(3h ago\): could not resolve the base ref/,
+    );
+    // Not the terminal-failure treatment.
+    expect(document.querySelector(".task-card-failure-reason")).toBeNull();
+  });
+
+  it("#1997 — shows no dispatch note for a queued task without a recorded reason", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", failureReason: null })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")).toBeNull();
+  });
+
+  it("#1997 — shows the reason without a 'since' when the failure clock is unset", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", failureReason: "spawn failed" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")?.textContent).toBe(
+      "Not dispatched yet: spawn failed",
+    );
+  });
+
+  it("#1997 — a failed card keeps the terminal treatment, not the dispatch note", () => {
+    tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")).toBeNull();
+    expect(document.querySelector(".task-card-failure-reason")).not.toBeNull();
+  });
+
   it("shows a review-round indicator once a reviewing task has been auto-returned to the worker", () => {
     tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 1 })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

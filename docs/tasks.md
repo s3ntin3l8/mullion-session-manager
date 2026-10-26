@@ -570,6 +570,27 @@ own `agentCommand` field — so the task board can show which agent actually
 ran a task without re-deriving precedence after the fact (the issue body,
 project setting, or global default could all have changed since).
 
+## A queued task that cannot dispatch
+
+A claimed task waits in the queue (`claimed`) until a worker slot is free and a
+dispatch attempt succeeds. When an attempt fails — the placement host is
+unreachable (`could not resolve the base ref on host X: …`), git cannot cut the
+worktree (`worktree creation failed on host X: …`), or a required host is not
+eligible yet — the task stays queued and is retried with a growing delay (a
+held task waiting for its required host is simply re-checked every poll tick).
+The reason is not hidden:
+
+- **Board card and task drawer** show "Not dispatched yet (3h ago): …" in a
+  warning tone with a clock icon — distinct from the red triangle a terminal
+  `failed` task gets, because the task is still being retried. "(3h ago)" is
+  how long the current run of failures has lasted.
+- The notice disappears as soon as the task dispatches.
+- **It does not retry forever.** After **6 hours** of continuous failure the
+  task is failed (`via: dispatch-give-up`) with
+  `gave up after 6h of failed dispatch attempts — last: <reason>`; the usual
+  recovery (`failed → ready`) applies. Retry has nothing to resume at that
+  point, since no worktree was ever cut.
+
 ## Where a task runs: `Platform:` and `Host:`
 
 By default Task Master places each task's worker by load (see
@@ -597,11 +618,21 @@ Host: 3f2a9c1e-…
 - **It is a hard requirement.** Only an _eligible_ host qualifies — online, not
   parked, reporting its capacity, and with a path for this project (the
   project's **Also lives on** setting, `hostCwds`). It works for a `pinned`
-  project too. If no host qualifies the claim is **refused**: the task goes to
-  `failed` with the reason on it (visible on the board and synced to the
-  issue), and nothing is run on a host where it would just break. Fix the host
-  (bring it online, add the project's path on it), then move the task back to
-  `ready`. A task with neither directive is placed exactly as before.
+  project too. A task with neither directive is placed exactly as before.
+- **When no host qualifies, it depends on why.**
+  - A host that _could_ match exists — it is registered and has the project's
+    path, but is offline, parked, or has not reported its capacity yet (a Mac
+    that is rebooting or asleep) — so the task **waits**: it stays queued
+    (`claimed`), the card shows "Not dispatched yet: …" with the reason, and it
+    starts within one poll tick of the host becoming eligible. If it has been
+    waiting **6 hours** it is failed with that reason (see
+    [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
+  - Nothing could ever match — no host of that platform is registered, or none
+    has a path for this project — so the claim is **refused** at once: the task
+    goes to `failed` with the reason on it (visible on the board and synced to
+    the issue), and nothing is run on a host where it would just break. Fix the
+    host (register it, add the project's path on it), then move the task back to
+    `ready`.
 - The chosen host runs the whole task: the worktree is cut and the base ref
   resolved there, and the reviewer, the rebase worker and Retry join the
   worker's host. The requirement is recorded on the task

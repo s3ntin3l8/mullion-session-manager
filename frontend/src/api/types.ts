@@ -1962,6 +1962,10 @@ export interface Task {
   // in_progress (only rendered in the UI when status === "failed" — see
   // TaskDetail.tsx). NOT a GitHub sync/scope error — see githubSyncError.
   failureReason: string | null;
+  // #1997 — when the current run of failed/held dispatch attempts began.
+  // While status is "claimed", `failureReason` is the LAST dispatch error
+  // (the task is still queued and being retried), not a terminal failure.
+  dispatchFailingSince: string | null;
   // #485 — the most recent GitHub sync or promotion failure (e.g. an
   // under-scoped token's 403), independent of task status and cleared the
   // next time any sync for this task succeeds. Null means no known problem,

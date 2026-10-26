@@ -8,7 +8,7 @@ import { commandToBinary } from "../cliLogos.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
 import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
-import { BlockedIcon, BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
+import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
@@ -393,6 +393,19 @@ export function TaskCard({
         <div className="task-card-failure-reason" title={task.failureReason}>
           <WarningTriangleIcon size={11} />
           {task.failureReason}
+        </div>
+      )}
+      {/* #1997 — a QUEUED task that keeps failing to dispatch (an unreachable
+          host, a worktree git cannot cut, a required host that is not
+          eligible yet) is still retried, so this is a waiting notice, not the
+          terminal failure above. Cleared when the task dispatches. */}
+      {task.status === "claimed" && task.failureReason && (
+        <div className="task-card-dispatch-reason" title={task.failureReason}>
+          <ClockIcon size={11} />
+          Not dispatched yet
+          {task.dispatchFailingSince &&
+            ` (${formatRelativeAge(Date.parse(task.dispatchFailingSince))})`}
+          : {task.failureReason}
         </div>
       )}
       {/* D5 — "sent back to the worker" is the single most useful fact

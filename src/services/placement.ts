@@ -578,7 +578,21 @@ export type PlacementTarget =
   { hostId: string; platform?: string } | { platform: string };
 
 export type TargetPlacementResult =
-  { ok: true; decision: PlacementDecision } | { ok: false; detail: string };
+  | { ok: true; decision: PlacementDecision }
+  | {
+      ok: false;
+      detail: string;
+      /**
+       * Issue #2006 — whether waiting could change the answer. TRUE when a
+       * host matching the target, with this project's path, EXISTS but is not
+       * eligible right now (offline, parked, no capacity reading yet) — or the
+       * fleet could not be read at all. FALSE when nothing could ever match
+       * (no such host or platform, or none has this project's path): only
+       * config can fix that. Deliberately not part of `detail`, which names
+       * only the target so a session-scoped caller cannot enumerate the fleet.
+       */
+      transient: boolean;
+    };
 
 /** `host <id>`, `platform <p>`, or `host <id> (platform <p>)` for a target that
  * names both. Used in refusals and the recorded placement reason. */
@@ -617,9 +631,10 @@ export function resolveTargetHost(
     requestedBy?: string;
   },
 ): TargetPlacementResult {
-  const refusal = (): TargetPlacementResult => ({
+  const refusal = (transient: boolean): TargetPlacementResult => ({
     ok: false,
     detail: `no eligible host matches ${describeTarget(opts.target)}`,
+    transient,
   });
 
   let collected: CollectedCandidates;
@@ -627,7 +642,8 @@ export function resolveTargetHost(
     collected = collectCandidates(app, opts.project);
   } catch (err) {
     app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
-    return refusal();
+    // Could not read the fleet: nothing says a retry would fail too.
+    return refusal(true);
   }
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
@@ -645,7 +661,12 @@ export function resolveTargetHost(
   });
   // chooseHost falls back to the pinned host when nothing is eligible; for a
   // target that is exactly the case to refuse.
-  if (decision.fellBack) return refusal();
+  if (decision.fellBack) {
+    // Issue #2006 — a host that matches the target AND has this project's
+    // path exists; it is just not eligible yet (offline, parked, no capacity
+    // reading), so waiting can help. With none, only a config change can.
+    return refusal(matching.some((candidate) => candidate.projectCwd !== null));
+  }
 
   const decorated: PlacementDecision = {
     ...decision,

@@ -39,6 +39,7 @@ const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
   ingested: true,
   blockers: true,
   hierarchy: true,
+  dispatch: true,
 };
 
 function isTaskWireMessage(value: unknown): boolean {
