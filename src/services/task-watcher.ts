@@ -496,8 +496,8 @@ const STARTUP_STAGGER_MS = 2_000;
  * How many slots auto-claim pacing treats as taken: running tasks plus queued
  * ones that are genuinely waiting for a worker slot.
  *
- * A task held for a required host (issue #2006: queued, with a placement
- * requirement and a failing clock) is not waiting for a slot — it cannot run
+ * A task held for a required host (issue #2006, `tasks.dispatchHeld`) is not
+ * waiting for a slot — it cannot run
  * until its host returns — so it must not use up the pacing budget, or one
  * sleeping Mac would stall every unrelated ready task.
  */
@@ -508,10 +508,7 @@ export function countOccupiedSlots(app: FastifyInstance): number {
     .where(
       or(
         eq(tasks.status, "in_progress"),
-        and(
-          eq(tasks.status, "claimed"),
-          or(isNull(tasks.placementRequirement), isNull(tasks.dispatchFailingSince)),
-        ),
+        and(eq(tasks.status, "claimed"), eq(tasks.dispatchHeld, false)),
       ),
     )
     .all().length;

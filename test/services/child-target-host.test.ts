@@ -337,6 +337,7 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       detail: "no eligible host matches platform darwin",
       // Could not read the fleet at all: nothing says waiting would not help.
       transient: true,
+      unreadable: true,
     });
   });
 

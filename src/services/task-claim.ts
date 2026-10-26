@@ -205,6 +205,7 @@ export async function enqueueTask(
       // failed, then went back to ready) must not read as that.
       failureReason: null,
       dispatchFailingSince: null,
+      dispatchHeld: false,
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
@@ -240,17 +241,6 @@ export async function enqueueTask(
   void syncTaskTransition(app, { ...task, status: "claimed" }, project, "claimed");
 
   return { ok: true, task: queuedRow };
-}
-
-// The phrase in a `holdClaim` reason that says the task is waiting for a
-// required host. `isHoldReason` recognises it so the dispatcher can tell a
-// hold (nothing was cut, nothing to resume) from a failed attempt.
-const HOLD_PHRASE = "registered but not eligible right now";
-
-/** Whether a queued task's `failureReason` was written by a placement hold
- * (issue #2006) rather than by a failed dispatch attempt. */
-export function isHoldReason(reason: string | null): boolean {
-  return reason !== null && reason.includes(HOLD_PHRASE);
 }
 
 /**
@@ -289,6 +279,7 @@ export function failQueuedTask(
     status: "failed",
     failureReason: opts.detail,
     dispatchFailingSince: null,
+    dispatchHeld: false,
     ...opts.extra,
   };
   const updated = app.db
@@ -432,13 +423,14 @@ export async function dispatchClaimedTask(
   // back; task-dispatch.ts bounds the wait. The text is stable (no times in
   // it) so an unchanged hold writes and broadcasts nothing on later ticks.
   function holdClaim(detail: string): DispatchTaskOutcome {
-    if (task.failureReason !== detail || failingSince === null) {
+    if (task.failureReason !== detail || failingSince === null || !task.dispatchHeld) {
       const written = app.db
         .update(tasks)
         .set({
           failureReason: detail,
           placementRequirement: requirementJson,
           dispatchFailingSince: failingSince ?? new Date(),
+          dispatchHeld: true,
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
         .run();
@@ -466,10 +458,12 @@ export async function dispatchClaimedTask(
       requestedBy: "the task's requirement",
     });
     if (!targeted.ok && targeted.transient) {
+      const requires = `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)})`;
       return holdClaim(
-        `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)}), ` +
-          `and a matching host is ${HOLD_PHRASE} (offline, parked, or ` +
-          "no capacity reading yet). It will start once one is.",
+        targeted.unreadable
+          ? `${requires}, but the hosts could not be checked just now. It will be tried again shortly.`
+          : `${requires}, and a matching host is registered but not eligible right now (offline, parked, ` +
+              "or no capacity reading yet). It will start once one is.",
       );
     }
     if (!targeted.ok) {
@@ -495,10 +489,10 @@ export async function dispatchClaimedTask(
   // wait toward the 6h give-up. Only a HOLD is dropped: the reason of a failed
   // attempt (an unreachable base ref, a worktree git cannot cut) is still the
   // last known truth until a dispatch succeeds.
-  if (failingSince !== null && isHoldReason(task.failureReason)) {
+  if (task.dispatchHeld) {
     const cleared = app.db
       .update(tasks)
-      .set({ failureReason: null, dispatchFailingSince: null })
+      .set({ failureReason: null, dispatchFailingSince: null, dispatchHeld: false })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
     failingSince = null;
@@ -592,6 +586,8 @@ export async function dispatchClaimedTask(
         // clock); `task` is the row read at the top, and nothing else writes
         // the column between that read and here.
         dispatchFailingSince: failingSince ?? new Date(),
+        // A failed attempt is not a hold (see schema.ts's dispatchHeld).
+        dispatchHeld: false,
         placementRequirement: requirementJson,
         baseSha: null,
         seedDelivered: null,
@@ -815,6 +811,7 @@ export async function dispatchClaimedTask(
         // longer is, so the card stops showing it.
         failureReason: null,
         dispatchFailingSince: null,
+        dispatchHeld: false,
       })
       .where(eq(tasks.id, taskId))
       .run();
@@ -972,6 +969,7 @@ export async function retryTask(
         // Issue #1997 — a retry starts a fresh run; a clock left by an earlier
         // queue spell (a task failed by another route) must not carry over.
         dispatchFailingSince: null,
+        dispatchHeld: false,
         completedAt: null,
         sessionId: null,
         prUrl: null,

@@ -1307,6 +1307,7 @@ describe("claimTask", () => {
       expect(row.failureReason).toContain("requires platform darwin");
       expect(row.failureReason).toContain("not eligible right now");
       expect(row.dispatchFailingSince).toBeInstanceOf(Date);
+      expect(row.dispatchHeld).toBe(true);
       expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
       expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
       // A hold is not a transition: nothing reached the activity feed.
@@ -1331,6 +1332,28 @@ describe("claimTask", () => {
       expect(after.status).toBe("in_progress");
       expect(after.failureReason).toBeNull();
       expect(after.dispatchFailingSince).toBeNull();
+      expect(after.dispatchHeld).toBe(false);
+
+      await app.close();
+    });
+
+    it("words the hold honestly when the hosts could not be checked at all", async () => {
+      const { app, task } = await setup("Platform: darwin");
+      vi.spyOn(placementModule, "resolveTargetHost").mockReturnValue({
+        ok: false,
+        detail: "no eligible host matches platform darwin",
+        transient: true,
+        unreadable: true,
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-held" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.dispatchHeld).toBe(true);
+      expect(row.failureReason).toContain("could not be checked just now");
+      expect(row.failureReason).not.toContain("registered but not eligible");
 
       await app.close();
     });
@@ -1361,6 +1384,7 @@ describe("claimTask", () => {
       const row = getTask(app, task.id);
       expect(row.failureReason).not.toContain("not eligible right now");
       expect(row.failureReason).toContain("boom");
+      expect(row.dispatchHeld).toBe(false);
       // A NEW run of failures: the two hours spent waiting for the host are
       // not counted toward the give-up.
       expect(row.dispatchFailingSince!.getTime()).toBeGreaterThan(

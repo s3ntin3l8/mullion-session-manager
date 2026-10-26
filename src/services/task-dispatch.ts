@@ -22,7 +22,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { dispatchClaimedTask, failQueuedTask, isHoldReason } from "./task-claim.js";
+import { dispatchClaimedTask, failQueuedTask } from "./task-claim.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
@@ -229,6 +229,7 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
       status: tasks.status,
       since: tasks.dispatchFailingSince,
       failureReason: tasks.failureReason,
+      held: tasks.dispatchHeld,
     })
     .from(tasks)
     .where(eq(tasks.id, taskId))
@@ -236,7 +237,11 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
   if (!row || row.status !== "claimed" || row.since === null) return false;
   if (now - row.since.getTime() < DISPATCH_GIVE_UP_AFTER_MS) return false;
   const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
-  const detail = `gave up after ${hours}h of failed dispatch attempts — last: ${row.failureReason ?? "unknown"}`;
+  // A held task never failed an attempt, so its own reason ("it will start
+  // once one is") would read as a contradiction after the give-up.
+  const detail = row.held
+    ? `gave up after ${hours}h waiting for a host that matches the task's Platform:/Host: requirement to become eligible`
+    : `gave up after ${hours}h of failed dispatch attempts — last: ${row.failureReason ?? "unknown"}`;
   app.log.warn({ taskId, detail }, "[task-dispatch] giving up on a task that cannot be dispatched");
   return failQueuedTask(app, taskId, {
     detail,
@@ -248,7 +253,7 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
     // that was never created. After a failed ATTEMPT they are left alone — a
     // partial or unclean worktree may exist on the host, and Retry (or the
     // user) can still find it through them.
-    extra: isHoldReason(row.failureReason) ? { worktreePath: null, branchName: null } : {},
+    extra: row.held ? { worktreePath: null, branchName: null } : {},
   });
 }
 

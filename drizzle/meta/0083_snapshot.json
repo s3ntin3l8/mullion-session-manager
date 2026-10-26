@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "0eb23454-8b1a-4b4c-a60b-5a845dd71f99",
+  "id": "cca86df8-d11b-441b-a960-3409fc97a47c",
   "prevId": "e226e9a7-aef3-4510-9254-550fdc2ba211",
   "tables": {
     "bridges": {
@@ -1948,6 +1948,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "dispatch_held": {
+          "name": "dispatch_held",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
         },
         "claimed_at": {
           "name": "claimed_at",

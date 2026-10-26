@@ -961,7 +961,7 @@ board renders it as such), and `enqueueTask` / a successful dispatch null it.
 deliberately longer than the 1h backoff cap) fails an overdue task through
 `failQueuedTask` (`via: dispatch-give-up`, the same `claimed → failed` write
 the placement refusal uses) with the last reason, clearing `branchName` /
-`worktreePath` — but only when the task merely waited for its host (a failed
+`worktreePath` — but only when the task merely waited for its host (`tasks.dispatchHeld`, the flag `holdClaim` sets and every other write clears; nothing infers a hold from the reason's wording) (a failed
 attempt may have left a partial worktree, so those fields stay and Retry can
 still find it). A hold also stops counting once placement succeeds again (the
 stale reason and clock are dropped, so waiting for a worker slot is not charged
@@ -1002,8 +1002,9 @@ recorded on the task's `githubSyncError` field, rendered in the task
 detail drawer regardless of the task's status (see
 [`tasks.md`](tasks.md#the-task-board)). If claiming a task never actually
 labels/comments on its GitHub issue, the task itself will now say why —
-`githubSyncError` is not `failureReason`: the latter is only rendered when
-`status === "failed"` and also carries reject feedback, so a sync problem
+`githubSyncError` is not `failureReason`: the latter is rendered for a
+`failed` task (and, as the last dispatch error, for a `claimed` one — see
+`dispatchFailingSince` above) and also carries reject feedback, so a sync problem
 never overwrites it.
 
 ## Task → PR promotion

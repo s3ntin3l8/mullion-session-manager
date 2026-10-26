@@ -592,6 +592,9 @@ export type TargetPlacementResult =
        * only the target so a session-scoped caller cannot enumerate the fleet.
        */
       transient: boolean;
+      /** Only with `transient`: the fleet could not be read at all, so nothing
+       * is known about any host — the caller words its hold accordingly. */
+      unreadable?: boolean;
     };
 
 /** `host <id>`, `platform <p>`, or `host <id> (platform <p>)` for a target that
@@ -631,10 +634,11 @@ export function resolveTargetHost(
     requestedBy?: string;
   },
 ): TargetPlacementResult {
-  const refusal = (transient: boolean): TargetPlacementResult => ({
+  const refusal = (transient: boolean, unreadable = false): TargetPlacementResult => ({
     ok: false,
     detail: `no eligible host matches ${describeTarget(opts.target)}`,
     transient,
+    ...(unreadable ? { unreadable } : {}),
   });
 
   let collected: CollectedCandidates;
@@ -643,7 +647,7 @@ export function resolveTargetHost(
   } catch (err) {
     app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
     // Could not read the fleet: nothing says a retry would fail too.
-    return refusal(true);
+    return refusal(true, true);
   }
 
   const wantedPlatform = opts.target.platform?.toLowerCase();

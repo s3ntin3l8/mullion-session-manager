@@ -326,6 +326,7 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     await dispatchQueuedTasks(app);
     expect(getTask(app, held.id).status).toBe("claimed");
     expect(getTask(app, held.id).failureReason).toContain("not eligible right now");
+    expect(getTask(app, held.id).dispatchHeld).toBe(true);
     // The task behind it was not blocked by the hold.
     expect(getTask(app, behind.id).sessionId).not.toBeNull();
 
@@ -439,8 +440,11 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
 
       const row = getTask(app, task.id);
       expect(row.status).toBe("failed");
-      expect(row.failureReason).toMatch(/^gave up after 6h of failed dispatch attempts — last: /);
-      expect(row.failureReason).toContain("not eligible right now");
+      // A held task never failed an attempt: its own "it will start once one
+      // is" must not be echoed back after the give-up.
+      expect(row.failureReason).toMatch(/^gave up after 6h waiting for a host/);
+      expect(row.failureReason).not.toContain("will start");
+      expect(row.dispatchHeld).toBe(false);
       expect(row.branchName).toBeNull();
       expect(row.worktreePath).toBeNull();
       await expect(retryTask(app, task.id)).resolves.toMatchObject({
@@ -472,12 +476,19 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     insert(1, { status: "in_progress" });
     // Queued, genuinely waiting for a slot.
     insert(2, { status: "claimed" });
-    // Queued and failing, but not waiting on a host: still a slot's worth.
-    insert(3, { status: "claimed", dispatchFailingSince: now, failureReason: "worktree failed" });
+    // Queued and failing - even with a host requirement, if the attempt FAILED
+    // rather than being held - it is still waiting for a slot.
+    insert(3, {
+      status: "claimed",
+      dispatchFailingSince: now,
+      failureReason: "worktree failed",
+      placementRequirement: JSON.stringify({ platform: "darwin" }),
+    });
     // Held for its required host: does not count.
     insert(4, {
       status: "claimed",
       dispatchFailingSince: now,
+      dispatchHeld: true,
       placementRequirement: JSON.stringify({ platform: "darwin" }),
     });
     insert(5, { status: "ready" });
