@@ -13,6 +13,7 @@ import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as HermesReview from "../../src/services/hermes-review.js";
 import type { RelayReviewState } from "../../src/shared/types.js";
+import type { SessionBackend } from "../../src/services/session-backend.js";
 // The mocked module's own value import (see the vi.mock above) — a test
 // asserts on the run lookup with it.
 import {
@@ -6863,6 +6864,255 @@ describe("projects route", () => {
       expect(res.statusCode).toBe(503);
 
       await app.close();
+    });
+
+    // Issue #2026 — Settings → Storage's "Kept session worktrees": removal of
+    // an ended session's own worktree, which may be on another host and was
+    // cut from `worktreeRepoCwd`, not necessarily `project.cwd`.
+    describe("with a sessionId", () => {
+      async function insertOwner(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        values: {
+          projectId: number;
+          cwd: string;
+          repoCwd: string;
+          hostId?: string | null;
+          status?: "active" | "killed" | "exited";
+        },
+      ) {
+        const { sessions } = await import("../../src/db/schema.js");
+        const inserted = app.db
+          .insert(sessions)
+          .values({
+            projectId: values.projectId,
+            command: "bash",
+            cwd: values.cwd,
+            hostId: values.hostId ?? null,
+            status: values.status ?? "exited",
+            worktreeBranch: "mullion/session-x",
+            worktreeRepoCwd: values.repoCwd,
+            worktreeKeptReason: "unpushed",
+          })
+          .run();
+        return Number(inserted.lastInsertRowid);
+      }
+
+      async function readOwner(app: Awaited<ReturnType<typeof buildApp>>, id: number) {
+        const { sessions } = await import("../../src/db/schema.js");
+        const { eq } = await import("drizzle-orm");
+        return app.db.select().from(sessions).where(eq(sessions.id, id)).all()[0];
+      }
+
+      it("removes the session's local worktree and marks it reclaimed", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue({
+          [String(ownerId)]: "dead",
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(res.json()).toEqual({ removed: true });
+        expect(fs.existsSync(worktreePath)).toBe(false);
+        const row = await readOwner(app, ownerId);
+        expect(row.worktreeReclaimedAt).toBeInstanceOf(Date);
+        expect(row.worktreeKeptReason).toBeNull();
+
+        vi.restoreAllMocks();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("refuses while the owning session's process is still alive, and force overrides it", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+          status: "killed",
+        });
+        vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue({
+          [String(ownerId)]: "alive",
+        });
+
+        const refused = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(refused.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(ownerId),
+        });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+        expect((await readOwner(app, ownerId)).worktreeReclaimedAt).toBeNull();
+
+        const forced = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId, force: true },
+        });
+        expect(forced.json()).toEqual({ removed: true });
+        expect((await readOwner(app, ownerId)).worktreeReclaimedAt).toBeInstanceOf(Date);
+
+        vi.restoreAllMocks();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("runs on the session's host against worktreeRepoCwd, with the live-session guard", async () => {
+        const app = await buildApp();
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "kept-worktree-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const remoteHostId = host.json().id as string;
+        // A LOCAL project whose session was placed on the remote host.
+        const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-kept-remote-"));
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "kept-remote", cwd: projectCwd },
+        });
+        const projectId = project.json().id as number;
+        const repoCwd = "/remote/checkout";
+        const worktreePath = "/remote/checkout/.mullion-worktrees/mullion-session-x";
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd,
+          hostId: remoteHostId,
+        });
+
+        const removeListedWorktree = vi.fn().mockResolvedValue({ removed: true });
+        const liveness = vi.fn().mockResolvedValue({ [String(ownerId)]: "dead" });
+        const resolveBackendSpy = vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+          removeListedWorktree,
+          liveness,
+        } as unknown as SessionBackend);
+
+        // Another session still active inside the worktree, on that host.
+        const { sessions } = await import("../../src/db/schema.js");
+        const sibling = app.db
+          .insert(sessions)
+          .values({ projectId, command: "bash", cwd: worktreePath, hostId: remoteHostId })
+          .run();
+        const guarded = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(guarded.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(sibling.lastInsertRowid),
+        });
+        expect(removeListedWorktree).not.toHaveBeenCalled();
+
+        const { eq } = await import("drizzle-orm");
+        app.db
+          .update(sessions)
+          .set({ status: "exited" })
+          .where(eq(sessions.id, Number(sibling.lastInsertRowid)))
+          .run();
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(res.json()).toEqual({ removed: true });
+        expect(resolveBackendSpy).toHaveBeenCalledWith(expect.anything(), remoteHostId);
+        expect(removeListedWorktree).toHaveBeenCalledWith(repoCwd, worktreePath, {
+          force: undefined,
+        });
+        expect((await readOwner(app, ownerId)).worktreeReclaimedAt).toBeInstanceOf(Date);
+
+        vi.restoreAllMocks();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("rejects a session from another project, one without a worktree, or a mismatched path", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const other = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "kept-other", cwd: projectCwd },
+        });
+        const foreignId = await insertOwner(app, {
+          projectId: other.json().id,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        const { sessions } = await import("../../src/db/schema.js");
+        const plainId = Number(
+          app.db
+            .insert(sessions)
+            .values({ projectId, command: "bash", cwd: worktreePath, status: "exited" })
+            .run().lastInsertRowid,
+        );
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        const post = (payload: object) =>
+          app.inject({
+            method: "POST",
+            url: `/api/projects/${projectId}/git-worktree-remove`,
+            payload,
+          });
+
+        expect((await post({ worktreePath, sessionId: foreignId })).statusCode).toBe(404);
+        expect((await post({ worktreePath, sessionId: 999999 })).statusCode).toBe(404);
+        expect((await post({ worktreePath, sessionId: plainId })).statusCode).toBe(400);
+        expect((await post({ worktreePath: projectCwd, sessionId: ownerId })).statusCode).toBe(400);
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("reports an already-reclaimed worktree without touching the host", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        const { sessions } = await import("../../src/db/schema.js");
+        const { eq } = await import("drizzle-orm");
+        app.db
+          .update(sessions)
+          .set({ worktreeReclaimedAt: new Date() })
+          .where(eq(sessions.id, ownerId))
+          .run();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(res.json()).toEqual({ removed: false, reason: "not-listed" });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
     });
   });
 

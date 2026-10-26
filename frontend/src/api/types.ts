@@ -796,6 +796,16 @@ export interface BackgroundTask {
   name?: string;
 }
 
+// Mirrors src/services/session-worktree-reclaim.ts's KeptReason 1:1.
+export type WorktreeKeptReason =
+  | "in-use"
+  | "still-running"
+  | "unpushed"
+  | "branch-missing"
+  | "dirty"
+  | "conflicts"
+  | "remove-failed";
+
 export interface Session {
   id: number;
   projectId: number;
@@ -860,6 +870,20 @@ export interface Session {
   placementReason: string | null;
   createdAt: string;
   lastAttachedAt: string | null;
+  // Issue #1964 — the git worktree this session OWNS (raw DB columns, through
+  // withLiveInfo's `...row` spread): the branch it was cut on and the
+  // repository it was cut from, on the session's host. Null for a session
+  // that owns none. Once the session ends, the reclaim sweep removes the
+  // worktree when it is safe to, stamping `worktreeReclaimedAt`; otherwise it
+  // leaves it in place with the reason in `worktreeKeptReason`. Timestamps
+  // are ISO strings, like `createdAt`. Optional so the many Session fixtures
+  // need not declare them — Settings → Storage's "Kept session worktrees"
+  // (issue #2026) is the only reader.
+  worktreeBranch?: string | null;
+  worktreeRepoCwd?: string | null;
+  worktreeKeptReason?: WorktreeKeptReason | null;
+  worktreeLastAttemptAt?: string | null;
+  worktreeReclaimedAt?: string | null;
   alive: boolean;
   subscriberCount: number;
   // Live-only fields (in-memory PtyManager state, same philosophy as

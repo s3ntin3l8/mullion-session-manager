@@ -142,7 +142,10 @@ function recordKept(app: FastifyInstance, row: typeof sessions.$inferSelect, rea
   );
 }
 
-function recordReclaimed(app: FastifyInstance, row: typeof sessions.$inferSelect) {
+/** Marks the session's worktree as gone. Also called by the manual removal in
+ * Settings → Storage (`POST /api/projects/:id/git-worktree-remove` with a
+ * `sessionId`), so a worktree the user removed drops off that list. */
+export function recordReclaimed(app: FastifyInstance, row: typeof sessions.$inferSelect) {
   app.db
     .update(sessions)
     .set({ worktreeReclaimedAt: new Date(), worktreeKeptReason: null })
