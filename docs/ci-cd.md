@@ -34,11 +34,14 @@ floating on `@main` like every other caller here:
   already get a terminal review from Task Master's own review agent; see
   [`tasks-internals.md`](tasks-internals.md#external-review-workflows) for
   why. `on-demand-review` is **not** excluded — a human can still
-  explicitly ask Hermes for a second opinion on a Task Master PR. Both jobs
-  also guard against a fork PR running arbitrary workflow-file content on
-  this repo's self-hosted runner (`head.repo.full_name == github.repository`
-  for the `pull_request`-triggered path; `issue_comment` always runs the
-  default branch's own copy of the file regardless).
+  explicitly ask Hermes for a second opinion on a Task Master PR. The
+  `pull_request` path also checks `head.repo.full_name == github.repository`,
+  but that guard only catches accidents: a fork PR runs its *own* copy of the
+  workflow file and can delete the check. The real control keeping fork PRs
+  off this repo's self-hosted runner is the Actions setting "Require approval
+  for all outside collaborators" (tracked in `s3ntin3l8/.github#139`).
+  `issue_comment` always runs the default branch's own copy of the file, so
+  its `author_association` gate is sufficient on its own.
 
 ## Reusable workflows rule
 
