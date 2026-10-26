@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
+import { usePrDetail } from "../hooks/useGitHubData.js";
 import type { GitHubPrDetail, GitHubPrDetailThread, RelayReviewState } from "../api/types.js";
 import { checkDotClass } from "./checkDot.js";
 import { formatRelativeAge } from "../relativeTime.js";
@@ -273,68 +274,31 @@ export function PrDetailView({
   number: number;
   onBack: () => void;
 }) {
-  const [pr, setPr] = useState<GitHubPrDetail | null>(null);
-  // The relay's state for this PR (issue #1630) — refreshed with the PR
-  // itself, so a review that lands shows up within the same 30s tick. The PR
-  // it belongs to is remembered alongside it, so switching PRs never shows the
-  // previous PR's verdict under the new PR's header (cleared by derivation,
-  // not by a setState inside the effect).
-  const [relay, setRelay] = useState<{
-    projectId: number;
-    pr: number;
-    state: RelayReviewState | null;
-  }>({ projectId, pr: number, state: null });
-  const relayReview = relay.projectId === projectId && relay.pr === number ? relay.state : null;
-  const [error, setError] = useState<string | null>(null);
+  // Cached (stale-while-revalidate): a PR already seen — or prefetched on row
+  // hover — paints immediately instead of "Loading…". The relay's state
+  // (issue #1630) rides along; a failure there is not the PR's failure.
+  const { pr, error: loadError, review: relayReview, refresh } = usePrDetail(projectId, number);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? loadError;
+  const setError = setActionError;
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<"merge" | "review" | "handoff" | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
   const [showBody, setShowBody] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showCommits, setShowCommits] = useState(false);
+  const reload = () => {
+    setActionError(null);
+    void refresh();
+  };
 
   // The GitHub tab this replaces refreshed itself: re-fetch periodically
   // while the view is open (the server caches ~30s, so faster is pointless).
   useEffect(() => {
     const t = setInterval(() => {
-      if (document.visibilityState !== "hidden") setReloadKey((k) => k + 1);
+      if (document.visibilityState !== "hidden") void refresh();
     }, PR_REFRESH_MS);
     return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getProjectPr(projectId, number)
-      .then((res) => {
-        if (cancelled) return;
-        setPr(res);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load the PR");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, number, reloadKey]);
-
-  // The relay's state for this PR (issue #1630). A failure here is not the
-  // PR's failure — the PR still renders, just without the review block.
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getProjectPrReview(projectId, number)
-      .then((res) => {
-        if (!cancelled) setRelay({ projectId, pr: number, state: res });
-      })
-      .catch(() => {
-        if (!cancelled) setRelay({ projectId, pr: number, state: null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, number, reloadKey]);
+  }, [refresh]);
 
   const run = async (kind: "merge" | "review" | "handoff", fn: () => Promise<string | void>) => {
     setBusy(kind);
@@ -354,7 +318,7 @@ export function PrDetailView({
     run("merge", async () => {
       if (!pr) return;
       await api.mergeProjectPr(projectId, number, pr.headSha);
-      setReloadKey((k) => k + 1);
+      reload();
       return "Merged (squash)";
     });
 
@@ -364,7 +328,7 @@ export function PrDetailView({
       // Refetch: the request produced a new run, so the old verdict on screen
       // is stale (the state is memoized per run, so a refetch shows the new
       // one straight away).
-      setReloadKey((k) => k + 1);
+      reload();
       // #1790 — the review runs either way; the marker is how the repository's
       // own review workflow sees it, so say when it could not be written.
       return res.marker && !res.marker.written
@@ -427,7 +391,7 @@ export function PrDetailView({
         <button type="button" className="gh-detail-back" onClick={onBack}>
           ← Back
         </button>
-        <button type="button" className="gh-link-button" onClick={() => setReloadKey((k) => k + 1)}>
+        <button type="button" className="gh-link-button" onClick={() => reload()}>
           Refresh
         </button>
       </div>

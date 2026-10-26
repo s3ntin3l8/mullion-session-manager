@@ -49,6 +49,9 @@ class MockWebSocket {
 
 let instances: MockWebSocket[] = [];
 
+const trigger = (projectId: number) =>
+  useDashboardStore.getState().prsRefreshTriggerByProject[projectId] ?? 0;
+
 describe("store /ws/github integration", () => {
   beforeEach(() => {
     instances = [];
@@ -81,15 +84,63 @@ describe("store /ws/github integration", () => {
     useDashboardStore.setState({ refreshGitRefs });
     const stop = useDashboardStore.getState().connectGitHubWS();
     instances[0].__open();
-    const triggerBefore = useDashboardStore.getState().prsRefreshTrigger;
+    const triggerBefore = trigger(1);
 
     instances[0].__message(JSON.stringify({ projectId: 1 }));
 
     expect(refreshGitRefs).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(300);
     expect(refreshGitRefs).toHaveBeenCalledTimes(1);
-    expect(useDashboardStore.getState().prsRefreshTrigger).toBe(triggerBefore + 1);
+    expect(trigger(1)).toBe(triggerBefore + 1);
 
+    stop();
+  });
+
+  it("bumps only the trigger of the project the event is about", () => {
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    const before = [trigger(1), trigger(2)];
+
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+
+    expect(trigger(1)).toBe(before[0] + 1);
+    expect(trigger(2)).toBe(before[1]);
+    stop();
+  });
+
+  it("marks only that project's cached GitHub entries stale", () => {
+    useDashboardStore.setState({
+      githubCache: {
+        "1:status": { data: { a: 1 }, fetchedAt: 123, error: null },
+        "2:status": { data: { a: 2 }, fetchedAt: 456, error: null },
+      },
+    });
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+
+    const cache = useDashboardStore.getState().githubCache;
+    expect(cache["1:status"].fetchedAt).toBe(0);
+    expect(cache["1:status"].data).toEqual({ a: 1 });
+    expect(cache["2:status"].fetchedAt).toBe(456);
+    stop();
+  });
+
+  it("drops a response that was in flight when an event for its project arrived", async () => {
+    let resolve!: (v: string) => void;
+    const slow = useDashboardStore
+      .getState()
+      .githubFetch("1:late", () => new Promise<string>((r) => (resolve = r)));
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+    resolve("pre-event");
+    await slow;
+
+    expect(useDashboardStore.getState().githubCache["1:late"]).toBeUndefined();
     stop();
   });
 
@@ -99,7 +150,7 @@ describe("store /ws/github integration", () => {
     useDashboardStore.setState({ refreshGitRefs });
     const stop = useDashboardStore.getState().connectGitHubWS();
     instances[0].__open();
-    const triggerBefore = useDashboardStore.getState().prsRefreshTrigger;
+    const triggerBefore = trigger(1);
 
     instances[0].__message(JSON.stringify({ projectId: 1 }));
     instances[0].__message(JSON.stringify({ projectId: 1 }));
@@ -110,7 +161,7 @@ describe("store /ws/github integration", () => {
     // prsRefreshTrigger itself is NOT debounced — every message still bumps
     // it, since GitHubPanel's own effect is cheap and unrelated to the
     // refetch cost this debounce protects against.
-    expect(useDashboardStore.getState().prsRefreshTrigger).toBe(triggerBefore + 3);
+    expect(trigger(1)).toBe(triggerBefore + 3);
 
     stop();
   });

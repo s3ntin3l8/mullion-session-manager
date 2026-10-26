@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
@@ -282,6 +283,8 @@ describe("PrDetailView", () => {
     expect(screen.getByText("Awaiting review from alice")).toBeInTheDocument();
     expect(screen.getByText("No checks reported")).toBeInTheDocument();
     unmount();
+    // The cache would (correctly) serve the first PR for the same key.
+    __resetGithubCacheForTests();
 
     stub({
       ...PR,
@@ -429,6 +432,7 @@ describe("PrDetailView", () => {
     const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText("Checks unknown")).toBeInTheDocument();
     unmount();
+    __resetGithubCacheForTests();
 
     // The poller did fetch the head runs and found none: that is an answer.
     stub({ ...PR, ciStatus: null, ciKnown: true, actionsRuns: [] });

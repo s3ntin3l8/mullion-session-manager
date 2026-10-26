@@ -31,6 +31,7 @@ import type {
   UpdateCheckResult,
   Workspace,
 } from "../api/index.js";
+import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
 import type { KanbanColumnId } from "../kanban.js";
 
@@ -277,10 +278,34 @@ export interface GitSlice {
   bumpGitRefreshTrigger: () => void;
 }
 
+export interface GithubCacheEntry {
+  data: unknown;
+  /** 0 marks the entry stale (a WS event for its project) — refetched on next use. */
+  fetchedAt: number;
+  error: string | null;
+}
+
 export interface GithubSlice {
   // Counter bumped by GitHub WS onmessage so components can re-fetch
   // PR/CI data when an event arrives from the backend.
-  prsRefreshTrigger: number;
+  // Per project (issue #1970): an event for one project no longer re-fetches
+  // every other mounted project's panels.
+  prsRefreshTriggerByProject: Record<number, number>;
+  // Keyed stale-while-revalidate cache for the GitHub views (status, PRs, PR
+  // detail, CI jobs, issues), see store/slices/github.ts and githubResources.ts.
+  githubCache: Record<string, GithubCacheEntry>;
+  // Resolves the cached value when fresh, else fetches (deduped per key).
+  // `force` skips the freshness check; a failure keeps the previous data.
+  githubFetch: <T>(key: string, fetcher: () => Promise<T>, force?: boolean) => Promise<T>;
+  // Warm the cache for a project's panel (status, PRs, first issues page).
+  prefetchGithubProject: (projectId: number) => void;
+  // Warm one PR's detail (PR row hover).
+  prefetchGithubPr: (projectId: number, number: number) => void;
+  // The Issues view's filters/paging and open issue, kept across drill-in/back.
+  githubOpenIssueByProject: Record<number, number | null>;
+  setGithubOpenIssue: (projectId: number, number: number | null) => void;
+  githubIssueUiByProject: Record<number, GithubIssueUi>;
+  patchGithubIssueUi: (projectId: number, patch: Partial<GithubIssueUi>) => void;
   // Phase 2 — GitHub WebSocket connection and project subscription for
   // real-time PR/CI updates.
   githubWSConnected: boolean;

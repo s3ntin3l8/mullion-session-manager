@@ -65,7 +65,7 @@ beforeEach(() => {
   vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(prsStatus([pr(1)]));
   useDashboardStore.setState({
     prsByProject: {},
-    prsRefreshTrigger: 0,
+    prsRefreshTriggerByProject: {},
     subscribeToGitHubProject: subscribe,
     unsubscribeFromGitHubProject: unsubscribe,
   });

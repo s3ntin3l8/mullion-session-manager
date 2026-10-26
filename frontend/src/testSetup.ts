@@ -3,6 +3,7 @@ import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
 import { __resetSessionRefreshBlockForTests } from "./store/slices/sessions.js";
+import { __resetGithubCacheForTests } from "./store/githubCacheReset.js";
 import { __discardPendingSettingsPatchForTests } from "./store/slices/ui.js";
 
 // vitest.config.ts doesn't set `test.globals: true` (this repo's convention
@@ -54,6 +55,13 @@ afterEach(() => {
 // there is no wait left to race.
 afterEach(() => {
   __discardPendingSettingsPatchForTests();
+});
+
+// The GitHub client cache (store/slices/github.ts) is store state plus a
+// module-scoped in-flight map; a cached response from one test would be
+// served fresh to the next test's differently-mocked fetch.
+afterEach(() => {
+  __resetGithubCacheForTests();
 });
 
 // jsdom provides no window.matchMedia at all, unlike every real browser
