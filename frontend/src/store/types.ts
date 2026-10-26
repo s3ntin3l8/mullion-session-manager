@@ -631,6 +631,9 @@ export interface UiSlice {
   // overlaying the grid.
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
+  /** A one-shot "show History scoped to this" request (Source Control's View
+   *  in History); the History view applies it, then clears it. */
+  rightSidebarHistoryRequest: { projectId: number; scope: string; nonce: number } | null;
   /** The PR open in each project's GitHub view drill-in (absent/null = the
    *  list). In the store, not the panel, so it survives switching sidebar
    *  views and so a session row can open it before the panel is mounted. */
@@ -742,6 +745,9 @@ export interface UiSlice {
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
   openRightSidebarPr: (projectId: number, number: number) => void;
+  /** Opens the History rail view scoped to `scope` (`branch:<name>`, `all`, `head`). */
+  openRightSidebarHistory: (projectId: number, scope: string) => void;
+  clearRightSidebarHistoryRequest: () => void;
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;

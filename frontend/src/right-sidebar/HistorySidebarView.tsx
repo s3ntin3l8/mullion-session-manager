@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { GitHistorySection } from "../git/GitHistorySection.js";
 import type { HistoryScope } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
@@ -18,6 +18,17 @@ export function HistorySidebarView({ projectId }: RightSidebarViewProps) {
     cwd: string;
     scope: HistoryScope;
   }>({ projectId, cwd: ROOT, scope: "head" });
+  // A one-shot "scope History to this" request (Source Control's View in
+  // History): applied in render, keyed on its nonce, then cleared.
+  const request = useDashboardStore((s) => s.rightSidebarHistoryRequest);
+  const [handledNonce, setHandledNonce] = useState(0);
+  if (request && request.nonce !== handledNonce && request.projectId === projectId) {
+    setHandledNonce(request.nonce);
+    setSelection({ projectId, cwd: ROOT, scope: request.scope as HistoryScope });
+  }
+  useEffect(() => {
+    if (request) useDashboardStore.getState().clearRightSidebarHistoryRequest();
+  }, [request]);
   const current = selection.projectId === projectId ? selection : null;
   const cwd = current?.cwd ?? ROOT;
   const scope = current?.scope ?? "head";

@@ -12,6 +12,8 @@ import type {
   SessionStatus,
   SessionSeverity,
   GitBranchInfo,
+  GitBranchMergeState,
+  GitBranchPr,
   GitWorktreeInfo,
   GitStatus,
   GitPullReason,
@@ -40,6 +42,7 @@ import type {
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
+export type { GitBranchInfo, GitBranchMergeState, GitBranchPr, GitWorktreeInfo };
 export type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,
@@ -1366,6 +1369,49 @@ export interface GitCommitDetail {
   time: number;
   message: string;
   files: { path: string; additions: number | null; deletions: number | null }[];
+}
+
+/** One commit of GET git-branch's `uniqueCommits`/`lastCommit`. */
+export interface GitBranchCommit {
+  sha: string;
+  /** Seconds since the epoch. */
+  time: number;
+  author: string;
+  subject: string;
+}
+
+/** GET /api/projects/:id/git-branch?name= (A3). */
+export interface GitBranchDetail {
+  name: string;
+  sha: string;
+  upstream?: string;
+  upstreamGone?: boolean;
+  upstreamAhead?: number;
+  upstreamBehind?: number;
+  /** The base ref the counts below compare against (e.g. "origin/main"). */
+  base: string | null;
+  baseAhead?: number;
+  baseBehind?: number;
+  uniqueCommits: GitBranchCommit[];
+  uniqueTruncated: boolean;
+  lastCommit: GitBranchCommit | null;
+  isCurrent: boolean;
+  mergeState: GitBranchMergeState | null;
+  pr: GitBranchPr | null;
+  worktreePath: string | null;
+  /** Id of the resumable task that holds this branch. */
+  taskId: number | null;
+}
+
+export type PruneSkipReason = "current" | "worktree" | "task-claimed" | "default";
+
+/** POST /api/projects/:id/git-branch-prune (A3). */
+export interface GitBranchPruneResult {
+  dryRun: boolean;
+  candidates: { name: string; reason: GitBranchMergeState }[];
+  skipped: { name: string; why: PruneSkipReason }[];
+  deleted: string[];
+  failed: { name: string; why: string }[];
 }
 
 export interface GitBranchesResult {
