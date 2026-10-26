@@ -27,6 +27,7 @@ import {
   getPreviewWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
+import { gitEnv } from "../../src/services/git-env.js";
 
 type App = Awaited<ReturnType<typeof buildApp>>;
 
@@ -36,7 +37,7 @@ function git(cwd: string, ...args: string[]) {
   return execFileSync("git", ["-c", "gc.auto=0", "-C", cwd, ...args], {
     stdio: ["ignore", "pipe", "pipe"],
     env: {
-      ...process.env,
+      ...gitEnv(),
       GIT_AUTHOR_NAME: "t",
       GIT_AUTHOR_EMAIL: "t@t",
       GIT_COMMITTER_NAME: "t",
