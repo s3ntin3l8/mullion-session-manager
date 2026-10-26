@@ -10,6 +10,7 @@ import {
   phaseTone,
   prStatuses,
   prTriadItems,
+  reviewerRows,
   reviewStatus,
   runIdFromUrl,
   sortPrsByAttention,
@@ -316,5 +317,78 @@ describe("prTriadItems", () => {
     expect(items[0].title).toBe("CI: All checks have passed");
     items[1].onClick?.();
     expect(onToggle).toHaveBeenCalledWith("review");
+  });
+});
+
+describe("checks edge cases (review feedback)", () => {
+  it("does not call all-skipped or cancelled runs a pass", () => {
+    for (const conclusion of ["skipped", "cancelled"]) {
+      const st = checksStatus(
+        base({ actionsRuns: [run(conclusion, "completed", 1), run(conclusion, "completed", 2)] }),
+      );
+      expect(st).toMatchObject({
+        tone: "neutral",
+        text: "No checks ran",
+        label: "–2",
+        short: "–2",
+      });
+    }
+    const jobs = [1, 2].map((id) => ({
+      id,
+      name: "j",
+      status: "completed",
+      conclusion: "skipped",
+      startedAt: null,
+      completedAt: null,
+      htmlUrl: "",
+      steps: [],
+    }));
+    expect(
+      checksStatus(base({ actionsRuns: [run("success", "completed", 1)] }), { 1: jobs }).text,
+    ).toBe("No checks ran");
+  });
+
+  it("counts a run with no jobs at run level next to a run that has jobs", () => {
+    const job = {
+      id: 9,
+      name: "j",
+      status: "completed",
+      conclusion: "success",
+      startedAt: null,
+      completedAt: null,
+      htmlUrl: "",
+      steps: [],
+    };
+    const input = base({
+      actionsRuns: [run("failure", "completed", 1), run("success", "completed", 2)],
+    });
+    expect(checkCounts(input, { 1: [], 2: [job] })).toEqual({
+      failed: 1,
+      pending: 0,
+      passed: 1,
+      skipped: 0,
+    });
+  });
+});
+
+describe("reviewerRows", () => {
+  it("reads the summary (COMMENTED included), else the lean reviewer list", () => {
+    const sum = {
+      decision: null,
+      approved: ["a"],
+      changesRequested: ["b"],
+      commented: ["hermes-bot"],
+      requested: [],
+      relay: null,
+      unresolvedThreads: null,
+      latest: [],
+    };
+    expect(reviewerRows({ reviewSummary: sum, reviewers: [] }).map((r) => r.state)).toEqual([
+      "APPROVED",
+      "CHANGES_REQUESTED",
+      "COMMENTED",
+    ]);
+    expect(reviewerRows({ reviewers: [{ login: "x", state: "APPROVED" }] })).toHaveLength(1);
+    expect(reviewerRows({})).toEqual([]);
   });
 });

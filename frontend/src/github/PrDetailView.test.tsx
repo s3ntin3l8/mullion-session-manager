@@ -829,6 +829,20 @@ describe("PrDetailView", () => {
       expect(screen.getByRole("button", { name: "Request re-review" })).toBeInTheDocument();
     });
 
+    it("lists a comment-only reviewer in the Reviews drilldown, not 'No reviewers'", async () => {
+      stub({
+        ...PR,
+        reviewDecision: null,
+        reviewers: [],
+        reviewSummary: summaryOf({ commented: ["hermes-bot"] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /Reviews/ }));
+      const drill = screen.getByRole("region", { name: "Reviews" });
+      expect(within(drill).getByText("hermes-bot")).toBeInTheDocument();
+      expect(within(drill).queryByText("No reviewers")).toBeNull();
+    });
+
     it("says reviews and conversation are unavailable on a partial detail", async () => {
       stub({ ...PR, partial: true });
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

@@ -14,7 +14,7 @@ import {
   type TriadItem,
 } from "../ui/sidebar/index.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
-import { prStatuses, prTriadItems, relayPillTitle, runIdFromUrl } from "./prPhase.js";
+import { prStatuses, reviewerRows, prTriadItems, relayPillTitle, runIdFromUrl } from "./prPhase.js";
 
 const HOVER_PREFETCH_MS = 120;
 
@@ -65,16 +65,7 @@ export function PrRow({
       ? { id: pr.taskId, status: pr.taskStatus as Task["status"] }
       : null);
   const run = links?.reviewRun;
-  const reviewers = pr.reviewSummary
-    ? [
-        ...pr.reviewSummary.approved.map((login) => ({ login, state: "APPROVED" })),
-        ...pr.reviewSummary.changesRequested.map((login) => ({
-          login,
-          state: "CHANGES_REQUESTED",
-        })),
-        ...pr.reviewSummary.commented.map((login) => ({ login, state: "COMMENTED" })),
-      ]
-    : (pr.reviewers ?? []);
+  const reviewers = reviewerRows(pr);
   const requested = pr.reviewSummary?.requested ?? pr.requestedReviewers ?? [];
   const threads = pr.unresolvedThreads ?? 0;
 

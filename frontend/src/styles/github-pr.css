@@ -272,3 +272,14 @@ a.pr-dr-row:hover {
 .pr-tone-merged {
   color: var(--status-merged-fg);
 }
+.pr-run-link {
+  color: inherit;
+  text-decoration: none;
+}
+.pr-run-link:hover {
+  text-decoration: underline;
+}
+.pr-run-link:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}

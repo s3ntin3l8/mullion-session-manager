@@ -158,13 +158,24 @@ export function checkCounts(
 ): CheckCounts {
   const loaded = Object.values(jobsByRun ?? {}).filter((j): j is GitHubJob[] => Array.isArray(j));
   const fetchable = input.actionsRuns.filter((r) => runIdFromUrl(r.htmlUrl) != null).length;
-  const jobs = loaded.flat();
-  // A run that reports no jobs at all (a skipped workflow) says nothing at job
-  // level, so the run itself still counts.
-  const classes =
-    jobs.length > 0 && loaded.length === fetchable
-      ? jobs.map((j) => checkDotClass(j.status, j.conclusion))
-      : input.actionsRuns.map((r) => checkDotClass(r.status, r.conclusion));
+  const classes: string[] = [];
+  if (loaded.length === fetchable && loaded.some((j) => j.length > 0)) {
+    // Job level. A run that reports no jobs at all (a skipped workflow) says
+    // nothing there, so the run itself still counts; a run with no job-list URL
+    // has none to show and is left out, as before.
+    for (const r of input.actionsRuns) {
+      const id = runIdFromUrl(r.htmlUrl);
+      if (id == null) continue;
+      const jobs = jobsByRun?.[id];
+      if (Array.isArray(jobs) && jobs.length > 0) {
+        for (const j of jobs) classes.push(checkDotClass(j.status, j.conclusion));
+      } else {
+        classes.push(checkDotClass(r.status, r.conclusion));
+      }
+    }
+  } else {
+    for (const r of input.actionsRuns) classes.push(checkDotClass(r.status, r.conclusion));
+  }
   for (const c of input.otherChecks ?? []) classes.push(otherCheckClass(c));
   const count = (k: string) => classes.filter((c) => c === k).length;
   return {
@@ -215,11 +226,21 @@ export function checksStatus(input: PrStatusInput, jobsByRun?: Record<number, Ru
       short: `${n.passed}/${n.passed + n.pending}`,
     };
   }
+  if (n.passed === 0) {
+    // Everything skipped or cancelled: nothing ran, which is not a pass.
+    return {
+      tone: "neutral",
+      glyph: "–",
+      text: "No checks ran",
+      label: `–${n.skipped}`,
+      short: `–${n.skipped}`,
+    };
+  }
   return {
     tone: "success",
     glyph: "✓",
     text: "All checks have passed",
-    label: parts.join(" ") || "✓",
+    label: parts.join(" "),
     short: `✓${n.passed}`,
   };
 }
@@ -463,4 +484,17 @@ export function relayPillTitle(relay: RelayReviewState): string {
     return "A review was requested for this pull request — it could not be confirmed on the pull request";
   }
   return "A review was requested for this pull request";
+}
+
+/** Per-reviewer latest state for the Reviews drilldown, COMMENTED and bots included. */
+export function reviewerRows(
+  input: Pick<PrStatusInput, "reviewSummary" | "reviewers">,
+): { login: string; state: string }[] {
+  const sum = input.reviewSummary;
+  if (!sum) return input.reviewers ?? [];
+  return [
+    ...sum.approved.map((login) => ({ login, state: "APPROVED" })),
+    ...sum.changesRequested.map((login) => ({ login, state: "CHANGES_REQUESTED" })),
+    ...sum.commented.map((login) => ({ login, state: "COMMENTED" })),
+  ];
 }

@@ -23,7 +23,7 @@ import {
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
-import { prStatuses, runIdFromUrl, type DimStatus } from "./prPhase.js";
+import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -492,8 +492,8 @@ export function PrDetailView({
           />
           {openStatus === "review" && (
             <ReviewsDrill
-              reviewers={pr.reviewers}
-              requested={pr.requestedReviewers}
+              reviewers={reviewerRows(pr)}
+              requested={pr.reviewSummary?.requested ?? pr.requestedReviewers}
               status={statuses.review}
               title={`Reviews · ${statuses.review.text}`}
             />

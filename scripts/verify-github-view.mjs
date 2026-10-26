@@ -139,7 +139,8 @@ const DETAIL = {
   mergeStateStatus: "BLOCKED",
   reviewDecision: null,
   requestedReviewers: [],
-  reviewers: [{ login: "hermes-bot", state: "COMMENTED" }],
+  // A comment-only PR carries no opinionated reviewers; the summary has the comment.
+  reviewers: [],
   reviewSummary: summary({
     commented: ["hermes-bot"],
     unresolvedThreads: 2,
@@ -298,6 +299,15 @@ async function run(browser, demo) {
         `${tag}: the PR's own open-on-GitHub icon is in the header`,
         (await page.getByRole("link", { name: "Open PR #1946 on GitHub" }).getAttribute("href")) ===
           PRS[0].htmlUrl,
+      );
+      await page.getByRole("button", { name: /Reviews/ }).click();
+      check(
+        `${tag}: a comment-only PR's Reviews drilldown lists the commenter`,
+        (
+          await page
+            .locator('.sb-drill[aria-label="Reviews"], [role="region"][aria-label="Reviews"]')
+            .innerText()
+        ).includes("hermes-bot"),
       );
       check(`${tag}: detail does not scroll horizontally`, !(await hScroll(page)));
       await page.locator(".right-sidebar-panel").screenshot({
