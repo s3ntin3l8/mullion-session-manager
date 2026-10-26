@@ -45,9 +45,9 @@ import {
   isCardWindowReset,
 } from "../services/runway-client.js";
 import {
-  agentFromMap,
   agentQuarantineInfo,
-  isEnforceableAgent,
+  isEnforceableTarget,
+  targetsFromMap,
 } from "../services/runway-quarantine.js";
 import { getStoredSettings } from "../services/settings.js";
 
@@ -503,27 +503,31 @@ export async function integrationsRoute(app: FastifyInstance) {
     // key already lives, so nothing about the key reaches the client.
     const unmapped = new Set<string>();
     for (const card of limits.cards) {
-      const agent = agentFromMap(settings.runway?.providerMap, card.providerId);
-      if (agent === null) {
+      const targets = targetsFromMap(settings.runway?.providerMap, card.providerId);
+      if (targets.length === 0) {
         unmapped.add(card.providerId);
         continue;
       }
-      // Mapped, but to a name no claim can resolve to (a typo, or a CLI
-      // display name like `claude-code`): the gate never matches it, so it
-      // is reported as uncovered while still shown below.
-      if (!isEnforceableAgent(agent)) unmapped.add(card.providerId);
-      agents.push({
-        agent,
-        providerId: card.providerId,
-        pctUsed: card.pctUsed,
-        resetAt: card.resetAt?.toISOString() ?? null,
-        // The SAME helpers the quarantine decides with — re-deriving the
-        // exhaustion here would ignore the `used_value >= limit_value` path
-        // and the reset lift, and the badge would then claim "Mullion will
-        // not claim a task onto <agent>" about a claim the gate allows.
-        exhausted: isCardExhausted(card) && !isCardWindowReset(card),
-        quarantined: agentQuarantineInfo(app, agent).quarantined,
-      });
+      // Mapped, but to a target no claim can resolve to (a typo, a CLI
+      // display name like `claude-code`, a bare provider id): the gate never
+      // matches it, so it is reported as uncovered while still shown below.
+      if (!targets.every(isEnforceableTarget)) unmapped.add(card.providerId);
+      // One entry per target: `agent` is the quarantine target, so an
+      // opencode provider shows as `opencode/xai` (issue #2054).
+      for (const agent of targets) {
+        agents.push({
+          agent,
+          providerId: card.providerId,
+          pctUsed: card.pctUsed,
+          resetAt: card.resetAt?.toISOString() ?? null,
+          // The SAME helpers the quarantine decides with — re-deriving the
+          // exhaustion here would ignore the `used_value >= limit_value` path
+          // and the reset lift, and the badge would then claim "Mullion will
+          // not claim a task onto <agent>" about a claim the gate allows.
+          exhausted: isCardExhausted(card) && !isCardWindowReset(card),
+          quarantined: agentQuarantineInfo(app, agent).quarantined,
+        });
+      }
     }
 
     return {

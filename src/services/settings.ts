@@ -578,10 +578,15 @@ export interface AppSettings {
      * at all (gemini, github, ollama, …). So the correspondence is a
      * per-install decision, with a conservative default.
      *
+     * A value is a target or a list of targets. A target is a bare agent
+     * (`opencode` = every opencode task) or, for a multi-provider CLI,
+     * `opencode/<opencode-provider-id>` (`xai` -> `opencode/xai`): it holds
+     * only the tasks whose resolved model is `<provider>/…`.
+     *
      * An agent that is NOT in this map is never quarantined: absence of
      * data must not block work.
      */
-    providerMap: Record<string, string>;
+    providerMap: Record<string, string | string[]>;
     /** How often to poll Runway for the quota. 0 = never poll (the feature is configured but idle). */
     pollSeconds: number;
   };
@@ -787,10 +792,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
     //                            quarantined when ANY of its pools is
     //                            exhausted, even if another still has room.
     //   minimax     -> mcode     the MiniMax Code plan (coding_plan/remains).
-    //   opencode    -> opencode  the OpenCode Go usage API. opencode also
-    //                            spends other providers' quota (xai,
-    //                            openrouter, ...); those are not mapped, so
-    //                            only Go exhaustion holds opencode tasks.
+    //   opencode    -> opencode/opencode-go
+    //                            the OpenCode Go usage API. opencode is a
+    //                            multi-provider CLI, so the target names the
+    //                            opencode provider: only tasks whose model is
+    //                            `opencode-go/…` are held. A provider's quota
+    //                            that opencode spends too (xai, openrouter,
+    //                            minimax-coding-plan, …) is added per install
+    //                            as e.g. `xai: "opencode/xai"`, or a list
+    //                            (`minimax: ["mcode", "opencode/minimax-coding-plan"]`).
+    //                            A bare `opencode` target still holds every
+    //                            opencode task.
     //
     // Left unmapped on purpose: gemini (stale cards, API-strategy collector),
     // anthropic_console, deepseek, github, kimi_*, ollama, openrouter, xai,
@@ -799,7 +811,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // lists the providers Runway reports that have no entry.
     providerMap: {
       anthropic: "claude",
-      opencode: "opencode",
+      opencode: "opencode/opencode-go",
       chatgpt: "codex",
       antigravity: "agy",
       minimax: "mcode",
@@ -1447,9 +1459,9 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
 /**
  * Issue #29 — the Runway provider-id → Mullion-agent map.
  *
- * Both halves are plain strings. An empty provider id or agent name is
- * dropped: an empty key could match every provider, and an empty agent
- * could match nothing.
+ * The key is a plain string and the value a target string or a list of
+ * them. An empty provider id or target is dropped: an empty key could match
+ * every provider, and an empty target could match nothing.
  *
  * The object is built with a NULL PROTOTYPE and `Object.defineProperty`,
  * not `out[key] = value`. The provider id is operator-supplied, so a plain
@@ -1472,15 +1484,34 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
  */
 function sanitizeProviderMap(
   value: unknown,
-  fallback: Record<string, string>,
-): Record<string, string> {
+  fallback: Record<string, string | string[]>,
+): Record<string, string | string[]> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ...fallback };
-  const out: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const [provider, agent] of Object.entries(value as Record<string, unknown>)) {
+  const out: Record<string, string | string[]> = Object.create(null) as Record<
+    string,
+    string | string[]
+  >;
+  for (const [provider, targets] of Object.entries(value as Record<string, unknown>)) {
     if (typeof provider !== "string" || provider.trim() === "") continue;
-    if (typeof agent !== "string" || agent.trim() === "") continue;
+    // A value is one target or a list of them (issue #2054); anything else
+    // in a list is dropped, and a list left empty drops the entry.
+    let clean: string | string[] | null = null;
+    if (typeof targets === "string") {
+      if (targets.trim() !== "") clean = targets.trim();
+    } else if (Array.isArray(targets)) {
+      const list = [
+        ...new Set(
+          targets
+            .filter((t): t is string => typeof t === "string")
+            .map((t) => t.trim())
+            .filter((t) => t !== ""),
+        ),
+      ];
+      if (list.length > 0) clean = list;
+    }
+    if (clean === null) continue;
     Object.defineProperty(out, provider.trim(), {
-      value: agent.trim(),
+      value: clean,
       enumerable: true,
       writable: true,
       configurable: true,
@@ -1527,7 +1558,7 @@ function withRawProviderMap(merged: AppSettings, raw: unknown): AppSettings {
   if (!isPlainObject(map)) return merged;
   return {
     ...merged,
-    runway: { ...merged.runway, providerMap: map as Record<string, string> },
+    runway: { ...merged.runway, providerMap: map as Record<string, string | string[]> },
   };
 }
 

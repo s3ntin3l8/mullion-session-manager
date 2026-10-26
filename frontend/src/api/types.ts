@@ -2371,7 +2371,7 @@ export interface AppSettings {
      * correspondence is per-install, and an agent that is not in the map is
      * never quarantined.
      */
-    providerMap: Record<string, string>;
+    providerMap: Record<string, string | string[]>;
     /** How often to poll Runway for the quota. */
     pollSeconds: number;
   };

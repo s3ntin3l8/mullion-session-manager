@@ -194,6 +194,26 @@ describe("Settings -> Integrations -> Runway quota", () => {
     );
   });
 
+  it("commits a provider map with opencode provider targets and lists (#2054)", async () => {
+    const user = userEvent.setup();
+    await renderSection();
+    const field = screen.getByLabelText("Provider map");
+    await user.clear(field);
+    await user.click(field);
+    await user.paste('{"xai":"opencode/xai","minimax":["mcode","opencode/minimax-coding-plan"]}');
+    await user.tab();
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({
+        runway: {
+          providerMap: {
+            xai: "opencode/xai",
+            minimax: ["mcode", "opencode/minimax-coding-plan"],
+          },
+        },
+      }),
+    );
+  });
+
   it("refuses an invalid provider map and leaves the setting alone", async () => {
     const user = userEvent.setup();
     await renderSection();
@@ -216,7 +236,7 @@ describe("Settings -> Integrations -> Runway quota", () => {
     const field = screen.getByLabelText("Provider map");
     await user.clear(field);
     await user.click(field);
-    await user.paste('{"anthropic": 7}');
+    await user.paste('{"anthropic": [7]}');
     await user.tab();
 
     expect(await screen.findByText(/must be a JSON object/i)).toBeInTheDocument();

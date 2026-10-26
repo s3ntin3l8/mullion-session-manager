@@ -210,10 +210,25 @@ describe("sanitizeSettings — the Runway provider map (issue #29)", () => {
   it("defaults to the verified provider → agent map (#1841)", () => {
     expect(mergeSettings({}).runway.providerMap).toEqual({
       anthropic: "claude",
-      opencode: "opencode",
+      opencode: "opencode/opencode-go",
       chatgpt: "codex",
       antigravity: "agy",
       minimax: "mcode",
+    });
+  });
+
+  it("accepts a list of targets and cleans it (#2054)", () => {
+    const loaded = mergeSettings({
+      runway: {
+        providerMap: {
+          minimax: [" mcode ", "opencode/minimax-coding-plan", "mcode", "", 7],
+          empty: [],
+          junk: 3,
+        },
+      },
+    });
+    expect({ ...loaded.runway.providerMap }).toEqual({
+      minimax: ["mcode", "opencode/minimax-coding-plan"],
     });
   });
 

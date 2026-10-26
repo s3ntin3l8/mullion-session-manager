@@ -25,36 +25,78 @@ import { commandModelCli } from "../models/modelCatalogs.js";
 // per-install decision — the backend's own default map names the binary —
 // so BOTH are looked up, CLI name first, and the first one Runway reports
 // wins.
-function agentKeys(command: string): string[] {
+//
+// Issue #2054 — an opencode session spends the quota of the opencode
+// PROVIDER it runs (`opencode/<provider>`, from its `provider/model`), so
+// those targets are looked up too. The claim gate holds a task when ANY of
+// its targets is out, so the chip does the same for opencode (see
+// pickSummary): the bare agent and the session's provider both count. A
+// session with no model could run on any provider the map names, exactly as
+// the gate treats it, so every `opencode/*` target Runway reports counts.
+function agentKeys(
+  command: string,
+  model: string | null | undefined,
+  reported: RunwayQuota["agents"],
+): string[] {
   const keys: string[] = [];
   const cli = commandModelCli(command);
+  if (cli === "opencode") {
+    const provider = model ? model.split("/")[0] : "";
+    if (provider !== "") keys.push(`opencode/${provider}`);
+    else {
+      for (const entry of reported) {
+        if (entry.agent.startsWith("opencode/") && !keys.includes(entry.agent)) {
+          keys.push(entry.agent);
+        }
+      }
+    }
+  }
   if (cli !== null) keys.push(cli);
   const binary = commandToBinary(command);
   if (binary !== "" && !keys.includes(binary)) keys.push(binary);
   return keys;
 }
 
+// Which reading the chip shows. For opencode the gate holds on ANY target,
+// so a target that is out wins over one that is not; otherwise (and for
+// every other agent) the first key Runway reports wins.
+function pickSummary(
+  keys: string[],
+  agents: RunwayQuota["agents"],
+  anyTarget: boolean,
+): RunwayQuotaSummary | null {
+  let first: RunwayQuotaSummary | null = null;
+  for (const key of keys) {
+    const candidate = summarizeRunwayQuota(agents, key);
+    if (candidate === null) continue;
+    if (!anyTarget) return candidate;
+    if (candidate.out) return candidate;
+    first ??= candidate;
+  }
+  return first;
+}
+
 export function QuotaBadge({
   quota,
   command,
+  model,
 }: {
   quota: RunwayQuota | null;
   // The session's launch command — the same value the row's agent logo and
   // name are derived from (see cliLogos.ts), so the badge names the same
   // agent the rest of the row names.
   command: string | null;
+  // The session's resolved model (`provider/model`), when it has one.
+  model?: string | null;
 }) {
   if (quota === null || !quota.configured || quota.fetchedAt === null) return null;
   if (command === null) return null;
 
-  let summary: RunwayQuotaSummary | null = null;
-  for (const agent of agentKeys(command)) {
-    const candidate = summarizeRunwayQuota(quota.agents, agent);
-    if (candidate !== null) {
-      summary = candidate;
-      break;
-    }
-  }
+  const summary = pickSummary(
+    agentKeys(command, model, quota.agents),
+    quota.agents,
+    commandModelCli(command) === "opencode",
+  );
   if (summary === null) return null;
 
   const dotClass = runwayQuotaDotClass(summary);

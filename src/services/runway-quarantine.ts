@@ -92,32 +92,86 @@ export function resetRunwayQuarantine(): void {
 }
 
 /**
- * The Mullion agent a Runway provider id maps to, or null when it maps to
- * none.
+ * The quarantine targets a Runway provider id maps to — `[]` when it maps
+ * to none.
+ *
+ * A target is a bare agent (`claude`, or `opencode` for every opencode
+ * task) or `opencode/<opencode-provider-id>` for a multi-provider CLI (issue
+ * #2054). A provider may map to several targets: its quota is spent by more
+ * than one CLI.
  */
-export function agentForProvider(app: FastifyInstance, providerId: string): string | null {
-  return agentFromMap(getStoredSettings(app.db).runway?.providerMap, providerId);
+export function targetsForProvider(app: FastifyInstance, providerId: string): string[] {
+  return targetsFromMap(getStoredSettings(app.db).runway?.providerMap, providerId);
 }
 
 /**
  * The same lookup against a map the caller already holds — a route walking
  * many cards reads the settings once instead of once per card.
  */
-export function agentFromMap(
-  map: Record<string, string> | undefined,
+export function targetsFromMap(
+  map: Record<string, string | string[]> | undefined,
   providerId: string,
-): string | null {
-  const agent = map?.[providerId];
-  return typeof agent === "string" && agent.trim() !== "" ? agent.trim() : null;
+): string[] {
+  const value = map?.[providerId];
+  const list = Array.isArray(value) ? value : [value];
+  return list
+    .filter((t): t is string => typeof t === "string" && t.trim() !== "")
+    .map((t) => t.trim());
 }
 
 /**
- * Whether a mapped agent name can ever match a claim. The gate compares it
- * with the task's RESOLVED command, which is always a KNOWN_AGENTS name, so
- * a typo or a CLI display name (`claude-code`) is inert: it counts as
- * "mapped" to the eye but never holds a task.
+ * The quarantine targets one claim would spend: the agent itself, plus
+ * `opencode/<provider>` when the agent is opencode and its resolved model
+ * (`provider/model`) names a provider.
+ *
+ * An opencode task with NO resolved model (the stock install: no default
+ * model is configured) will run on whatever opencode picks, so nothing
+ * narrower can be said — it is checked against every opencode provider the
+ * map names, because holding it is the only way the gate keeps its promise
+ * not to claim onto an exhausted provider.
  */
-export function isEnforceableAgent(agent: string): boolean {
+export function claimTargets(
+  app: FastifyInstance,
+  agent: string,
+  model: string | null | undefined,
+): string[] {
+  if (agent !== "opencode") return [agent];
+  if (model) {
+    const provider = model.split("/")[0];
+    return provider === "" ? [agent] : [agent, `opencode/${provider}`];
+  }
+  const named = new Set<string>();
+  for (const value of Object.values(getStoredSettings(app.db).runway?.providerMap ?? {})) {
+    for (const target of Array.isArray(value) ? value : [value]) {
+      if (typeof target === "string" && target.startsWith("opencode/")) named.add(target.trim());
+    }
+  }
+  return [agent, ...named];
+}
+
+/** The first of `targets` that is quarantined, with its details, or null. */
+export function quarantinedTarget(
+  app: FastifyInstance,
+  targets: string[],
+): { target: string; reason: string | null } | null {
+  for (const target of targets) {
+    const info = agentQuarantineInfo(app, target);
+    if (info.quarantined) return { target, reason: info.reason };
+  }
+  return null;
+}
+
+/**
+ * Whether a mapped target can ever match a claim. The gate compares targets
+ * with the task's RESOLVED command (always a KNOWN_AGENTS name) and, for
+ * opencode, `opencode/<provider>`. So a typo, a CLI display name
+ * (`claude-code`) or a bare provider id (`xai` instead of `opencode/xai`) is
+ * inert: it counts as "mapped" to the eye but never holds a task.
+ */
+export function isEnforceableTarget(target: string): boolean {
+  const [agent, provider, ...rest] = target.split("/");
+  if (rest.length > 0) return false;
+  if (provider !== undefined) return agent === "opencode" && provider !== "";
   return (KNOWN_AGENTS as readonly string[]).includes(agent);
 }
 
@@ -174,11 +228,11 @@ function isStale(app: FastifyInstance, entry: AgentQuarantine, now: number): boo
 }
 
 /**
- * Whether an agent is currently quarantined.
+ * Whether a quarantine target is currently quarantined.
  *
- * `agent` is the RESOLVED agent (the CLI command the task would run —
- * "claude", "codex", "opencode", "agy"), which is what the provider
- * map's values name.
+ * `agent` is a target as the provider map's values name it: the RESOLVED
+ * agent (the CLI command the task would run — "claude", "codex", "opencode",
+ * "agy", "mcode") or, for opencode, `opencode/<opencode-provider-id>`.
  */
 export function isAgentQuarantined(app: FastifyInstance, agent: string): boolean {
   const entry = quarantined.get(agent);
@@ -243,27 +297,26 @@ export function applyRunwaySnapshot(app: FastifyInstance, limits: RunwayLimits):
   const exhaustedFor = new Map<string, { reason: string; resetAt: Date | null }>();
 
   for (const card of limits.cards) {
-    const agent = agentForProvider(app, card.providerId);
-    if (agent === null) continue;
-
     const exhausted = isCardExhausted(card) && !isCardWindowReset(card, now);
     if (!exhausted) continue;
-    const existing = exhaustedFor.get(agent);
-    // Keep the LATEST reset among the exhausted cards: the provider is
-    // free again only when the LAST of its exhausted windows resets.
-    // Keeping the earliest would lift the quarantine while a later window
-    // is still exhausted — and auto-claim would then proceed onto a provider
-    // with nothing left.
-    //
-    // A card with NO reset time means we cannot know when that window lifts,
-    // so the quarantine does not lift on its own at all (`resetAt: null`).
-    const resetAt =
-      existing === undefined
-        ? card.resetAt
-        : existing.resetAt === null || card.resetAt === null
-          ? null
-          : new Date(Math.max(existing.resetAt.getTime(), card.resetAt.getTime()));
-    exhaustedFor.set(agent, { reason: `${card.providerId} quota exhausted`, resetAt });
+    for (const agent of targetsForProvider(app, card.providerId)) {
+      const existing = exhaustedFor.get(agent);
+      // Keep the LATEST reset among the exhausted cards: the provider is
+      // free again only when the LAST of its exhausted windows resets.
+      // Keeping the earliest would lift the quarantine while a later window
+      // is still exhausted — and auto-claim would then proceed onto a provider
+      // with nothing left.
+      //
+      // A card with NO reset time means we cannot know when that window lifts,
+      // so the quarantine does not lift on its own at all (`resetAt: null`).
+      const resetAt =
+        existing === undefined
+          ? card.resetAt
+          : existing.resetAt === null || card.resetAt === null
+            ? null
+            : new Date(Math.max(existing.resetAt.getTime(), card.resetAt.getTime()));
+      exhaustedFor.set(agent, { reason: `${card.providerId} quota exhausted`, resetAt });
+    }
   }
 
   for (const [agent, info] of exhaustedFor) {
@@ -291,7 +344,7 @@ export function applyRunwaySnapshot(app: FastifyInstance, limits: RunwayLimits):
 
   // A provider map that changed under us must not leave a stale quarantine
   // behind for an agent that is no longer mapped.
-  const mappedAgents = new Set(Object.values(settings.runway?.providerMap ?? {}));
+  const mappedAgents = new Set(Object.values(settings.runway?.providerMap ?? {}).flat());
   for (const agent of [...quarantined.keys()]) {
     if (!mappedAgents.has(agent)) quarantined.delete(agent);
   }

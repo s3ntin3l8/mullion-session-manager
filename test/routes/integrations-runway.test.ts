@@ -184,6 +184,36 @@ describe("Runway quota integration routes", () => {
       ]);
     });
 
+    it("reports one entry per target and flags a bare provider id as uncovered (#2054)", async () => {
+      applySettingsPatch(app, {
+        runway: {
+          apiUrl: "https://runway.example",
+          providerMap: {
+            minimax: ["mcode", "opencode/minimax-coding-plan"],
+            xai: "xai", // a typo for "opencode/xai": never matches a claim
+          },
+        },
+      });
+      await call("PUT", "/api/integrations/runway/key", { key: "runway-admin" }); // pragma: allowlist secret
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          limits: [
+            { provider_id: "minimax", pct_used: 10 },
+            { provider_id: "xai", pct_used: 10 },
+          ],
+        }),
+      });
+
+      const body = (await call("GET", "/api/runway/quota")).json();
+      expect(body.agents.map((a: { agent: string }) => a.agent)).toEqual([
+        "mcode",
+        "opencode/minimax-coding-plan",
+        "xai",
+      ]);
+      expect(body.unmappedProviders).toEqual(["xai"]);
+    });
+
     it("lists the providers Runway reports that the map has no entry for (#1841)", async () => {
       applySettingsPatch(app, {
         runway: { apiUrl: "https://runway.example", providerMap: { anthropic: "claude" } },
