@@ -1,0 +1,13 @@
+// Types for protocol.mjs, which stays plain ESM (it is copied into dist/
+// verbatim and loaded by the standalone pty-host master as well as by the
+// backend's attach client).
+export const FRAME_DATA: 0;
+export const FRAME_RESIZE: 1;
+export const FRAME_EXIT: 2;
+export const MAX_FRAME_BYTES: number;
+export function encodeFrame(type: number, payload: Buffer): Buffer;
+export function encodeResize(cols: number, rows: number): Buffer;
+export function encodeExit(code: number): Buffer;
+export function createDeframer(
+  onFrame: (type: number, payload: Buffer) => void,
+): (chunk: Buffer) => void;

@@ -192,12 +192,24 @@ describe("getScopeBackend — platform selection", () => {
     }
   });
 
-  it("throws a plain, actionable error on a platform with no backend", () => {
+  it("selects the pty-host backend on win32 (issue #1728)", () => {
     const original = process.platform;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
+      expect(getScopeBackend({ sessionsDir: SESSIONS_DIR, instanceId: INSTANCE_ID }).kind).toBe(
+        "pty-host",
+      );
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+
+  it("throws a plain, actionable error on a platform with no backend", () => {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "freebsd", configurable: true });
+    try {
       expect(() => getScopeBackend({ sessionsDir: SESSIONS_DIR, instanceId: INSTANCE_ID })).toThrow(
-        /no scope backend for platform "win32"/,
+        /no scope backend for platform "freebsd"/,
       );
     } finally {
       Object.defineProperty(process, "platform", { value: original, configurable: true });

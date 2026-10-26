@@ -131,6 +131,9 @@ export function spawnScopeProcess(opts: ScopeSpawnOptions): Promise<void> {
       cwd: opts.cwd,
       env: opts.env,
       stdio: "ignore",
+      // No console window flashing up on Windows for every launch; a no-op
+      // everywhere else.
+      windowsHide: true,
     });
     // M3 — a wedged supervisor left this promise pending forever (and, with
     // it, the caller's spawnOutcome()/terminate()). Same SIGTERM-then-SIGKILL

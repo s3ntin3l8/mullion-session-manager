@@ -2566,17 +2566,17 @@ describe("PtyManager", () => {
     }
 
     it("resolves the local scope through the PLATFORM, not a fixed backend", async () => {
-      await withPlatform("win32", async () => {
+      await withPlatform("freebsd", async () => {
         // A platform with no backend has no way to run a local session at
         // all, and says so plainly — which is only observable if the local
         // path really does go through getScopeBackend().
-        const winManager = new PtyManager({ sessionsDir });
+        const bsdManager = new PtyManager({ sessionsDir });
         try {
-          await expect(winManager.isMasterAliveStateBatch(["1"])).rejects.toThrow(
-            /no scope backend for platform "win32"/,
+          await expect(bsdManager.isMasterAliveStateBatch(["1"])).rejects.toThrow(
+            /no scope backend for platform "freebsd"/,
           );
         } finally {
-          winManager.killAll();
+          bsdManager.killAll();
         }
       });
     });

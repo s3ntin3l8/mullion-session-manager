@@ -1,10 +1,12 @@
 import { DetachedScopeBackend } from "./detached.js";
 import { SystemdScopeBackend } from "./systemd.js";
+import { WindowsScopeBackend } from "./windows.js";
 import type { ScopeBackend } from "./types.js";
 
 export type { ScopeBackend, ScopeConstraints, ScopeLaunchSpec, ScopeLiveness } from "./types.js";
 export { DetachedScopeBackend } from "./detached.js";
 export { SystemdScopeBackend } from "./systemd.js";
+export { WindowsScopeBackend } from "./windows.js";
 
 export interface ScopeBackendOptions {
   /** This instance's absolute, resolved sessions dir. */
@@ -58,11 +60,14 @@ export function getScopeBackend(opts: ScopeBackendOptions): ScopeBackend {
   if (process.platform === "darwin") {
     return new DetachedScopeBackend(opts);
   }
+  if (process.platform === "win32") {
+    return new WindowsScopeBackend(opts);
+  }
   if (process.platform !== "linux") {
     throw new Error(
       `no scope backend for platform "${process.platform}": Mullion runs sessions on ` +
-        `Linux and macOS (issue #1715 added the platform seam; issue #1716 added the ` +
-        `macOS backend).`,
+        `Linux, macOS and Windows (issue #1715 added the platform seam; issue #1716 added ` +
+        `the macOS backend; issue #1728 the Windows one).`,
     );
   }
   return new SystemdScopeBackend(opts);

@@ -25,6 +25,7 @@ export default tseslint.config(
       "src/hooks/**/*.js",
       "src/mcp/**/*.mjs",
       "src/cli/**/*.mjs",
+      "src/pty-host/**/*.mjs",
       "scripts/**/*.mjs",
     ],
     languageOptions: {
