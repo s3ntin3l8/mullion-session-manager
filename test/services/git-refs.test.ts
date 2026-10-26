@@ -466,6 +466,19 @@ describe("resolveRepoRoot", () => {
     expect(await resolveRepoRoot(path.join(linked, "src"))).toBe(linked);
   });
 
+  it("resolves a repository nested inside another (a submodule's shape) to its own root", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const nested = path.join(tmpDir, "vendor", "lib");
+    initRepo(nested);
+
+    // Its root is not the enclosing repo's, so a worktree-membership check on
+    // the root rejects it.
+    expect(await resolveRepoRoot(nested)).toBe(nested);
+    expect(await resolveRepoRoot(nested)).not.toBe(tmpDir);
+  });
+
   it("is null outside a repo, for a relative path, and for a path with ..", async () => {
     expect(await resolveRepoRoot(tmpDir)).toBeNull();
     expect(await resolveRepoRoot("relative/path")).toBeNull();

@@ -398,8 +398,9 @@ export async function listWorktrees(cwd: string): Promise<GitWorktreeInfo[] | nu
  *
  * Known, accepted tradeoff (flagged in review — see PR #335): a `candidate`
  * inside a git SUBMODULE of one of these worktrees has its own separate
- * `.git` (so it passes the caller's `isGitRepo` check) but is never itself
- * one of `git worktree list`'s own entries, so it's rejected here and falls
+ * repository root (callers pass the candidate's repo root, or a path that
+ * passed `isGitRepo`) but that root is never itself one of `git worktree
+ * list`'s own entries, so it's rejected here and falls
  * back to the session's static cwd rather than showing the submodule's own
  * branch. Treating a submodule as "this project's own repo" for
  * branch-tracking purposes would be the wrong call anyway — it's a distinct
