@@ -1335,6 +1335,41 @@ describe("claimTask", () => {
       await app.close();
     });
 
+    it("drops a stale hold once the host is back, so its wait and wording do not outlive it", async () => {
+      const { app, mac, task, fakeBackend } = await setup("Platform: darwin");
+      park(app, mac, true);
+      await claimAndDispatch(app, task.id, { auto: false });
+      // The task has been held for two hours...
+      const longAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: longAgo })
+        .where(eq(tasks.id, task.id))
+        .run();
+      // ...the host returns, but the attempt then fails for a different reason.
+      park(app, mac, false);
+      vi.mocked(fakeBackend.createWorktree).mockResolvedValue({
+        created: false,
+        reason: "create-failed",
+        detail: "boom",
+      });
+
+      await expect(dispatchClaimedTask(app, task.id)).resolves.toMatchObject({
+        reason: "worktree-failed",
+      });
+
+      const row = getTask(app, task.id);
+      expect(row.failureReason).not.toContain("not eligible right now");
+      expect(row.failureReason).toContain("boom");
+      // A NEW run of failures: the two hours spent waiting for the host are
+      // not counted toward the give-up.
+      expect(row.dispatchFailingSince!.getTime()).toBeGreaterThan(
+        longAgo.getTime() + 60 * 60 * 1000,
+      );
+
+      await app.close();
+    });
+
     it("tells the board a hold was recorded, once — not on every unchanged tick", async () => {
       const { app, mac, task } = await setup("Platform: darwin");
       park(app, mac, true);
@@ -1907,6 +1942,8 @@ describe("retryTask (#483)", () => {
       .set({
         prUrl: "https://github.com/o/r/pull/1",
         prNumber: 1,
+        // A clock left by an earlier queue spell (a task failed by another route).
+        dispatchFailingSince: new Date(),
         // Review fix (#1015) — a failed task can be archived (hidden from
         // the board) without losing Retry; resuming it must un-hide it too,
         // or it vanishes from the board the instant it starts running again.
@@ -1930,6 +1967,8 @@ describe("retryTask (#483)", () => {
     // retry lands on "in_progress" now, not "claimed".
     expect(row.status).toBe("in_progress");
     expect(row.failureReason).toBeNull();
+    // Issue #1997 — a retry starts a fresh run of dispatch failures.
+    expect(row.dispatchFailingSince).toBeNull();
     expect(row.completedAt).toBeNull();
     // #972 — prUrl and prNumber must clear together, never leaving an
     // inconsistent pair (a prNumber with no matching prUrl hid the PR link

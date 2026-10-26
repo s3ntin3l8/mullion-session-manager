@@ -377,7 +377,7 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
       delete process.env.MULLION_TASK_MAX_CONCURRENT;
     });
 
-    it("fails a task that has been failing for 6 hours, with the last reason, and Retry has nothing to resume", async () => {
+    it("fails a task that has been failing for 6 hours, with the last reason, keeping the worktree it may have left", async () => {
       const { app, notARepo, task } = await failingTask();
       app.db
         .update(tasks)
@@ -392,7 +392,55 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
       expect(row.status).toBe("failed");
       expect(row.failureReason).toMatch(/^gave up after 6h of failed dispatch attempts — last: .+/);
       expect(row.dispatchFailingSince).toBeNull();
-      // No commit block ever ran: nothing for Retry to resume.
+      // A failed ATTEMPT may have left a partial or unclean worktree on the
+      // host: the branch and path stay, so it can still be found and resumed.
+      expect(row.branchName).not.toBeNull();
+      expect(row.worktreePath).not.toBeNull();
+
+      fs.rmSync(notARepo, { recursive: true, force: true });
+      await app.close();
+      delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    });
+
+    it("clears the branch and path when the task only ever waited for its host, so Retry has nothing to resume", async () => {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+      const app = await buildApp();
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-dispatch-test-give-up-hold-"));
+      const projectId = await createProject(app, cwd);
+      const hostRes = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "gone-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const macId = hostRes.json().id as string;
+      app.hostHeartbeatTracker?.recordSuccess(macId);
+      app.db
+        .update(hosts)
+        .set({ drained: true, platform: "darwin" })
+        .where(eq(hosts.id, macId))
+        .run();
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ [macId]: "/Users/me/proj" }) })
+        .where(eq(projects.id, projectId))
+        .run();
+      const task = insertReadyTask(app, projectId, 41);
+      app.db.update(tasks).set({ body: "Platform: darwin" }).where(eq(tasks.id, task.id)).run();
+      expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+      await dispatchQueuedTasks(app);
+      expect(getTask(app, task.id).status).toBe("claimed");
+
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * HOURS) })
+        .where(eq(tasks.id, task.id))
+        .run();
+      await dispatchQueuedTasks(app);
+
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toMatch(/^gave up after 6h of failed dispatch attempts — last: /);
+      expect(row.failureReason).toContain("not eligible right now");
       expect(row.branchName).toBeNull();
       expect(row.worktreePath).toBeNull();
       await expect(retryTask(app, task.id)).resolves.toMatchObject({
@@ -400,10 +448,45 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
         reason: "no-worktree",
       });
 
-      fs.rmSync(notARepo, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();
       delete process.env.MULLION_TASK_MAX_CONCURRENT;
     });
+  });
+
+  // Issue #2006 — auto-claim paces itself by what is occupying worker slots; a
+  // task held for a required host is waiting for a HOST, not a slot.
+  it("does not count a task held for its host against auto-claim pacing", async () => {
+    const { countOccupiedSlots } = await import("../../src/services/task-watcher.js");
+    process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-dispatch-test-pacing-"));
+    const projectId = await createProject(app, cwd);
+    const base = { projectId, title: "t", boardOrder: 0 };
+    const insert = (issueNumber: number, values: Partial<typeof tasks.$inferInsert>) =>
+      app.db
+        .insert(tasks)
+        .values({ ...base, issueNumber, ...values })
+        .run();
+    const now = new Date();
+    insert(1, { status: "in_progress" });
+    // Queued, genuinely waiting for a slot.
+    insert(2, { status: "claimed" });
+    // Queued and failing, but not waiting on a host: still a slot's worth.
+    insert(3, { status: "claimed", dispatchFailingSince: now, failureReason: "worktree failed" });
+    // Held for its required host: does not count.
+    insert(4, {
+      status: "claimed",
+      dispatchFailingSince: now,
+      placementRequirement: JSON.stringify({ platform: "darwin" }),
+    });
+    insert(5, { status: "ready" });
+
+    expect(countOccupiedSlots(app)).toBe(3);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+    delete process.env.MULLION_TASK_MAX_CONCURRENT;
   });
 
   it("clears backoff on a later successful dispatch, so a task isn't stuck backed off forever", async () => {

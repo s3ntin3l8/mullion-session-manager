@@ -242,6 +242,17 @@ export async function enqueueTask(
   return { ok: true, task: queuedRow };
 }
 
+// The phrase in a `holdClaim` reason that says the task is waiting for a
+// required host. `isHoldReason` recognises it so the dispatcher can tell a
+// hold (nothing was cut, nothing to resume) from a failed attempt.
+const HOLD_PHRASE = "registered but not eligible right now";
+
+/** Whether a queued task's `failureReason` was written by a placement hold
+ * (issue #2006) rather than by a failed dispatch attempt. */
+export function isHoldReason(reason: string | null): boolean {
+  return reason !== null && reason.includes(HOLD_PHRASE);
+}
+
 /**
  * Fails a still-`claimed` task, with the reason on the row where the user and
  * the board can see it, and records the `claimed -> failed` transition. The
@@ -358,6 +369,9 @@ export async function dispatchClaimedTask(
   const seedCapable = commandSupportsSeed(command);
 
   const branchName = task.branchName ?? deriveTaskBranchName(task);
+  // The start of the current run of failed attempts (issue #1997). A local, so
+  // a stale hold can be dropped below without `release()` reusing its clock.
+  let failingSince = task.dispatchFailingSince;
 
   // The placement is decided HERE, once, because the worktree is cut on
   // the chosen host (#1724) — so the orphan check below has to ask THAT
@@ -418,23 +432,27 @@ export async function dispatchClaimedTask(
   // back; task-dispatch.ts bounds the wait. The text is stable (no times in
   // it) so an unchanged hold writes and broadcasts nothing on later ticks.
   function holdClaim(detail: string): DispatchTaskOutcome {
-    if (task.failureReason !== detail || task.dispatchFailingSince === null) {
-      app.db
+    if (task.failureReason !== detail || failingSince === null) {
+      const written = app.db
         .update(tasks)
         .set({
           failureReason: detail,
           placementRequirement: requirementJson,
-          dispatchFailingSince: task.dispatchFailingSince ?? new Date(),
+          dispatchFailingSince: failingSince ?? new Date(),
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
         .run();
-      app.log.info({ taskId, requirement }, `task dispatch: ${detail} — holding the task`);
-      broadcastTaskEvent({
-        taskId,
-        projectId: project.id,
-        kind: "dispatch",
-        ts: Date.now(),
-      });
+      // Nothing matched when something else moved the row first (the write is
+      // conditional on `claimed`): then there is nothing to tell the board.
+      if (written.changes > 0) {
+        app.log.info({ taskId, requirement }, `task dispatch: ${detail} — holding the task`);
+        broadcastTaskEvent({
+          taskId,
+          projectId: project.id,
+          kind: "dispatch",
+          ts: Date.now(),
+        });
+      }
     }
     return { ok: false, reason: "placement-held", detail };
   }
@@ -450,7 +468,7 @@ export async function dispatchClaimedTask(
     if (!targeted.ok && targeted.transient) {
       return holdClaim(
         `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)}), ` +
-          "and a matching host is registered but not eligible right now (offline, parked, or " +
+          `and a matching host is ${HOLD_PHRASE} (offline, parked, or ` +
           "no capacity reading yet). It will start once one is.",
       );
     }
@@ -470,6 +488,23 @@ export async function dispatchClaimedTask(
     placement = targeted.decision;
   } else {
     placement = resolvePlacement(app, { project: placementProject, unattended: true });
+  }
+  // Placement succeeded, so a hold recorded earlier (the host was not eligible)
+  // no longer describes the task — it may now wait for a worker slot instead,
+  // and the card must not keep saying the host is unavailable, nor count that
+  // wait toward the 6h give-up. Only a HOLD is dropped: the reason of a failed
+  // attempt (an unreachable base ref, a worktree git cannot cut) is still the
+  // last known truth until a dispatch succeeds.
+  if (failingSince !== null && isHoldReason(task.failureReason)) {
+    const cleared = app.db
+      .update(tasks)
+      .set({ failureReason: null, dispatchFailingSince: null })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+      .run();
+    failingSince = null;
+    if (cleared.changes > 0) {
+      broadcastTaskEvent({ taskId, projectId: project.id, kind: "dispatch", ts: Date.now() });
+    }
   }
   // The project root ON THE PLACEMENT HOST. Null would mean the placement
   // chose a host this project is not on — unreachable in practice (the
@@ -556,7 +591,7 @@ export async function dispatchClaimedTask(
         // Issue #1997 — keeps the START of this run of failures (the give-up
         // clock); `task` is the row read at the top, and nothing else writes
         // the column between that read and here.
-        dispatchFailingSince: task.dispatchFailingSince ?? new Date(),
+        dispatchFailingSince: failingSince ?? new Date(),
         placementRequirement: requirementJson,
         baseSha: null,
         seedDelivered: null,
@@ -934,6 +969,9 @@ export async function retryTask(
         // prUrl (or vice versa), which is exactly the inconsistent pair
         // that made the PR link vanish from the UI (#972).
         failureReason: null,
+        // Issue #1997 — a retry starts a fresh run; a clock left by an earlier
+        // queue spell (a task failed by another route) must not carry over.
+        dispatchFailingSince: null,
         completedAt: null,
         sessionId: null,
         prUrl: null,

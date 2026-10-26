@@ -285,7 +285,22 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       expect(await refusal({ hostId }, projectId)).toMatchObject({ ok: false, transient: true });
       readings.mockRestore();
 
+      // A host that has not reported a platform yet (a Mac still offline after
+      // a backend restart) might be the one: wait for it.
+      app.db.update(hosts).set({ drained: true, platform: null }).where(eq(hosts.id, hostId)).run();
+      vi.spyOn(app.hostCapacityTracker!, "get").mockReturnValue(undefined);
+      expect(await refusal({ platform: "darwin" }, projectId)).toMatchObject({
+        ok: false,
+        transient: true,
+      });
+      vi.mocked(app.hostCapacityTracker!.get).mockRestore();
+
       // No host of that platform exists at all.
+      app.db
+        .update(hosts)
+        .set({ drained: false, platform: "linux" })
+        .where(eq(hosts.id, hostId))
+        .run();
       expect(await refusal({ platform: "win32" }, projectId)).toMatchObject({
         ok: false,
         transient: false,

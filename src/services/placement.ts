@@ -665,7 +665,19 @@ export function resolveTargetHost(
     // Issue #2006 — a host that matches the target AND has this project's
     // path exists; it is just not eligible yet (offline, parked, no capacity
     // reading), so waiting can help. With none, only a config change can.
-    return refusal(matching.some((candidate) => candidate.projectCwd !== null));
+    //
+    // A host that has not reported a platform yet (a Mac still offline after a
+    // backend restart) cannot be told apart from a match, so for a platform
+    // target it counts too — it may turn out to be one.
+    const mightMatch = collected.candidates.some(
+      (candidate) =>
+        candidate.projectCwd !== null &&
+        (wantedHost === null || candidate.hostId === wantedHost) &&
+        (wantedPlatform === undefined ||
+          (candidate.platform ?? "").toLowerCase() === wantedPlatform ||
+          (candidate.platform ?? "") === ""),
+    );
+    return refusal(mightMatch);
   }
 
   const decorated: PlacementDecision = {

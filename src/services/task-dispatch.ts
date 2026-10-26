@@ -22,7 +22,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { dispatchClaimedTask, failQueuedTask } from "./task-claim.js";
+import { dispatchClaimedTask, failQueuedTask, isHoldReason } from "./task-claim.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
@@ -242,10 +242,13 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
     detail,
     via: "dispatch-give-up",
     hostId: null,
-    // No commit block ever ran, so the branch and path stamped at claim time
-    // name nothing the task owns; clearing them makes Retry refuse cleanly
-    // (`no-worktree`) rather than try to resume a branch that may not exist.
-    extra: { worktreePath: null, branchName: null },
+    // A task that only ever waited for its host cut nothing: the branch and
+    // path stamped at claim time name nothing it owns, and clearing them makes
+    // Retry refuse cleanly (`no-worktree`) rather than try to resume a branch
+    // that was never created. After a failed ATTEMPT they are left alone — a
+    // partial or unclean worktree may exist on the host, and Retry (or the
+    // user) can still find it through them.
+    extra: isHoldReason(row.failureReason) ? { worktreePath: null, branchName: null } : {},
   });
 }
 

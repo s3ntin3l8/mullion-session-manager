@@ -961,7 +961,15 @@ board renders it as such), and `enqueueTask` / a successful dispatch null it.
 deliberately longer than the 1h backoff cap) fails an overdue task through
 `failQueuedTask` (`via: dispatch-give-up`, the same `claimed → failed` write
 the placement refusal uses) with the last reason, clearing `branchName` /
-`worktreePath` so Retry refuses cleanly with `no-worktree`.
+`worktreePath` — but only when the task merely waited for its host (a failed
+attempt may have left a partial worktree, so those fields stay and Retry can
+still find it). A hold also stops counting once placement succeeds again (the
+stale reason and clock are dropped, so waiting for a worker slot is not charged
+to the 6 hours), and auto-claim pacing (`countOccupiedSlots`, task-watcher.ts)
+does not count a held task as occupying a slot — one sleeping Mac must not
+stall every unrelated `ready` task. A host that has not reported a platform yet
+counts as a possible match for a `Platform:` target, so it holds rather than
+refuses.
 
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
