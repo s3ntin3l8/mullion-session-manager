@@ -6,7 +6,7 @@ import { useShallow } from "zustand/react/shallow";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
-import type { Device, DiscoveredProject, Host, Project, Session } from "./api/index.js";
+import type { Device, DiscoveredProject, Host, Project, Session, Task } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
 import { describeHostBadge } from "./lib/hostBadge.js";
@@ -93,6 +93,13 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 // rendering strategy out from under the user mid-keystroke.
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
+// Issue #1891 — every blocked task is a row above Devices and Projects, and
+// `.sidebar-wrapper` is the only scroller, so an uncapped backlog squeezes
+// the session list off the first screen. Eight is enough to see that work
+// is stuck; the rest stay one click away on the board, through the same
+// `onOpenTasks` the Tasks entry already uses — not a second way to navigate.
+const BLOCKED_TASKS_VISIBLE_CAP = 8;
+
 export interface SidebarProps {
   // Phone navigator only: render just one of the sidebar's two areas (the
   // full-screen navigator shows Projects and Devices as separate tabs).
@@ -113,6 +120,10 @@ export interface SidebarProps {
   // Phase 6 (6.5/#218) — opens (or focuses) the global task board, replacing
   // 2.5's own ad hoc TasksSection list.
   onOpenTasks: () => void;
+  // Issue #1891 — a blocked task used to be visible only through the board's
+  // "Blocked only" toggle. This opens that task's own detail (the existing
+  // task-detail panel), not a second definition of "blocked".
+  onOpenTask: (task: Task) => void;
   // Issue #433 scope B — SourceControlSection's own "Open Git Panel" action.
   // App.tsx already had this callback (for GitPanel's own command-palette
   // entry, issue #76) but never threaded it down to Sidebar until now.
@@ -136,6 +147,7 @@ export function Sidebar({
   onOpenProjectLauncher,
   onOpenSettingsProjects,
   onOpenTasks,
+  onOpenTask,
   onOpenGit,
   onOpenProjectSetup,
   onOpenDevice,
@@ -256,6 +268,12 @@ export function Sidebar({
   const actionableTaskCount = tasks.filter(
     (t) => t.status === "ready" || t.status === "reviewing",
   ).length;
+  // Issue #1891 — the board's "Blocked only" toggle is the only other place
+  // a blocked task shows up, and it is easy to never open. `blocked` (not
+  // `unresolved`, which is "still checking") is the state that toggle
+  // filters on. Archived tasks are off the board unless the user asks for
+  // them, so they are not a "you missed this" signal here either.
+  const blockedTasks = tasks.filter((t) => t.blockedState === "blocked" && t.archivedAt === null);
 
   // #9 — a "killed" task session is already excluded by the `s.status !==
   // "killed"` check above/below regardless of this toggle (see PR 8's own
@@ -342,6 +360,19 @@ export function Sidebar({
         : projects,
     [projects, filterActive, filteredSessionsByProject],
   );
+
+  // Issue #1891 — the Tasks entry above is a nav row and stays global on
+  // purpose. This is a list, so it follows the same filter as the project
+  // tree: `visibleProjects` is already "projects the search or the chips
+  // still show", and a task whose project was filtered out does not stay
+  // behind as a row from somewhere else.
+  const filteredBlockedTasks = useMemo(() => {
+    if (!filterActive) return blockedTasks;
+    const visibleProjectIds = new Set(visibleProjects.map((project) => project.id));
+    return blockedTasks.filter((task) => visibleProjectIds.has(task.projectId));
+  }, [blockedTasks, filterActive, visibleProjects]);
+  const shownBlockedTasks = filteredBlockedTasks.slice(0, BLOCKED_TASKS_VISIBLE_CAP);
+  const hiddenBlockedTaskCount = filteredBlockedTasks.length - shownBlockedTasks.length;
 
   // Issue #1889 — the Projects section header's caption. It used to be the
   // bare word "sessions", which read as a label with no number (or a number
@@ -483,6 +514,31 @@ export function Sidebar({
             <span className="project-attn-pill">{actionableTaskCount}</span>
           )}
         </button>
+      )}
+      {phoneSection !== "devices" && filteredBlockedTasks.length > 0 && (
+        <section className="sidebar-blocked-tasks" aria-label="Blocked tasks">
+          <div className="sidebar-section-header">
+            <h3 className="sidebar-section-title">Blocked tasks</h3>
+          </div>
+          {shownBlockedTasks.map((task) => (
+            <button
+              key={task.id}
+              type="button"
+              className="sidebar-blocked-task"
+              onClick={() => onOpenTask(task)}
+            >
+              <span className="sidebar-blocked-task-title" title={task.title}>
+                {task.title}
+              </span>
+              <span className="sidebar-blocked-task-state">blocked</span>
+            </button>
+          ))}
+          {hiddenBlockedTaskCount > 0 && (
+            <button type="button" className="sidebar-blocked-tasks-more" onClick={onOpenTasks}>
+              +{hiddenBlockedTaskCount} more
+            </button>
+          )}
+        </section>
       )}
       {phoneSection !== "projects" && <SidebarDevices onOpenDevice={onOpenDevice} />}
       {phoneSection !== "devices" && (

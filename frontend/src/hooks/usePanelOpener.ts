@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
-import type { Device, Project, Session, Workspace } from "../api/index.js";
+import type { Device, Project, Session, Task, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { randomPanelId } from "../random-id.js";
 import {
@@ -15,6 +15,7 @@ import {
   openOrFocusProjectPanel,
   openProjectHubPanel,
   openSessionPanel,
+  openTaskDetailPanel,
   openTimelinePanel,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
@@ -145,6 +146,10 @@ export interface UsePanelOpenerResult {
   // The task board is the unified Kanban view (UnifiedBoard.tsx), not a
   // dockview panel — this just switches `viewMode`.
   onOpenTasks: () => void;
+  // Issue #1891 — opens (or focuses) one task's detail panel. The board's
+  // blocked toggle is unchanged; this is how a blocked row outside the
+  // board reaches the task it names.
+  onOpenTask: (task: Task) => void;
   // Issue #109 — opens a browser pane pre-filled with a specific favorited
   // URL. Always creates a fresh panel (random id suffix); never
   // open-or-focus, unlike every panel kind above.
@@ -391,6 +396,18 @@ export function usePanelOpener({
     if (layout.tier === "desktop") setSidebarOpen(false);
   }, [layout.tier, setSidebarOpen]);
 
+  const onOpenTask = useCallback(
+    (task: Task) => {
+      if (!dockviewApi) return;
+      // The detail panel lives in the grid, not under the Tasks overlay.
+      // Same leave-the-board step every other opener takes.
+      leaveTaskView();
+      openTaskDetailPanel(dockviewApi, task, layout);
+      setSidebarOpen(false);
+    },
+    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+  );
+
   const onOpenBrowserUrl = useCallback(
     (projectId: number, url: string, label: string) => {
       if (!dockviewApi) return;
@@ -472,6 +489,7 @@ export function usePanelOpener({
     onOpenSkills,
     onOpenBrowser,
     onOpenTasks,
+    onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
     onOpenDevice,

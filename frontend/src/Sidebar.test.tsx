@@ -143,6 +143,7 @@ const NOOP_PROPS = {
   onOpenProjectLauncher: vi.fn(),
   onOpenSettingsProjects: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenTask: vi.fn(),
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
   onOpenDevice: vi.fn(),
@@ -359,6 +360,104 @@ describe("Sidebar Tasks entry — Tasks-as-a-destination", () => {
 
     expect(onOpenTasks).toHaveBeenCalled();
     expect(setViewMode).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #1891 — a blocked task was only visible through the board's
+// "Blocked only" toggle. The sidebar names it and says it is blocked.
+describe("blocked tasks outside the board (issue #1891)", () => {
+  it("names a blocked task and says it is blocked, in text", () => {
+    tasks = [
+      makeTask({ id: 1, title: "Wait on the API", blockedState: "blocked" }),
+      makeTask({ id: 2, title: "Still checking", blockedState: "unresolved" }),
+      makeTask({ id: 3, title: "Free to start", blockedState: "clear" }),
+      makeTask({
+        id: 4,
+        title: "Archived and stuck",
+        blockedState: "blocked",
+        archivedAt: "2026-02-01T00:00:00.000Z",
+      }),
+    ];
+    renderSidebar();
+
+    const row = screen.getByRole("button", { name: /Wait on the API/ });
+    expect(row).toHaveTextContent("blocked");
+    expect(screen.getByRole("region", { name: "Blocked tasks" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Still checking/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Free to start/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Archived and stuck/ })).toBeNull();
+  });
+
+  it("opens that task, rather than only the board", async () => {
+    tasks = [makeTask({ id: 9, title: "Wait on the API", blockedState: "blocked" })];
+    const onOpenTask = vi.fn();
+    const onOpenTasks = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenTask, onOpenTasks });
+
+    await user.click(screen.getByRole("button", { name: /Wait on the API/ }));
+
+    expect(onOpenTask).toHaveBeenCalledTimes(1);
+    expect(onOpenTask.mock.calls[0][0].id).toBe(9);
+    expect(onOpenTasks).not.toHaveBeenCalled();
+  });
+
+  it("stays off the devices tab — that tab is not the project/task list", () => {
+    tasks = [makeTask({ id: 1, title: "Wait on the API", blockedState: "blocked" })];
+    renderSidebar({ phoneSection: "devices" });
+    expect(screen.queryByRole("region", { name: "Blocked tasks" })).toBeNull();
+  });
+
+  it("is still listed on the phone projects tab, which has no Tasks button", () => {
+    tasks = [makeTask({ id: 1, title: "Wait on the API", blockedState: "blocked" })];
+    renderSidebar({ phoneSection: "projects" });
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Wait on the API/ })).toHaveTextContent("blocked");
+  });
+
+  it("puts the task title on the truncated label", () => {
+    const title = "Wait on the API key rotation that the row cannot show in full";
+    tasks = [makeTask({ id: 1, title, blockedState: "blocked" })];
+    renderSidebar();
+    expect(screen.getByText(title)).toHaveAttribute("title", title);
+  });
+
+  it("caps the list and opens the board for the rest", async () => {
+    tasks = Array.from({ length: 9 }, (_, i) =>
+      makeTask({ id: i + 1, title: `Blocked task ${i + 1}`, blockedState: "blocked" }),
+    );
+    const onOpenTasks = vi.fn();
+    const onOpenTask = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenTasks, onOpenTask });
+
+    expect(screen.getByText("Blocked task 1")).toBeInTheDocument();
+    expect(screen.getByText("Blocked task 8")).toBeInTheDocument();
+    expect(screen.queryByText("Blocked task 9")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "+1 more" }));
+
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+    expect(onOpenTask).not.toHaveBeenCalled();
+  });
+
+  it("hides a blocked task whose project the search has filtered out", async () => {
+    projects = [PROJECT, makeProject({ id: 2, name: "other", cwd: "/home/x/other" })];
+    sessions = [
+      makeSession({ id: 1, projectId: 1, command: "claude code" }),
+      makeSession({ id: 2, projectId: 2, command: "npm run build" }),
+    ];
+    tasks = [
+      makeTask({ id: 1, projectId: 1, title: "Stuck on demo", blockedState: "blocked" }),
+      makeTask({ id: 2, projectId: 2, title: "Stuck on other", blockedState: "blocked" }),
+    ];
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.type(screen.getByLabelText("Filter sessions"), "npm");
+
+    expect(screen.queryByRole("button", { name: /Stuck on demo/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Stuck on other/ })).toBeInTheDocument();
   });
 });
 

@@ -6,7 +6,7 @@ import { usePanelOpener } from "./usePanelOpener.js";
 import type { DockviewApi } from "dockview-react";
 import type { Device } from "../api/index.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
-import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask, makeWorkspace } from "../test/fixtures.js";
 
 // Same store-mock shape as useDockviewDrop.test.ts/useSessionDeepLink.test.ts —
 // a `storeState()` factory serving `useDashboardStore.getState()`, the only
@@ -630,6 +630,44 @@ describe("usePanelOpener — onOpenTasks", () => {
     const { result } = setup({ dockviewApi: null });
     result.current.onOpenTasks();
     expect(setViewMode).not.toHaveBeenCalledWith("list");
+  });
+});
+
+// Issue #1891 — the sidebar's blocked-task row opens that task. This is
+// openTaskDetailPanel (focus if the panel is already there, otherwise add
+// it), not a new panel kind, and not the board's blocked toggle.
+describe("usePanelOpener — onOpenTask", () => {
+  const task = makeTask({ id: 9, title: "Wait on the API" });
+
+  it("opens a task-detail panel and leaves the Tasks overlay", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenTask(task);
+
+    expect(setViewMode).toHaveBeenCalledWith("list");
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "task-detail-9", component: "task-detail" }),
+    );
+    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("focuses the existing panel instead of opening a second one", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "task-detail-9", component: "task-detail", params: { taskId: 9 } });
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenTask(task);
+
+    expect(api.getPanel("task-detail-9")!.api.setActive).toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does nothing when there is no dockview to open into", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenTask(task);
+    expect(setViewMode).not.toHaveBeenCalled();
+    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });
 
