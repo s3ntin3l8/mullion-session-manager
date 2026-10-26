@@ -300,6 +300,74 @@ describe("dev-worktrees", () => {
     });
   });
 
+  // Issue #1979 — directories git no longer (or never) knew as worktrees.
+  describe("orphans", () => {
+    it("reports unregistered directories under each root, report-only, and leaves them on prune", async () => {
+      const registered = addWorktree("feat/kept", { pushed: true, branch: "feat-kept" });
+      const root = fs.realpathSync(repo);
+      const orphanTop = path.join(root, ".wt", "stray");
+      const orphanNested = path.join(root, ".wt", "feat", "old");
+      const orphanWorktrees = path.join(root, ".worktrees", "x");
+      const orphanAgent = path.join(root, ".claude", "worktrees", "agent-gone");
+      for (const dir of [orphanTop, orphanNested, orphanWorktrees, orphanAgent]) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, "file.txt"), "z".repeat(10_000));
+      }
+      // A plain file under a root is not a directory, so not a worktree either.
+      fs.writeFileSync(path.join(root, ".wt", "notes.txt"), "hi");
+
+      const status = await inspectDevWorktrees(opts());
+      const orphans = status.candidates.filter((c) => c.reason === "orphaned");
+      expect(orphans.map((c) => [c.path, c.slug, c.kind]).sort()).toEqual(
+        [
+          [orphanTop, "stray", "wt"],
+          [orphanNested, path.join("feat", "old"), "wt"],
+          [orphanWorktrees, "x", "wt"],
+          [orphanAgent, "agent-gone", "claude-agent"],
+        ].sort(),
+      );
+      expect(orphans.every((c) => c.bytes >= 10_000 && c.branch === null)).toBe(true);
+      // The registered one under the same `feat/` parent is not an orphan.
+      expect(status.candidates.map((c) => c.path)).not.toContain(registered);
+      // Not something cleanup can free.
+      expect(status.totalBytes).toBe(0);
+
+      await pruneDevWorktrees(opts());
+      for (const dir of [orphanTop, orphanNested, orphanWorktrees, orphanAgent]) {
+        expect(exists(dir)).toBe(true);
+      }
+    });
+
+    it("doesn't call a registered worktree orphaned when the root is a symlink", async () => {
+      const real = path.join(base, "elsewhere");
+      fs.mkdirSync(real);
+      fs.symlinkSync(real, path.join(repo, ".wt"));
+      git(repo, ["worktree", "add", "-b", "via-link", path.join(repo, ".wt", "a"), "origin/main"]);
+      fs.mkdirSync(path.join(real, "stray"));
+      const orphans = (await inspectDevWorktrees(opts())).candidates.filter(
+        (c) => c.reason === "orphaned",
+      );
+      expect(orphans.map((c) => c.slug)).toEqual(["stray"]);
+    });
+
+    it("reports an orphan once when two roots are the same directory", async () => {
+      fs.mkdirSync(path.join(repo, ".wt", "stray"), { recursive: true });
+      fs.symlinkSync(path.join(repo, ".wt"), path.join(repo, ".worktrees"));
+      const orphans = (await inspectDevWorktrees(opts())).candidates.filter(
+        (c) => c.reason === "orphaned",
+      );
+      expect(orphans.map((c) => c.slug)).toEqual(["stray"]);
+    });
+
+    it("finds orphans in a project that has no registered developer worktree at all", async () => {
+      fs.mkdirSync(path.join(repo, ".wt", "leftover"), { recursive: true });
+      const status = await inspectDevWorktrees(opts());
+      expect(status.candidates).toEqual([
+        expect.objectContaining({ reason: "orphaned", slug: "leftover" }),
+      ]);
+    });
+  });
+
   describe("prune", () => {
     it("removes stale worktrees, keeps their branches and everything else", async () => {
       const gone = addWorktree("gone-one", { pushed: true });

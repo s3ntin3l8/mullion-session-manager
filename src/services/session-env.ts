@@ -94,6 +94,7 @@ const RUNTIME_ONLY_SERVER_ENV_KEYS = [
   "MULLION_CONTROL_UNAVAILABLE",
   "MULLION_FORWARDER_PATH",
   "MULLION_FORWARDER_NODE",
+  "MULLION_WORKTREES_IN_DOT_WT",
   "OPENCODE_CONFIG_CONTENT",
   // opencode v2: absolute paths of the per-session instruction files the
   // plugin injects (hook-adapters/opencode.ts) — a stale value inherited from

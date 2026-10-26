@@ -225,6 +225,59 @@ describe("forwarder.mjs (issue #174)", () => {
     expect(JSON.parse(messageLine)).toEqual({ kind: "tool_done", tool: "Bash" });
   });
 
+  // Issue #1979 — the off-convention `git worktree add` nudge reaches stdout
+  // as the PostToolUse additionalContext reply, after the usual send.
+  it("prints the worktree nudge on stdout for an off-convention git worktree add", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = await listen(socketPath);
+
+    const linesPromise = collectLines(server, 3);
+    const { code, stdout } = await runForwarderCapturingStdout(
+      ["claude-code", "PostToolUse"],
+      {
+        MULLION_HOOK_SOCKET: socketPath,
+        MULLION_HOOK_TOKEN: "tok-123",
+        MULLION_WORKTREES_IN_DOT_WT: "1",
+      },
+      JSON.stringify({
+        tool_name: "Bash",
+        cwd: "/repo",
+        tool_input: { command: "git worktree add ../sibling -b feat/x" },
+      }),
+    );
+    expect(code).toBe(0);
+    const sent = (await linesPromise).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(sent).toContainEqual(
+      expect.objectContaining({ kind: "git_branch", worktree: "/sibling" }),
+    );
+    const output = JSON.parse(stdout.trim()) as {
+      hookSpecificOutput: { hookEventName: string; additionalContext: string };
+    };
+    expect(output.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+    expect(output.hookSpecificOutput.additionalContext).toContain("promote_to_worktree");
+  });
+
+  it("prints a bare {} for the same command when the session has no .wt convention", async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+    const socketPath = path.join(dir, "hooks.sock");
+    server = await listen(socketPath);
+
+    const linesPromise = collectLines(server, 3);
+    const { code, stdout } = await runForwarderCapturingStdout(
+      ["claude-code", "PostToolUse"],
+      { MULLION_HOOK_SOCKET: socketPath, MULLION_HOOK_TOKEN: "tok-123" },
+      JSON.stringify({
+        tool_name: "Bash",
+        cwd: "/repo",
+        tool_input: { command: "git worktree add ../sibling -b feat/x" },
+      }),
+    );
+    expect(code).toBe(0);
+    await linesPromise;
+    expect(stdout.trim()).toBe("{}");
+  });
+
   it("exits cleanly with no socket configured at all", async () => {
     const exitCode = await runForwarder(
       ["claude-code", "Stop"],

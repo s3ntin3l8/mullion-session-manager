@@ -24,6 +24,7 @@ function writeStubForwarder(dir: string): string {
       'import net from "node:net";',
       "console.error(`SOCKET=${process.env.MULLION_HOOK_SOCKET}`);",
       "console.error(`TOKEN=${process.env.MULLION_HOOK_TOKEN}`);",
+      'console.error(`WT=${process.env.MULLION_WORKTREES_IN_DOT_WT ?? "unset"}`);',
       "console.error(`ARGV=${process.argv.slice(2).join(",
       ")}`);",
       'console.log(JSON.stringify({ decision: "allow" }));',
@@ -136,6 +137,25 @@ describe("mcode-hook-shim.sh", () => {
     expect(result.stderr).toContain("ARGV=mcode,SessionStart");
     expect(result.stderr).toContain("SOCKET=/tmp/hooks.sock");
     expect(result.stderr).toContain("TOKEN=tok-abc");
+  });
+
+  it("re-exports the .wt worktree-convention flag from the handoff (issue #1979)", () => {
+    const write = (worktreesInDotWt?: string) =>
+      writeFileSync(
+        path.join(tmpDir, "mullion-hook.json"),
+        JSON.stringify({
+          socket: "/tmp/hooks.sock",
+          token: "tok-abc",
+          forwarderPath,
+          nodePath: process.execPath,
+          ...(worktreesInDotWt === undefined ? {} : { worktreesInDotWt }),
+        }),
+      );
+    write("1");
+    expect(runShim({ env: { TMPDIR: tmpDir } }).stderr).toContain("WT=1");
+    // An older handoff without the field reads as off, never as a stray value.
+    write();
+    expect(runShim({ env: { TMPDIR: tmpDir } }).stderr).toContain("WT=\n");
   });
 
   it("fails open with an empty JSON object when the handoff file is missing", () => {

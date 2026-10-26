@@ -442,6 +442,12 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // `sessionsDir` is the session's own field, never derived from
   // hookSocketPath: on Windows that is a named pipe (cli/ipc-path.mjs), which
   // has no parent directory.
+  const worktreesInDotWt = conventionsUseWtDirectory(session.workflowConventionsText);
+  // Issue #1979 — tells the hook forwarder to nudge an agent whose
+  // `git worktree add` lands outside `.wt/` (forwarder-core.mjs's
+  // worktreeNudge). An env var, not a server lookup, so the forwarder stays
+  // fire-and-forget.
+  if (worktreesInDotWt) sessionEnv.MULLION_WORKTREES_IN_DOT_WT = "1";
   const {
     command: launchCommand,
     envAdditions,
@@ -455,7 +461,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     controlSocketPath: session.controlSocketPath,
     forwarderPath,
     injectAgentGuide: session.injectAgentGuide,
-    worktreesInDotWt: conventionsUseWtDirectory(session.workflowConventionsText),
+    worktreesInDotWt,
     injectProjectBriefing: session.injectProjectBriefing,
     injectMullionBundle: session.injectMullionBundle,
     authEnabled: session.authEnabled,

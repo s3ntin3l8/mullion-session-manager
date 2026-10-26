@@ -52,8 +52,14 @@ export type DevWorktreeKind = (typeof ROOTS)[number]["kind"];
  *   branch.
  * - `in-default`: a hook-created `worktree-*` branch whose tip is already in the
  *   default branch, i.e. nothing was committed on it.
+ *
+ * And one that is reported but never removed (issue #1979):
+ * - `orphaned`: a directory under a worktree root that `git worktree list` does
+ *   not know (its registration was pruned, or it was never a worktree). Nothing
+ *   can tell whether it holds work, so it is left for a person to delete; it is
+ *   not counted in `totalBytes`.
  */
-export type DevWorktreeReason = "gone" | "merged" | "detached-merged" | "in-default";
+export type DevWorktreeReason = "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
 
 export interface DevWorktreeProject {
   id: number;
@@ -80,7 +86,9 @@ export interface DevWorktreeCandidate {
 
 export interface DevWorktreeStatus {
   available: boolean;
+  /** Includes the `orphaned` ones, which are listed but never removed. */
   candidates: DevWorktreeCandidate[];
+  /** What cleanup can free: every candidate but the `orphaned` ones. */
   totalBytes: number;
   error?: string;
 }
@@ -248,14 +256,71 @@ async function evaluate(
 /** This project's developer worktrees, with the repo facts every check needs. */
 async function gather(
   project: DevWorktreeProject,
+  listed?: GitWorktreeInfo[] | null,
 ): Promise<{ ctx: RepoContext; located: Located[] } | null> {
-  const worktrees = await listWorktrees(project.cwd);
+  const worktrees = listed === undefined ? await listWorktrees(project.cwd) : listed;
   if (!worktrees) return null;
   const root = await repoRoot(project.cwd);
   const located = worktrees.flatMap((worktree) => locate(root, worktree) ?? []);
   if (located.length === 0) return null;
   const ctx = await repoContext(project);
   return ctx ? { ctx, located } : null;
+}
+
+/**
+ * Directories under `dir` that are neither a registered worktree nor a parent
+ * of one (`.wt/feat/` holding a registered `.wt/feat/x` is walked into, not
+ * reported). Symlinks are skipped: what they point at isn't this root's.
+ */
+async function unregisteredDirs(dir: string, known: string[]): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const found: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const full = path.join(dir, entry.name);
+    if (known.includes(full)) continue;
+    if (known.some((k) => k.startsWith(full + path.sep))) {
+      found.push(...(await unregisteredDirs(full, known)));
+    } else {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+/** Issue #1979 — the project's `orphaned` directories under each root. */
+async function findOrphans(
+  project: DevWorktreeProject,
+  worktrees: GitWorktreeInfo[],
+): Promise<Evaluated[]> {
+  const root = await repoRoot(project.cwd);
+  const known = worktrees.map((worktree) => path.resolve(worktree.path));
+  const orphans: Evaluated[] = [];
+  const seenRoots = new Set<string>();
+  for (const { dir, kind } of ROOTS) {
+    // Real path: `git worktree list` prints one, so a symlinked `.wt` (or
+    // `.claude`) would otherwise make every registered worktree under it look
+    // unknown.
+    const rootDir = await fs.realpath(path.join(root, dir)).catch(() => null);
+    // Two roots can be one directory (`.worktrees` symlinked to `.wt`); walk
+    // it once, or every orphan in it is reported twice.
+    if (!rootDir || seenRoots.has(rootDir)) continue;
+    seenRoots.add(rootDir);
+    for (const orphan of await unregisteredDirs(rootDir, known)) {
+      orphans.push({
+        projectId: project.id,
+        projectName: project.name,
+        repoCwd: project.cwd,
+        path: orphan,
+        slug: path.relative(rootDir, orphan),
+        branch: null,
+        kind,
+        reason: "orphaned",
+        headSha: "",
+      });
+    }
+  }
+  return orphans;
 }
 
 /**
@@ -268,10 +333,14 @@ export async function inspectDevWorktrees(options: DevWorktreeOptions): Promise<
     const candidates: DevWorktreeCandidate[] = [];
     for (const project of options.projects) {
       try {
-        const gathered = await gather(project);
+        const worktrees = await listWorktrees(project.cwd);
+        const gathered = await gather(project, worktrees);
         for (const located of gathered?.located ?? []) {
           const found = await evaluate(gathered!.ctx, located, options);
           if (found) candidates.push({ ...found, bytes: await dirSize(found.path) });
+        }
+        for (const orphan of worktrees ? await findOrphans(project, worktrees) : []) {
+          candidates.push({ ...orphan, bytes: await dirSize(orphan.path) });
         }
       } catch {
         // one unreadable repo must not hide the rest
@@ -280,7 +349,9 @@ export async function inspectDevWorktrees(options: DevWorktreeOptions): Promise<
     return {
       available: true,
       candidates,
-      totalBytes: candidates.reduce((sum, c) => sum + c.bytes, 0),
+      totalBytes: candidates
+        .filter((c) => c.reason !== "orphaned")
+        .reduce((sum, c) => sum + c.bytes, 0),
     };
   } catch (error) {
     return {

@@ -385,6 +385,54 @@ export function detectWorktreeAdd(payload, resolveCwd) {
   return result;
 }
 
+// Issue #1979 — the agents whose PostToolUse hook reads a
+// `hookSpecificOutput.additionalContext` reply back into the model's context:
+// Claude Code, and Codex (its embedded `post-tool-use.command.output` schema
+// carries the same field, checked against codex-cli 0.164.0), and mcode, whose
+// CLAUDE-format result parser reads it too (see formatSessionStartOutput's
+// mcode case). agy's PostToolUse has no result message at all, and opencode
+// is a plugin that never runs this forwarder.
+const WORKTREE_NUDGE_AGENTS = new Set(["claude-code", "codex", "mcode"]);
+
+/** Whether a worktree path sits somewhere under a `.wt/` directory: a path
+ * segment named `.wt` with something after it. Relative paths count too, so a
+ * path left unresolved after a `cd` (see detectWorktreeAdd) is still judged. */
+export function isUnderDotWt(worktreePath) {
+  return worktreePath
+    .split(/[\\/]+/)
+    .slice(0, -1)
+    .includes(".wt");
+}
+
+/** Issue #1979 — the PostToolUse nudge for a `git worktree add` that put the
+ * worktree outside `.wt/` in a session whose conventions say `.wt/<branch>`
+ * (`worktreesInDotWt`, from the `MULLION_WORKTREES_IN_DOT_WT` env var
+ * launch-plan.ts sets). Returns the text to hand back as additionalContext, or
+ * null. It never blocks: the worktree already exists by the time PostToolUse
+ * fires, and a PreToolUse gate on Bash was removed in #178 for firing on every
+ * call. */
+export function worktreeNudge(agent, kind, payload, worktreesInDotWt) {
+  if (!worktreesInDotWt || kind !== "PostToolUse" || !WORKTREE_NUDGE_AGENTS.has(agent)) {
+    return null;
+  }
+  const detected = detectWorktreeAdd(payload, payload?.cwd);
+  if (!detected || isUnderDotWt(detected.worktree)) return null;
+  return (
+    `Mullion: this project keeps worktrees under \`.wt/<branch>\` in the repository root, ` +
+    `but \`git worktree add\` just created \`${detected.worktree}\`. That was not blocked. ` +
+    `For new worktrees, run \`git worktree add .wt/<branch> -b <branch> origin/<default>\` ` +
+    `from the repository root. (The \`promote_to_worktree\` tool is the other option, ` +
+    `but it makes a Mullion-managed worktree under \`.mullion-worktrees/\`, not \`.wt/\`.)`
+  );
+}
+
+/** The PostToolUse stdout reply carrying `additionalContext`, or null for an
+ * agent that has no such reply (main() then prints its usual `{}`). */
+export function formatPostToolUseOutput(agent, additionalContext) {
+  if (!WORKTREE_NUDGE_AGENTS.has(agent)) return null;
+  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext } };
+}
+
 /** Issue: sidebar worktree detection — parses a `git checkout`/`git switch`
  * command string and returns `{ branch }` when it unambiguously switches the
  * checked-out branch, or `null` otherwise (this repo's own working tree is

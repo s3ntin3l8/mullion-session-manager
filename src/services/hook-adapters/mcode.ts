@@ -539,9 +539,11 @@ export function buildMcodePermissionPluginManifest(): string {
 
 /**
  * The per-session handoff file's contents: the socket path, the handshake
- * token, and the forwarder path (+ the node binary to run it with). Read by
- * the shim, which re-exports them as the MULLION_* env vars the forwarder
- * expects.
+ * token, and the forwarder path (+ the node binary to run it with), plus
+ * the `.wt` worktree-convention flag (issue #1979). Read by the shim, which
+ * re-exports them as the MULLION_* env vars the forwarder expects — mcode's
+ * hook child env drops every MULLION_* var, so the session env can't carry
+ * them. The flag is a string ("1" or "") because the shim only reads strings.
  *
  * Exported for tests. Pure, no I/O.
  */
@@ -556,6 +558,7 @@ export function buildMcodeHookHandoff(
       token: ctx.hookToken,
       forwarderPath,
       nodePath,
+      worktreesInDotWt: ctx.worktreesInDotWt ? "1" : "",
     },
     null,
     2,

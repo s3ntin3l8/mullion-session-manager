@@ -26,7 +26,9 @@ function describeWorktree(candidate: DevWorktreeCandidate): string {
       ? "branch deleted on the remote"
       : candidate.reason === "merged"
         ? `PR ${candidate.detail ?? ""} merged`.trim()
-        : "already in the default branch";
+        : candidate.reason === "orphaned"
+          ? "not a registered git worktree"
+          : "already in the default branch";
   return `${kind}, ${why}`;
 }
 
@@ -203,6 +205,9 @@ export function StorageSection() {
   const caches = hasMeasuredData(probes.caches) ? probes.caches : null;
   const opencode = hasMeasuredData(probes.opencode) ? probes.opencode : null;
   const worktrees = hasMeasuredData(probes.worktrees) ? probes.worktrees : null;
+  // Issue #1979 — orphaned directories are reported, never removed.
+  const removableWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason !== "orphaned");
+  const orphanedWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason === "orphaned");
 
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
@@ -265,7 +270,7 @@ export function StorageSection() {
   });
   const worktreeRow = tierRow("Developer worktrees", probes.worktrees, (data) =>
     data.available
-      ? data.candidates.length > 0
+      ? data.candidates.some((c) => c.reason !== "orphaned")
         ? { bytes: data.totalBytes }
         : null
       : failed(data),
@@ -406,11 +411,11 @@ export function StorageSection() {
         </>
       )}
 
-      {worktrees?.available && worktrees.candidates.length > 0 && (
+      {worktrees?.available && removableWorktrees.length > 0 && (
         <>
           <div className="storage-subhead">Developer worktrees aggressive cleanup would remove</div>
           <div className="settings-info-table">
-            {worktrees.candidates.map((candidate, i) => (
+            {removableWorktrees.map((candidate, i) => (
               <div
                 key={candidate.path}
                 className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}
@@ -423,6 +428,35 @@ export function StorageSection() {
                 </span>
               </div>
             ))}
+          </div>
+        </>
+      )}
+
+      {worktrees?.available && orphanedWorktrees.length > 0 && (
+        <>
+          <div className="storage-subhead">
+            Directories under a worktree root that git doesn't know (not removed)
+          </div>
+          <div className="settings-info-table">
+            {orphanedWorktrees.map((candidate, i) => (
+              <div
+                key={candidate.path}
+                className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}
+              >
+                <span className="settings-info-key">
+                  {candidate.projectName} / {candidate.slug}
+                </span>
+                {/* The full path, on screen and in a tooltip (the value cell truncates
+                    with an ellipsis): deleting by hand is the only remedy. */}
+                <span className="settings-info-value" title={candidate.path}>
+                  <code>{candidate.path}</code> · {formatBytes(candidate.bytes)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="settings-footer-note">
+            Nothing can tell whether these hold work, so cleanup leaves them alone. Delete one by
+            hand once you've checked it.
           </div>
         </>
       )}
@@ -486,7 +520,7 @@ export function StorageSection() {
                   : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
           </div>
         )}
-        {worktrees?.available && worktrees.candidates.length > 0 && (
+        {worktrees?.available && removableWorktrees.length > 0 && (
           <div className="settings-footer-note">
             <strong>Developer worktrees.</strong> Developer worktrees (<code>.wt/</code> and Claude
             agents' <code>.claude/worktrees/</code>) whose work is already elsewhere free{" "}
