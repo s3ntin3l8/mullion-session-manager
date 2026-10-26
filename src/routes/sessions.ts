@@ -369,7 +369,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       // would be indistinguishable from a session that is genuinely idle and
       // alive. Per HOST, not per session: one unreachable machine must not
       // mark another machine's sessions suspended.
-      const unreachableHosts = new Set<string>();
+      // Issue #2010 — a host that ANSWERED with an error (rate limit, stale
+      // token) is in the map too, with the HTTP status it refused with, so
+      // the detail does not call a host that is up "unreachable".
+      const failedHosts = new Map<string, { refusedStatus?: number }>();
       await Promise.all(
         [...idsByHost.entries()].map(async ([hostId, ids]) => {
           try {
@@ -378,11 +381,14 @@ export async function sessionsRoute(app: FastifyInstance) {
               await resolveBackend(app, hostId).liveStatus(ids, idleThresholdMs),
             );
           } catch (err) {
+            const refusedStatus = err instanceof HostRequestError ? err.statusCode : undefined;
             app.log.warn(
               { hostId, err },
-              "host unreachable, reporting default live status for its sessions",
+              refusedStatus === undefined
+                ? "host unreachable, reporting default live status for its sessions"
+                : "host answered the live-status request with an error, reporting default live status for its sessions",
             );
-            unreachableHosts.add(hostId);
+            failedHosts.set(hostId, { refusedStatus });
             liveByHost.set(hostId, Object.create(null));
           }
         }),
@@ -392,7 +398,8 @@ export async function sessionsRoute(app: FastifyInstance) {
         const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
         return withLiveInfo(app, row, info, hostId, {
-          hostReachable: !unreachableHosts.has(hostId),
+          hostReachable: !failedHosts.has(hostId),
+          hostRefusedStatus: failedHosts.get(hostId)?.refusedStatus,
         });
       });
     },

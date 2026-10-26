@@ -77,11 +77,26 @@ describe("readSessionLiveInfo", () => {
       hostReachable: false,
       failure: "refused",
       error: err,
+      // The status travels with the result so the REST path can say it.
+      hostRefusedStatus: 429,
     });
     // The same default view as an unreachable host (the REST path is unchanged),
     // but a log line that says what actually happened.
     const [, message] = warn.mock.calls[0] as [unknown, string];
     expect(message).toMatch(/answered .* with an error/);
     expect(message).not.toMatch(/unreachable/);
+  });
+
+  it("hands the refusing status to the session view, so it does not say 'unreachable'", async () => {
+    liveStatus.mockRejectedValue(new HostRequestError("mac", 403, "revoked"));
+    const { withLiveStatus } = await import("../../src/services/session-live-info.js");
+    const view = await withLiveStatus(
+      { ...app, config: {}, browser: undefined } as unknown as FastifyInstance,
+      { id: 7, projectId: 1, status: "active", env: null } as never,
+      30_000,
+      "mac",
+    );
+    expect(view.sessionStatus).toBe("suspended");
+    expect(view.sessionStatusDetail).toBe("host rejected the request (HTTP 403)");
   });
 });

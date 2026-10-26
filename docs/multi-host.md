@@ -830,6 +830,12 @@ When a host does not answer, the sessions on it are reported as
 - **Not idle.** The idle fallback would be indistinguishable from a session
   that is genuinely idle and alive — the silence of a sleeping laptop and
   the silence of a finished turn look the same otherwise.
+- **Down is not the same as refusing.** A host that _answered_ with an error —
+  its rate limit (`HTTP 429`), a stale or revoked agent token (`401`/`403`) —
+  is up, so the detail reads "host rejected the request (HTTP 429)" instead of
+  "host unreachable". The status is still `suspended` (nothing about the
+  session could be read), and it clears on the first refresh after the host
+  answers again.
 - **Not an alert.** A suspended session is `dormant`, so it does not ring
   the tab, badge the favicon, or fire a desktop notification. A laptop that
   fell asleep is not an event.

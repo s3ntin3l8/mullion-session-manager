@@ -22,6 +22,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import net from "node:net";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { EventEmitter } from "node:events";
 import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
@@ -1082,6 +1084,58 @@ describe("sessions route", () => {
       expect(session.resolvedHostId).toBe(hostId);
 
       await app.close();
+    });
+
+    it("says a host that ANSWERED with an error rejected the request, not that it is unreachable (issue #2010)", async () => {
+      // One host that is up and refuses (its INTERNAL_RATE_LIMIT answers 429)
+      // and one that is down, in the SAME app: each row must be told apart.
+      const refusing = http.createServer((_req, res) => {
+        res.statusCode = 429;
+        res.end("Too Many Requests");
+      });
+      await new Promise<void>((resolve) => refusing.listen(0, "127.0.0.1", resolve));
+      const { port } = refusing.address() as AddressInfo;
+      const app = await buildApp();
+      try {
+        const projectId = await createProject(app);
+        const addHost = async (name: string, baseUrl: string) => {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/hosts",
+            payload: { name, baseUrl, token: "t" },
+          });
+          expect(res.statusCode).toBe(201);
+          return res.json().id as string;
+        };
+        const refusingHostId = await addHost("rate-limited", `http://127.0.0.1:${port}`);
+        const downHostId = await addHost("sleepy-laptop", "http://127.0.0.1:1");
+        const insert = (hostId: string) =>
+          app.db
+            .insert(sessions)
+            .values({ projectId, command: "bash", status: "active", hostId })
+            .returning()
+            .get();
+        const refusedRow = insert(refusingHostId);
+        const downRow = insert(downHostId);
+
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        const byId = new Map<number, { sessionStatus: string; sessionStatusDetail: string }>(
+          list.json().map((s: { id: number }) => [s.id, s]),
+        );
+        expect(byId.get(refusedRow.id)?.sessionStatus).toBe("suspended");
+        expect(byId.get(refusedRow.id)?.sessionStatusDetail).toBe(
+          "host rejected the request (HTTP 429)",
+        );
+        expect(byId.get(downRow.id)?.sessionStatusDetail).toBe(
+          "host unreachable — may still be running",
+        );
+      } finally {
+        await app.close();
+        await new Promise((resolve) => refusing.close(resolve));
+      }
     });
 
     it("does NOT suspend a LOCAL session because ANOTHER host is unreachable", async () => {

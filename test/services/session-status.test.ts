@@ -85,6 +85,32 @@ describe("deriveSessionStatus", () => {
       });
     });
 
+    it("says the host rejected the request, not that it is unreachable, when it answered with an error (issue #2010)", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        hostRefusedStatus: 429,
+        info: BASE,
+      });
+      // Same status and severity — nothing about the session was observed —
+      // but a host that is up and refusing must not be called unreachable.
+      expect(derived).toEqual({
+        status: "suspended",
+        severity: "dormant",
+        detail: "host rejected the request (HTTP 429)",
+        attentionRequired: false,
+      });
+    });
+
+    it("ignores a refused status on a reachable host", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostRefusedStatus: 429,
+        info: BASE,
+      });
+      expect(derived.status).not.toBe("suspended");
+    });
+
     it("is NOT 'exited' — the work may still be running on that machine", () => {
       const derived = deriveSessionStatus({
         dbStatus: "active",

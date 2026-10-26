@@ -159,6 +159,14 @@ export interface DeriveSessionStatusInput {
    * exists.
    */
   hostReachable?: boolean;
+  /**
+   * Issue #2010 — set (to the HTTP status) when the host ANSWERED with an
+   * error rather than not answering: its rate limit (429), a stale or
+   * revoked agent token (401/403). Only read when `hostReachable === false`;
+   * the session is still `suspended` (nothing about it could be observed),
+   * but the detail must not say the host is unreachable when it is up.
+   */
+  hostRefusedStatus?: number;
   info: Pick<
     SessionInfo,
     | "activity"
@@ -236,6 +244,7 @@ export function defaultDeriveStatusInfo(
 export function deriveSessionStatus({
   dbStatus,
   hostReachable,
+  hostRefusedStatus,
   info,
 }: DeriveSessionStatusInput): DerivedSessionStatus {
   // --- Liveness axis wins outright: dbStatus is the DB row's own recorded
@@ -283,7 +292,12 @@ export function deriveSessionStatus({
   // machine. The backend cannot tell a sleeping host from an unreachable
   // one, so the detail says what is actually knowable.
   if (hostReachable === false) {
-    return make("suspended", "host unreachable — may still be running");
+    return make(
+      "suspended",
+      hostRefusedStatus === undefined
+        ? "host unreachable — may still be running"
+        : `host rejected the request (HTTP ${hostRefusedStatus})`,
+    );
   }
 
   // --- Agent-activity axis, in precedence order. ---
