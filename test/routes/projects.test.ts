@@ -3201,6 +3201,173 @@ describe("projects route", () => {
       });
     });
 
+    describe("on a remote-host project (issue #1969)", () => {
+      async function withAgent(
+        handler: (url: string) => { status: number; body: unknown },
+        run: (ctx: {
+          app: Awaited<ReturnType<typeof makeApp>>;
+          id: number;
+          seen: string[];
+        }) => Promise<void>,
+      ) {
+        vi.unstubAllGlobals();
+        const { createServer } = await import("node:http");
+        const seen: string[] = [];
+        const server = createServer((req, res) => {
+          if ((req.url ?? "").startsWith("/internal/git-")) seen.push(req.url ?? "");
+          const { status, body } = handler(req.url ?? "");
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(body));
+        });
+        await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+        const port = (server.address() as { port: number }).port;
+        const app = await makeApp();
+        try {
+          const host = await app.inject({
+            method: "POST",
+            url: "/api/hosts",
+            payload: {
+              name: `history-host-${port}`,
+              baseUrl: `http://127.0.0.1:${port}`,
+              token: "t",
+            },
+          });
+          const project = await app.inject({
+            method: "POST",
+            url: "/api/projects",
+            payload: { name: "remote-history", cwd: "/x", hostId: host.json().id },
+          });
+          await run({ app, id: project.json().id as number, seen });
+        } finally {
+          server.close();
+        }
+      }
+
+      const sha = "a".repeat(40);
+      const commit = { sha, parents: [], author: "T", time: 1, subject: "s", refs: [] };
+
+      it("proxies git-log, git-commit and git-commit/file to the host agent", async () => {
+        await withAgent(
+          (url) => {
+            if (url.startsWith("/internal/git-log"))
+              return { status: 200, body: { commits: [commit] } };
+            if (url.startsWith("/internal/git-commit-file"))
+              return { status: 200, body: { patch: "+x" } };
+            return {
+              status: 200,
+              body: { detail: { ...commit, email: "t@e", message: "m", files: [] } },
+            };
+          },
+          async ({ app, id, seen }) => {
+            const log = await app.inject({
+              method: "GET",
+              url: `/api/projects/${id}/git-log?limit=5&scope=head&cwd=${encodeURIComponent("/x/wt")}`,
+            });
+            expect(log.statusCode).toBe(200);
+            expect(log.json().commits).toEqual([commit]);
+            expect(seen[0]).toContain("scope=head");
+            expect(seen[0]).toContain("limit=5");
+            expect(seen[0]).toContain("worktree=%2Fx%2Fwt");
+
+            const detail = await app.inject({
+              method: "GET",
+              url: `/api/projects/${id}/git-commit/${sha}`,
+            });
+            expect(detail.statusCode).toBe(200);
+            expect(detail.json().message).toBe("m");
+            expect(seen[1]).not.toContain("worktree=");
+
+            const file = await app.inject({
+              method: "GET",
+              url: `/api/projects/${id}/git-commit/${sha}/file?path=a.txt`,
+            });
+            expect(file.json()).toEqual({ patch: "+x" });
+          },
+        );
+      });
+
+      it("204s when the log is empty and 404s a missing commit or diff", async () => {
+        await withAgent(
+          (url) =>
+            url.startsWith("/internal/git-log")
+              ? { status: 200, body: { commits: null } }
+              : url.startsWith("/internal/git-commit-file")
+                ? { status: 200, body: { patch: null } }
+                : { status: 200, body: { detail: null } },
+          async ({ app, id }) => {
+            expect(
+              (await app.inject({ method: "GET", url: `/api/projects/${id}/git-log` })).statusCode,
+            ).toBe(204);
+            expect(
+              (await app.inject({ method: "GET", url: `/api/projects/${id}/git-commit/${sha}` }))
+                .statusCode,
+            ).toBe(404);
+            expect(
+              (
+                await app.inject({
+                  method: "GET",
+                  url: `/api/projects/${id}/git-commit/${sha}/file?path=a.txt`,
+                })
+              ).statusCode,
+            ).toBe(404);
+          },
+        );
+      });
+
+      it("400s a worktree the agent refuses", async () => {
+        await withAgent(
+          (url) =>
+            url.startsWith("/internal/git-log")
+              ? { status: 200, body: { commits: null, forbidden: true } }
+              : { status: 200, body: { detail: null, forbidden: true, patch: null } },
+          async ({ app, id }) => {
+            const q = `cwd=${encodeURIComponent("/etc")}`;
+            for (const url of [
+              `/api/projects/${id}/git-log?${q}`,
+              `/api/projects/${id}/git-commit/${sha}?${q}`,
+              `/api/projects/${id}/git-commit/${sha}/file?path=a.txt&${q}`,
+            ]) {
+              expect((await app.inject({ method: "GET", url })).statusCode).toBe(400);
+            }
+          },
+        );
+      });
+
+      it("204s for an agent that predates the routes", async () => {
+        await withAgent(
+          () => ({ status: 404, body: { message: "no such route" } }),
+          async ({ app, id }) => {
+            expect(
+              (await app.inject({ method: "GET", url: `/api/projects/${id}/git-log` })).statusCode,
+            ).toBe(204);
+          },
+        );
+      });
+
+      it("503s when the host is unreachable", async () => {
+        vi.unstubAllGlobals();
+        const app = await makeApp();
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "history-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-history-down", cwd: "/x", hostId: host.json().id },
+        });
+        const id = project.json().id;
+        for (const url of [
+          `/api/projects/${id}/git-log`,
+          `/api/projects/${id}/git-commit/${sha}`,
+          `/api/projects/${id}/git-commit/${sha}/file?path=a.txt`,
+        ]) {
+          expect((await app.inject({ method: "GET", url })).statusCode).toBe(503);
+        }
+      });
+    });
+
     it("503s for a project on an unreachable remote host", async () => {
       // Unlike every other test in this block, this needs a real (failing)
       // network connection to 127.0.0.1:1, not the api.github.com fetch

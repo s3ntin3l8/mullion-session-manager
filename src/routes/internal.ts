@@ -47,6 +47,13 @@ import { readGitBranch } from "../services/git-branch.js";
 import { getGitStatus, getGitStatusFailure, isGitRepo } from "../services/git-status.js";
 import { getDiffStats, getDefaultBaseRef, getFileDiff } from "../services/git-diff.js";
 import {
+  getCommitDetail,
+  getCommitFileDiff,
+  getCommitLog,
+  isSafeRepoPath,
+  isValidSha,
+} from "../services/git-log.js";
+import {
   listBranches,
   listRemoteBranches,
   listWorktrees,
@@ -1241,6 +1248,74 @@ export async function internalRoutes(app: FastifyInstance) {
       const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
       const patch = await getFileDiff(resolvedCwd, resolvedPath, effectiveBase);
       return { patch };
+    },
+  );
+
+  // History for the right sidebar's Git view on a remote-hosted project
+  // (issue #1969) — git-log.ts's `git log`/`git show` shell-outs have to run
+  // on *this* agent's own filesystem. `cwd` is the project root; the optional
+  // `worktree` scopes the query to one of its worktrees and is accepted only
+  // if `git worktree list` reports it, so it can never point git at an
+  // arbitrary directory. A rejected worktree answers `{ forbidden: true }`
+  // (200) so the caller can tell it from "host unreachable".
+  async function resolveHistoryCwd(
+    root: string,
+    worktree: string | undefined,
+  ): Promise<string | null> {
+    if (worktree === undefined || worktree === root) return root;
+    const worktrees = await listWorktrees(root);
+    return worktrees?.find((w) => w.path === worktree)?.path ?? null;
+  }
+
+  app.get<{
+    Querystring: { cwd?: string; worktree?: string; skip?: string; limit?: string; scope?: string };
+  }>("/internal/git-log", INTERNAL_RATE_LIMIT, async (request, reply) => {
+    const { cwd, worktree, scope } = request.query;
+    if (!cwd) return reply.badRequest("cwd query param is required");
+    const root = requireWithinRoots(app, reply, cwd, "cwd");
+    if (root === null) return;
+    const skip = request.query.skip === undefined ? 0 : Number(request.query.skip);
+    const limit = request.query.limit === undefined ? 100 : Number(request.query.limit);
+    if (!Number.isInteger(skip) || skip < 0 || !Number.isInteger(limit) || limit < 1) {
+      return reply.badRequest("skip and limit must be non-negative integers");
+    }
+    if (scope !== undefined && scope !== "all" && scope !== "head") {
+      return reply.badRequest("scope must be all or head");
+    }
+    const target = await resolveHistoryCwd(root, worktree);
+    if (target === null) return { commits: null, forbidden: true };
+    return { commits: await getCommitLog(target, { skip, limit, all: scope !== "head" }) };
+  });
+
+  app.get<{ Querystring: { cwd?: string; worktree?: string; sha?: string } }>(
+    "/internal/git-commit",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd, worktree, sha } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      if (!sha || !isValidSha(sha)) return reply.badRequest("Invalid commit id");
+      const root = requireWithinRoots(app, reply, cwd, "cwd");
+      if (root === null) return;
+      const target = await resolveHistoryCwd(root, worktree);
+      if (target === null) return { detail: null, forbidden: true };
+      return { detail: await getCommitDetail(target, sha) };
+    },
+  );
+
+  app.get<{ Querystring: { cwd?: string; worktree?: string; sha?: string; path?: string } }>(
+    "/internal/git-commit-file",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const { cwd, worktree, sha, path: file } = request.query;
+      if (!cwd) return reply.badRequest("cwd query param is required");
+      if (!sha || !isValidSha(sha) || !file || !isSafeRepoPath(file)) {
+        return reply.badRequest("Invalid commit id or path");
+      }
+      const root = requireWithinRoots(app, reply, cwd, "cwd");
+      if (root === null) return;
+      const target = await resolveHistoryCwd(root, worktree);
+      if (target === null) return { patch: null, forbidden: true };
+      return { patch: await getCommitFileDiff(target, sha, file) };
     },
   );
 

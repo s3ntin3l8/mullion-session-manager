@@ -18,6 +18,7 @@ import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
 import { pushBranch, type PushResult } from "./git-push.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { getFileDiff } from "./git-diff.js";
+import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import {
@@ -269,4 +270,54 @@ export async function resolveRepoRef(
 ): Promise<GitHubRepoRef | null> {
   const result = await resolveRepoRefResult(app, project);
   return result.ok ? result.value : null;
+}
+
+/** What a remote history read hands back: the value, or `forbidden` when the
+ * agent refused the requested worktree (it isn't one of the project's). */
+export type HostHistoryValue<T> = { forbidden: false; value: T } | { forbidden: true };
+
+/**
+ * Remote counterparts of git-log.ts's three readers (issue #1969), for a
+ * project whose clone lives on another host. Callers dispatch local reads
+ * themselves — the route has already validated the worktree against
+ * `listWorktrees` there — so these are remote-only: the agent re-validates
+ * `worktree` against its own `git worktree list`.
+ */
+export function resolveHostGitLog(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
+): Promise<HostGitResult<HostHistoryValue<CommitLogEntry[] | null>>> {
+  return viaRemote(app, hostId, async (client) => {
+    const r = await client.resolveGitLog(cwd, opts);
+    return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.commits };
+  });
+}
+
+export function resolveHostGitCommit(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  sha: string,
+  worktree?: string,
+): Promise<HostGitResult<HostHistoryValue<CommitDetail | null>>> {
+  return viaRemote(app, hostId, async (client) => {
+    const r = await client.resolveGitCommit(cwd, sha, worktree);
+    return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.detail };
+  });
+}
+
+export function resolveHostGitCommitFile(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  sha: string,
+  filePath: string,
+  worktree?: string,
+): Promise<HostGitResult<HostHistoryValue<string | null>>> {
+  return viaRemote(app, hostId, async (client) => {
+    const r = await client.resolveGitCommitFile(cwd, sha, filePath, worktree);
+    return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.patch };
+  });
 }
