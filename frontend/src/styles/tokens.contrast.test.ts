@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import css from "./tokens.css?raw";
+
+// import.meta.glob rather than node:fs: tsconfig.app.json is a browser-only
+// type universe (same pattern as primitives.a11y.test.tsx).
+const sources = import.meta.glob("./tokens.css", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+}) as Record<string, string>;
+const css = sources["./tokens.css"];
 
 // Reads tokens.css itself, so a token edit that drops a status pairing below
 // WCAG AA fails here rather than shipping as grey-on-grey.
