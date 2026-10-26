@@ -27,7 +27,7 @@ export function TaskChip({ task, locked, onOpen }: TaskChipProps) {
       tone={taskTone(task.status)}
       title={
         locked
-          ? `Owned by task #${task.id} — can't be deleted here`
+          ? `Owned by task #${task.id} — can't be deleted here; open task`
           : `Task #${task.id} — open task`
       }
       onClick={() => open(task.id)}

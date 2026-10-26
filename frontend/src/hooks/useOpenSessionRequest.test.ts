@@ -65,6 +65,37 @@ describe("useOpenSessionRequest", () => {
     expect(markSessionRead).not.toHaveBeenCalled();
   });
 
+  // The store's nonce restarts at 1 after a clear (store/slices/ui.ts), so a
+  // second request must not be mistaken for the one just resolved.
+  it("opens a second request that reuses the cleared nonce", () => {
+    vi.useFakeTimers();
+    openSessionRequest = { sessionId: 7, nonce: 1 };
+    const onOpenSession = vi.fn();
+    const sessions = [makeSession({ id: 7 }), makeSession({ id: 8 })];
+    const { rerender } = renderHook(() =>
+      useOpenSessionRequest({
+        dockviewApi: {} as DockviewApi,
+        activeWorkspaceId: 1,
+        sessionsLoaded: true,
+        sessions,
+        onOpenSession,
+        restoringRef: { current: false },
+        restoredWorkspaceIdRef: { current: 1 },
+      }),
+    );
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(openSessionRequest).toBeNull();
+    rerender();
+    openSessionRequest = { sessionId: 8, nonce: 1 };
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(onOpenSession.mock.calls.map(([s]) => s.id)).toEqual([7, 8]);
+  });
+
   it("does nothing until dockviewApi, workspace-restore, and sessionsLoaded all gate open", () => {
     vi.useFakeTimers();
     openSessionRequest = { sessionId: 7, nonce: 1 };

@@ -74,6 +74,27 @@ describe("useOpenTaskRequest", () => {
     expect(refreshTasks).not.toHaveBeenCalled();
   });
 
+  // The store's nonce restarts at 1 after a clear: a second click must not be
+  // mistaken for the request just resolved.
+  it("opens a second request that reuses the cleared nonce", () => {
+    vi.useFakeTimers();
+    tasks = [makeTask({ id: 5 }), makeTask({ id: 6 })];
+    openTaskRequest = { taskId: 5, nonce: 1 };
+    const onOpenTask = vi.fn();
+    const { rerender } = renderHook(() => useOpenTaskRequest({ ...baseProps, onOpenTask }));
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(openTaskRequest).toBeNull();
+    rerender();
+    openTaskRequest = { taskId: 6, nonce: 1 };
+    rerender();
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(onOpenTask.mock.calls.map(([t]) => (t as Task).id)).toEqual([5, 6]);
+  });
+
   it("waits for dockview and the workspace restore", () => {
     vi.useFakeTimers();
     tasks = [makeTask({ id: 5 })];
