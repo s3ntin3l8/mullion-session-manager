@@ -23,11 +23,11 @@
         --y: #d7b06a;
         --p: #b884db;
         --o: #e0965a;
-        --accent-solid: #0e9f6e;
+        --accent-solid: #0e9f6e; /* base; white text on it is 3.39:1 — known debt, B1 darkens button fill */
         --ring: #12b981;
-        --border: #3b3b41;
+        --border: #3b3b41; /* NEW value (tokens.css: #2c2c30) */
         --border-soft: #2b2b30; /* NEW: stronger (was #2c2c30 / #232326, ~1.1:1) */
-        --surface: #1e1e21;
+        --surface: #1e1e21; /* NEW token (does not exist in tokens.css) */
         --surface-hover: #26262a; /* NEW */
         --accent: #34d399; /* NEW: defined (was referenced but undefined) */
         --lane-1: #5c9bf5;
@@ -56,9 +56,9 @@
         --o: #bc5215;
         --accent-solid: #0b6e4b;
         --ring: #0b6e4b;
-        --border: #c9c9c4;
+        --border: #c9c9c4; /* NEW value (tokens.css: #e2e2df) */
         --border-soft: #dcdcd8;
-        --surface: #ffffff;
+        --surface: #ffffff; /* NEW token (does not exist in tokens.css) */
         --surface-hover: #f0f0ed;
         --accent: #0b6e4b;
         --lane-1: #0969da;
@@ -82,10 +82,17 @@
       }
       .t-dark {
         --tint: 16%;
+        --status-danger-fg: #ff7b7e;
         --tint-border: 42%;
       }
       .t-light {
-        --tint: 11%;
+        --tint: 7%;
+        --status-success-fg: #0f5a26;
+        --status-danger-fg: #a40e26;
+        --status-warn-fg: #6b4400;
+        --status-info-fg: #0550ae;
+        --status-merged-fg: #5a32a8;
+        --status-neutral-fg: #3d3d3d;
         --tint-border: 38%;
       }
       .t-dark,
@@ -329,6 +336,9 @@
         color: var(--muted);
       }
       .sec-h .name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
         font-size: 11px;
         font-weight: 650;
         letter-spacing: 0.06em;
@@ -336,6 +346,7 @@
         color: var(--fg);
       }
       .count {
+        flex: none;
         font-size: 11px;
         font-weight: 600;
         padding: 0 6px;
@@ -349,6 +360,7 @@
         flex: 1;
       }
       .link {
+        flex: none;
         background: none;
         border: none;
         color: var(--accent);
@@ -1195,15 +1207,22 @@
       const chip = (tone, txt, o = {}) =>
         `<span class="chip ${tone}${o.mono ? " mono" : ""}"${o.title ? ` title="${o.title}"` : ""}>${o.icon ? I(o.icon, 11) : ""}${o.short !== undefined ? `<span class="full">${txt}</span><span class="short">${o.short}</span>` : txt}</span>`;
       const ibtn = (n, label, extra = "") =>
-        `<span class="ibtn ${extra}" title="${label}" aria-label="${label}">${I(n)}</span>`;
+        `<span class="ibtn ${extra}" role="button" tabindex="0" title="${label}" aria-label="${label}">${I(n)}</span>`;
       const ViewHeader = (title, sub, actions, ext) =>
         `<div class="vh"><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext || "Open on GitHub", "ext")}</div></div>`;
       const DetailHeader = (title, sub, actions, ext) =>
-        `<div class="vh"><span class="ibtn" aria-label="Back">${I("back")}</span><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext, "ext")}</div></div>`;
+        `<div class="vh"><span class="ibtn" role="button" tabindex="0" title="Back" aria-label="Back">${I("back")}</span><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext, "ext")}</div></div>`;
       const Sec = (name, count, body, o = {}) =>
         `<div class="sec"><div class="sec-h"><span class="chev">${I(o.closed ? "chevr" : "chevd", 12)}</span><span class="name">${name}</span>${count != null ? `<span class="count">${count}</span>` : ""}<span class="sp"></span>${o.action || ""}</div>${o.closed ? "" : body}</div>`;
       const Row = (lead, name, meta, trail, o = {}) =>
-        `<div class="row${o.sel ? " sel" : ""}"><span class="lead">${lead}</span><div class="body"><div class="t"><span class="name">${name}</span></div>${meta ? `<div class="meta">${meta}</div>` : ""}${o.extra ? `<div class="extra">${o.extra}</div>` : ""}</div><div class="trail">${o.hover ? `<span class="hover-actions">${o.hover}</span>` : ""}${trail || ""}</div></div>`;
+        `<div class="row${o.sel ? " sel" : ""}"><span class="lead">${lead}</span><div class="body"><div class="t"><span class="name" title="${String(
+          name,
+        )
+          .replace(/<[^>]*>/g, "")
+          .replace(
+            /"/g,
+            "&quot;",
+          )}">${name}</span></div>${meta ? `<div class="meta">${meta}</div>` : ""}${o.extra ? `<div class="extra">${o.extra}</div>` : ""}</div><div class="trail">${o.hover ? `<span class="hover-actions">${o.hover}</span>` : ""}${trail || ""}</div></div>`;
       const dot = (t) => `<span class="dotc ${t}"></span>`;
       const tone = (t, n, s) => `<span class="tone-${t}">${I(n, s)}</span>`;
 
@@ -1545,17 +1564,17 @@
   <div class="search">${I("search", 13)}<span>Search issues…</span></div>
   <div class="btn-row" style="padding-top:0"><span class="chip neutral">Sort: Updated ▾</span><span class="chip neutral">Unassigned</span><span class="chip info">label: bug ×</span></div>
   <div class="scroll">
-  ${issueRow("open", "Git/GitHub sidebar overhaul (epic)", 1965, "bjoern", "1h", lbl("var(--g)", "enhancement") + lbl("var(--b)", "frontend"), 11, pills(spill("sidebar audit", "working", { agent: "claude" })))}
-  ${issueRow("open", "fix: 40x10 server minimum terminal grid shrinks font on landscape phones", 1388, "ansible", "3w", lbl("var(--r)", "bug"), 4, pills(tchip(471, "in progress"), `<span class="chip info" title="Triage run finished">${I("check", 10)}<span class="full">triaged</span><span class="short">triaged</span></span>`))}
-  ${issueRow("open", "feat(github): cached client data layer with prefetch (A5)", 1970, "bjoern", "1h", lbl("var(--g)", "enhancement") + lbl("var(--b)", "frontend"), 0, pills(`<span class="chip neutral" title="Triage requested">${I("clock", 10)}<span class="full">triage running</span><span class="short">triage…</span></span>`))}
-  ${issueRow("done", "chore: bump dockview", 1830, "bjoern", "2d", lbl("var(--muted)", "dependencies"), 2, pills(tchip(466, "done")))}
+  ${issueRow("open", "Git/GitHub sidebar overhaul (epic)", 1965, "bjoern", "1h", lbl("var(--status-success-fg)", "enhancement") + lbl("var(--status-info-fg)", "frontend"), 11, pills(spill("sidebar audit", "working", { agent: "claude" })))}
+  ${issueRow("open", "fix: 40x10 server minimum terminal grid shrinks font on landscape phones", 1388, "ansible", "3w", lbl("var(--status-danger-fg)", "bug"), 4, pills(tchip(471, "in progress"), `<span class="chip info" title="Triage run finished">${I("check", 10)}<span class="full">triaged</span><span class="short">triaged</span></span>`))}
+  ${issueRow("open", "feat(github): cached client data layer with prefetch (A5)", 1970, "bjoern", "1h", lbl("var(--status-success-fg)", "enhancement") + lbl("var(--status-info-fg)", "frontend"), 0, pills(`<span class="chip neutral" title="Triage requested">${I("clock", 10)}<span class="full">triage running</span><span class="short">triage…</span></span>`))}
+  ${issueRow("done", "chore: bump dockview", 1830, "bjoern", "2d", lbl("var(--status-neutral-fg)", "dependencies"), 2, pills(tchip(466, "done")))}
   <div style="padding:8px 10px"><button class="btn block">Load more</button></div></div>`;
 
       V.issue =
         () => `${DetailHeader("#1388 · 40x10 server minimum grid shrinks the font on landscape phones", "Open · bjoern · 3w ago", "", "Open issue #1388 on GitHub")}
   <div class="scroll">
   <div class="btn-row"><button class="btn primary">${I("sess", 12)} Open session</button><button class="btn" disabled style="opacity:.5">${I("task", 12)} Queued</button></div>
-  <div class="triad" style="padding:0 10px">${lbl("var(--r)", "bug")}</div>
+  <div class="triad" style="padding:0 10px">${lbl("var(--status-danger-fg)", "bug")}</div>
   <div class="card"><div class="ch">Mullion <span class="sp"></span><span class="why">linked</span></div><div class="cb">
     ${pills(spill("issue-1388 fix", "working", { agent: "claude" }))}
     <dl class="kv" style="margin-top:8px"><dt>Task</dt><dd>${tchip(471, "in progress")}</dd><dt>Branch</dt><dd class="mono">issue-1388-grid-min</dd><dt>Triage</dt><dd>${chip("info", "done · run #81", { icon: "check" })}</dd></dl></div></div>
@@ -1636,6 +1655,7 @@
           "Primitives and tokens: <code>ViewHeader</code>, <code>DetailHeader</code>, <code>SidebarSection</code>, <code>SidebarRow</code> (compact variant), <code>StatusChip</code>, <code>StatusTriad</code>, <code>IconButton</code>, <code>Button</code>, plus Mullion’s <code>SessionPills</code> and <code>TaskChip</code>.",
         ],
       ];
+      const VIEW_FNS = new Map(Object.entries(V));
       let cur = "source";
       const nav = document.getElementById("nav"),
         stage = document.getElementById("stage"),
@@ -1652,7 +1672,7 @@
             [260, 340]
               .map(
                 (w) =>
-                  `<div class="col"><h3>${th} · ${w}px${w === 260 ? " · compact" : ""}</h3><div class="frame w${w} t-${th}">${V[cur](w)}</div></div>`,
+                  `<div class="col"><h3>${th} · ${w}px${w === 260 ? " · compact" : ""}</h3><div class="frame w${w} t-${th}">${VIEW_FNS.get(cur)(w)}</div></div>`,
               )
               .join(""),
           )
@@ -1666,10 +1686,10 @@
           render();
         }
       });
-      if (location.hash.slice(1) && V[location.hash.slice(1)]) cur = location.hash.slice(1);
+      if (VIEW_FNS.has(location.hash.slice(1))) cur = location.hash.slice(1);
       window.addEventListener("hashchange", () => {
         const k = location.hash.slice(1);
-        if (V[k]) {
+        if (VIEW_FNS.has(k)) {
           cur = k;
           render();
         }
