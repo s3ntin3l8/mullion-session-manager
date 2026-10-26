@@ -558,8 +558,10 @@ each spawn site checks to pick the right resolver.
    default. A task's recorded worker model (`tasks.model`) never overrides
    the reviewer's resolution.
 3. `SmallModel: <value>` (opencode and claude-code) — the model used for
-   small/fast operations (e.g. title derivation in #761). Falls back to the
-   install-wide small model, then the CLI's own default, if unset.
+   small/fast operations (e.g. title derivation in #761). For claude-code it
+   must be a full model id — an alias like `haiku` is ignored (see above).
+   Falls back to the install-wide small model, then the CLI's own default, if
+   unset.
 
 opencode's `<provider>/<model>` format accepts **more than one slash**, e.g.
 `openrouter/anthropic/claude-sonnet-4-5` — the format check requires
