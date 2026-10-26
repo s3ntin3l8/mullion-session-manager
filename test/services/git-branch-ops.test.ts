@@ -20,17 +20,8 @@ function git(cwd: string, args: string[]): string {
 function commit(cwd: string, file: string, content: string, message: string): void {
   fs.writeFileSync(path.join(cwd, file), content);
   git(cwd, ["add", "-A"]);
-  git(cwd, [
-    "-c",
-    "user.name=t",
-    "-c",
-    "user.email=t@t",
-    "commit",
-    "-q",
-    "-m",
-    message,
-    "--no-verify",
-  ]);
+  // The identity comes from test/setup.ts's GIT_AUTHOR_*/GIT_COMMITTER_* env.
+  git(cwd, ["commit", "-q", "-m", message, "--no-verify"]);
 }
 
 const head = (cwd: string) => git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
