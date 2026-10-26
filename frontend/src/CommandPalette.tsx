@@ -5,7 +5,6 @@ import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
-  CheckIcon,
   ChevronDownIcon,
   CloseIcon,
   FolderIcon,
@@ -15,9 +14,11 @@ import {
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
+import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
+import { describeError } from "./lib/describeError.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
@@ -82,7 +83,7 @@ function shortenHome(path: string): string {
   return path.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~");
 }
 
-// One Integrations row — shared by the empty-query list, the "Project ›"
+// One command row — shared by the empty-query list, the "Project ›"
 // sub-list and search results, so they can't drift apart.
 function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }: CommandRowProps) {
   const Icon = command.icon;
@@ -168,6 +169,16 @@ interface CommandPaletteProps {
   // that entry. Project-independent (the task board is install-wide, not
   // per-project), so it's always shown, same as onOpenBlankBrowser below.
   onOpenTasks: () => void;
+  // Settings sections the rest of the UI already opens via openSettings.
+  // Optional so existing tests (and any caller that only embeds the
+  // launcher) don't have to thread them; the row is omitted without one.
+  onOpenDevices?: () => void;
+  onOpenHosts?: () => void;
+  // The settings modal itself (⌘,), not a single section.
+  onOpenSettings?: () => void;
+  // Pane menu's "View timeline" for the active session. Omitted from the
+  // list when there is no active session pane.
+  onOpenTimeline?: (session: Session) => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
@@ -215,6 +226,10 @@ export function CommandPalette({
   onOpenBrowser,
   onOpenIntegrationsSettings,
   onOpenTasks,
+  onOpenDevices,
+  onOpenHosts,
+  onOpenSettings,
+  onOpenTimeline,
   onOpenBlankBrowser,
   onToggleRightSidebar,
   onOpenBrowserUrl,
@@ -225,20 +240,23 @@ export function CommandPalette({
   // action-callers (used inside a handler and an effect below, never read
   // as a value) — see the useDashboardStore.getState() calls at their own
   // call sites instead of subscribing to them here.
-  const { projects, sessions, theme, settings, projectUrls, workspaces } = useDashboardStore(
-    useShallow((s) => ({
-      projects: s.projects,
-      sessions: s.sessions,
-      theme: s.theme,
-      settings: s.settings,
-      projectUrls: s.projectUrls,
-      // U2 — the Workspaces result group's match source (see
-      // matchingWorkspaces below); read here rather than via getState()
-      // since (unlike createSession/refreshProjectUrls) this one IS read
-      // reactively during render, same rule P1's own header comment states.
-      workspaces: s.workspaces,
-    })),
-  );
+  const { projects, sessions, theme, settings, projectUrls, workspaces, activePanelId } =
+    useDashboardStore(
+      useShallow((s) => ({
+        projects: s.projects,
+        sessions: s.sessions,
+        theme: s.theme,
+        settings: s.settings,
+        projectUrls: s.projectUrls,
+        // U2 — the Workspaces result group's match source (see
+        // matchingWorkspaces below); read here rather than via getState()
+        // since (unlike createSession/refreshProjectUrls) this one IS read
+        // reactively during render, same rule P1's own header comment states.
+        workspaces: s.workspaces,
+        // Which pane is up, so the timeline command can name that session.
+        activePanelId: s.activePanelId,
+      })),
+    );
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
     const stored = readNumber(STORAGE_KEYS.lastLaunchProjectId, 0);
@@ -362,10 +380,18 @@ export function CommandPalette({
   // time.
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
+  // The project drill-in and the "New workspace" name step. Declared up
+  // here so "New workspace" `.run()` can open the name step without a ref:
+  // the step's query reset needs setQuery, which does not exist until the
+  // commands (which include this opener) have been built.
+  const [subView, setSubView] = useState<"project" | "workspace-name" | null>(null);
+  const [subIndex, setSubIndex] = useState(0);
 
-  // The Integrations commands (paletteCommands.ts): the empty-query view lists
-  // the `top` ones and drills into the `project` ones; a typed query searches
-  // them all (useCommandSearch).
+  // The non-launcher commands (paletteCommands.ts): the empty-query view
+  // lists the `top` ones and drills into the `project` ones; a typed query
+  // searches them all (useCommandSearch).
+  const activeSession =
+    sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
     projectId: effectiveProjectId,
     projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
@@ -378,6 +404,7 @@ export function CommandPalette({
     // both, and a phone-tier window with a fine pointer is not a case where
     // the Dock is available (issue #1881).
     dockUnavailable: useDockUnavailableReason(),
+    activeSession,
     open: {
       github: onOpenGitHub,
       git: onOpenGit,
@@ -393,24 +420,32 @@ export function CommandPalette({
       integrationsSettings: onOpenIntegrationsSettings,
       blankBrowser: onOpenBlankBrowser,
       toggleRightSidebar: onToggleRightSidebar,
+      tasks: onOpenTasks,
+      devices: onOpenDevices,
+      hosts: onOpenHosts,
+      settings: onOpenSettings,
+      timeline: onOpenTimeline,
+      newWorkspace: () => {
+        setSubView("workspace-name");
+        setSubIndex(0);
+      },
     },
   });
   const topCommands = commands.filter((c) => c.placement === "top");
 
-  // The three parallel filter pipelines (Sessions / Workspaces / launcher
-  // "Matching commands") plus the combined-index keyboard nav across them —
-  // see useCommandSearch.ts for the full doc comment on the index math.
+  // The three parallel filter pipelines (Sessions / Workspaces / Launchers)
+  // plus the combined-index keyboard nav across them — see
+  // useCommandSearch.ts for the full doc comment on the index math.
   const {
     query,
     setQuery,
+    selectedIndex,
     setSelectedIndex,
     filtered,
     matchingSessions,
     matchingWorkspaces,
     matchingCommands,
     entries,
-    activeIndex,
-    activeEntry,
     groupOffset,
     commandOffset,
   } = useCommandSearch({
@@ -424,11 +459,28 @@ export function CommandPalette({
     commands,
   });
 
-  // "Project ›" drill-in. Same shape as the project picker above: while open
-  // it swaps the list and the placeholder and handles its own arrows/Enter/
-  // Escape. Entering and leaving clear the (shared) query.
-  const [subView, setSubView] = useState<"project" | null>(null);
-  const [subIndex, setSubIndex] = useState(0);
+  // Blank query: the Commands group is painted above Launchers, but
+  // `matchingCommands` stays empty until there is a query, so `entries`
+  // would otherwise be launchers only and arrows could not reach New
+  // workspace, Settings or Devices. Prepend the painted rows. Search
+  // ranking is unchanged — a typed query still uses `entries` as
+  // useCommandSearch built it (commands after launchers). The default-agent
+  // seed below adds the same lead, so Enter still launches that launcher.
+  const blankCommands = query.trim() === "" ? topCommands : [];
+  const navEntries: PaletteEntry[] =
+    blankCommands.length === 0
+      ? entries
+      : [
+          ...blankCommands.map((command): PaletteEntry => ({ type: "command", command })),
+          ...entries,
+        ];
+  const navIndex = navEntries.length === 0 ? -1 : Math.min(selectedIndex, navEntries.length - 1);
+  const navEntry = navEntries[navIndex];
+
+  // "Project ›" drill-in, and the name step for "New workspace". Same shape
+  // as the project picker above: while open it swaps the list and the
+  // placeholder and handles its own arrows/Enter/Escape. Entering and
+  // leaving clear the (shared) query.
   const subCommands = commands.filter(
     (c) =>
       c.placement === subView &&
@@ -438,7 +490,7 @@ export function CommandPalette({
   // Both hand focus back to the search input: a click on the drill-in row
   // leaves focus on that (about to unmount) button, and every arrow/Enter/
   // Escape handler lives on the input.
-  const enterSubView = (view: "project") => {
+  const enterSubView = (view: "project" | "workspace-name") => {
     setSubView(view);
     setSubIndex(0);
     setQuery("");
@@ -449,9 +501,53 @@ export function CommandPalette({
     setQuery("");
     inputRef.current?.focus();
   };
+  // create-then-switch, matching WorkspaceSwitcher's inline form. A failure
+  // leaves the name step up and reports through the same toast other
+  // workspace mutations use — closing would hide the name the user can fix.
+  // Enter is the only submit, and a held key repeats, so a second Enter
+  // before this settles would create a second workspace of the same name
+  // (audit finding 18, the Add host guard). The flag clears on both
+  // success and failure — success closes the palette, failure stays so the
+  // name can be edited and submitted again.
+  const creatingWorkspaceRef = useRef(false);
+  const submitNewWorkspace = (name: string) => {
+    if (creatingWorkspaceRef.current) return;
+    creatingWorkspaceRef.current = true;
+    void useDashboardStore
+      .getState()
+      .createWorkspace(name)
+      .then((workspace) => {
+        selectWorkspace(workspace.id);
+        closeAfterAction();
+      })
+      .catch((err: unknown) => {
+        console.debug("[CommandPalette] create workspace failed", err);
+        useDashboardStore
+          .getState()
+          .reportError("Could not create the workspace.", describeError(err));
+      })
+      .finally(() => {
+        creatingWorkspaceRef.current = false;
+      });
+  };
   const runCommand = (command: PaletteCommand) => {
+    // `.run()` is the behaviour, including opening the name step.
+    // `prompt` only keeps the palette open and clears the box so the
+    // name can be typed; the focus move is an event-handler concern.
     command.run();
+    if (command.prompt === "workspace-name") {
+      setQuery("");
+      inputRef.current?.focus();
+      return;
+    }
     closeAfterAction();
+  };
+  const activateCommand = (command: PaletteCommand) => {
+    if (command.drillIn) {
+      enterSubView(command.drillIn);
+      return;
+    }
+    runCommand(command);
   };
 
   const filteredProjects = useMemo(() => {
@@ -485,7 +581,7 @@ export function CommandPalette({
   // must stash whatever the user had already typed and closing (by any of
   // the four paths: toggle-off, Escape, Enter-select, row click) must put it
   // back. Without this, leftover picker-filter text (e.g. "beta") silently
-  // filters "Matching commands" down to nothing right after picking a
+  // filters the Launchers list down to nothing right after picking a
   // project — see PR #811 review.
   const savedQueryRef = useRef("");
 
@@ -534,10 +630,14 @@ export function CommandPalette({
         // occupying the front of the flattened `entries` list — resetting
         // to 0 there lands on whichever group is actually first, rather
         // than aiming this launcher-only `defaultIndex` at an unrelated
-        // flattened slot. The common case (project resolved before any
-        // typing) always has an empty query here, so those groups are empty
-        // and this is exactly the old plain-launcher-index behavior.
-        setSelectedIndex(query.trim() !== "" ? 0 : defaultIndex >= 0 ? defaultIndex : 0);
+        // flattened slot. On a blank query the Commands group leads the
+        // arrow list (it is painted above the launchers), so the seed adds
+        // that same lead — Enter still launches the default agent, and a
+        // list with no default agent still starts on the first launcher.
+        const commandLead = query.trim() === "" ? topCommands.length : 0;
+        setSelectedIndex(
+          query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
+        );
       })
       .catch(() => {
         if (ignore) return;
@@ -598,8 +698,7 @@ export function CommandPalette({
     value: string | null;
   } | null>(null);
 
-  const activeLauncherCommand =
-    activeEntry?.type === "launcher" ? activeEntry.launcher.command : null;
+  const activeLauncherCommand = navEntry?.type === "launcher" ? navEntry.launcher.command : null;
   const activeCli = activeLauncherCommand !== null ? commandModelCli(activeLauncherCommand) : null;
   // A command that already has its own --model (or codex's -m) flag keeps it
   // — offering a picker that the backend would then silently ignore
@@ -736,9 +835,11 @@ export function CommandPalette({
             placeholder={
               pickerOpen
                 ? "Filter projects…"
-                : subView
-                  ? `Project: ${target?.name ?? ""} › filter…`
-                  : "Launch a session or run a command…"
+                : subView === "workspace-name"
+                  ? "Workspace name…"
+                  : subView
+                    ? `Project: ${target?.name ?? ""} › filter…`
+                    : "Launch a session or run a command…"
             }
             aria-activedescendant={
               pickerOpen && filteredProjects.length > 0
@@ -775,6 +876,13 @@ export function CommandPalette({
                 } else if (e.key === "Backspace" && query === "") {
                   e.preventDefault();
                   exitSubView();
+                } else if (subView === "workspace-name") {
+                  // A name, not a list — arrows have nothing to move.
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const name = query.trim();
+                    if (name) submitNewWorkspace(name);
+                  }
                 } else if (e.key === "ArrowDown") {
                   e.preventDefault();
                   setSubIndex(Math.min(activeSubIndex + 1, subCommands.length - 1));
@@ -795,12 +903,12 @@ export function CommandPalette({
                 openProjectPicker();
               } else if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setSelectedIndex(Math.min(activeIndex + 1, entries.length - 1));
+                setSelectedIndex(Math.min(navIndex + 1, navEntries.length - 1));
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
-                setSelectedIndex(Math.max(activeIndex - 1, 0));
+                setSelectedIndex(Math.max(navIndex - 1, 0));
               } else if (e.key === "Enter") {
-                const picked = entries[activeIndex];
+                const picked = navEntries[navIndex];
                 if (!picked) return;
                 if (picked.type === "session") {
                   onOpenSession(picked.session);
@@ -809,7 +917,7 @@ export function CommandPalette({
                   selectWorkspace(picked.workspace.id);
                   closeAfterAction();
                 } else if (picked.type === "command") {
-                  runCommand(picked.command);
+                  activateCommand(picked.command);
                 } else {
                   launch(picked.launcher);
                 }
@@ -915,7 +1023,7 @@ export function CommandPalette({
         {!pickerOpen && effectiveProjectId !== null && launchersLoaded && (
           <div
             className={`cmd-palette-options-strip${
-              (activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent") ||
+              (navEntry?.type === "launcher" && navEntry.launcher.kind === "agent") ||
               showModelPicker
                 ? ""
                 : " collapsed"
@@ -924,13 +1032,11 @@ export function CommandPalette({
             <div
               style={{
                 visibility:
-                  activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent"
+                  navEntry?.type === "launcher" && navEntry.launcher.kind === "agent"
                     ? "visible"
                     : "hidden",
               }}
-              aria-hidden={
-                !(activeEntry?.type === "launcher" && activeEntry.launcher.kind === "agent")
-              }
+              aria-hidden={!(navEntry?.type === "launcher" && navEntry.launcher.kind === "agent")}
             >
               <label className="cmd-palette-worktree-toggle">
                 <input
@@ -1024,6 +1130,15 @@ export function CommandPalette({
               </button>
             ))}
           </div>
+        ) : subView === "workspace-name" ? (
+          <div className="cmux-scroll cmd-palette-list">
+            <div className="cmd-palette-group-label">
+              {query.trim() ? `Create ${query.trim()}` : "New workspace"}
+            </div>
+            <div style={{ padding: "12px 11px", fontSize: 12.5, color: "var(--muted)" }}>
+              Enter creates the workspace. Escape cancels.
+            </div>
+          </div>
         ) : subView ? (
           <div className="cmux-scroll cmd-palette-list" role="listbox">
             <div className="cmd-palette-group-label">
@@ -1047,38 +1162,19 @@ export function CommandPalette({
                 so they don't compete with actual command results. */}
             {query.trim() === "" && (
               <>
-                <div className="cmd-palette-group-label">Navigate</div>
-                <button
-                  className="cmd-row"
-                  onClick={() => {
-                    onOpenTasks();
-                    closeAfterAction();
-                  }}
-                >
-                  <span
-                    className="cmd-row-icon"
-                    style={{ background: "color-mix(in srgb, var(--fg) 8%, transparent)" }}
-                  >
-                    <CheckIcon size={13} style={{ color: "var(--muted)" }} />
-                  </span>
-                  <span className="cmd-row-body">
-                    <span className="cmd-row-title">Task board</span>
-                    <span className="cmd-row-subtitle">Every project's tasks, in one board</span>
-                  </span>
-                </button>
-                <div className="cmd-palette-group-label">Integrations</div>
-                {topCommands.map((command) => (
+                <div className="cmd-palette-group-label">Commands</div>
+                {blankCommands.map((command, i) => (
                   <CommandRow
                     key={command.id}
                     command={command}
-                    onClick={() =>
-                      command.drillIn ? enterSubView(command.drillIn) : runCommand(command)
-                    }
+                    selected={i === navIndex}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => activateCommand(command)}
                   />
                 ))}
               </>
             )}
-            {/* U2 — shown above "Matching commands" whenever there's at
+            {/* U2 — shown above the Launchers list whenever there's at
                 least one match: an existing session/workspace the user is
                 looking for should rank above starting something new with
                 the same name, since jumping to a running session is
@@ -1091,6 +1187,10 @@ export function CommandPalette({
               <>
                 <div className="cmd-palette-group-label">Sessions</div>
                 {matchingSessions.map((session, i) => {
+                  // `i` is already the absolute index — no `blankCommands`
+                  // lead. A blank query empties this group (useCommandSearch
+                  // returns [] when `query.trim() === ""`), so these rows
+                  // only render once that lead is empty.
                   const project = projects.find((p) => p.id === session.projectId);
                   const title = session.name || session.lastTitle || session.command;
                   const subtitleParts = [project?.name, session.liveBranch].filter(
@@ -1099,7 +1199,7 @@ export function CommandPalette({
                   return (
                     <button
                       key={`session-${session.id}`}
-                      className={`cmd-row${i === activeIndex ? " selected" : ""}`}
+                      className={`cmd-row${i === navIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(i)}
                       onClick={() => {
                         onOpenSession(session);
@@ -1121,7 +1221,7 @@ export function CommandPalette({
                           <span className="cmd-row-subtitle">{subtitleParts.join(" · ")}</span>
                         )}
                       </span>
-                      {i === activeIndex && <span className="kbd">↵</span>}
+                      {i === navIndex && <span className="kbd">↵</span>}
                     </button>
                   );
                 })}
@@ -1131,11 +1231,13 @@ export function CommandPalette({
               <>
                 <div className="cmd-palette-group-label">Workspaces</div>
                 {matchingWorkspaces.map((workspace, i) => {
+                  // Same blank-query invariant as sessions above: this group
+                  // is empty when `query.trim() === ""`, so no Commands lead.
                   const absoluteIndex = matchingSessions.length + i;
                   return (
                     <button
                       key={`workspace-${workspace.id}`}
-                      className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
+                      className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
                         selectWorkspace(workspace.id);
@@ -1151,25 +1253,28 @@ export function CommandPalette({
                       <span className="cmd-row-body">
                         <span className="cmd-row-title">{workspace.name}</span>
                       </span>
-                      {absoluteIndex === activeIndex && <span className="kbd">↵</span>}
+                      {absoluteIndex === navIndex && <span className="kbd">↵</span>}
                     </button>
                   );
                 })}
               </>
             )}
-            <div className="cmd-palette-group-label">Matching commands</div>
+            <div className="cmd-palette-group-label">Launchers</div>
             {filtered.length === 0 && matchingCommands.length === 0 && (
               <div style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}>
                 No matching launchers.
               </div>
             )}
             {filtered.map((launcher, i) => {
-              const absoluteIndex = groupOffset + i;
+              // Blank query prepends the Commands rows to the arrow list;
+              // a typed query does not (`blankCommands` is empty), so this
+              // is still `groupOffset + i`.
+              const absoluteIndex = blankCommands.length + groupOffset + i;
               const logo = resolveLauncherLogo(launcher, theme);
               return (
                 <button
                   key={launcher.id}
-                  className={`cmd-row${absoluteIndex === activeIndex ? " selected" : ""}`}
+                  className={`cmd-row${absoluteIndex === navIndex ? " selected" : ""}`}
                   onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                   onClick={() => launch(launcher)}
                 >
@@ -1213,13 +1318,13 @@ export function CommandPalette({
                         ⚠ skip perms
                       </span>
                     )}
-                  {absoluteIndex === activeIndex && <span className="kbd">↵</span>}
+                  {absoluteIndex === navIndex && <span className="kbd">↵</span>}
                 </button>
               );
             })}
             {matchingCommands.length > 0 && (
               <>
-                <div className="cmd-palette-group-label">Integrations</div>
+                <div className="cmd-palette-group-label">Commands</div>
                 {matchingCommands.map((command, i) => {
                   const absoluteIndex = commandOffset + i;
                   return (
@@ -1227,9 +1332,9 @@ export function CommandPalette({
                       key={command.id}
                       command={command}
                       showBreadcrumb
-                      selected={absoluteIndex === activeIndex}
+                      selected={absoluteIndex === navIndex}
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
-                      onClick={() => runCommand(command)}
+                      onClick={() => activateCommand(command)}
                     />
                   );
                 })}
@@ -1246,16 +1351,24 @@ export function CommandPalette({
             <span className="kbd">↵</span>
             {/* Reflects whichever entry is actually selected, not just the
                 launch-a-command case — "Launch in X" would be misleading
-                once the highlighted row is an existing session/workspace. */}
-            {pickerOpen
-              ? filteredProjects[activeProjectIndex]?.name
-                ? `Select ${filteredProjects[activeProjectIndex]?.name}`
-                : "Select project"
-              : activeEntry?.type === "session"
-                ? "Open session"
-                : activeEntry?.type === "workspace"
-                  ? "Switch workspace"
-                  : `Launch in ${target?.name ?? "…"}`}
+                once the highlighted row is a command, session, or workspace. */}
+            {subView === "workspace-name"
+              ? query.trim()
+                ? `Create ${query.trim()}`
+                : "Name the workspace"
+              : pickerOpen
+                ? filteredProjects[activeProjectIndex]?.name
+                  ? `Select ${filteredProjects[activeProjectIndex]?.name}`
+                  : "Select project"
+                : navEntry?.type === "session"
+                  ? "Open session"
+                  : navEntry?.type === "workspace"
+                    ? "Switch workspace"
+                    : navEntry?.type === "command"
+                      ? navEntry.command.drillIn
+                        ? `Open ${navEntry.command.title}`
+                        : `Run ${navEntry.command.title}`
+                      : `Launch in ${target?.name ?? "…"}`}
           </span>
           {pickerOpen && (
             <span className="cmd-palette-footer-item">

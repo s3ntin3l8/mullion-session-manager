@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // useCommandSearch.ts — the three parallel filter pipelines (Sessions /
-// Workspaces / launcher "Matching commands") and the combined-index keyboard
+// Workspaces / Launchers) and the combined-index keyboard
 // nav across them, extracted from CommandPalette.tsx (PR 29, Wave 5 of
 // .claude/plans/can-we-do-a-warm-cocke.md). CommandPalette.test.tsx's own
 // "Sessions/Workspaces search (U2)" describe already exercises this

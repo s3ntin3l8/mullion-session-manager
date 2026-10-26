@@ -5,6 +5,7 @@ import {
   type PaletteCommandContext,
 } from "./paletteCommands.js";
 import type { DockUnavailableReason } from "./lib/dockAvailability.js";
+import { makeSession } from "./test/fixtures.js";
 
 function ctx(over: Partial<PaletteCommandContext> = {}) {
   const open = {
@@ -21,6 +22,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     browserUrl: vi.fn(),
     integrationsSettings: vi.fn(),
     blankBrowser: vi.fn(),
+    newWorkspace: vi.fn(),
   };
   const context: PaletteCommandContext = {
     projectId: 5,
@@ -38,25 +40,26 @@ const titles = (placement: "top" | "project", c: ReturnType<typeof buildPaletteC
   c.filter((x) => x.placement === placement).map((x) => x.title);
 
 describe("buildPaletteCommands", () => {
-  it("lists the top-level entries and puts the setup entries under the Project drill-in", () => {
+  it("lists each placement in title order, with setup entries under the Project drill-in", () => {
     const commands = buildPaletteCommands(ctx().context);
 
     expect(titles("top", commands)).toEqual([
-      "GitHub",
       "Git",
-      "Project: mullion",
-      "Preview",
+      "GitHub",
       "Manage integrations…",
       "New preview tab",
+      "New workspace",
+      "Preview",
+      "Project: mullion",
     ]);
     expect(titles("project", commands)).toEqual([
       "Agent Rules",
-      "Mullion Briefing",
-      "Scaffold Mullion",
       "Dock",
-      "Skills",
       "Edit project files",
+      "Mullion Briefing",
       "Open file by path",
+      "Scaffold Mullion",
+      "Skills",
     ]);
     expect(commands.filter((c) => c.drillIn).map((c) => c.id)).toEqual(["project"]);
   });
@@ -115,7 +118,11 @@ describe("buildPaletteCommands", () => {
 
   it("offers only the project-independent entries when there is no project", () => {
     const commands = buildPaletteCommands(ctx({ projectId: null, projectName: null }).context);
-    expect(commands.map((c) => c.id)).toEqual(["integrations-settings", "blank-browser"]);
+    expect(commands.map((c) => c.id)).toEqual([
+      "integrations-settings",
+      "blank-browser",
+      "new-workspace",
+    ]);
   });
 
   it("offers Toggle right sidebar only when an opener is provided", () => {
@@ -143,6 +150,59 @@ describe("buildPaletteCommands", () => {
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
     const drill = buildPaletteCommands(ctx().context).find((c) => c.drillIn)!;
     expect(() => drill.run()).not.toThrow();
+  });
+
+  it("offers Devices, Hosts, Settings, the task board, and the active session's timeline only when wired", () => {
+    const { context, open } = ctx();
+    const bare = buildPaletteCommands(context);
+    for (const id of ["task-board", "devices", "hosts", "settings", "session-timeline"]) {
+      expect(bare.some((c) => c.id === id)).toBe(false);
+    }
+    const create = bare.find((c) => c.id === "new-workspace")!;
+    expect(create.prompt).toBe("workspace-name");
+    expect(create.placement).toBe("top");
+    create.run();
+    expect(open.newWorkspace).toHaveBeenCalledTimes(1);
+
+    const tasks = vi.fn();
+    const devices = vi.fn();
+    const hosts = vi.fn();
+    const settings = vi.fn();
+    const timeline = vi.fn();
+    const session = makeSession({ id: 9, projectId: 5, name: "hotfix" });
+    const wired = buildPaletteCommands({
+      ...context,
+      activeSession: session,
+      open: { ...context.open, tasks, devices, hosts, settings, timeline },
+    });
+    const byId = Object.fromEntries(wired.map((c) => [c.id, c]));
+
+    byId["task-board"].run();
+    byId["devices"].run();
+    byId["hosts"].run();
+    byId["settings"].run();
+    byId["session-timeline"].run();
+
+    expect(tasks).toHaveBeenCalledTimes(1);
+    expect(devices).toHaveBeenCalledTimes(1);
+    expect(hosts).toHaveBeenCalledTimes(1);
+    expect(settings).toHaveBeenCalledTimes(1);
+    expect(timeline).toHaveBeenCalledWith(session);
+    expect(byId["devices"].subtitle).toBe("Settings → Devices");
+    expect(byId["hosts"].subtitle).toBe("Settings → Hosts");
+    expect(byId["settings"].title).toBe("Settings");
+    expect(byId["session-timeline"].subtitle).toBe("hotfix");
+
+    const noSession = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, timeline },
+    });
+    expect(noSession.some((c) => c.id === "session-timeline")).toBe(false);
+
+    const top = titles("top", wired);
+    expect(top).toEqual(
+      [...top].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+    );
   });
 });
 
