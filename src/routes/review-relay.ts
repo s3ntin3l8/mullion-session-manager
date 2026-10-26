@@ -1132,10 +1132,10 @@ export function reviewReader(
     },
     /**
      * Is the head's content what the reviewed commit had? Same commit, or the
-     * same tree (a rewrite that changed nothing — while the reviewed commit is still
-     * one of the PR's commits; one that drops it hides its marker,
-     * s3ntin3l8/.github#136). An unreadable tree is not "the same". The workflow
-     * skips on the same test.
+     * same tree (a rewrite that changed nothing, including one that dropped the
+     * reviewed commit from the PR: its marker is found through the force-push
+     * history, s3ntin3l8/.github#136). An unreadable tree is not "the same". The
+     * workflow skips on the same test.
      */
     sameContent: async (baseSha, headSha) => {
       if (baseSha === headSha) return true;

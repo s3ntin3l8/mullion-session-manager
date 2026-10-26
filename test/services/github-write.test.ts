@@ -445,6 +445,28 @@ describe("github-write service", () => {
         expect(onError).toHaveBeenCalledWith(expect.stringContaining("gone"));
       });
 
+      it("treats an answer without a timeline (a token without access) as unreadable", async () => {
+        serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
+        const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+        fetchMock.mockImplementation(async (url: string) =>
+          String(url).includes("/graphql")
+            ? jsonResponse(200, { data: { repository: { pullRequest: { timelineItems: null } } } })
+            : inner(url),
+        );
+        const onError = vi.fn();
+        const markers = await listReviewMarkers(
+          "pr-tok",
+          "checks-tok",
+          "owner",
+          "repo",
+          9,
+          "Hermes review",
+          onError,
+        );
+        expect(markers.map((m) => m.oid)).toEqual(["head"]);
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining("force-push history"));
+      });
+
       it("falls back to the PR's current commits, and says so, when the force-push read fails", async () => {
         serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
         const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;

@@ -30,7 +30,6 @@ import {
   githubRateLimitRemainingMs,
   GitHubRateLimitError,
 } from "./github-fetch.js";
-import { graphql } from "./github-pr-reviews.js";
 import type { ReleaseDetectionResult, ReleasePullRequestStatus } from "../shared/types.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -965,13 +964,15 @@ interface ForcePushedHeadsData {
  * commit from the PR, but the ledger marker stays on it; REST's timeline only
  * names the commit AFTER a force-push, so this is GraphQL. A `beforeCommit`
  * GitHub has already collected comes back null and is skipped. `null` = the
- * read was not possible (rate limit, backoff, a token without access): the
- * caller degrades to the PR's current commits.
+ * read was not possible (rate limit, a failed or partial answer, a token without
+ * access): the caller degrades to the PR's current commits, which can make the
+ * relay's base differ from the shared workflow's for that dispatch (a lost
+ * dedup, never a wrong review).
  *
- * Reuses `graphql()`, so it also stands down while the poller is in GraphQL
- * backoff. That can make this read fail when the shared workflow's does not,
- * and the two bases then differ for that dispatch: a lost dedup, never a
- * wrong review.
+ * Deliberately NOT the poller's `graphql()` helper: that one arms an app-wide
+ * backoff on a 403/429 and shares a warning slot with the PR-list refresh, so a
+ * failure of this read would pause the UI. This one only reports through its
+ * result.
  */
 async function listForcePushedHeads(
   prToken: string,
@@ -980,11 +981,28 @@ async function listForcePushedHeads(
   prNumber: number,
 ): Promise<string[] | null> {
   validateGitHubRepoRef(owner, repo);
-  const data = await graphql<ForcePushedHeadsData>(prToken, FORCE_PUSHED_HEADS_QUERY, {
-    owner,
-    repo,
-    number: prNumber,
-  });
+  if (isGitHubRateLimited()) return null;
+  let data: ForcePushedHeadsData | undefined;
+  try {
+    const res = await fetch(`${GITHUB_API_BASE}/graphql`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${prToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+      },
+      body: JSON.stringify({
+        query: FORCE_PUSHED_HEADS_QUERY,
+        variables: { owner, repo, number: prNumber },
+      }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    data = ((await res.json()) as { data?: ForcePushedHeadsData }).data;
+  } catch {
+    return null;
+  }
   const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
   if (!nodes) return null;
   return nodes.flatMap((n) => (n?.beforeCommit?.oid ? [n.beforeCommit.oid] : []));

@@ -442,10 +442,11 @@ review`) asks about _that_ repository's PR with no flags. `--repo
   demonstrably reviewed — read from the ledger marker (the check run named by
   `reviewRelay.ledgerName`, default `Hermes review`), not from the
   review's own `commit_id`, which GitHub re-points at the head when the branch
-  is rewritten — so a rewrite that changes nothing is refused while the reviewed
-  commit is still one of the pull request's commits, and an "Update branch" merge
-  is reviewed. (A force-push or rebase that drops the reviewed commit hides its
-  marker, and the round reviews again: s3ntin3l8/.github#136.) A review is a
+  is rewritten — so a rewrite that changes nothing is refused, and an "Update
+  branch" merge is reviewed. The marker is searched on the pull request's newest
+  50 commits and on the heads it had before its last 20 force-pushes, so a rebase
+  or a recreated branch that dropped the reviewed commit is still recognised
+  (s3ntin3l8/.github#136). A review is a
   marker's own only if it was submitted while the run ran — between the marker's
   start and its close, and at most 90 minutes after the start, so a marker that
   was closed hours late does not claim a later, unrelated review. When the marker

@@ -299,9 +299,9 @@ export interface RelayTarget {
   /**
    * Does the head hold the same content as the reviewed commit (the same
    * commit, or the same tree)? A rewrite that changed nothing has nothing new to
-   * review (while the reviewed commit is still one of the PR's commits: a rewrite that
-   * drops it hides its marker, s3ntin3l8/.github#136); an "Update branch" merge does. The
-   * workflow skips on the same test. Without it only the same commit counts.
+   * review, even when it dropped the reviewed commit from the PR (its marker is found
+   * through the force-push history, s3ntin3l8/.github#136); an "Update branch" merge
+   * does. The workflow skips on the same test. Without it only the same commit counts.
    */
   sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
   /** Dispatching Mullion session, when the request came from an agent. */
