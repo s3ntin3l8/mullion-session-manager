@@ -4,8 +4,19 @@
 // in-process rather than only through a child process.
 import net from "node:net";
 import { spawn } from "node:child_process";
+import { timingSafeEqual } from "node:crypto";
+import { existsSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
-import { FRAME_DATA, FRAME_RESIZE, createDeframer, encodeExit, encodeFrame } from "./protocol.mjs";
+import { isPipePath } from "../cli/ipc-path.mjs";
+import {
+  FRAME_DATA,
+  FRAME_HELLO,
+  FRAME_RESIZE,
+  TOKEN_ENV,
+  createDeframer,
+  encodeExit,
+  encodeFrame,
+} from "./protocol.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -25,6 +36,9 @@ const EXIT_FLUSH_MS = 200;
  * next attach repaints the screen.
  */
 export const MAX_CLIENT_BACKLOG_BYTES = 8 * 1024 * 1024;
+
+/** How long a new client has to present the session token before it is dropped. */
+export const AUTH_TIMEOUT_MS = 5_000;
 
 /** Resolves true when something accepts a connection on `endpoint`. */
 export function isServing(endpoint) {
@@ -51,6 +65,16 @@ export async function createSession(endpoint, program, args, opts) {
     // dtach refuses an in-use socket the same way.
     log(`pty-host: ${endpoint} is already in use`);
     return 1;
+  }
+  // Not served: a unix socket file still at this path is stale (a master
+  // that was killed outright never closed it), and would make the new
+  // master's listen() fail. A named pipe leaves nothing behind.
+  if (!isPipePath(endpoint) && existsSync(endpoint)) {
+    try {
+      unlinkSync(endpoint);
+    } catch {
+      // The new master's own listen() will report it.
+    }
   }
   const master = spawn(process.execPath, [opts.entry, "--serve", endpoint, program, ...args], {
     detached: true,
@@ -79,26 +103,73 @@ export async function createSession(endpoint, program, args, opts) {
   return 1;
 }
 
+/** Whether `offered` is `token`, without leaking how much of it matched. */
+function tokenMatches(offered, token) {
+  const a = Buffer.from(offered);
+  const b = Buffer.from(token, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 /**
  * `--serve`: be the master. Listens FIRST, so an endpoint that is already
  * taken never starts the program; then runs `program` in a pseudo-terminal
- * and serves it to every client that attaches. Calls `onExit(code)` when the
- * master is done — 1 when it could not serve or start the program, 0 once
- * the program has exited and the clients have been told.
+ * and serves it to every client that attaches. Calls `onExit(code)` exactly
+ * once, when the master is done — 1 when it could not serve or start the
+ * program (or has no token), 0 once the program has exited and the clients
+ * have been told.
+ *
+ * **Every client must present the session token first** (a HELLO frame,
+ * protocol.mjs). Until it has, it receives nothing and its frames are not
+ * applied; a wrong token, any other first frame, or no HELLO within
+ * AUTH_TIMEOUT_MS closes the connection. The endpoint's OS access control is
+ * the first gate — on Windows a named pipe's DEFAULT access lets other local
+ * users connect (#2065) — and the token is the second, the same posture as
+ * the hook and control sockets' handshake tokens. The token is the session
+ * backend's (scope/windows.ts writes it where only this user can read it);
+ * it is removed from the program's environment, so nothing the session runs
+ * ever sees it.
  *
  * Returns `stop()`, which kills the program (its exit then ends the master).
  */
 export function serve(endpoint, program, args, opts) {
   const log = opts.log ?? ((line) => process.stderr.write(`${line}\n`));
+  let finished = false;
+  const finish = (code) => {
+    if (finished) return;
+    finished = true;
+    opts.onExit(code);
+  };
+  const token = opts.token;
+  if (typeof token !== "string" || token.length === 0) {
+    log(`pty-host: refusing to serve ${endpoint} without a session token (${TOKEN_ENV})`);
+    finish(1);
+    return { stop: () => {} };
+  }
+
+  /** Clients that have presented the token — the only ones that get output. */
   const clients = new Set();
   let term = null;
 
   const server = net.createServer((socket) => {
-    clients.add(socket);
-    const drop = () => clients.delete(socket);
+    let authed = false;
+    const authTimer = setTimeout(() => socket.destroy(), AUTH_TIMEOUT_MS);
+    const drop = () => {
+      clearTimeout(authTimer);
+      clients.delete(socket);
+    };
     socket.on("close", drop);
     socket.on("error", drop);
     const onChunk = createDeframer((type, payload) => {
+      if (!authed) {
+        if (type === FRAME_HELLO && tokenMatches(payload, token)) {
+          authed = true;
+          clearTimeout(authTimer);
+          clients.add(socket);
+        } else {
+          socket.destroy();
+        }
+        return;
+      }
       if (!term) return;
       if (type === FRAME_DATA) {
         term.write(payload.toString("utf8"));
@@ -116,12 +187,18 @@ export function serve(endpoint, program, args, opts) {
     });
   });
 
-  server.once("error", (err) => {
+  // `on`, not `once`: a server error after the first would otherwise be an
+  // uncaught exception that takes the master down and orphans its program.
+  server.on("error", (err) => {
     log(`pty-host: cannot serve ${endpoint}: ${err.message}`);
-    opts.onExit(1);
+    if (term) term.kill();
+    else finish(1);
   });
 
   server.listen(endpoint, () => {
+    // The token is the master's alone: nothing the session runs inherits it.
+    const env = { ...process.env };
+    delete env[TOKEN_ENV];
     try {
       const pty = require("node-pty");
       term = pty.spawn(program, args, {
@@ -129,12 +206,12 @@ export function serve(endpoint, program, args, opts) {
         cols: 80,
         rows: 24,
         cwd: process.cwd(),
-        env: process.env,
+        env,
       });
     } catch (err) {
       log(`pty-host: cannot start ${program}: ${err.message}`);
       server.close();
-      opts.onExit(1);
+      finish(1);
       return;
     }
     term.onData((data) => {
@@ -147,8 +224,9 @@ export function serve(endpoint, program, args, opts) {
     term.onExit(({ exitCode }) => {
       const frame = encodeExit(exitCode ?? -1);
       for (const client of clients) client.end(frame);
+      // A clean close also removes a unix socket file; a pipe has none.
       server.close();
-      setTimeout(() => opts.onExit(0), EXIT_FLUSH_MS);
+      setTimeout(() => finish(0), EXIT_FLUSH_MS);
     });
   });
 

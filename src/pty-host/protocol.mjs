@@ -21,6 +21,17 @@ export const FRAME_DATA = 0;
 export const FRAME_RESIZE = 1;
 /** The program exited, master -> client: its exit code as i32be. */
 export const FRAME_EXIT = 2;
+/**
+ * The session token, client -> master, as the client's FIRST frame. Until a
+ * client has sent the right one the master tells it nothing and ignores its
+ * input; a wrong one closes the connection. The token is the session's
+ * gate on top of the endpoint's own OS access control — the same posture as
+ * the hook and control sockets' handshake tokens (see master.mjs).
+ */
+export const FRAME_HELLO = 3;
+
+/** The environment variable a master reads its session token from. */
+export const TOKEN_ENV = "MULLION_PTY_HOST_TOKEN";
 
 const HEADER_BYTES = 5;
 
@@ -46,6 +57,11 @@ export function encodeResize(cols, rows) {
   payload.writeUInt16BE(clamp(cols), 0);
   payload.writeUInt16BE(clamp(rows), 2);
   return encodeFrame(FRAME_RESIZE, payload);
+}
+
+/** A HELLO frame carrying the session `token`. */
+export function encodeHello(token) {
+  return encodeFrame(FRAME_HELLO, Buffer.from(token, "utf8"));
 }
 
 /** An EXIT frame carrying `code`. */

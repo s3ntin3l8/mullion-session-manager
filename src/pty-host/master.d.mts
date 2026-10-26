@@ -12,6 +12,7 @@ export function serve(
   endpoint: string,
   program: string,
   args: string[],
-  opts: { onExit: (code: number) => void; log?: (line: string) => void },
+  opts: { onExit: (code: number) => void; token: string; log?: (line: string) => void },
 ): { stop: () => void };
 export const MAX_CLIENT_BACKLOG_BYTES: number;
+export const AUTH_TIMEOUT_MS: number;

@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { TOKEN_ENV } from "../../pty-host/protocol.mjs";
 import type { CgroupProcess } from "../cgroup-inventory.js";
+import { createPtyHostToken, removePtyHostToken } from "../pty-host-token.js";
 import { probeSocket } from "../unix-socket.js";
 import { descendantsOf, type ProcessEntry } from "./detached.js";
 import { sessionSocketPath } from "./dtach.js";
@@ -176,14 +178,22 @@ export class WindowsScopeBackend implements ScopeBackend {
     if (!program) {
       throw new Error(`${spec.label} failed: no program to launch`);
     }
-    const [command, argv] =
-      program === "dtach" ? [process.execPath, [resolvePtyHostPath(), ...rest]] : [program, rest];
+    const isSessionMaster = program === "dtach";
+    const [command, argv] = isSessionMaster
+      ? [process.execPath, [resolvePtyHostPath(), ...rest]]
+      : [program, rest];
+    // A fresh token per launch: the master serves only clients presenting it
+    // (src/pty-host/master.mjs), and Session.attachClient() reads it back
+    // from the sessions dir — see pty-host-token.ts.
+    const env = isSessionMaster
+      ? { ...spec.env, [TOKEN_ENV]: createPtyHostToken(this.opts.sessionsDir, spec.id) }
+      : spec.env;
     const endpoint = this.endpointFor(spec.id);
     await spawnScopeProcess({
       command,
       argv,
       cwd: spec.cwd,
-      env: spec.env,
+      env,
       timeoutMs: spec.timeoutMs,
       label: spec.label,
       scopeName: endpoint,
@@ -228,17 +238,22 @@ export class WindowsScopeBackend implements ScopeBackend {
    */
   async stop(id: string): Promise<void> {
     const found = await this.findMaster(id);
-    if (found?.master === undefined) return;
+    // Could not read the process table: the master may still be running, so
+    // its token stays — removing it would make a live session unattachable.
+    if (found === null) return;
     const pid = found.master;
-    await new Promise<void>((resolve) => {
-      execFile(
-        "taskkill",
-        ["/T", "/F", "/PID", String(pid)],
-        { timeout: TASKKILL_TIMEOUT_MS, windowsHide: true },
-        // Already gone, or not ours to kill — either way nothing to do here.
-        () => resolve(),
-      );
-    });
+    if (pid !== undefined) {
+      await new Promise<void>((resolve) => {
+        execFile(
+          "taskkill",
+          ["/T", "/F", "/PID", String(pid)],
+          { timeout: TASKKILL_TIMEOUT_MS, windowsHide: true },
+          // Already gone, or not ours to kill — either way nothing to do here.
+          () => resolve(),
+        );
+      });
+    }
+    removePtyHostToken(this.opts.sessionsDir, id);
   }
 
   /**

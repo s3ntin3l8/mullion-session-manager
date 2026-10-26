@@ -4,6 +4,9 @@
 export const FRAME_DATA: 0;
 export const FRAME_RESIZE: 1;
 export const FRAME_EXIT: 2;
+export const FRAME_HELLO: 3;
+export const TOKEN_ENV: "MULLION_PTY_HOST_TOKEN";
+export function encodeHello(token: string): Buffer;
 export const MAX_FRAME_BYTES: number;
 export function encodeFrame(type: number, payload: Buffer): Buffer;
 export function encodeResize(cols: number, rows: number): Buffer;

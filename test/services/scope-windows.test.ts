@@ -7,9 +7,11 @@
 // (`taskkill /T /F` on the master). Every OS call is mocked, so these run on
 // any platform.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 // --- the mocked socket probe ----------------------------------------------
@@ -27,7 +29,7 @@ vi.mock("../../src/services/unix-socket.js", () => ({
 let cimOutput = "";
 let cimFails = false;
 let taskkillCalls: string[][] = [];
-let spawnCalls: Array<{ file: string; args: string[] }> = [];
+let spawnCalls: Array<{ file: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
 let spawnExitCode = 0;
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -54,8 +56,8 @@ vi.mock("node:child_process", async (importOriginal) => {
         callback(new Error(`unexpected execFile: ${file}`), "", "");
       },
     ),
-    spawn: vi.fn((file: string, args: string[]) => {
-      spawnCalls.push({ file, args });
+    spawn: vi.fn((file: string, args: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      spawnCalls.push({ file, args, env: options?.env });
       const child = new EventEmitter() as EventEmitter & {
         kill: () => boolean;
         exitCode: number | null;
@@ -81,8 +83,12 @@ const {
   resolvePtyHostPath,
 } = await import("../../src/services/scope/windows.js");
 const { sessionSocketPath } = await import("../../src/services/scope/dtach.js");
+const { createPtyHostToken, ptyHostTokenPath, readPtyHostToken } =
+  await import("../../src/services/pty-host-token.js");
+const { TOKEN_ENV } = await import("../../src/pty-host/protocol.mjs");
 
-const SESSIONS_DIR = path.resolve("/data/sessions");
+const SESSIONS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "scope-windows-"));
+afterAll(() => fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }));
 const endpoint = (id: string) => sessionSocketPath(SESSIONS_DIR, id);
 const backend = () => new WindowsScopeBackend({ sessionsDir: SESSIONS_DIR });
 
@@ -212,18 +218,26 @@ describe("WindowsScopeBackend.start", () => {
       "-lc",
       "claude",
     ]);
+    // A fresh session token: handed to the master in its environment, and
+    // kept where Session.attachClient() reads it back.
+    const token = spawnCalls[0].env?.[TOKEN_ENV];
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(readPtyHostToken(SESSIONS_DIR, "5")).toBe(token);
   });
 
   it("runs any other program as given", async () => {
     await backend().start({
-      id: "5",
+      id: "6",
       argv: ["emulator.exe", "-avd", "x"],
       cwd: process.cwd(),
       env: {},
       timeoutMs: 5_000,
       label: "device bootstrap",
     });
-    expect(spawnCalls[0]).toEqual({ file: "emulator.exe", args: ["-avd", "x"] });
+    expect(spawnCalls[0]).toMatchObject({ file: "emulator.exe", args: ["-avd", "x"] });
+    // Only a session master gets a token.
+    expect(spawnCalls[0].env?.[TOKEN_ENV]).toBeUndefined();
+    expect(fs.existsSync(ptyHostTokenPath(SESSIONS_DIR, "6"))).toBe(false);
   });
 
   it("refuses an empty argv", async () => {
@@ -287,22 +301,29 @@ describe("WindowsScopeBackend.isAliveBatch", () => {
 });
 
 describe("WindowsScopeBackend.stop", () => {
-  it("kills the master's whole tree", async () => {
+  it("kills the master's whole tree, then removes the session token", async () => {
+    createPtyHostToken(SESSIONS_DIR, "7");
     cimOutput = tableForSession("7", 100);
     await backend().stop("7");
     expect(taskkillCalls).toEqual([["/T", "/F", "/PID", "100"]]);
+    expect(readPtyHostToken(SESSIONS_DIR, "7")).toBe("");
   });
 
-  it("does nothing when no master serves the session", async () => {
+  it("kills nothing when no master serves the session, and clears a stale token", async () => {
+    createPtyHostToken(SESSIONS_DIR, "7");
     cimOutput = tableForSession("8");
     await backend().stop("7");
     expect(taskkillCalls).toEqual([]);
+    expect(readPtyHostToken(SESSIONS_DIR, "7")).toBe("");
   });
 
-  it("does nothing when the process table cannot be read", async () => {
+  it("does nothing when the process table cannot be read — the token stays", async () => {
+    const token = createPtyHostToken(SESSIONS_DIR, "7");
     cimFails = true;
     await backend().stop("7");
     expect(taskkillCalls).toEqual([]);
+    // The master may still be running; it must stay attachable.
+    expect(readPtyHostToken(SESSIONS_DIR, "7")).toBe(token);
   });
 
   it("does nothing when the process table is not valid JSON", async () => {

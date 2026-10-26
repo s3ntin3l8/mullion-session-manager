@@ -5,8 +5,12 @@ import {
   FRAME_EXIT,
   createDeframer,
   encodeFrame,
+  encodeHello,
   encodeResize,
 } from "../pty-host/protocol.mjs";
+
+/** How much unsent input may wait for the master before more is dropped. */
+export const MAX_INPUT_BACKLOG_BYTES = 8 * 1024 * 1024;
 
 /**
  * The part of a node-pty process that a Session drives its attach client
@@ -50,12 +54,19 @@ function emitter<T>() {
  *   - `kill()` DETACHES. It closes this connection; the master and its
  *     program keep running, exactly as killing a `dtach -a` client does.
  *
- * The initial size is sent as the first frame, which also makes ConPTY
- * repaint the screen for this client — see pty-host.mjs's header.
+ * The session `token` (pty-host-token.ts) is the first frame and the initial
+ * size the second — both written here, before the connection opens, which
+ * net.Socket queues in order ahead of anything written later. The size also
+ * makes ConPTY repaint the screen for this client (see pty-host.mjs).
+ *
+ * Input is dropped, not queued, once more than MAX_INPUT_BACKLOG_BYTES is
+ * waiting to be sent — the mirror of the master's own per-client cap, so a
+ * stuck master cannot make the backend buffer without bound.
  */
 export function attachPtyHost(
   endpoint: string,
   size: { cols: number; rows: number },
+  token: string,
 ): AttachClient {
   const data = emitter<string>();
   const exit = emitter<{ exitCode: number; signal?: number }>();
@@ -74,7 +85,8 @@ export function attachPtyHost(
     else if (type === FRAME_EXIT && payload.length >= 4) exitCode = payload.readInt32BE(0);
   });
 
-  socket.on("connect", () => socket.write(encodeResize(size.cols, size.rows)));
+  socket.write(encodeHello(token));
+  socket.write(encodeResize(size.cols, size.rows));
   socket.on("data", (chunk: Buffer) => {
     try {
       onChunk(chunk);
@@ -94,7 +106,7 @@ export function attachPtyHost(
     onData: data.event,
     onExit: exit.event,
     write: (input: string | Buffer) => {
-      if (socket.destroyed) return;
+      if (socket.destroyed || socket.writableLength >= MAX_INPUT_BACKLOG_BYTES) return;
       const bytes = typeof input === "string" ? Buffer.from(input, "utf8") : input;
       socket.write(encodeFrame(FRAME_DATA, bytes));
     },

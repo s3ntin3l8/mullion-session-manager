@@ -46,6 +46,7 @@ type Listener<T> = (value: T) => void;
 interface FakeClient {
   endpoint: string;
   size: { cols: number; rows: number };
+  token: string;
   writes: string[];
   resizes: Array<[number, number]>;
   killed: number;
@@ -55,12 +56,13 @@ interface FakeClient {
 const clients: FakeClient[] = [];
 
 vi.mock("../../src/services/pty-host-client.js", () => ({
-  attachPtyHost: vi.fn((endpoint: string, size: { cols: number; rows: number }) => {
+  attachPtyHost: vi.fn((endpoint: string, size: { cols: number; rows: number }, token: string) => {
     const data = new Set<Listener<string>>();
     const exit = new Set<Listener<{ exitCode: number }>>();
     const record: FakeClient = {
       endpoint,
       size,
+      token,
       writes: [],
       resizes: [],
       killed: 0,
@@ -86,6 +88,8 @@ vi.mock("../../src/services/pty-host-client.js", () => ({
 
 const { PtyManager } = await import("../../src/services/pty-manager.js");
 const { attachPtyHost } = await import("../../src/services/pty-host-client.js");
+const { createPtyHostToken, readPtyHostToken } =
+  await import("../../src/services/pty-host-token.js");
 
 const stubScope = {
   kind: "stub",
@@ -104,8 +108,9 @@ afterEach(() => {
   vi.mocked(attachPtyHost).mockClear();
 });
 
-function mkSession(id: string) {
+function mkSession(id: string, prepare?: (sessionsDir: string) => void) {
   const sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pty-manager-pty-host-"));
+  prepare?.(sessionsDir);
   const manager = new PtyManager({ sessionsDir, scope: stubScope });
   cleanups.push(() => {
     manager.killAll();
@@ -118,7 +123,7 @@ function mkSession(id: string) {
     cols: 90,
     rows: 30,
   });
-  return { manager, session };
+  return { manager, session, sessionsDir };
 }
 
 async function waitUntil(check: () => boolean) {
@@ -130,11 +135,13 @@ async function waitUntil(check: () => boolean) {
 }
 
 describe("Session on a named-pipe endpoint (pty-host)", () => {
-  it("attaches through the pty-host client at the session's pipe, at its size", async () => {
-    const { session } = mkSession("41");
+  it("attaches through the pty-host client at the session's pipe, at its size, with its token", async () => {
+    const { session, sessionsDir } = mkSession("41", (dir) => createPtyHostToken(dir, "41"));
     await waitUntil(() => clients.length === 1);
     expect(clients[0].endpoint).toBe("\\\\.\\pipe\\mullion-test-41");
     expect(clients[0].size).toEqual({ cols: 90, rows: 30 });
+    expect(clients[0].token).toBe(readPtyHostToken(sessionsDir, "41"));
+    expect(clients[0].token).not.toBe("");
     expect(stubScope.start).not.toHaveBeenCalled();
     expect(session.isAlive).toBe(true);
   });

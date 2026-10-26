@@ -1,5 +1,6 @@
 import * as pty from "node-pty";
 import { attachPtyHost, type AttachClient } from "./pty-host-client.js";
+import { readPtyHostToken } from "./pty-host-token.js";
 import { mkdirSync, existsSync, unlinkSync, readFileSync } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -1596,7 +1597,11 @@ export class Session {
     // dtach one: attach to it in-process instead of through `dtach -a` —
     // see pty-host-client.ts for why it is not a second pseudo-terminal.
     const ptyProcess: AttachClient = isPipePath(this.socketPath)
-      ? attachPtyHost(this.socketPath, { cols: this.cols, rows: this.rows })
+      ? attachPtyHost(
+          this.socketPath,
+          { cols: this.cols, rows: this.rows },
+          readPtyHostToken(this.sessionsDir, this.id),
+        )
       : this.spawnDtachClient();
     this.wireAttachClient(ptyProcess);
   }

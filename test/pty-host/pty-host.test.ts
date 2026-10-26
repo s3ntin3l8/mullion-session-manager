@@ -19,8 +19,12 @@ import { attachPtyHost, type AttachClient } from "../../src/services/pty-host-cl
 import { probeSocket } from "../../src/services/unix-socket.js";
 import { ipcPath } from "../../src/cli/ipc-path.mjs";
 import { createSession, isServing, serve } from "../../src/pty-host/master.mjs";
+import { TOKEN_ENV, encodeFrame, encodeHello, FRAME_DATA } from "../../src/pty-host/protocol.mjs";
 
 const PTY_HOST = path.resolve(import.meta.dirname, "..", "..", "src", "pty-host", "pty-host.mjs");
+
+/** The session token every master in this file is started with. */
+const TOKEN = "test-session-token";
 
 /** A program that echoes each line back with a prefix, and exits 3 on "quit". */
 const ECHO_PROGRAM = [
@@ -33,6 +37,7 @@ const ECHO_PROGRAM = [
     // getWindowSize() asks the terminal now; .columns is only refreshed by a
     // resize event, which Windows delivers late.
     "  if (d.includes('size')) process.stdout.write('size:' + process.stdout.getWindowSize().join('x') + '\\n');",
+    "  else if (d.includes('env')) process.stdout.write('token:' + (process.env.MULLION_PTY_HOST_TOKEN || 'none') + '\\n');",
     "  else process.stdout.write('got:' + d.trim() + '\\n');",
     "});",
   ].join(""),
@@ -75,7 +80,7 @@ async function waitServing(endpoint: string, ms = 10_000) {
 /** Attaches once the master serves and collects output; waits for the program's "ready". */
 async function attachReady(endpoint: string) {
   await waitServing(endpoint);
-  const client: AttachClient = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+  const client: AttachClient = attachPtyHost(endpoint, { cols: 80, rows: 24 }, TOKEN);
   const seen = { output: "", exits: [] as Array<{ exitCode: number }> };
   client.onData((d) => (seen.output += d));
   client.onExit((e) => seen.exits.push(e));
@@ -89,6 +94,7 @@ describe("serve (the master)", () => {
     const endpoint = tmpEndpoint();
     const exitCodes: number[] = [];
     serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
       onExit: (code) => exitCodes.push(code),
       log: () => {},
     });
@@ -115,6 +121,7 @@ describe("serve (the master)", () => {
     async () => {
       const endpoint = tmpEndpoint();
       const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+        token: TOKEN,
         onExit: () => {},
         log: () => {},
       });
@@ -131,12 +138,13 @@ describe("serve (the master)", () => {
   it("fans output out to every attached client", async () => {
     const endpoint = tmpEndpoint();
     const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
       onExit: () => {},
       log: () => {},
     });
     cleanups.push(() => master.stop());
     const a = await attachReady(endpoint);
-    const b = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+    const b = attachPtyHost(endpoint, { cols: 80, rows: 24 }, TOKEN);
     let bOutput = "";
     b.onData((d) => (bOutput += d));
     cleanups.push(() => b.kill());
@@ -153,6 +161,7 @@ describe("serve (the master)", () => {
     const endpoint = tmpEndpoint();
     const exitCodes: number[] = [];
     const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
       onExit: (code) => exitCodes.push(code),
       log: () => {},
     });
@@ -170,6 +179,7 @@ describe("serve (the master)", () => {
     const exitCodes: number[] = [];
     const logs: string[] = [];
     serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
       onExit: (code) => exitCodes.push(code),
       log: (line) => logs.push(line),
     });
@@ -181,6 +191,7 @@ describe("serve (the master)", () => {
   it("drops a client that sends a malformed frame, and keeps serving the rest", async () => {
     const endpoint = tmpEndpoint();
     const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
       onExit: () => {},
       log: () => {},
     });
@@ -195,6 +206,71 @@ describe("serve (the master)", () => {
     await closed;
     good.client.write("still\r");
     await until(() => good.seen.output.includes("got:still"));
+  }, 30_000);
+});
+
+describe("serve — the session token", () => {
+  /** A master on a fresh endpoint, with one authenticated client ready. */
+  async function servedWithClient() {
+    const endpoint = tmpEndpoint();
+    const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
+      onExit: () => {},
+      log: () => {},
+    });
+    cleanups.push(() => master.stop());
+    return { endpoint, good: await attachReady(endpoint) };
+  }
+
+  /** A raw connection that sends `frames` and reports what it got back. */
+  async function rawClient(endpoint: string, frames: Buffer[]) {
+    const socket = net.connect(endpoint);
+    let received = 0;
+    socket.on("data", (chunk) => (received += chunk.length));
+    socket.on("error", () => {});
+    const closed = new Promise<void>((r) => socket.on("close", () => r()));
+    for (const frame of frames) socket.write(frame);
+    return { closed, received: () => received };
+  }
+
+  it("refuses to serve without a token, without starting the program", async () => {
+    const exitCodes: number[] = [];
+    const logs: string[] = [];
+    const master = serve(tmpEndpoint(), process.execPath, ECHO_PROGRAM, {
+      token: "",
+      onExit: (code) => exitCodes.push(code),
+      log: (line) => logs.push(line),
+    });
+    master.stop();
+    expect(exitCodes).toEqual([1]);
+    expect(logs.join("\n")).toMatch(/without a session token/);
+  });
+
+  it("drops a client with the wrong token, which never sees output", async () => {
+    const { endpoint, good } = await servedWithClient();
+    const intruder = await rawClient(endpoint, [encodeHello("wrong")]);
+    await intruder.closed;
+    good.client.write("hello\r");
+    await until(() => good.seen.output.includes("got:hello"));
+    expect(intruder.received()).toBe(0);
+  }, 30_000);
+
+  it("drops a client whose first frame is not the token, and ignores what it sent", async () => {
+    const { endpoint, good } = await servedWithClient();
+    const intruder = await rawClient(endpoint, [
+      encodeFrame(FRAME_DATA, Buffer.from("intruder\r")),
+    ]);
+    await intruder.closed;
+    good.client.write("after\r");
+    await until(() => good.seen.output.includes("got:after"));
+    expect(good.seen.output).not.toContain("got:intruder");
+  }, 30_000);
+
+  it("keeps the token out of the program's environment", async () => {
+    const { good } = await servedWithClient();
+    good.client.write("env\r");
+    await until(() => good.seen.output.includes("token:"));
+    expect(good.seen.output).toContain("token:none");
   }, 30_000);
 });
 
@@ -247,13 +323,13 @@ describe("pty-host.mjs (the command line)", () => {
     const launched = spawnSync(
       process.execPath,
       [PTY_HOST, "-n", endpoint, process.execPath, ...ECHO_PROGRAM],
-      { encoding: "utf8", timeout: 20_000 },
+      { encoding: "utf8", timeout: 20_000, env: { ...process.env, [TOKEN_ENV]: TOKEN } },
     );
     // This master is detached from the test process, so end it even if an
     // assertion below fails: tell its program to quit, over the session.
     cleanups.push(async () => {
       if (!(await isServing(endpoint))) return;
-      const stopper = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+      const stopper = attachPtyHost(endpoint, { cols: 80, rows: 24 }, TOKEN);
       stopper.write("quit\r");
       await sleep(500);
       stopper.kill();
@@ -269,6 +345,18 @@ describe("pty-host.mjs (the command line)", () => {
     expect(seen.exits).toEqual([{ exitCode: 3 }]);
     await sleep(600);
     expect(await isServing(endpoint)).toBe(false);
+  }, 30_000);
+
+  it("-n fails when the master has no session token to serve with", () => {
+    const env = { ...process.env };
+    delete env[TOKEN_ENV];
+    const result = spawnSync(
+      process.execPath,
+      [PTY_HOST, "-n", tmpEndpoint(), process.execPath, ...ECHO_PROGRAM],
+      { encoding: "utf8", timeout: 20_000, env },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/exited \(code 1\) before serving/);
   }, 30_000);
 
   it("prints its usage on bad arguments", () => {

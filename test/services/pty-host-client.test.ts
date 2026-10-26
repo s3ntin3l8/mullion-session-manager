@@ -7,10 +7,11 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { attachPtyHost } from "../../src/services/pty-host-client.js";
+import { MAX_INPUT_BACKLOG_BYTES, attachPtyHost } from "../../src/services/pty-host-client.js";
 import { ipcPath } from "../../src/cli/ipc-path.mjs";
 import {
   FRAME_DATA,
+  FRAME_HELLO,
   FRAME_RESIZE,
   createDeframer,
   encodeExit,
@@ -54,16 +55,18 @@ const until = async (cond: () => boolean, ms = 2_000) => {
 };
 
 describe("attachPtyHost", () => {
-  it("sends its size first, then forwards input and resizes as frames", async () => {
+  it("sends the token, then its size, ahead of input written before it connected", async () => {
     const endpoint = tmpEndpoint();
     const master = await fakeMaster(endpoint);
-    const client = attachPtyHost(endpoint, { cols: 100, rows: 30 });
-    await master.connected;
+    // Written immediately, before the connection is up — they must still
+    // land after the HELLO and the initial size (review on PR #2077).
+    const client = attachPtyHost(endpoint, { cols: 100, rows: 30 }, "tok");
     client.write("ls\r");
     client.write(Buffer.from("x"));
     client.resize(120, 40);
-    await until(() => master.received.length === 4);
-    const [size, input, bytes, resize] = master.received;
+    await until(() => master.received.length === 5);
+    const [hello, size, input, bytes, resize] = master.received;
+    expect([hello.type, hello.payload.toString()]).toEqual([FRAME_HELLO, "tok"]);
     expect(size.type).toBe(FRAME_RESIZE);
     expect([size.payload.readUInt16BE(0), size.payload.readUInt16BE(2)]).toEqual([100, 30]);
     expect([input.type, input.payload.toString()]).toEqual([FRAME_DATA, "ls\r"]);
@@ -75,7 +78,7 @@ describe("attachPtyHost", () => {
   it("delivers output as strings and reports the program's exit code once", async () => {
     const endpoint = tmpEndpoint();
     const master = await fakeMaster(endpoint);
-    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "tok");
     const output: string[] = [];
     const exits: Array<{ exitCode: number }> = [];
     client.onData((d) => output.push(d));
@@ -94,7 +97,7 @@ describe("attachPtyHost", () => {
   it("detaches on kill(): exit fires with 0 and the master keeps running", async () => {
     const endpoint = tmpEndpoint();
     const master = await fakeMaster(endpoint);
-    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "tok");
     const exits: Array<{ exitCode: number }> = [];
     const sub = client.onExit((e) => exits.push(e));
     await master.connected;
@@ -109,7 +112,7 @@ describe("attachPtyHost", () => {
   });
 
   it("reports a missing session as a failed attach (exit code 1)", async () => {
-    const client = attachPtyHost(tmpEndpoint(), { cols: 80, rows: 24 });
+    const client = attachPtyHost(tmpEndpoint(), { cols: 80, rows: 24 }, "tok");
     const exits: Array<{ exitCode: number }> = [];
     client.onExit((e) => exits.push(e));
     await until(() => exits.length > 0);
@@ -119,7 +122,7 @@ describe("attachPtyHost", () => {
   it("drops the connection on a malformed frame from the master", async () => {
     const endpoint = tmpEndpoint();
     const master = await fakeMaster(endpoint);
-    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "tok");
     const exits: Array<{ exitCode: number }> = [];
     client.onExit((e) => exits.push(e));
     const socket = await master.connected;
@@ -128,5 +131,20 @@ describe("attachPtyHost", () => {
     socket.write(huge);
     await until(() => exits.length > 0);
     expect(exits).toHaveLength(1);
+  });
+});
+
+describe("attachPtyHost input backlog", () => {
+  it("drops input once more than the cap is waiting to be sent", async () => {
+    const endpoint = tmpEndpoint();
+    const master = await fakeMaster(endpoint);
+    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "tok");
+    // Queued before the connection is up, so all of it is still unsent.
+    client.write("x".repeat(MAX_INPUT_BACKLOG_BYTES));
+    client.write("dropped");
+    await until(() => master.received.length >= 3, 10_000);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(master.received.map((f) => f.payload.length)).toEqual([3, 4, MAX_INPUT_BACKLOG_BYTES]);
+    client.kill();
   });
 });

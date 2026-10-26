@@ -2,11 +2,13 @@ import { describe, it, expect } from "vitest";
 import {
   FRAME_DATA,
   FRAME_EXIT,
+  FRAME_HELLO,
   FRAME_RESIZE,
   MAX_FRAME_BYTES,
   createDeframer,
   encodeExit,
   encodeFrame,
+  encodeHello,
   encodeResize,
 } from "../../src/pty-host/protocol.mjs";
 
@@ -45,6 +47,12 @@ describe("pty-host protocol", () => {
     expect(frames[1].payload.readUInt16BE(0)).toBe(120);
     expect(frames[1].payload.readUInt16BE(2)).toBe(40);
     expect(frames[2].payload.readInt32BE(0)).toBe(3);
+  });
+
+  it("carries a session token in a HELLO frame", () => {
+    const { frames, feed } = collect();
+    feed(encodeHello("s3cret"));
+    expect(frames).toEqual([{ type: FRAME_HELLO, payload: Buffer.from("s3cret") }]);
   });
 
   it("carries an empty payload and a negative exit code", () => {
