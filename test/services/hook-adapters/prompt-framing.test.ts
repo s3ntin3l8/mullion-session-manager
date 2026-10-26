@@ -80,7 +80,7 @@ describe("getAdapterPromptFraming", () => {
     },
   );
 
-  it.each(["bash", "zsh", "agy", "aider", "gemini", ""])(
+  it.each(["bash", "zsh", "agy", "gemini", ""])(
     "has no prompt delivery for %j (shell, agy, or unknown CLI)",
     (command) => {
       expect(getAdapterPromptFraming(command, "hi", PASTE)).toBeNull();

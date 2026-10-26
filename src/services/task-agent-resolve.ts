@@ -150,7 +150,7 @@ export function resolveReviewAgentCommand(
  * `initialPromptArgs` (Claude Code, Codex, agy, and — as of the promote
  * first-turn fix — opencode too, via `--prompt`, verified to actually
  * submit a turn; see opencode.ts's own comment). No `KNOWN_AGENTS` entry
- * with no adapter at all has this — currently `aider`, `gemini`, `pi` — see
+ * with no adapter at all has this — currently `gemini`, `pi` — see
  * each adapter's own `initialPromptArgs`, hook-adapters/index.ts's
  * `adapterHasInitialPromptArgs`). Spawning an autonomous claim with a
  * command that can't receive an initial prompt this way means the agent

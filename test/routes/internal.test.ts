@@ -3042,7 +3042,7 @@ describe("internal routes (agent role, issue #26)", () => {
       };
 
       vi.mocked(runGenerationTurnInScratchWorktree).mockRejectedValueOnce(
-        new UnsupportedGenerationAgentError("aider"),
+        new UnsupportedGenerationAgentError("pi"),
       );
       const unsupported = await app.inject({
         method: "POST",

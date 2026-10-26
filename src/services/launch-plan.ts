@@ -70,7 +70,6 @@ export const SKIP_PERMISSION_FLAGS: Record<string, string> = {
   // value per `agy --help`, so this never depends on — or mutates — the
   // user's own global `agentMode` default.
   agy: "--dangerously-skip-permissions --mode accept-edits",
-  aider: "--yes",
   // Issue: mcode support — DELIBERATELY ABSENT.
   //
   // mcode's TUI has NO permission flag at all (verified empirically against

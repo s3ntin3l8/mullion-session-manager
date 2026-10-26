@@ -3973,7 +3973,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           : commentBody;
 
         // Hermes review, PR #576 — a non-seed-capable worker adapter (e.g.
-        // aider/gemini/pi — every registered adapter, including OpenCode,
+        // gemini/pi — every registered adapter, including OpenCode,
         // has initialPromptArgs by now; see getAdapterInitialPromptArgs's
         // own doc comment for the current list) can't receive the findings
         // as an initial prompt at all (reseedTaskIfSessionExited delivers

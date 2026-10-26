@@ -764,7 +764,7 @@ export async function sessionsRoute(app: FastifyInstance) {
   // `initialPromptArgs` (every registered adapter today: Claude Code,
   // Codex, agy, opencode), the seed is sent as `initialPrompt` instead, so
   // the replacement starts working immediately. For anything with no
-  // adapter at all (`aider`, `gemini`, `pi`, or a plain shell), this
+  // adapter at all (`gemini`, `pi`, or a plain shell), this
   // preserves the previous behavior unchanged — those commands have no hook
   // round trip and no argv channel either, so the `seedPrompt` fallback
   // below reaches nobody; it's a status-quo no-op, not an actual delivery
