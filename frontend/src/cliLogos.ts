@@ -7,6 +7,7 @@ import opencodeLightLogo from "./assets/cli-logos/opencode-light.svg";
 import opencodeDarkLogo from "./assets/cli-logos/opencode-dark.svg";
 import googleGeminiLogo from "./assets/cli-logos/google-gemini.svg";
 import antigravityLogo from "./assets/cli-logos/antigravity-color.svg";
+import minimaxLogo from "./assets/cli-logos/minimax.svg";
 import piCodingAgentLightLogo from "./assets/cli-logos/pi-coding-agent-light.svg";
 import piCodingAgentDarkLogo from "./assets/cli-logos/pi-coding-agent-dark.svg";
 
@@ -29,6 +30,7 @@ const LOGO_REGISTRY: Record<string, LogoEntry> = {
   opencode: { base: opencodeLightLogo, light: opencodeLightLogo, dark: opencodeDarkLogo },
   "google-gemini": { base: googleGeminiLogo },
   "antigravity-color": { base: antigravityLogo },
+  minimax: { base: minimaxLogo },
   "pi-coding-agent": {
     base: piCodingAgentLightLogo,
     light: piCodingAgentLightLogo,
@@ -46,6 +48,7 @@ const BINARY_TO_LOGO: Record<string, string> = {
   gemini: "google-gemini",
   agy: "antigravity-color",
   pi: "pi-coding-agent",
+  mcode: "minimax",
 };
 
 function resolveEntry(logoName: string, theme: Theme): string | null {

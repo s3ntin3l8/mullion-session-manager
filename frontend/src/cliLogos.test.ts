@@ -24,6 +24,10 @@ describe("resolveAgentLogo", () => {
     );
   });
 
+  it("resolves the MiniMax logo for mcode", () => {
+    expect(resolveAgentLogo("mcode", DARK)).toBeTruthy();
+  });
+
   it("returns null for an unknown binary", () => {
     expect(resolveAgentLogo("custom-tool", DARK)).toBeNull();
   });
@@ -52,6 +56,11 @@ describe("resolveLauncherLogo", () => {
   it("resolves a detected agent launcher by id", () => {
     const launcher = makeLauncher({ id: "agent:claude" });
     expect(resolveLauncherLogo(launcher, DARK)).toBeTruthy();
+  });
+
+  it("resolves a detected mcode launcher by id", () => {
+    const launcher = makeLauncher({ id: "agent:mcode", command: "mcode" });
+    expect(resolveLauncherLogo(launcher, DARK)).toBe(resolveAgentLogo("mcode", DARK));
   });
 
   it("returns null for a shell launcher", () => {

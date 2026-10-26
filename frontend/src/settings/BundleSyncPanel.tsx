@@ -48,9 +48,8 @@ const CLI_META: Record<BundleSyncCli, { label: string; logoBinary: string }> = {
   codex: { label: "Codex", logoBinary: "codex" },
   opencode: { label: "opencode", logoBinary: "opencode" },
   agy: { label: "Antigravity", logoBinary: "agy" },
-  // Issue: mcode support — no logo asset ships with mcode and none is
-  // vendored, so resolveAgentLogo returns null and the row renders
-  // without an image, same as any other un-branded agent.
+  // Issue: mcode support — the MiniMax mark is vendored (cliLogos.ts maps
+  // the `mcode` binary to it).
   mcode: { label: "MiniMax Code", logoBinary: "mcode" },
 };
 

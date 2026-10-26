@@ -2,14 +2,14 @@
 
 The icons in this directory identify third-party CLI tools that this project can
 launch as sessions (Claude Code, Codex, opencode, Gemini CLI, Antigravity, Pi Coding
-Agent). They are used solely to identify those tools in the session launcher UI and
+Agent, MiniMax Code). They are used solely to identify those tools in the session launcher UI and
 are not modified beyond format conversion, except `pi-coding-agent-light.svg` (see
 below).
 
 ## homarr-labs/dashboard-icons — Apache License 2.0
 
 Files: `claude-ai.svg`, `opencode-light.svg`, `opencode-dark.svg`, `google-gemini.svg`,
-`pi-coding-agent-dark.svg`.
+`minimax.svg`, `pi-coding-agent-dark.svg`.
 
 Source: https://github.com/homarr-labs/dashboard-icons
 
@@ -41,6 +41,6 @@ Copyright (c) 2023 LobeHub
 
 All product names, logos, and brand marks referenced here are trademarks of their
 respective owners (Anthropic, OpenAI, the opencode project, Google, Google DeepMind,
-earendil-works/the Pi Coding Agent project). Their use here is nominative — to
+MiniMax, earendil-works/the Pi Coding Agent project). Their use here is nominative — to
 identify the actual CLI a launcher entry starts — and does not imply sponsorship or
 endorsement of this project.
