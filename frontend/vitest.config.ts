@@ -1,5 +1,5 @@
 import { defineConfig } from "vitest/config";
-import { coverageConfig, maxWorkers } from "../vitest.shared.js";
+import { coverageConfig, maxWorkers, reporters } from "../vitest.shared.js";
 
 // Frontend's unit-test setup. Started deliberately minimal (Phase 4d, pure
 // logic modules only, e.g. reorder.ts) — the default environment stays
@@ -52,6 +52,7 @@ export default defineConfig({
     // backend's own vitest.config.ts, which this object was byte-identical
     // to before being extracted.)
     coverage: coverageConfig,
+    reporters,
     // Vitest replaces every imported .css with an empty module by default,
     // `?raw` included. styles/tokens.contrast.test.ts reads tokens.css as
     // text, so that one file opts back in.

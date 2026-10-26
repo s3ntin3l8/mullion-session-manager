@@ -1,5 +1,5 @@
 import { availableParallelism } from "node:os";
-import type { CoverageOptions } from "vitest/node";
+import type { CoverageOptions, InlineConfig } from "vitest/node";
 
 // Shared between the root `vitest.config.ts` and `frontend/vitest.config.ts`
 // (a separate npm workspace, imported via a relative `../vitest.shared.js`
@@ -63,3 +63,22 @@ export const worktreeExcludes = [".wt/**", ".claude/worktrees/**", ".mullion-wor
 export const maxWorkers: number | undefined = process.env.CI
   ? undefined
   : Math.max(2, Math.floor(availableParallelism() / 3));
+
+// Under CI, also write a JUnit report for Codecov Test Analytics. The shared
+// ci-node.yml uploads `<working-directory>/junit.xml` from each `test-shard`
+// into its shard artifact, and `test-merge`'s test-results upload finds it in
+// the downloaded `.shard-artifacts/` -- but only if the run writes one; before
+// this, nothing did, and every merge job logged "No JUnit XML reports found".
+// `outputFile` resolves against each config's own root, so the backend writes
+// `./junit.xml` and the frontend `frontend/junit.xml`, the two paths the shard
+// upload names. Setting `reporters` replaces Vitest's default list, which adds
+// `github-actions` (the inline failure annotations) itself only when the
+// option is unset -- so it is listed here explicitly. Local runs keep the
+// default reporters.
+export const reporters: InlineConfig["reporters"] = process.env.CI
+  ? [
+      "default",
+      ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : []),
+      ["junit", { outputFile: "junit.xml" }],
+    ]
+  : undefined;
