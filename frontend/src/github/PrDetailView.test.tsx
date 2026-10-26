@@ -432,6 +432,7 @@ describe("PrDetailView", () => {
     const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText("Checks unknown")).toBeInTheDocument();
     unmount();
+    __resetGithubCacheForTests();
 
     // The poller did fetch the head runs and found none: that is an answer.
     stub({ ...PR, ciStatus: null, ciKnown: true, actionsRuns: [] });
