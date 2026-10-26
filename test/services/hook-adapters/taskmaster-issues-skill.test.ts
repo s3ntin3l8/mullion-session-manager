@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Drift guard for src/bundle/skills/taskmaster-issues/ — the skill tells
-// authors exactly what six directives do and how they're matched. Rather
+// authors exactly what eight directives do and how they're matched. Rather
 // than re-declaring the parsers' regexes here (a copy drifts right along
 // with the source and detects nothing), this feeds the skill's own worked
 // example through the REAL production resolvers, so a future change to
@@ -109,6 +109,8 @@ const DIRECTIVE_PATTERNS = [
   { name: "Model:", re: /^\s*Model:\s*(\S+)\s*$/im },
   { name: "Reviewer-Model:", re: /^\s*Reviewer-Model:\s*(\S+)\s*$/im },
   { name: "SmallModel:", re: /^\s*SmallModel:\s*(\S+)\s*$/im },
+  { name: "Platform:", re: /^\s*Platform:\s*(\S+)\s*$/im },
+  { name: "Host:", re: /^\s*Host:\s*(\S+)\s*$/im },
 ];
 
 function countDirectiveLines(text: string, re: RegExp): number {
@@ -118,7 +120,7 @@ function countDirectiveLines(text: string, re: RegExp): number {
 
 describe("taskmaster-issues skill — SKILL.md's own prose never doubles as a directive", () => {
   // Mirrors task-prompt.test.ts's "directive-line collisions" guard on the
-  // preamble text, extended to all six directives this skill documents.
+  // preamble text, extended to all eight directives this skill documents.
   // Not a live hazard (nothing parses SKILL.md), but a skill that
   // illustrates a directive on its own line would be teaching the wrong
   // lesson about what "on its own line" means.
@@ -189,6 +191,8 @@ describe("taskmaster-issues skill — worked-example.md carries exactly its two 
     "Model:": 0,
     "Reviewer-Model:": 0,
     "SmallModel:": 0,
+    "Platform:": 0,
+    "Host:": 0,
   };
 
   for (const { name, re } of DIRECTIVE_PATTERNS) {
@@ -196,6 +200,33 @@ describe("taskmaster-issues skill — worked-example.md carries exactly its two 
       expect(countDirectiveLines(workedExample, re)).toBe(EXPECTED_COUNTS[name]);
     });
   }
+});
+
+describe("taskmaster-issues skill — the documented Platform:/Host: rules hold against the real parser (#1954)", () => {
+  it("matches the key case-insensitively and the first occurrence wins", async () => {
+    const { parsePlacementRequirement } =
+      await import("../../../src/services/task-placement-resolve.js");
+    expect(parsePlacementRequirement("platform: Darwin\nPlatform: linux")).toEqual({
+      platform: "darwin",
+    });
+  });
+
+  it("does not match a prefixed line, trailing comment, multi-word value or prose", async () => {
+    const { parsePlacementRequirement } =
+      await import("../../../src/services/task-placement-resolve.js");
+    expect(parsePlacementRequirement("- Platform: darwin")).toBeNull();
+    expect(parsePlacementRequirement("> Platform: darwin")).toBeNull();
+    expect(parsePlacementRequirement("Platform: darwin # needs xcode")).toBeNull();
+    expect(parsePlacementRequirement("run on Platform: darwin please")).toBeNull();
+  });
+
+  it("is not hidden by a fenced code block, like every other directive", async () => {
+    const { parsePlacementRequirement } =
+      await import("../../../src/services/task-placement-resolve.js");
+    expect(parsePlacementRequirement("```\nPlatform: darwin\n```")).toEqual({
+      platform: "darwin",
+    });
+  });
 });
 
 describe("taskmaster-issues skill — documented matching rules hold against the real parsers", () => {

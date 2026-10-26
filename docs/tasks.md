@@ -570,6 +570,46 @@ own `agentCommand` field — so the task board can show which agent actually
 ran a task without re-deriving precedence after the fact (the issue body,
 project setting, or global default could all have changed since).
 
+## Where a task runs: `Platform:` and `Host:`
+
+By default Task Master places each task's worker by load (see
+[multi-host](multi-host.md#automatic-placement)): a `pinned` project runs on
+its own host, an `auto` project on the least-loaded host that has a checkout.
+A task that needs something host-specific — Xcode, the iOS Simulator, a
+macOS-only spike — can require it in its issue body:
+
+```
+Platform: darwin
+```
+
+```
+Host: 3f2a9c1e-…
+```
+
+- `Platform: <os>` — any eligible host of that platform (`darwin`, `linux`,
+  `win32`; matched case-insensitively). `Host: <host id>` — exactly that host.
+  Give both and both must hold ("this host, and it must be a Mac").
+- Matched like the other directives: key case-insensitive, alone on its line,
+  one-word value, first match wins (so a `Host: localhost` line in a pasted HTTP
+  example _is_ read as the directive; the refusal names the line it came from,
+  and a line behind a `- ` bullet or `> ` quote prefix is not matched). A value no host reports (`mac` instead of
+  `darwin`) matches nothing and is refused naming it.
+- **It is a hard requirement.** Only an _eligible_ host qualifies — online, not
+  parked, reporting its capacity, and with a path for this project (the
+  project's **Also lives on** setting, `hostCwds`). It works for a `pinned`
+  project too. If no host qualifies the claim is **refused**: the task goes to
+  `failed` with the reason on it (visible on the board and synced to the
+  issue), and nothing is run on a host where it would just break. Fix the host
+  (bring it online, add the project's path on it), then move the task back to
+  `ready`. A task with neither directive is placed exactly as before.
+- The chosen host runs the whole task: the worktree is cut and the base ref
+  resolved there, and the reviewer, the rebase worker and Retry join the
+  worker's host. The requirement and the placement reason ("placed on platform
+  darwin at the task's requirement — …") are recorded on the task and its
+  session, so a past placement can be explained.
+- The target host needs an agent build new enough to serve the task routes
+  (see [Known limitations](#known-limitations)).
+
 ## Configuring Task Master
 
 Every control in the safety envelope below except the runtime pause has two

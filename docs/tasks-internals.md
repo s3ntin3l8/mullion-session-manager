@@ -915,6 +915,22 @@ same as always — none of it waits on the PR actually merging. Whether the PR
 merges is a separate, asynchronous concern; see [Merge on approve](#merge-on-approve)
 below.
 
+A task can require a platform or host (`#1954`): `Platform:` / `Host:` lines in
+the issue body, parsed by `task-placement-resolve.ts` (same matching rules as
+the other directives) and resolved at dispatch, in `dispatchClaimedTask`. With
+a requirement the placement goes through `resolveTargetHost` — the explicit
+spawn's filter (`#1951`), so "eligible" means exactly what it means for
+automatic placement — instead of `resolvePlacement`, and works for a `pinned`
+project. No match is a refusal, not a fallback: the task goes `claimed →
+failed` (`via: placement-refusal`, synced to the issue) with the reason in
+`failureReason`, and its claim-time `branchName`/`worktreePath` are cleared,
+since nothing was cut (Retry then refuses with `no-worktree`; the recovery is
+`failed → ready`). The resolved requirement is stored as JSON on
+`tasks.placementRequirement`, beside `agentCommand`, so a past placement can be
+explained; a re-claim re-parses the body like every other directive. The
+reviewer, the rebase worker, reseed and Retry already follow the worker's host
+(`resolveTaskWorkerHost`), so a task pinned to a Mac reviews and retries there.
+
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
 worktree — the worktree is branched from that exact SHA, not a symbolic ref

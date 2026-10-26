@@ -982,6 +982,263 @@ describe("claimTask", () => {
     await app.close();
   });
 
+  // Issue #1954 — a task can REQUIRE a platform or host (`Platform:` / `Host:`
+  // in its body). These use real host rows with heartbeat and capacity
+  // readings, so the real `resolveTargetHost` decides; only the backend and
+  // the base-ref call are faked.
+  describe("a task's placement requirement (#1954)", () => {
+    const MAC_CWD = "/Users/me/proj";
+    const LINUX_CWD = "/srv/proj";
+
+    async function addHost(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      name: string,
+      platform: string,
+      loadAverage1m: number,
+    ) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = res.json().id as string;
+      app.hostHeartbeatTracker?.recordSuccess(hostId);
+      app.hostCapacityTracker?.record(hostId, {
+        platform,
+        logicalCores: 8,
+        loadAverage1m,
+        memory: { totalBytes: 1000, freeBytes: 500 },
+        sessions: { tracked: 0, alive: 0 },
+      });
+      return hostId;
+    }
+
+    // A local project that also lives on an idle Linux box and a busier Mac.
+    // Without a requirement the least-loaded Linux box would win.
+    async function setup(
+      name: string,
+      body: string | null,
+      opts: { placement?: "pinned" | "auto"; mapMac?: boolean } = {},
+    ) {
+      const app = await buildApp();
+      const mac = await addHost(app, `${name}-mac`, "darwin", 3);
+      const linux = await addHost(app, `${name}-linux`, "linux", 0);
+      const hostCwds: Record<string, string> = { [linux]: LINUX_CWD };
+      if (opts.mapMac !== false) hostCwds[mac] = MAC_CWD;
+      const [project] = app.db
+        .insert(projects)
+        .values({
+          name,
+          cwd: "/srv/local-proj",
+          hostId: "local",
+          placement: opts.placement ?? "auto",
+          hostCwds: JSON.stringify(hostCwds),
+        })
+        .returning()
+        .all();
+      const task = insertReadyTask(app, project.id, 90 + Math.floor(Math.random() * 1000), body);
+      const fakeBackend = fakeSessionBackend({
+        spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+        createWorktree: vi.fn(async (baseCwd: string) => ({
+          created: true,
+          path: `${baseCwd}/.mullion-worktrees/mullion-task-x`,
+          branch: "x",
+        })),
+      });
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+      return { app, mac, linux, project, task, fakeBackend };
+    }
+
+    async function sessionOf(app: Awaited<ReturnType<typeof buildApp>>, taskId: number) {
+      const { sessions } = await import("../../src/db/schema.js");
+      const row = getTask(app, taskId);
+      const [session] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, row.sessionId as number))
+        .all();
+      return session;
+    }
+
+    it("puts a task that requires Platform: darwin on the Mac, though another host is less loaded", async () => {
+      const { app, mac, task, fakeBackend } = await setup(
+        "req-darwin",
+        "Platform: darwin\nBuild the iOS target.",
+      );
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("in_progress");
+      expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
+      // The worktree is cut from the project's path ON THE MAC.
+      expect(vi.mocked(fakeBackend.createWorktree).mock.calls[0]?.[0]).toBe(MAC_CWD);
+      const session = await sessionOf(app, task.id);
+      expect(session?.hostId).toBe(mac);
+      // The requirement is in the recorded reason, so a past placement can be explained.
+      expect(session?.placementReason).toContain("platform darwin");
+      expect(session?.placementReason).toContain("the task's requirement");
+      // The reviewer and the rebase worker follow the worker's host (#1724).
+      const { resolveTaskWorkerHost } = await import("../../src/services/session-live-info.js");
+      expect(resolveTaskWorkerHost(app, row)).toBe(mac);
+
+      await app.close();
+    });
+
+    it("leaves a task with no directive exactly as before — the least-loaded host, no requirement recorded", async () => {
+      const { app, mac, task } = await setup("req-none", "Just do the work.");
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      const row = getTask(app, task.id);
+      expect(row.placementRequirement).toBeNull();
+      expect((await sessionOf(app, task.id))?.hostId).not.toBe(mac);
+
+      await app.close();
+    });
+
+    it("honours the requirement for a PINNED project too", async () => {
+      const { app, mac, task } = await setup("req-pinned", "Platform: darwin", {
+        placement: "pinned",
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
+
+      await app.close();
+    });
+
+    it("matches a Host: directive to exactly that host", async () => {
+      const { app, linux, task } = await setup("req-host", "placeholder");
+      app.db
+        .update(tasks)
+        .set({ body: `Host: ${linux}` })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect(getTask(app, task.id).placementRequirement).toBe(JSON.stringify({ hostId: linux }));
+      expect((await sessionOf(app, task.id))?.hostId).toBe(linux);
+
+      await app.close();
+    });
+
+    it("requires BOTH when a body names a host and a platform, and refuses a mismatch", async () => {
+      const { app, linux, task, fakeBackend } = await setup("req-both", "placeholder");
+      // The idle box is a Linux host; it is not a Mac.
+      app.db
+        .update(tasks)
+        .set({ body: `Host: ${linux}\nPlatform: darwin` })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(getTask(app, task.id).status).toBe("failed");
+      expect(getTask(app, task.id).failureReason).toContain(`host ${linux} (platform darwin)`);
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("names the Host: line when that is what refused the claim", async () => {
+      // A `Host: localhost` in an HTTP example is the likely accident.
+      const { app, task } = await setup("req-host-source", "curl -H 'x'\nHost: localhost");
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(getTask(app, task.id).failureReason).toContain("the `Host:` line in its issue body");
+      expect(getTask(app, task.id).failureReason).toContain("requires host localhost");
+
+      await app.close();
+    });
+
+    it("does not let an earlier attempt's requirement outlive a later failed one", async () => {
+      const { app, task, fakeBackend } = await setup("req-stale", "No directive any more.");
+      // A previous attempt (with a directive since removed from the body).
+      app.db
+        .update(tasks)
+        .set({ placementRequirement: JSON.stringify({ platform: "darwin" }) })
+        .where(eq(tasks.id, task.id))
+        .run();
+      vi.mocked(fakeBackend.createWorktree).mockResolvedValue({
+        created: false,
+        reason: "create-failed",
+        detail: "boom",
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      // Released for retry - and the column describes THIS attempt: none.
+      expect(getTask(app, task.id).status).toBe("claimed");
+      expect(getTask(app, task.id).placementRequirement).toBeNull();
+
+      await app.close();
+    });
+
+    it("refuses the claim, with a recorded reason, when no eligible host matches — it does not fall back to the project's host", async () => {
+      // The Mac exists and is online, but the project has no path on it.
+      const { app, task, fakeBackend } = await setup("req-nomatch", "Platform: darwin", {
+        mapMac: false,
+      });
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.sessionId).toBeNull();
+      expect(row.failureReason).toContain("requires platform darwin");
+      // ...and says WHERE the requirement came from: `Host:` is an everyday
+      // word, so an author must be able to find the line that caused this.
+      expect(row.failureReason).toContain("the `Platform:` line in its issue body");
+      expect(row.failureReason).toContain("Also lives on");
+      expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
+      // Nothing was cut on the way: Retry refuses cleanly instead of trying to
+      // resume a branch that was only ever predicted.
+      expect(row.branchName).toBeNull();
+      expect(row.worktreePath).toBeNull();
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+      expect(fakeBackend.spawn).not.toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: task.id,
+          from: "claimed",
+          to: "failed",
+          via: "placement-refusal",
+        }),
+        "task transition",
+      );
+      expect(mockSyncTaskTransition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ status: "failed", branchName: null }),
+        expect.anything(),
+        "failed",
+      );
+      // ...and Retry says there is nothing to resume.
+      await expect(retryTask(app, task.id)).resolves.toMatchObject({
+        ok: false,
+        reason: "no-worktree",
+      });
+
+      await app.close();
+    });
+  });
+
   // Issue #1959 — the base ref is resolved on the host that CUTS the
   // worktree (the placement host), and a host that cannot answer is no longer
   // papered over with a bare `HEAD` (a stale ref on that host's clone).

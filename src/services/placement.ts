@@ -572,13 +572,21 @@ export function resolvePlacement(
  * Issue #1951 — WHERE a caller insists a session run: one host by id, or any
  * host of one platform. A target is a hard requirement, not a preference.
  */
-export type PlacementTarget = { hostId: string } | { platform: string };
+export type PlacementTarget =
+  // `platform` on a host target is an additional requirement ("this host, and
+  // it must be a Mac") — a Task Master issue can carry both directives (#1954).
+  { hostId: string; platform?: string } | { platform: string };
 
 export type TargetPlacementResult =
   { ok: true; decision: PlacementDecision } | { ok: false; detail: string };
 
-function describeTarget(target: PlacementTarget): string {
-  return "hostId" in target ? `host ${target.hostId}` : `platform ${target.platform}`;
+/** `host <id>`, `platform <p>`, or `host <id> (platform <p>)` for a target that
+ * names both. Used in refusals and the recorded placement reason. */
+export function describeTarget(target: PlacementTarget): string {
+  if (!("hostId" in target)) return `platform ${target.platform}`;
+  return target.platform === undefined
+    ? `host ${target.hostId}`
+    : `host ${target.hostId} (platform ${target.platform})`;
 }
 
 /**
@@ -603,6 +611,10 @@ export function resolveTargetHost(
     target: PlacementTarget;
     /** True for an unattended session (a Task Master worker or reviewer). */
     unattended: boolean;
+    /** Who asked, for the recorded reason: "the caller's request" by default
+     * (an explicit child spawn); Task Master passes "the task's requirement"
+     * so a past placement reads right (#1954/#1852). */
+    requestedBy?: string;
   },
 ): TargetPlacementResult {
   const refusal = (): TargetPlacementResult => ({
@@ -618,11 +630,12 @@ export function resolveTargetHost(
     return refusal();
   }
 
-  const wanted = "hostId" in opts.target ? null : opts.target.platform.toLowerCase();
-  const matching = collected.candidates.filter((candidate) =>
-    "hostId" in opts.target
-      ? candidate.hostId === opts.target.hostId
-      : (candidate.platform ?? "").toLowerCase() === wanted,
+  const wantedPlatform = opts.target.platform?.toLowerCase();
+  const wantedHost = "hostId" in opts.target ? opts.target.hostId : null;
+  const matching = collected.candidates.filter(
+    (candidate) =>
+      (wantedHost === null || candidate.hostId === wantedHost) &&
+      (wantedPlatform === undefined || (candidate.platform ?? "").toLowerCase() === wantedPlatform),
   );
 
   const decision = chooseHost(matching, {
@@ -636,7 +649,7 @@ export function resolveTargetHost(
 
   const decorated: PlacementDecision = {
     ...decision,
-    reason: `placed on ${describeTarget(opts.target)} at the caller's request — ${decision.reason}`,
+    reason: `placed on ${describeTarget(opts.target)} at ${opts.requestedBy ?? "the caller's request"} — ${decision.reason}`,
   };
   app.log.info(
     { hostId: decorated.hostId, target: opts.target, reason: decorated.reason },

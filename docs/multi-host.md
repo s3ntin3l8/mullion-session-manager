@@ -225,6 +225,14 @@ even on an `auto` project — its `cwd` only exists on that machine. If the
 project has no path on that host (`hostCwds`) and the session has no directory
 of its own to cut from, the promote is refused (409).
 
+A Task Master issue can also _require_ a platform or host (`Platform: darwin`,
+`Host: <id>` in its body; [tasks.md](tasks.md#where-a-task-runs-platform-and-host),
+#1954). That uses the same filter as `--host` / `--platform` on a child spawn,
+so the same prerequisite applies: the target host must have an entry for the
+project in `hostCwds` (**Edit project → Also lives on**), and be online and not
+parked. When none qualifies the task is failed with the reason — it is never
+run on a host where it would break.
+
 **How the choice is made.**
 
 - _Unattended_ sessions (a Task Master worker or reviewer) get **no local
