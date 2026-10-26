@@ -821,6 +821,32 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Issue #1892 — deriveHostStatus's words, beside a host name that was
+   already on screen (project row, session row, pane tab). The dot is
+   hidden from assistive tech; the word is the status. "parked" is
+   host.drained, which that function does not derive. */
+.host-derived-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 0.59375rem;
+  min-width: 0;
+}
+.host-derived-status-health,
+.host-derived-status-parked {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.host-derived-status-parked {
+  color: var(--y);
+}
+.host-derived-status .settings-status-dot {
+  width: 7px;
+  height: 7px;
+}
 .project-attn-pill {
   min-width: 15px;
   height: 15px;

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useSyncExternalStore } from "react";
 import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
@@ -19,16 +20,18 @@ import type {
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 import { STORAGE_KEYS } from "./lib/persistedState.js";
 import { writeDockManualProjectIds } from "./dock/dockHelpers.js";
+import { useDashboardStore } from "./store/index.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
 // covers the sidebar's new search/chip filter, persisted project collapse
 // state, and the above-threshold virtualized rendering path
 // (VirtualizedProjectTree in Sidebar.tsx). Mirrors UnifiedBoard.test.tsx's
-// own store-mock shape (a `storeState()` factory serving all three call
-// shapes the real zustand hook supports: no selector -> whole state, a
-// selector -> selector(state), .getState() -> whole state) since Sidebar
-// reads the store the same three ways across its own body and the child
-// components it mounts (ProjectHeader, SessionRow, HierarchyToggle).
+// own store-mock shape (a `storeState()` factory serving the call shapes
+// the real zustand hook supports: no selector -> whole state, a selector ->
+// selector(state), .getState() -> whole state, plus setState so a test can
+// publish a host-health change) since Sidebar reads the store the same ways
+// across its own body and the child components it mounts (ProjectHeader,
+// SessionRow, HierarchyToggle).
 let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
@@ -110,12 +113,42 @@ function storeState() {
   };
 }
 
+// Issue #1892 — selectors read the module-level `let`s (so a test can still
+// reassign `hosts` and rerender). setState patches `hosts` and bumps an
+// epoch so a health update re-renders subscribers without a parent rerender.
+// The snapshot is the epoch, a number: getSnapshot must stay referentially
+// stable between updates, and several selectors here allocate.
+let storeEpoch = 0;
+const storeListeners = new Set<() => void>();
+
+function subscribeStore(listener: () => void) {
+  storeListeners.add(listener);
+  return () => {
+    storeListeners.delete(listener);
+  };
+}
+
+function getStoreEpoch() {
+  return storeEpoch;
+}
+
 vi.mock("./store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
+    useSyncExternalStore(subscribeStore, getStoreEpoch);
     const state = storeState();
     return selector ? selector(state) : state;
   };
   useDashboardStore.getState = storeState;
+  useDashboardStore.setState = (
+    partial:
+      | Partial<ReturnType<typeof storeState>>
+      | ((state: ReturnType<typeof storeState>) => Partial<ReturnType<typeof storeState>>),
+  ) => {
+    const patch = typeof partial === "function" ? partial(storeState()) : partial;
+    if (patch.hosts !== undefined) hosts = patch.hosts;
+    storeEpoch += 1;
+    for (const listener of [...storeListeners]) listener();
+  };
   return { useDashboardStore };
 });
 
@@ -242,6 +275,7 @@ function stubVirtualizerLayout() {
 }
 
 beforeEach(() => {
+  storeListeners.clear();
   projects = [PROJECT];
   sessions = [];
   hosts = [];
@@ -777,6 +811,49 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     const { container } = renderSidebar();
 
     expect(container.querySelector(".project-host-badge")?.textContent).toBe("build-box");
+  });
+
+  describe("project host status (issue #1892)", () => {
+    it("says the heartbeat's words next to the host name", () => {
+      projects = [makeProject({ id: PROJECT.id, name: "remote", hostId: "box" })];
+      hosts = [makeHost({ id: "box", name: "build-box", health: "degraded" })];
+      renderSidebar();
+      expect(screen.getByText("build-box")).toBeInTheDocument();
+      expect(screen.getByText("missed a ping")).toBeInTheDocument();
+      expect(screen.queryByText("unreachable")).toBeNull();
+    });
+
+    it("says parked as well as unreachable — they are not the same state", () => {
+      projects = [makeProject({ id: PROJECT.id, name: "remote", hostId: "box" })];
+      hosts = [makeHost({ id: "box", name: "build-box", health: "offline", drained: true })];
+      renderSidebar();
+      expect(screen.getByText("unreachable")).toBeInTheDocument();
+      expect(screen.getByText("parked")).toBeInTheDocument();
+    });
+
+    it("follows a later heartbeat — the header is subscribed to that host", () => {
+      projects = [makeProject({ id: PROJECT.id, name: "remote", hostId: "box" })];
+      hosts = [makeHost({ id: "box", name: "build-box", health: "degraded" })];
+      renderSidebar();
+      expect(screen.getByText("missed a ping")).toBeInTheDocument();
+
+      act(() => {
+        useDashboardStore.setState({
+          hosts: [makeHost({ id: "box", name: "build-box", health: "offline" })],
+        });
+      });
+
+      expect(screen.getByText("unreachable")).toBeInTheDocument();
+      expect(screen.queryByText("missed a ping")).toBeNull();
+    });
+
+    it("adds nothing for a local project, which does not name a host", () => {
+      projects = [makeProject({ id: PROJECT.id, hostId: "local" })];
+      hosts = [makeHost({ id: "local", name: "This machine", health: "offline", drained: true })];
+      renderSidebar();
+      expect(screen.queryByText("unreachable")).toBeNull();
+      expect(screen.queryByText("parked")).toBeNull();
+    });
   });
 
   // Sidebar declutter (issue #1465) — a project the user has manually

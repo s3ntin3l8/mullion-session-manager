@@ -17,7 +17,8 @@ import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import type { Device, DiscoveredProject, Host, Project, Session, Task } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
-import { describeHostBadge } from "./lib/hostBadge.js";
+import { describeHostBadge, selectRemoteHost } from "./lib/hostBadge.js";
+import { HostStatusLabel } from "./HostStatusLabel.js";
 import {
   formatStatusLabel,
   isStatusReachable,
@@ -1225,6 +1226,9 @@ function ProjectHeader({
             {host.name}
           </span>
         )}
+        {/* Issue #1892 — outside the badge's own max-width, so a long host
+            name cannot ellipsis the status words away. */}
+        {host && <HostStatusLabel host={host} />}
         {attentionCount > 0 && <span className="project-attn-pill">{attentionCount}</span>}
         {/* Sidebar declutter — a project with no sessions at all doesn't need
           a "0" sitting in its header; the plain count only earns its place
@@ -2107,15 +2111,23 @@ export function SessionRow({
   // for the case that matters: one project's sessions on DIFFERENT hosts,
   // which is what automatic placement produces.
   //
-  // The host's name comes from the store's hosts list, read NON-reactively
-  // (getState) so a session row does not re-render every time the fleet's
-  // health dot refreshes — the row re-renders on every session refresh
-  // anyway, which is often enough for a label.
+  // The host's NAME comes from the store's hosts list, read non-reactively
+  // (getState). A name does not change when the heartbeat does, and a local
+  // row never reads the fleet list. A REMOTE row subscribes to its own host
+  // below, so that row re-renders when that host's health changes. A local
+  // row's selector stays null and does not track the fleet, so a health-dot
+  // refresh still does not re-render it — the row re-renders on session
+  // refresh, which is often enough for the name.
   // Issue #1852 — the host badge AND its tooltip (the placement
   // decision's own words) are computed together, in one place: see
   // lib/hostBadge.ts's own comment for why the two disagree about how to
   // name a host.
   const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
+  // Issue #1892 — the badge above names the host and deliberately does not
+  // subscribe (a name does not change when the heartbeat does). The status
+  // does, so this row subscribes to that one host. Local sessions have no
+  // badge and get no status.
+  const remoteHost = useDashboardStore((s) => selectRemoteHost(s.hosts, session.resolvedHostId));
   const statusLabel = (
     <span className="session-status-group">
       <span className={`session-status-label ${presentation.tone}`} title={statusLabelText}>
@@ -2141,6 +2153,7 @@ export function SessionRow({
           <span className="session-host-badge-name">{hostBadge.name}</span>
         </span>
       )}
+      {remoteHost && <HostStatusLabel host={remoteHost} />}
       {openInWorkspace && (
         // The word is the signal — a colour on the row would not say
         // "this pane is already open". aria-label below repeats it: that

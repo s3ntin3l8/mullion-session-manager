@@ -4,7 +4,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
 import { api } from "./api/index.js";
-import type { GitStatus, NotificationEvent, Project, Session } from "./api/index.js";
+import type { GitStatus, Host, NotificationEvent, Project, Session } from "./api/index.js";
+import { makeHost } from "./test/fixtures.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
@@ -58,6 +59,11 @@ let dismissedEventKeys: Record<string, true>;
 // #719 — per-session mute set. Mutable so the mute test can flip it without
 // re-mocking the store; defaults empty (unmuted) like the real store init.
 let mutedSessionIds: number[] = [];
+// Issue #1892 — mutable so a test can give the named host a real health
+// value. The default is a full Host with health "pending", which renders
+// no status words (same as before this issue, when the fixture had no
+// health field at all).
+let hosts: Host[];
 const markEventSeen = vi.fn((sessionId: number, seq: number) => {
   const current = lastSeenSeq[sessionId] ?? 0;
   if (seq > current) lastSeenSeq = { ...lastSeenSeq, [sessionId]: seq };
@@ -82,9 +88,8 @@ const reportError = vi.fn();
 function storeState() {
   return {
     sessions: [session, ...extraSessions],
-    // Issue #1727 — the fleet's hosts, for the per-session host badge (which
-    // reads the store non-reactively, like the sidebar's own badge).
-    hosts: [{ id: "mac-mini", name: "mac-mini" }],
+    // Issue #1727 — the fleet's hosts, for the per-session host badge.
+    hosts,
     projects,
     gitStatuses,
     sessionGitStatuses,
@@ -247,6 +252,7 @@ beforeEach(() => {
   lastSeenSeq = {};
   dismissedEventKeys = {};
   mutedSessionIds = [];
+  hosts = [makeHost({ id: "mac-mini", name: "mac-mini" })];
   markEventSeen.mockClear();
   requestSplit.mockClear();
   renameSession.mockReset();
@@ -371,15 +377,30 @@ describe("PaneTab", () => {
 
     it("hides the badge on a narrow tab, like the status badge", () => {
       // The tab has no room for it below the narrow threshold — the same
-      // rule the status badge and the branch label follow.
+      // rule the status badge and the branch label follow. The derived
+      // status hides with the name: a status with no host name is a host
+      // the tab was not showing.
       vi.spyOn(HTMLDivElement.prototype, "getBoundingClientRect").mockReturnValue({
         width: 100,
       } as DOMRect);
       session = { ...BASE_SESSION, resolvedHostId: "mac-mini" };
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
 
       render(<PaneTab {...makeProps()} />);
 
       expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
+      expect(screen.queryByText("unreachable")).not.toBeInTheDocument();
+      expect(screen.queryByText("parked")).not.toBeInTheDocument();
+    });
+
+    it("states unreachable and parked next to the host name", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "mac-mini" };
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
+      render(<PaneTab {...makeProps()} />);
+
+      expect(screen.getByText("mac-mini")).toBeInTheDocument();
+      expect(screen.getByText("unreachable")).toBeInTheDocument();
+      expect(screen.getByText("parked")).toBeInTheDocument();
     });
   });
 

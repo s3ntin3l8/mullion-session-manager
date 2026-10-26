@@ -57,3 +57,20 @@ export function describeHostBadge(
     title: reason ? reason.replaceAll(hostId, name) : `Runs on host: ${name}`,
   };
 }
+
+/**
+ * The remote host a session row or pane tab subscribes to (issue #1892).
+ *
+ * Null for a local session, or one with no resolved host — the selector
+ * then does not read a host object, so a fleet health refresh does not
+ * re-render that row. The badge's NAME stays describeHostBadge's
+ * non-reactive read; this is only the object whose health the status
+ * words follow.
+ */
+export function selectRemoteHost(
+  hosts: readonly Host[],
+  hostId: string | null | undefined,
+): Host | null {
+  if (!hostId || hostId === LOCAL_HOST_ID) return null;
+  return hosts.find((h) => h.id === hostId) ?? null;
+}
