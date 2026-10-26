@@ -1195,7 +1195,9 @@ export function buildReviewPrompt(opts: {
           "",
         ]
       : []),
-    ...(opts.roundsRemaining !== undefined
+    // Omitted for an unlimited project (Infinity): there is no backstop to
+    // describe, and "Infinity rounds left" would only confuse the reviewer.
+    ...(opts.roundsRemaining !== undefined && Number.isFinite(opts.roundsRemaining)
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
     "Report your findings in this session too, in plain language — the JSON file",

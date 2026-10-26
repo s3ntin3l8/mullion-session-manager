@@ -95,6 +95,7 @@ function makeTask(overrides: Partial<Task>): Task {
     lastAutoReturnReason: null,
     autoReturnCapped: false,
     autoReturnCapAnnouncedAt: null,
+    needsHumanReason: null,
     worktreePath: null,
     branchName: null,
     agent: null,
@@ -832,6 +833,27 @@ describe("TaskDetail", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/sent back to the worker automatically/)).toBeNull();
     expect(screen.queryByText(/review still in flight/)).toBeNull();
+  });
+
+  it.each([
+    ["no-progress", /Round 1 — worker returned without a change, needs a human/],
+    ["finding-persisted", /Round 1 — same finding still open after two rounds, needs a human/],
+  ] as const)("says why the loop stopped for %s, even below the round cap", (reason, expected) => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        autoReturnRounds: 1,
+        autoReturnCapped: false,
+        autoReturnCapAnnouncedAt: "2026-09-04T09:34:44.000Z",
+        needsHumanReason: reason,
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(screen.getByText(/The automatic loop has stopped/)).toBeInTheDocument();
   });
 
   // #487 — the review agent used to spawn silently with no prompt when its

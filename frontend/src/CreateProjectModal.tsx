@@ -193,8 +193,13 @@ export function CreateProjectModal({
   // input can't natively represent "no value typed yet" the way a string
   // one can.
   const [maxAutoReturnRounds, setMaxAutoReturnRounds] = useState(
-    initialMaxAutoReturnRounds !== null ? String(initialMaxAutoReturnRounds) : "",
+    initialMaxAutoReturnRounds !== null && initialMaxAutoReturnRounds !== 0
+      ? String(initialMaxAutoReturnRounds)
+      : "",
   );
+  // 0 means unlimited, which an empty field cannot say (empty = inherit), so
+  // unlimited is its own checkbox rather than a magic number to type.
+  const [unlimitedRounds, setUnlimitedRounds] = useState(initialMaxAutoReturnRounds === 0);
   const [conventionalCommitTitles, setConventionalCommitTitles] = useState(
     initialConventionalCommitTitles ?? false,
   );
@@ -395,9 +400,11 @@ export function CreateProjectModal({
         mergeOnApprove: isEdit ? mergeOnApprove : undefined,
         autoApprove: isEdit ? autoApprove : undefined,
         maxAutoReturnRounds: isEdit
-          ? maxAutoReturnRounds.trim() === ""
-            ? null
-            : Number(maxAutoReturnRounds)
+          ? unlimitedRounds
+            ? 0
+            : maxAutoReturnRounds.trim() === ""
+              ? null
+              : Number(maxAutoReturnRounds)
           : undefined,
         conventionalCommitTitles: isEdit ? conventionalCommitTitles : undefined,
         autoTagRelease: isEdit ? autoTagRelease : undefined,
@@ -829,14 +836,24 @@ export function CreateProjectModal({
           <input
             type="number"
             min={1}
-            placeholder="2 (install default)"
+            placeholder="install default"
             value={maxAutoReturnRounds}
+            disabled={unlimitedRounds}
             onChange={(e) => setMaxAutoReturnRounds(e.target.value)}
           />
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={unlimitedRounds}
+              onChange={(e) => setUnlimitedRounds(e.target.checked)}
+            />
+            Unlimited
+          </label>
           <span className="create-modal-field-hint">
-            How many times a task may be sent back to its worker automatically — a changes-requested
-            review, a red required CI check, or an unresolved PR comment. Blank uses the install
-            default (currently 2).
+            How many times a task may be sent back to its worker automatically — a review that
+            requested changes, a red required CI check, or an unresolved PR comment. An approved
+            review&apos;s suggestions never count. Blank uses the install default (Settings → Task
+            Master).
           </span>
         </label>
       )}

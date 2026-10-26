@@ -682,6 +682,13 @@ export interface AppSettings {
     // repo with Actions disabled or no workflows needs `0` (spawn
     // immediately, never wait) to be reachable without env-var surgery.
     reviewCiWaitMinutes: number;
+    // Install-wide cap on the automatic fix-up rounds a task may spend
+    // (a changes-requested review, a red required CI check, an unresolved PR
+    // review comment — an approved review's suggestions round spends none).
+    // 0 = unlimited. A project's own `maxAutoReturnRounds` overrides it; an
+    // unset project inherits this. Plain number, no "inherit" sentinel and no
+    // env counterpart, for the same reason as reviewCiWaitMinutes above.
+    maxAutoReturnRounds: number;
   };
 }
 
@@ -910,6 +917,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,
+    // The review loop now ends on an approval, not on exhausting a budget, so
+    // the cap is only a backstop against a loop that never converges.
+    maxAutoReturnRounds: 10,
     defaultAgent: "claude",
     defaultReviewAgent: "none",
   },
@@ -1337,6 +1347,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         min: 0,
         max: 240,
         fallback: DEFAULT_SETTINGS.taskMaster.reviewCiWaitMinutes,
+      }),
+      // 0 is a real value (unlimited), so it must survive untouched.
+      maxAutoReturnRounds: safeNumber(settings.taskMaster.maxAutoReturnRounds, {
+        min: 0,
+        max: 100,
+        fallback: DEFAULT_SETTINGS.taskMaster.maxAutoReturnRounds,
       }),
     },
     reviewRelay: {

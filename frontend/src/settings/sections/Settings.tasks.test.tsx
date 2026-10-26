@@ -251,6 +251,32 @@ describe("Settings -> Task Master", () => {
     );
   });
 
+  it("shows the install-wide round cap at its default of 10, and edits it down to 0 (unlimited)", async () => {
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const label = await screen.findByText("Automatic fix-up rounds");
+    const row = label.closest(".settings-row") as HTMLElement;
+    const input = row.querySelector("input[type=number]") as HTMLInputElement;
+    expect(input).toHaveValue(10);
+    expect(row).toHaveTextContent("rounds");
+
+    await user.clear(input);
+    await user.type(input, "0");
+    await user.tab();
+
+    expect(useDashboardStore.getState().settings.taskMaster.maxAutoReturnRounds).toBe(0);
+    expect(row).toHaveTextContent("unlimited");
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ taskMaster: { maxAutoReturnRounds: 0 } }),
+      }),
+    );
+  });
+
   it("does not persist a cleared budget field's transient 0 until the field is committed (blur/Enter)", async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
@@ -327,6 +353,7 @@ describe("Settings -> Task Master", () => {
           skipPermissions: "on",
           trustedLogins: [],
           reviewCiWaitMinutes: 30,
+          maxAutoReturnRounds: 10,
           defaultAgent: "codex",
           defaultReviewAgent: "agy",
         },

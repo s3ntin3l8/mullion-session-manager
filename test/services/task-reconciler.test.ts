@@ -4351,7 +4351,9 @@ describe("reconcileTasks", () => {
 
       it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
         const app = await buildApp();
-        const { taskId } = await createRedCiCandidate(app, { autoReturnRounds: 2 });
+        const { taskId } = await createRedCiCandidate(app, {
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
         mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
@@ -4366,11 +4368,13 @@ describe("reconcileTasks", () => {
           "o",
           "r",
           9,
-          expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
+          expect.objectContaining({
+            body: expect.stringContaining(`round cap (${DEFAULT_MAX_AUTO_RETURN_ROUNDS})`),
+          }),
         );
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
-        expect(row.autoReturnRounds).toBe(2);
+        expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
         // Issue #1038 — this trigger has no other durable write to
         // piggyback the announcement on, so it needs its own; assert it
         // actually landed.
@@ -4392,8 +4396,8 @@ describe("reconcileTasks", () => {
       // very same tick, which needs no elapsed time to observe.
       it("keys the cap-reached dedup per task, not globally — two different capped tasks in the same tick both get a comment", async () => {
         const app = await buildApp();
-        await createRedCiCandidate(app, { autoReturnRounds: 2 });
-        await createRedCiCandidate(app, { autoReturnRounds: 2 });
+        await createRedCiCandidate(app, { autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS });
+        await createRedCiCandidate(app, { autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
         mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
@@ -4920,7 +4924,9 @@ describe("reconcileTasks", () => {
 
       it("posts a cap-reached comment and stays in 'reviewing' once the round budget is spent", async () => {
         const app = await buildApp();
-        const { taskId } = await createPrCommentCandidate(app, { autoReturnRounds: 2 });
+        const { taskId } = await createPrCommentCandidate(app, {
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
         mockFetchPullRequestReviewThreads.mockResolvedValue({
@@ -4936,7 +4942,9 @@ describe("reconcileTasks", () => {
           "o",
           "r",
           9,
-          expect.objectContaining({ body: expect.stringContaining("round cap (2)") }),
+          expect.objectContaining({
+            body: expect.stringContaining(`round cap (${DEFAULT_MAX_AUTO_RETURN_ROUNDS})`),
+          }),
         );
         // Issue #1038 — same reasoning as the red-CI cap test above: its
         // own CAS'd write, no other durable write to piggyback on.
@@ -6935,6 +6943,272 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // The round cap is a backstop (project override, else the install-wide
+    // setting, 0 = unlimited), and a loop that stops converging asks a human
+    // before it ever reaches it.
+    describe("round cap and stall guard", () => {
+      const BLOCKER_JSON = JSON.stringify({
+        verdict: "changes-requested",
+        summary: "One blocker.",
+        findings: [{ path: "a.ts", line: 1, severity: "critical", body: "fix this" }],
+      });
+
+      async function seedReviewing(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        project: { maxAutoReturnRounds?: number | null },
+        task: Partial<typeof tasks.$inferInsert>,
+      ) {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: `p-stall-${Math.random()}`, cwd: "/tmp" },
+        });
+        const projectId = created.json().id;
+        if (project.maxAutoReturnRounds !== undefined) {
+          app.db
+            .update(projects)
+            .set({ maxAutoReturnRounds: project.maxAutoReturnRounds })
+            .where(eq(projects.id, projectId))
+            .run();
+        }
+        const worker = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const review = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash" },
+        });
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "stall guard",
+            status: "reviewing",
+            sessionId: worker.json().id,
+            reviewSessionId: review.json().id,
+            worktreePath: "/tmp",
+            agentCommand: "claude",
+            claimedAt: new Date(),
+            ...task,
+          })
+          .returning()
+          .all();
+        mockFinishedSessionIds(app, review.json().id);
+        return row;
+      }
+
+      it("never caps a project set to 0 (unlimited)", async () => {
+        const app = await buildApp();
+        const task = await seedReviewing(app, { maxAutoReturnRounds: 0 }, { autoReturnRounds: 50 });
+        writeFindings(app, task.id, 50, BLOCKER_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(51);
+        expect(row.autoReturnCapAnnouncedAt).toBeNull();
+
+        await app.close();
+      });
+
+      it("uses the install-wide cap when the project sets none, and parks at it with reason 'cap'", async () => {
+        const app = await buildApp();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { maxAutoReturnRounds: 1 } },
+        });
+        const task = await seedReviewing(app, {}, { autoReturnRounds: 1 });
+        writeFindings(app, task.id, 1, BLOCKER_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+        expect(row.needsHumanReason).toBe("cap");
+
+        await app.close();
+      });
+
+      it("treats an install-wide 0 as unlimited when the project sets none", async () => {
+        const app = await buildApp();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { maxAutoReturnRounds: 0 } },
+        });
+        const task = await seedReviewing(app, {}, { autoReturnRounds: 30 });
+        writeFindings(app, task.id, 30, BLOCKER_JSON);
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, task.id)).status).toBe("in_progress");
+
+        await app.close();
+      });
+
+      it("a project's own cap overrides the install-wide one", async () => {
+        const app = await buildApp();
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { maxAutoReturnRounds: 0 } },
+        });
+        const task = await seedReviewing(app, { maxAutoReturnRounds: 1 }, { autoReturnRounds: 1 });
+        writeFindings(app, task.id, 1, BLOCKER_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("reviewing");
+        expect(row.needsHumanReason).toBe("cap");
+
+        await app.close();
+      });
+
+      it("parks the task with 'finding-persisted' when the same earlier finding is still open two rounds running", async () => {
+        const app = await buildApp();
+        const task = await seedReviewing(
+          app,
+          {},
+          {
+            autoReturnRounds: 1,
+            lastAutoReturnReason: "review",
+            lastReviewVerdict: "changes-requested",
+            reviewFindings:
+              "## Round 2\n\n**Verdict:** changes requested — s\n\n### Earlier findings\n- **a.ts:1** — still-open: probe fails",
+          },
+        );
+        writeFindings(
+          app,
+          task.id,
+          1,
+          JSON.stringify({
+            verdict: "changes-requested",
+            summary: "Still broken.",
+            previous: [{ ref: "a.ts:1", status: "still-open", evidence: "probe fails" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.needsHumanReason).toBe("finding-persisted");
+        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("does not park a finding that was only just reported still-open for the first time", async () => {
+        const app = await buildApp();
+        const task = await seedReviewing(
+          app,
+          {},
+          {
+            autoReturnRounds: 1,
+            lastAutoReturnReason: "review",
+            lastReviewVerdict: "changes-requested",
+            reviewFindings: "## Round 1\n\n**Verdict:** changes requested — s",
+          },
+        );
+        writeFindings(
+          app,
+          task.id,
+          1,
+          JSON.stringify({
+            verdict: "changes-requested",
+            summary: "Not fixed.",
+            previous: [{ ref: "a.ts:1", status: "still-open", evidence: "probe fails" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("in_progress");
+        expect(row.needsHumanReason).toBeNull();
+
+        await app.close();
+      });
+
+      describe("no-progress", () => {
+        async function seedNoProgress(
+          app: Awaited<ReturnType<typeof buildApp>>,
+          liveHeadSha: string,
+        ) {
+          mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+          mockResolveGitHubToken.mockResolvedValue("tok");
+          mockGetPullRequestByNumber.mockResolvedValue({
+            number: 9,
+            htmlUrl: "https://github.com/o/r/pull/9",
+            nodeId: "PR_node9",
+            draft: false,
+            headSha: liveHeadSha,
+          });
+          const task = await seedReviewing(
+            app,
+            {},
+            {
+              autoReturnRounds: 1,
+              prNumber: 9,
+              lastAutoReturnReason: "review",
+              lastReviewVerdict: "changes-requested",
+              lastReviewedHeadSha: "sha-reviewed",
+            },
+          );
+          writeFindings(app, task.id, 1, BLOCKER_JSON);
+          return task;
+        }
+
+        it("parks the task when the worker came back and the PR head is the commit last reviewed", async () => {
+          const app = await buildApp();
+          const task = await seedNoProgress(app, "sha-reviewed");
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, task.id);
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnRounds).toBe(1);
+          expect(row.needsHumanReason).toBe("no-progress");
+          expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+          await app.close();
+        });
+
+        it("returns the task as usual when the worker did push", async () => {
+          const app = await buildApp();
+          const task = await seedNoProgress(app, "sha-moved-on");
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, task.id);
+          expect(row.status).toBe("in_progress");
+          expect(row.autoReturnRounds).toBe(2);
+
+          await app.close();
+        });
+
+        it("fails open when the PR head can't be read", async () => {
+          const app = await buildApp();
+          const task = await seedNoProgress(app, "sha-reviewed");
+          mockGetPullRequestByNumber.mockRejectedValue(new Error("GitHub is down"));
+
+          await reconcileTasks(app);
+
+          expect((await getTask(app, task.id)).status).toBe("in_progress");
+
+          await app.close();
+        });
+      });
+    });
+
     // An APPROVED review that left only suggestions: the worker applies them
     // once, the task does NOT spend a round, and the worker's return skips the
     // review — the nit loop this verdict exists to end.
@@ -7025,14 +7299,18 @@ describe("reconcileTasks", () => {
       it("still returns the suggestions on a task that has used every round it had", async () => {
         const app = await buildApp();
         const { taskId } = await claimIntoReviewing(app, "codex");
-        app.db.update(tasks).set({ autoReturnRounds: 2 }).where(eq(tasks.id, taskId)).run();
-        writeFindings(app, taskId, 2, SUGGESTIONS_JSON);
+        app.db
+          .update(tasks)
+          .set({ autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS })
+          .where(eq(tasks.id, taskId))
+          .run();
+        writeFindings(app, taskId, DEFAULT_MAX_AUTO_RETURN_ROUNDS, SUGGESTIONS_JSON);
 
         await reconcileTasks(app);
 
         const row = await getTask(app, taskId);
         expect(row.status).toBe("in_progress");
-        expect(row.autoReturnRounds).toBe(2);
+        expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
         // Not parked as "needs a human": the task is moving.
         expect(row.autoReturnCapAnnouncedAt).toBeNull();
 
@@ -7291,7 +7569,7 @@ describe("reconcileTasks", () => {
           status: "reviewing",
           sessionId: workerSession.json().id,
           reviewSessionId: reviewSession.json().id,
-          autoReturnRounds: 2,
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
           worktreePath: "/tmp",
           agentCommand: "claude",
           claimedAt: new Date(),
@@ -7299,13 +7577,18 @@ describe("reconcileTasks", () => {
         .returning()
         .all();
       mockFinishedSessionIds(app, reviewSession.json().id);
-      writeFindings(app, task.id, 2, "A third-round finding, arriving after the cap.");
+      writeFindings(
+        app,
+        task.id,
+        DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        "A third-round finding, arriving after the cap.",
+      );
 
       await reconcileTasks(app);
 
       const row = await getTask(app, task.id);
       expect(row.status).toBe("reviewing");
-      expect(row.autoReturnRounds).toBe(2);
+      expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
       expect(row.reviewFindings).toContain("arriving after the cap");
       expect(row.sessionId).toBe(workerSession.json().id);
       // Issue #1038 — the ground-truth "the machine actually stopped"
@@ -7411,7 +7694,7 @@ describe("reconcileTasks", () => {
           status: "reviewing",
           sessionId: workerSession.json().id,
           reviewSessionId: reviewSession.json().id,
-          autoReturnRounds: 2,
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
           worktreePath: "/tmp",
           agentCommand: "claude",
           prNumber: 9,
@@ -7429,13 +7712,18 @@ describe("reconcileTasks", () => {
         draft: false,
         headSha: "sha-head",
       });
-      writeFindings(app, task.id, 2, JSON.stringify({ verdict: "clean", summary: "All good." }));
+      writeFindings(
+        app,
+        task.id,
+        DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        JSON.stringify({ verdict: "clean", summary: "All good." }),
+      );
 
       await reconcileTasks(app);
 
       const row = await getTask(app, task.id);
       expect(row.status).toBe("reviewing");
-      expect(row.autoReturnRounds).toBe(2);
+      expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
       expect(row.lastReviewVerdict).toBe("approved");
       expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
       // The normal clean-verdict review comment still posts (proving
@@ -7486,7 +7774,7 @@ describe("reconcileTasks", () => {
           status: "reviewing",
           sessionId: workerSession.json().id,
           reviewSessionId: reviewSession.json().id,
-          autoReturnRounds: 2,
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
           worktreePath: "/tmp",
           agentCommand: "claude",
           prNumber: 9,
@@ -7507,7 +7795,7 @@ describe("reconcileTasks", () => {
       writeFindings(
         app,
         task.id,
-        2,
+        DEFAULT_MAX_AUTO_RETURN_ROUNDS,
         JSON.stringify({
           verdict: "changes-requested",
           summary: "Still failing lint.",
@@ -7523,7 +7811,7 @@ describe("reconcileTasks", () => {
         "r",
         9,
         expect.objectContaining({
-          body: expect.stringContaining("round cap (2)"),
+          body: expect.stringContaining(`round cap (${DEFAULT_MAX_AUTO_RETURN_ROUNDS})`),
           comments: [
             expect.objectContaining({
               path: "cmd/branchdam/main.go",
@@ -7644,7 +7932,7 @@ describe("reconcileTasks", () => {
     // #756's whole point: a project with the default cap gets a SECOND
     // automatic round, where the pre-#756 behavior would have stalled in
     // "reviewing" after the first.
-    it("auto-returns for a second round under the default cap (2)", async () => {
+    it("auto-returns for a second round under the default cap", async () => {
       const app = await buildApp();
       const project = await app.inject({
         method: "POST",
@@ -8444,7 +8732,7 @@ describe("reconcileTasks", () => {
           sessionId: workerSession.json().id,
           reviewSessionId: reviewSession.json().id,
           reviewFindingsIngestedSessionId: reviewSession.json().id,
-          autoReturnRounds: 2,
+          autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
           autoReturnCapAnnouncedAt: new Date(Date.now() - 60_000),
           lastReviewedHeadSha: "sha-old",
           // A real parked-capped task carries this: spawnReviewAgentNow's
@@ -8506,7 +8794,7 @@ describe("reconcileTasks", () => {
       // human push. See this function's own doc comment.
       expect(row.lastReviewedHeadSha).toBe("sha-new");
       // Not spent — the human did the work, not the worker.
-      expect(row.autoReturnRounds).toBe(2);
+      expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
       expect(row.status).toBe("reviewing");
 
       await app.close();
@@ -8523,7 +8811,7 @@ describe("reconcileTasks", () => {
       expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
       expect(row.reviewSessionId).not.toBeNull();
       expect(row.reviewSpawnClaimedAt).not.toBeNull();
-      expect(row.autoReturnRounds).toBe(2);
+      expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
 
       await app.close();
     });

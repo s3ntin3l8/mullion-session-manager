@@ -199,6 +199,7 @@ const TASK_ROW_COLUMNS = {
   // autoReturnCapped/reviewFindingsIngestedSessionId itself to render the
   // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
   autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
+  needsHumanReason: tasks.needsHumanReason,
   // Task 258971's investigation: declared on the frontend Task type
   // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
   // silent-drop that bit #816/#818 (see that PR's own doc comment above).
@@ -335,13 +336,16 @@ function withAutoReturnCapped<
     autoReturnRounds: number;
     projectMaxAutoReturnRounds: number | null;
   },
->(row: T): Omit<T, "projectMaxAutoReturnRounds"> & { autoReturnCapped: boolean } {
+>(
+  row: T,
+  installCap: number,
+): Omit<T, "projectMaxAutoReturnRounds"> & { autoReturnCapped: boolean } {
   const { projectMaxAutoReturnRounds, ...rest } = row;
   return {
     ...rest,
     autoReturnCapped:
       row.autoReturnRounds >=
-      resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }),
+      resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
   };
 }
 
@@ -411,7 +415,10 @@ export async function tasksRoute(app: FastifyInstance) {
         // insertion order (Hermes review, PR #471).
         .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
         .all();
-      return rows.map((row) => withBlockedState(withAutoReturnCapped(withPrTitleFallback(row))));
+      const installCap = resolveTaskMasterConfig(app).maxAutoReturnRounds;
+      return rows.map((row) =>
+        withBlockedState(withAutoReturnCapped(withPrTitleFallback(row), installCap)),
+      );
     },
   );
 
@@ -427,7 +434,14 @@ export async function tasksRoute(app: FastifyInstance) {
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
-    return row ? withBlockedState(withAutoReturnCapped(withPrTitleFallback(row))) : null;
+    return row
+      ? withBlockedState(
+          withAutoReturnCapped(
+            withPrTitleFallback(row),
+            resolveTaskMasterConfig(app).maxAutoReturnRounds,
+          ),
+        )
+      : null;
   }
 
   app.get<{ Params: { id: string } }>("/api/tasks/:id", async (request, reply) => {
@@ -1516,6 +1530,7 @@ export async function tasksRoute(app: FastifyInstance) {
           // Clearing it here, same write, means the board stops claiming
           // "needs a human" the instant a human has, in fact, acted.
           autoReturnCapAnnouncedAt: null,
+          needsHumanReason: null,
           // A human sent it back: whatever approval a suggestions round was
           // carrying no longer covers the work, so the next finish re-reviews.
           approvalCarriedAt: null,

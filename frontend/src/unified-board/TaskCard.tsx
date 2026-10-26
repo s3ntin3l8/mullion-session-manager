@@ -10,6 +10,7 @@ import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
+import { needsHumanText } from "../needsHuman.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
 
@@ -427,7 +428,7 @@ export function TaskCard({
           }
         >
           {capAnnounced
-            ? `Round ${task.autoReturnRounds} · round cap reached, needs a human`
+            ? `Round ${task.autoReturnRounds} · ${needsHumanText(task.needsHumanReason)}, needs a human`
             : task.autoReturnCapped
               ? `Round ${task.autoReturnRounds} · review in flight`
               : `Round ${task.autoReturnRounds} · returned to worker`}

@@ -968,6 +968,17 @@ export const tasks = sqliteTable(
     // every site that puts the task back into motion (autoReturnTask, the
     // Reject route, the reviewing<->in_progress transitions, claim, retry).
     autoReturnCapAnnouncedAt: integer("auto_return_cap_announced_at", { mode: "timestamp" }),
+    // WHY the machine stopped, written in the same write as
+    // `autoReturnCapAnnouncedAt` above (which stays the "stopped" signal):
+    // `cap` — the round cap was reached; `no-progress` — the worker came back
+    // from a changes-requested round without pushing anything; `finding-persisted`
+    // — the reviewer marked the same earlier finding still open on two
+    // consecutive rounds. Only meaningful while the announce stamp is set (a
+    // stale value is harmless and the board ignores it), and cleared wherever
+    // that stamp is.
+    needsHumanReason: text("needs_human_reason", {
+      enum: ["cap", "no-progress", "finding-persisted"],
+    }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside
     // reviewFindingsIngestedSessionId above (task-reconciler.ts's

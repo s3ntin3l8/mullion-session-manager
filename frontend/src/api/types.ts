@@ -1896,6 +1896,9 @@ export interface Task {
   // three states, not two: not capped / capped-but-not-announced (still
   // working) / capped-and-announced (needs a human).
   autoReturnCapAnnouncedAt: string | null;
+  // Why the automatic loop stopped; only meaningful while the announce stamp
+  // above is set. See needsHuman.ts.
+  needsHumanReason: "cap" | "no-progress" | "finding-persisted" | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
@@ -2390,6 +2393,9 @@ export interface AppSettings {
     // No sentinel, no env counterpart — settings.ts's own doc comment on
     // this field explains why.
     reviewCiWaitMinutes: number;
+    // Install-wide cap on automatic fix-up rounds; 0 = unlimited. A project's
+    // own maxAutoReturnRounds overrides it.
+    maxAutoReturnRounds: number;
   };
 }
 

@@ -338,7 +338,7 @@ const updateProjectSchema = {
       defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
-      maxAutoReturnRounds: { type: ["integer", "null"], minimum: 1 },
+      maxAutoReturnRounds: { type: ["integer", "null"], minimum: 0 },
       conventionalCommitTitles: { type: ["boolean", "null"] },
       autoTagRelease: { type: ["boolean", "null"] },
       injectAgentGuide: { type: ["boolean", "null"] },

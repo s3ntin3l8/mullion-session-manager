@@ -774,10 +774,41 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       />,
     );
 
-    await user.type(screen.getByPlaceholderText("2 (install default)"), "5");
+    await user.type(screen.getByPlaceholderText("install default"), "5");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ maxAutoReturnRounds: 5 }));
+  });
+
+  it("sends 0 for the Unlimited checkbox, and pre-checks it for a project already at 0", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialMaxAutoReturnRounds={0}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    const unlimited = screen.getByRole("checkbox", { name: "Unlimited" });
+    expect(unlimited).toBeChecked();
+    expect(screen.getByPlaceholderText("install default")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ maxAutoReturnRounds: 0 }));
+
+    // Unchecking falls back to inherit (blank), not to a stale number.
+    await user.click(unlimited);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ maxAutoReturnRounds: null }),
+    );
   });
 
   it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {

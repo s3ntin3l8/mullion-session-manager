@@ -53,6 +53,7 @@ import {
   taskRereviewRequestPath,
   isApprovingVerdict,
   parseReviewFindings,
+  type ParsedReviewFindings,
   parseCommitTitle,
   renderReviewFindingsMarkdown,
   resolvePrTitle,
@@ -100,6 +101,69 @@ import {
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
+
+export type ReviewStallReason = "no-progress" | "finding-persisted";
+
+/** `- **ref** — still-open: …` lines of a rendered "### Earlier findings"
+ * section, as `renderReviewFindingsMarkdown` writes them. */
+function openRefsOfRenderedRound(block: string | undefined): Set<string> {
+  const refs = new Set<string>();
+  if (!block) return refs;
+  for (const m of block.matchAll(/^- \*\*(.+?)\*\* — (?:still-open|re-broken)/gm)) {
+    refs.add(m[1]);
+  }
+  return refs;
+}
+
+/**
+ * Is a review loop with no human watching it going nowhere? Two signals, both
+ * about a task the reviewer just sent back AGAIN:
+ *
+ * - `finding-persisted` — an earlier finding this round marks still-open /
+ *   re-broken was already still-open in the previous round's rendered review.
+ * - `no-progress` — the worker's last return was a review fix-up, yet the PR
+ *   head is the very commit that review covered: it pushed nothing.
+ *
+ * A stall stops the automatic loop and asks a human, instead of spending the
+ * rest of the cap on the same defect. Fails OPEN: any GitHub lookup problem
+ * just means no `no-progress` verdict, never a wrongly parked task.
+ */
+async function detectReviewStall(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  parsed: ParsedReviewFindings,
+): Promise<ReviewStallReason | null> {
+  if (parsed.verdict !== "changes-requested") return null;
+
+  const blocks = task.reviewFindings?.split(/\n\n(?=## Round )/);
+  const previousOpen = openRefsOfRenderedRound(blocks?.[blocks.length - 1]);
+  if (parsed.previous.some((d) => d.status !== "addressed" && previousOpen.has(d.ref))) {
+    return "finding-persisted";
+  }
+
+  if (
+    task.lastAutoReturnReason === "review" &&
+    task.lastReviewVerdict === "changes-requested" &&
+    task.lastReviewedHeadSha !== null &&
+    task.prNumber !== null
+  ) {
+    try {
+      const repoRef = await resolveRepoRef(app, project);
+      const token = repoRef ? await resolveGitHubToken(app, repoRef, "read") : null;
+      if (repoRef && token) {
+        const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+        if (pr.headSha === task.lastReviewedHeadSha) return "no-progress";
+      }
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id },
+        "task reconcile: could not read the PR head to check for review-loop progress — not treating it as a stall",
+      );
+    }
+  }
+  return null;
+}
 
 /**
  * What the previous review round found, for a FOLLOW-UP review's delta
@@ -227,7 +291,8 @@ async function spawnReviewAgentNow(
     // a task has already spent more rounds than the new cap allows.
     const roundsRemaining = Math.max(
       0,
-      resolveMaxAutoReturnRounds(project) - task.autoReturnRounds,
+      resolveMaxAutoReturnRounds(project, resolveTaskMasterConfig(app).maxAutoReturnRounds) -
+        task.autoReturnRounds,
     );
     const prompt = buildReviewPrompt({
       task,
@@ -2721,7 +2786,7 @@ async function attemptReturnRedCiToWorker(
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return false;
 
-  const maxRounds = resolveMaxAutoReturnRounds(project);
+  const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
   if (task.autoReturnRounds >= maxRounds) {
     if (ciCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
     // Issue #1038 — unlike processReviewingTasks's cap notice, this trigger
@@ -2907,7 +2972,7 @@ async function attemptReturnPrCommentsToWorker(
     Math.max(...newComments.map((c) => new Date(c.createdAt).getTime())),
   );
 
-  const maxRounds = resolveMaxAutoReturnRounds(project);
+  const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
   if (task.autoReturnRounds >= maxRounds) {
     if (prCommentCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
     // Issue #1038 — same reasoning as the red-CI cap notice above: no other
@@ -3355,12 +3420,20 @@ function rereviewRequestKey(verdictAt: Date): number {
 // follow-up's whole point) needs more than one chance before it strands a
 // task in "reviewing" waiting for a human. Overridable per project via
 // `projects.maxAutoReturnRounds` (null = use this default).
-export const DEFAULT_MAX_AUTO_RETURN_ROUNDS = 2;
+export const DEFAULT_MAX_AUTO_RETURN_ROUNDS = 10;
 
-export function resolveMaxAutoReturnRounds(project: {
-  maxAutoReturnRounds: number | null;
-}): number {
-  return project.maxAutoReturnRounds ?? DEFAULT_MAX_AUTO_RETURN_ROUNDS;
+/**
+ * The effective round cap for a project: its own `maxAutoReturnRounds` if set,
+ * otherwise the install-wide `taskMaster.maxAutoReturnRounds` (default 10).
+ * `0` at either level means unlimited and resolves to `Infinity`, so every
+ * `rounds >= cap` comparison keeps working unchanged.
+ */
+export function resolveMaxAutoReturnRounds(
+  project: { maxAutoReturnRounds: number | null },
+  installCap: number = DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+): number {
+  const cap = project.maxAutoReturnRounds ?? installCap;
+  return cap === 0 ? Infinity : cap;
 }
 
 /**
@@ -3489,6 +3562,7 @@ export async function autoReturnTask(
       // it explicitly anyway so this write is the one place that can never
       // leave a stale announcement behind if that invariant ever slips.
       autoReturnCapAnnouncedAt: null,
+      needsHumanReason: null,
       // Issue #1357 — this is a fresh worker spell (a new session, per
       // reseedTaskIfSessionExited's force:true just below), same reasoning
       // as reject's own claimedAt reset (routes/tasks.ts): leaving the
@@ -3546,6 +3620,7 @@ export async function autoReturnTask(
         // above) — restores the pre-attempt value rather than assuming
         // null, though every designed caller already had it null here.
         autoReturnCapAnnouncedAt: task.autoReturnCapAnnouncedAt,
+        needsHumanReason: task.needsHumanReason,
         // Issue #1357 — claimedAt rolls back too: a failed re-seed means no
         // new spell actually started, so the clock the budget check reads
         // must not have moved either. Same "roll back together" reasoning
@@ -4016,9 +4091,19 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           task.worktreePath !== null &&
           task.agentCommand !== null &&
           commandSupportsSeed(task.agentCommand);
-        const maxRounds = resolveMaxAutoReturnRounds(project);
+        const maxRounds = resolveMaxAutoReturnRounds(
+          project,
+          resolvedTaskMaster.maxAutoReturnRounds,
+        );
         const capReached = task.autoReturnRounds >= maxRounds;
-        const shouldAutoReturn = wantsAutoReturn && !capReached;
+        // A loop that has stopped converging asks a human rather than
+        // running out the cap on the same defect. Only worth a lookup when a
+        // return was otherwise about to happen.
+        const stall =
+          wantsAutoReturn && !capReached
+            ? await detectReviewStall(app, task, project, parsed!)
+            : null;
+        const shouldAutoReturn = wantsAutoReturn && !capReached && stall === null;
         // An approval that left only suggestions: same preconditions as any
         // auto-return (a finished review, a worker that can take a seed) but
         // NOT capped — the round it sends costs nothing.
@@ -4084,7 +4169,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // output is being ingested (isUsableSignal above), so `capReached`
         // alone already means "a capped task's findings were just
         // ingested" — no separate ingest-pointer comparison needed here.
-        const announcingCap = capReached && !wantsSuggestionsRound;
+        const announcingCap = (capReached || stall !== null) && !wantsSuggestionsRound;
+        const needsHumanReason: "cap" | ReviewStallReason | null = announcingCap
+          ? capReached
+            ? "cap"
+            : stall
+          : null;
         // Issue #1039 — the PR head SHA this round's ingested findings are
         // actually about, read from the existing github-pr-poller.ts cache
         // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
@@ -4109,7 +4199,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
             // grace window; see that column's own doc comment in schema.ts.
             lastReviewVerdictAt: new Date(now),
-            ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date() } : {}),
+            ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
             ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
           })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
@@ -4149,7 +4239,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         const cappedNote =
           wantsAutoReturn && capReached
             ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
-            : "";
+            : stall === "finding-persisted"
+              ? "\n\n_The same earlier finding is still open after two rounds — the automatic loop has stopped; this task needs a human to take it from here._"
+              : stall === "no-progress"
+                ? "\n\n_The worker returned without pushing a change — the automatic loop has stopped; this task needs a human to take it from here._"
+                : "";
         await postReviewFindingsComment(
           app,
           task,
@@ -4357,6 +4451,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
       .update(tasks)
       .set({
         autoReturnCapAnnouncedAt: null,
+        needsHumanReason: null,
         reviewSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
@@ -4436,7 +4531,11 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     // filter above — the round budget is the scope's own second signal for
     // "still has life left," worth checking directly rather than trusting a
     // single derived flag.
-    if (task.autoReturnRounds >= resolveMaxAutoReturnRounds(project)) continue;
+    if (
+      task.autoReturnRounds >=
+      resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds)
+    )
+      continue;
 
     const staleReviewSessionId = task.reviewSessionId;
     const updated = app.db
@@ -4988,6 +5087,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // design), so any prior announcement is stale the instant
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
+                needsHumanReason: null,
                 // #761 — `?? task.prTitle`, not a bare overwrite: a later
                 // round that doesn't rewrite the title file (see
                 // `taskCommitTitlePath`'s own doc comment on why that's

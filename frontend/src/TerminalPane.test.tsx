@@ -639,6 +639,7 @@ function renderPane(
         skipPermissions: "inherit",
         trustedLogins: [],
         reviewCiWaitMinutes: 15,
+        maxAutoReturnRounds: 10,
         defaultAgent: "claude",
         defaultReviewAgent: "none",
       },

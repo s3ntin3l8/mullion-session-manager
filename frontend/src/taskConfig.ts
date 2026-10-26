@@ -14,6 +14,7 @@ export interface ResolvedTaskMasterConfig {
   rateLimitGraceMinutes: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
+  maxAutoReturnRounds: number;
 }
 
 export function resolveTaskMaster(
@@ -40,5 +41,6 @@ export function resolveTaskMaster(
         ? envDefaults.skipPermissions
         : taskMaster.skipPermissions === "on",
     reviewCiWaitMinutes: taskMaster.reviewCiWaitMinutes,
+    maxAutoReturnRounds: taskMaster.maxAutoReturnRounds,
   };
 }
