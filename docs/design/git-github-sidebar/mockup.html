@@ -1224,15 +1224,17 @@
         `<div class="vh"><span class="ibtn" role="button" tabindex="0" title="Back" aria-label="Back">${I("back")}</span><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext, "ext")}</div></div>`;
       const Sec = (name, count, body, o = {}) =>
         `<div class="sec"><div class="sec-h"><span class="chev">${I(o.closed ? "chevr" : "chevd", 12)}</span><span class="name">${name}</span>${count != null ? `<span class="count">${count}</span>` : ""}<span class="sp"></span>${o.action || ""}</div>${o.closed ? "" : body}</div>`;
+      /* plain text of an HTML fragment, attribute-escaped — parsed, not regex-stripped */
+      const plainText = (html) => {
+        const t = document.createElement("template");
+        t.innerHTML = String(html);
+        return t.content.textContent.replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      };
       const Row = (lead, name, meta, trail, o = {}) =>
-        `<div class="row${o.sel ? " sel" : ""}"><span class="lead">${lead}</span><div class="body"><div class="t"><span class="name" title="${String(
-          name,
-        )
-          .replace(/<[^>]*>/g, "")
-          .replace(
-            /"/g,
-            "&quot;",
-          )}">${name}</span></div>${meta ? `<div class="meta">${meta}</div>` : ""}${o.extra ? `<div class="extra">${o.extra}</div>` : ""}</div><div class="trail">${o.hover ? `<span class="hover-actions">${o.hover}</span>` : ""}${trail || ""}</div></div>`;
+        `<div class="row${o.sel ? " sel" : ""}"><span class="lead">${lead}</span><div class="body"><div class="t"><span class="name" title="${plainText(name)}">${name}</span></div>${meta ? `<div class="meta">${meta}</div>` : ""}${o.extra ? `<div class="extra">${o.extra}</div>` : ""}</div><div class="trail">${o.hover ? `<span class="hover-actions">${o.hover}</span>` : ""}${trail || ""}</div></div>`;
       const dot = (t) => `<span class="dotc ${t}"></span>`;
       const tone = (t, n, s) => `<span class="tone-${t}">${I(n, s)}</span>`;
 
@@ -1688,19 +1690,21 @@
           )
           .join("");
       }
+      const pick = (k) => VIEWS.find(([id]) => id === k)?.[0];
       nav.addEventListener("click", (e) => {
         const b = e.target.closest("button");
-        if (b) {
-          cur = b.dataset.k;
-          location.hash = cur;
+        const id = b && pick(b.dataset.k);
+        if (id) {
+          cur = id;
+          location.hash = id;
           render();
         }
       });
-      if (VIEW_FNS.has(location.hash.slice(1))) cur = location.hash.slice(1);
+      cur = pick(location.hash.slice(1)) ?? cur;
       window.addEventListener("hashchange", () => {
-        const k = location.hash.slice(1);
-        if (VIEW_FNS.has(k)) {
-          cur = k;
+        const id = pick(location.hash.slice(1));
+        if (id) {
+          cur = id;
           render();
         }
       });
