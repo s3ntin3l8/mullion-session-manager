@@ -700,18 +700,20 @@ export function SessionTimeline({
                       const owner = sessions.find((s) => s.id === event.sessionId);
                       if (!owner) return null;
                       return (
-                        <button
-                          type="button"
-                          className="session-timeline-row-pr"
-                          onClick={() =>
-                            useDashboardStore
-                              .getState()
-                              .openRightSidebarPr(owner.projectId, prNumber)
-                          }
-                        >
+                        <>
                           {" "}
-                          Open PR #{prNumber}
-                        </button>
+                          <button
+                            type="button"
+                            className="session-timeline-row-pr"
+                            onClick={() =>
+                              useDashboardStore
+                                .getState()
+                                .openRightSidebarPr(owner.projectId, prNumber)
+                            }
+                          >
+                            Open PR #{prNumber}
+                          </button>
+                        </>
                       );
                     })()}
                   {/* Hermes review, PR #560 — `event.sessionId === null` alone

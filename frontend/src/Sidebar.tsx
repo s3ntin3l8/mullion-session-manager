@@ -52,6 +52,7 @@ import {
   SkillIcon,
   WarningTriangleIcon,
 } from "./ui/icons.js";
+import { useLayoutContext } from "./lib/layoutTier.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import {
   dockColumnProjectIds,
@@ -2022,6 +2023,7 @@ export function SessionRow({
   );
   const matchedPr = matchSessionPr(prsStatus?.prs, { branch: displayBranch, taskPrNumber });
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
+  const layoutTier = useLayoutContext().tier;
 
   // U3 — factored into sessionDisplayTitle (module scope, top of file) so
   // the sidebar's new search filter matches against exactly this same
@@ -2247,11 +2249,16 @@ export function SessionRow({
           isMuted={isMuted}
           onToggleMute={() => useDashboardStore.getState().toggleSessionMute(session.id)}
           onOpenAsFloat={onOpenAsFloat}
-          onRevealInGit={() => {
-            const st = useDashboardStore.getState();
-            if (displayBranch) st.openRightSidebarBranch(project.id, displayBranch);
-            else st.openRightSidebarView("git", project.id);
-          }}
+          onRevealInGit={
+            // No right sidebar on phone — the request would never be applied.
+            layoutTier === "phone"
+              ? undefined
+              : () => {
+                  const st = useDashboardStore.getState();
+                  if (displayBranch) st.openRightSidebarBranch(project.id, displayBranch);
+                  else st.openRightSidebarView("git", project.id);
+                }
+          }
           onPromote={() => setPromoteOpen(true)}
           onRename={(value) => {
             // The store rolls the optimistic rename back on a rejected

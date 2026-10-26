@@ -125,11 +125,10 @@ export function useFollowedProject(
     { value: FOLLOW_SENTINEL, label: followLabel },
     ...scopedProjects.map((p) => ({ value: String(p.id), label: p.name })),
   ];
-  // Out-of-scope but on screen (pinned from the palette, or the last panel's
-  // project after a workspace switch): keep it selectable rather than blank.
-  const shownId = pinnedProjectId ?? effectiveProjectId;
-  if (shownId != null && pinnedProjectId != null && !scopedProjects.some((p) => p.id === shownId)) {
-    const extra = projects.find((p) => p.id === shownId);
+  // A project pinned from outside the scope (palette "Edit project files")
+  // stays selectable rather than leaving the Dropdown value dangling.
+  if (pinnedProjectId != null && !scopedProjects.some((p) => p.id === pinnedProjectId)) {
+    const extra = projects.find((p) => p.id === pinnedProjectId);
     if (extra) dropdownOptions.push({ value: String(extra.id), label: extra.name });
   }
   const dropdownValue = pinnedProjectId != null ? String(pinnedProjectId) : FOLLOW_SENTINEL;
