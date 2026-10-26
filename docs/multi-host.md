@@ -823,6 +823,51 @@ look like a broken one. It returns to the live state on its own — the
 session list is refreshed every few seconds, so the first refresh after the
 host wakes brings the real status back.
 
+## Changing an agent's project roots
+
+An agent's **project roots** (`PROJECTS_ROOTS`) are the folders it scans for
+projects **and the containment barrier for its file and git routes**: a path
+outside them is refused (`… must be within this agent's PROJECTS_ROOTS`). They
+come from the agent's own `.env`, and can be changed from the primary without
+logging in to the host: **Settings → Hosts → the host's menu → config → Projects
+roots → Edit roots** (add/remove directories, **Save roots**; **Reset to
+default** goes back to the `.env` value).
+
+- It takes effect on the **next request** — the agent re-reads its roots every
+  time — with no restart. Projects that fall outside the new roots stop being
+  reachable on that host until they are inside one again.
+- The agent **validates** the list: absolute paths (or `~/…`) to **existing
+  directories**, no `..`, no commas, nothing too broad (the filesystem root, the
+  home directory itself or a folder that contains it such as `/Users`), and
+  nothing inside a credentials directory under home (`~/.ssh`, `~/.gnupg`,
+  `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gcloud`), and nothing that
+  **overlaps Mullion's own install or data** on that host — `~/.mullion`,
+  `MULLION_HOME`, the sessions directory and the database file are refused as a
+  root whether the root contains them or sits inside them. At most 16, never
+  empty.
+- It is stored as a small override file on the agent
+  (`~/.mullion/agent-projects-roots.json`), **not** by rewriting its `.env`
+  (which holds the agent token). A missing or unreadable file means "no
+  override" — the `.env` value applies. What is **read back** is validated again
+  too, so a hand-edited file naming something unsafe is ignored rather than
+  trusted; and a saved list that no longer validates (say a root on a share
+  that is not mounted right now) falls back to the `.env` roots and applies
+  again by itself once the path is back.
+- **The host's operator can forbid it:** set `PROJECTS_ROOTS_LOCKED=true` in
+  the agent's environment and the primary cannot set the roots at all (the
+  dialog says so, and a previously saved override is ignored). A stale override
+  saved before the pin is reported by the dialog, which offers **Reset to
+  default** to clear it — clearing is allowed because it only moves toward the
+  pinned value. The agent enforces this, not the UI.
+- Trust, plainly: the primary can already start arbitrary sessions on an agent
+  (a session's directory is deliberately not confined to the roots), so an
+  editable roots list removes only defence in depth against a buggy primary or a
+  leaked credential for the file and git routes. Every change is logged on the
+  agent, and the edit endpoint is rate-limited (5 per minute).
+- This machine's own roots are **Settings → Projects & discovery**, not this
+  dialog. A host whose Mullion predates this feature shows "too old to change
+  its roots from here — upgrade it".
+
 ## Agent updates
 
 Issue [#647](https://github.com/s3ntin3l8/mullion-session-manager/issues/647)

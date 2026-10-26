@@ -1273,6 +1273,34 @@ describe("RemoteHostClient", () => {
     expect((err as RequestError).statusCode).toBe(404);
   });
 
+  it("PUTs the roots to /internal/projects-roots and returns the agent's fresh config (issue #1951)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { projectsRoots: ["/a"] }));
+    await expect(client().resolveSetProjectsRoots(["/a"])).resolves.toEqual({
+      projectsRoots: ["/a"],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/projects-roots",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ roots: ["/a"] }) }),
+    );
+  });
+
+  it("resolveSetProjectsRoots sends null to remove the override, and surfaces a 422 body (issue #1951)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    await client().resolveSetProjectsRoots(null);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.objectContaining({ body: JSON.stringify({ roots: null }) }),
+    );
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ status: 400, error: "nope" }), { status: 422 }),
+    );
+    const err = await client()
+      .resolveSetProjectsRoots(["/x"])
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect(JSON.parse((err as RequestError).body)).toEqual({ status: 400, error: "nope" });
+  });
+
   it("bypasses fetch entirely for an empty ids array", async () => {
     await expect(client().bulkLiveStatus([], 1000)).resolves.toEqual({});
     await expect(client().bulkIsMasterAlive([])).resolves.toEqual({});

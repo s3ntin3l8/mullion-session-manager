@@ -40,6 +40,14 @@ export const hostsApi = {
 
   getHostConfig: (id: string) => request<HostConfig>(`/api/hosts/${encodeURIComponent(id)}/config`),
 
+  // Issue #1951 follow-up — save (or, with null, remove) a remote host's
+  // project-roots override; resolves to the host's fresh config.
+  setHostProjectsRoots: (id: string, roots: string[] | null) =>
+    request<HostConfig>(`/api/hosts/${encodeURIComponent(id)}/config/projects-roots`, {
+      method: "PUT",
+      body: JSON.stringify({ roots }),
+    }),
+
   // Issue #647 / roadmap 7.8.
   getHostUpdateStatus: (id: string) =>
     request<HostUpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update`),

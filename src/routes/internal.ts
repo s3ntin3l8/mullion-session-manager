@@ -111,6 +111,13 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
+import {
+  effectiveProjectsRoots,
+  protectedAgentDirs,
+  resolveEffectiveProjectsRoots,
+  validateProjectsRoots,
+  writeProjectsRootsOverride,
+} from "../services/agent-projects-roots.js";
 import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
 import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
 import { getCachedAgents } from "../services/agent-detect.js";
@@ -173,6 +180,8 @@ import {
   terminateSchema,
   promptSchema,
   waitOutputSchema,
+  projectsRootsSchema,
+  type ProjectsRootsBody,
   type PromptBody,
   type WaitOutputBody,
   reviewGateSchema,
@@ -259,6 +268,12 @@ const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 m
 // enforces. Module-scope, same as INTERNAL_RATE_LIMIT above — every other
 // per-route rate-limit const in this file lives here, not inside
 // internalRoutes() itself.
+// Issue #1951 follow-up — PUT /internal/projects-roots moves the containment
+// barrier of this agent's file and git routes, so it gets its own tight limit
+// instead of INTERNAL_RATE_LIMIT's 1000/min: a person edits this a few times,
+// never in a loop.
+const PROJECTS_ROOTS_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } };
+
 const GENERATION_TURN_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
 
 /**
@@ -303,9 +318,9 @@ function resolveWithinRoots(app: FastifyInstance, cwd: string): string | null {
   let roots: string[];
   try {
     realResolved = realpathExistingPrefix(resolved);
-    roots = parseProjectsRootsEnv(app.config.PROJECTS_ROOTS).map((root) =>
-      realpathExistingPrefix(path.resolve(root)),
-    );
+    // Issue #1951 follow-up — the roots in force: the saved override the
+    // primary set from Settings → Hosts, else this host's own env value.
+    roots = effectiveProjectsRoots(app).map((root) => realpathExistingPrefix(path.resolve(root)));
   } catch {
     // A non-ENOENT failure mid-walk (EACCES, ELOOP on a symlink cycle, ...)
     // means realpathExistingPrefix couldn't reliably determine the real
@@ -519,10 +534,20 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // acceptable for a read-only diagnostic, but don't read this as "what the
   // session gets" the way it is for the other two tiers.
   const sshAuthSockPath = rawSshAuthSock === "" ? "" : path.resolve(rawSshAuthSock);
+  const projectsRoots = resolveEffectiveProjectsRoots(app);
   return {
     role: app.config.MULLION_ROLE,
     version: appVersion,
-    projectsRoots: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
+    projectsRoots: projectsRoots.roots,
+    // Issue #1951 follow-up — where the roots above come from, what a reset
+    // goes back to, and whether this host's operator pinned them. Optional on
+    // the wire: an agent build that predates them omits them.
+    projectsRootsSource: projectsRoots.source,
+    projectsRootsEnv: parseProjectsRootsEnv(app.config.PROJECTS_ROOTS),
+    projectsRootsLocked: app.config.PROJECTS_ROOTS_LOCKED,
+    // A saved override that the operator's lock is keeping from applying: the
+    // dialog offers to clear it (clearing only moves toward the pinned value).
+    projectsRootsOverrideIgnored: projectsRoots.overrideIgnored,
     sessionsDir: app.config.SESSIONS_DIR,
     crsConfigDir: app.config.CRS_CONFIG_DIR,
     browserEnabled: app.config.BROWSER_ENABLED,
@@ -772,11 +797,12 @@ export async function internalRoutes(app: FastifyInstance) {
     }
   });
 
-  // This agent's own PROJECTS_ROOTS, always read straight from env — unlike
-  // the primary's resolveProjectRoots (routes/projects.ts), there's no
-  // Settings override to check since an agent has no DB.
+  // This agent's own project roots: its env PROJECTS_ROOTS unless the primary
+  // saved an override (services/agent-projects-roots.ts). Unlike the primary's
+  // resolveProjectRoots (routes/projects.ts) there is no DB Settings value to
+  // check — an agent has no DB.
   app.get("/internal/discover", INTERNAL_RATE_LIMIT, async () => {
-    return discoverCandidates(parseProjectsRootsEnv(app.config.PROJECTS_ROOTS));
+    return discoverCandidates(effectiveProjectsRoots(app));
   });
 
   // Issue #247 / roadmap 7.4 — per-agent effective-config visibility, pull-
@@ -791,6 +817,49 @@ export async function internalRoutes(app: FastifyInstance) {
   // Settings value (services/settings.ts's idleThresholdSeconds) with no
   // env-var equivalent, so an agent has no way to know it either.
   app.get("/internal/config", INTERNAL_RATE_LIMIT, async () => buildAgentConfig(app));
+
+  // Issue #1951 follow-up — the primary editing THIS agent's project roots
+  // (Settings → Hosts → config). The roots are the containment barrier for
+  // this file's file and git routes, so a refusal here is deliberate and
+  // explained: it answers HTTP 422 carrying `{status, error}` (a 4xx,
+  // because RemoteHostClient.request() discards the body of a 5xx) with the
+  // status the primary should show. `roots: null` removes the saved override
+  // and goes back to this host's env value. The change is persisted
+  // (services/agent-projects-roots.ts) and applies to the very next request
+  // — no restart. Logged at warn level: a moved barrier should never be
+  // silent on the host it protects.
+  app.put<{ Body: ProjectsRootsBody }>(
+    "/internal/projects-roots",
+    { ...PROJECTS_ROOTS_RATE_LIMIT, schema: projectsRootsSchema },
+    async (request, reply) => {
+      const requested = request.body.roots;
+      // Pinned: the primary may not SET roots, but clearing a stale saved
+      // override is allowed — it only moves toward the value the operator
+      // pinned, and without it an override saved before the lock would sit
+      // there, ignored, until someone unlocks the host and it springs back.
+      if (app.config.PROJECTS_ROOTS_LOCKED && requested !== null) {
+        reply.code(422);
+        return {
+          status: 409,
+          error:
+            "this host's project roots are pinned by its operator (PROJECTS_ROOTS_LOCKED) and cannot be changed from the primary",
+        };
+      }
+      if (requested === null) {
+        writeProjectsRootsOverride(null);
+        app.log.warn("project roots: the saved override was removed by the primary");
+        return buildAgentConfig(app);
+      }
+      const checked = validateProjectsRoots(requested, { protectedDirs: protectedAgentDirs(app) });
+      if (!checked.ok) {
+        reply.code(422);
+        return { status: 400, error: checked.error };
+      }
+      writeProjectsRootsOverride(checked.roots);
+      app.log.warn({ roots: checked.roots }, "project roots: changed by the primary");
+      return buildAgentConfig(app);
+    },
+  );
 
   // Issue #1721 / roadmap 8.7 — this agent's own CAPACITY: how busy this
   // machine is, in numbers a placement policy can compare across hosts.

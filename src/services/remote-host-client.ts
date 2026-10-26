@@ -256,6 +256,12 @@ const GIT_REPAIR_REQUEST_TIMEOUT_MS = 180_000;
 // different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
 
+// Issue #1951 follow-up — the agent validates every root with a few stat/realpath
+// calls on its own disk; a network share or a sleeping disk makes that slower
+// than the default 5 s, and a timeout here would read as "host unreachable"
+// for a save that may in fact have been applied.
+const PROJECTS_ROOTS_REQUEST_TIMEOUT_MS = 15_000;
+
 // Issue #1951 — `sessions.prompt` against a child on this host. The agent
 // types the body, waits the adapter's submit delay (~150 ms), re-checks, then
 // presses Enter, all under a per-session lock — so a queued prompt can wait
@@ -434,6 +440,18 @@ export interface AgentConfig {
   role: "primary" | "agent";
   version: string;
   projectsRoots: string[];
+  // Issue #1951 follow-up — where `projectsRoots` comes from ("env": this
+  // host's own PROJECTS_ROOTS; "override": saved from the primary's
+  // Settings → Hosts), the env value a reset returns to, and whether this
+  // host's operator pinned the roots (PROJECTS_ROOTS_LOCKED). All optional: an
+  // agent build that predates them omits them, and the dialog then offers no
+  // editing rather than guessing.
+  projectsRootsSource?: "env" | "override";
+  projectsRootsEnv?: string[];
+  projectsRootsLocked?: boolean;
+  // A saved override exists but the lock keeps it from applying — see
+  // routes/internal.ts's buildAgentConfig.
+  projectsRootsOverrideIgnored?: boolean;
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;
@@ -654,6 +672,24 @@ export class RemoteHostClient {
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
+  }
+
+  /**
+   * Issue #1951 follow-up — saves (or, with `null`, removes) this agent's
+   * project-roots override. The agent answers a refusal (locked, an unsafe or
+   * missing directory) as HTTP 422 `{status, error}`; an agent build too old
+   * to have the route answers 404.
+   */
+  resolveSetProjectsRoots(roots: string[] | null): Promise<AgentConfig> {
+    return this.request(
+      "/internal/projects-roots",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ roots }),
+      },
+      PROJECTS_ROOTS_REQUEST_TIMEOUT_MS,
+    );
   }
 
   // Issue #247 / roadmap 7.4 — see internal.ts's GET /internal/config for

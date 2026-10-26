@@ -4629,6 +4629,190 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  // Issue #1951 follow-up — the primary editing THIS agent's project roots.
+  // The saved override lives under os.homedir(), so HOME points at a throwaway
+  // directory for the whole block: nothing here may touch the real ~/.mullion.
+  describe("PUT /internal/projects-roots (issue #1951)", () => {
+    const originalHome = process.env.HOME;
+    let sandbox: string;
+    let newRoot: string;
+    const put = (app: Awaited<ReturnType<typeof buildApp>>, roots: unknown, token = TOKEN) =>
+      app.inject({
+        method: "PUT",
+        url: "/internal/projects-roots",
+        headers: { authorization: `Bearer ${token}` },
+        payload: { roots },
+      });
+    const get = (app: Awaited<ReturnType<typeof buildApp>>, url: string) =>
+      app.inject({ method: "GET", url, headers: { authorization: `Bearer ${TOKEN}` } });
+
+    beforeEach(() => {
+      sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "internal-roots-"));
+      process.env.HOME = path.join(sandbox, "home");
+      fs.mkdirSync(process.env.HOME, { recursive: true });
+      newRoot = path.join(sandbox, "work");
+      fs.mkdirSync(path.join(newRoot, "other-repo", ".git"), { recursive: true });
+    });
+    afterEach(() => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      delete process.env.PROJECTS_ROOTS_LOCKED;
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    });
+
+    it("saves the roots, reports them as an override, and applies them on the very next request", async () => {
+      const app = await buildApp();
+      const res = await put(app, [newRoot]);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        projectsRoots: [newRoot],
+        projectsRootsSource: "override",
+        projectsRootsEnv: [projectsRoot],
+        projectsRootsLocked: false,
+      });
+      // The discover scan and the path barrier both read the new roots at once.
+      const discovered = await get(app, "/internal/discover");
+      expect(discovered.json()).toEqual([
+        { name: "other-repo", cwd: path.join(newRoot, "other-repo"), isGitRepo: true },
+      ]);
+      const inside = await get(app, `/internal/actions?cwd=${encodeURIComponent(newRoot)}`);
+      expect(inside.statusCode).not.toBe(400);
+      const oldRoot = await get(app, `/internal/actions?cwd=${encodeURIComponent(projectsRoot)}`);
+      expect(oldRoot.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("survives a restart, and null goes back to the host's own PROJECTS_ROOTS", async () => {
+      const first = await buildApp();
+      expect((await put(first, [newRoot])).statusCode).toBe(200);
+      await first.close();
+
+      const second = await buildApp();
+      const config = (await get(second, "/internal/config")).json();
+      expect(config).toMatchObject({ projectsRoots: [newRoot], projectsRootsSource: "override" });
+
+      const reset = await put(second, null);
+      expect(reset.statusCode).toBe(200);
+      expect(reset.json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsSource: "env",
+      });
+      expect(
+        fs.existsSync(path.join(process.env.HOME!, ".mullion", "agent-projects-roots.json")),
+      ).toBe(false);
+      await second.close();
+    });
+
+    it("refuses an unsafe or missing directory with 422 {status: 400}, saving nothing", async () => {
+      const app = await buildApp();
+      for (const bad of [
+        path.join(sandbox, "missing"),
+        process.env.HOME!,
+        path.dirname(sandbox),
+        "relative/dir",
+      ]) {
+        const res = await put(app, [bad]);
+        expect(res.statusCode).toBe(422);
+        expect(res.json()).toMatchObject({ status: 400, error: expect.any(String) });
+      }
+      expect((await get(app, "/internal/config")).json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsSource: "env",
+      });
+      await app.close();
+    });
+
+    it("rejects a malformed body", async () => {
+      const app = await buildApp();
+      // Refused either by the body schema (400) or, for an empty list that the
+      // schema layer coerces through, by the validator (422 {status: 400}).
+      for (const body of [[], "nope", { roots: 1 }]) {
+        const res = await put(app, body);
+        expect([400, 422]).toContain(res.statusCode);
+      }
+      await app.close();
+    });
+
+    it("answers 422 {status: 409} when the host's operator pinned the roots, and ignores a saved override", async () => {
+      // An override saved earlier (before the operator pinned the roots).
+      const early = await buildApp();
+      expect((await put(early, [newRoot])).statusCode).toBe(200);
+      await early.close();
+
+      process.env.PROJECTS_ROOTS_LOCKED = "true";
+      const app = await buildApp();
+      const res = await put(app, [newRoot]);
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({ status: 409, error: expect.stringMatching(/pinned/) });
+      expect((await get(app, "/internal/config")).json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsSource: "env",
+        projectsRootsLocked: true,
+        // ... and it says the saved list is being ignored, so it can be cleared.
+        projectsRootsOverrideIgnored: true,
+      });
+
+      // Clearing is allowed while pinned: it only moves toward the pinned value,
+      // and without it the old override would spring back the day the pin lifts.
+      const cleared = await put(app, null);
+      expect(cleared.statusCode).toBe(200);
+      expect(cleared.json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsOverrideIgnored: false,
+      });
+      expect(
+        fs.existsSync(path.join(process.env.HOME!, ".mullion", "agent-projects-roots.json")),
+      ).toBe(false);
+      await app.close();
+    });
+
+    it("does not trust a hand-edited override: a file rewritten to name '/' falls back to the env roots", async () => {
+      const first = await buildApp();
+      expect((await put(first, [newRoot])).statusCode).toBe(200);
+      await first.close();
+      // What an attacker with file-write reach into ~/.mullion would try.
+      const file = path.join(process.env.HOME!, ".mullion", "agent-projects-roots.json");
+      fs.writeFileSync(file, JSON.stringify({ version: 1, roots: ["/"] }));
+      const future = new Date(Date.now() + 10_000);
+      fs.utimesSync(file, future, future);
+
+      const app = await buildApp();
+      expect((await get(app, "/internal/config")).json()).toMatchObject({
+        projectsRoots: [projectsRoot],
+        projectsRootsSource: "env",
+      });
+      await app.close();
+    });
+
+    it("refuses a root that overlaps Mullion's own data (~/.mullion holds this very override)", async () => {
+      const app = await buildApp();
+      const own = path.join(process.env.HOME!, ".mullion");
+      fs.mkdirSync(own, { recursive: true });
+      const res = await put(app, [own]);
+      expect(res.statusCode).toBe(422);
+      expect(res.json()).toMatchObject({
+        status: 400,
+        error: expect.stringMatching(/Mullion's own/),
+      });
+      await app.close();
+    });
+
+    it("rejects a request with the wrong token", async () => {
+      const app = await buildApp();
+      expect((await put(app, [newRoot], "wrong")).statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("is rate limited far below the other internal routes", async () => {
+      const app = await buildApp();
+      const statuses: number[] = [];
+      for (let i = 0; i < 7; i++) statuses.push((await put(app, [newRoot])).statusCode);
+      expect(statuses.slice(0, 5).every((s) => s === 200)).toBe(true);
+      expect(statuses.slice(5)).toEqual([429, 429]);
+      await app.close();
+    });
+  });
+
   // Issue #1951 — the agent-side halves of `sessions.prompt` and
   // `sessions.wait_for_output` for a child whose PTY lives on this host. A
   // refusal is HTTP 422 carrying `{status, error}`: RemoteHostClient discards

@@ -1,5 +1,6 @@
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
+import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 
 // The JSON Schema bodies/params for `internalRoutes` (internal.ts) — the
 // DB-less agent's own token-gated API. Extracted from internal.ts, which
@@ -236,6 +237,34 @@ export const livenessSchema = {
 export const terminateSchema = {
   params: SESSION_ID_PARAMS_SCHEMA,
 };
+
+// Issue #1951 follow-up — the primary editing this agent's project roots
+// (PUT /internal/projects-roots). `roots: null` removes the saved override.
+// The count and per-entry length are bounded here; whether each entry is a
+// safe, existing directory is validateProjectsRoots' job (a schema cannot stat).
+export interface ProjectsRootsBody {
+  roots: string[] | null;
+}
+export const projectsRootsSchema = {
+  body: {
+    type: "object",
+    required: ["roots"],
+    additionalProperties: false,
+    properties: {
+      roots: {
+        anyOf: [
+          { type: "null" },
+          {
+            type: "array",
+            minItems: 1,
+            maxItems: MAX_PROJECTS_ROOTS,
+            items: { type: "string", minLength: 1, maxLength: 1024 },
+          },
+        ],
+      },
+    },
+  },
+} as const;
 
 // Issue #1951 — `sessions.prompt` / `sessions.wait_for_output` for a child on
 // this host, proxied by the primary. The text bound is a character count (the

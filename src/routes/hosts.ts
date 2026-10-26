@@ -16,6 +16,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion } from "./server-info.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
@@ -276,6 +277,78 @@ export async function hostsRoute(app: FastifyInstance) {
       return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }
   });
+
+  // Issue #1951 follow-up — edit a REMOTE host's project roots from the config
+  // dialog. The roots are the agent's own containment barrier for its file and
+  // git routes, so the decision is the AGENT's: it validates the list, may be
+  // pinned by its operator (PROJECTS_ROOTS_LOCKED), and persists the change.
+  // This route only relays that and translates the agent's refusal (HTTP 422
+  // `{status, error}` — a 4xx so the body survives RemoteHostClient) into the
+  // status a browser should see. `roots: null` removes the saved override and
+  // goes back to the host's env value. The local host is not editable here: its
+  // roots are Settings → Projects & discovery's (a DB value), not an env one.
+  app.put<{ Params: { id: string }; Body: { roots: string[] | null } }>(
+    "/api/hosts/:id/config/projects-roots",
+    {
+      schema: {
+        body: {
+          type: "object",
+          required: ["roots"],
+          additionalProperties: false,
+          properties: {
+            roots: {
+              anyOf: [
+                { type: "null" },
+                {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: MAX_PROJECTS_ROOTS,
+                  items: { type: "string", minLength: 1, maxLength: 1024 },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      if (id === LOCAL_HOST_ID) {
+        return reply.badRequest(
+          "This machine's project roots are set in Settings → Projects & discovery",
+        );
+      }
+      if (!getHostRow(app, id)) return reply.notFound();
+      try {
+        return await getRemoteHostClient(app, id).resolveSetProjectsRoots(request.body.roots);
+      } catch (err) {
+        if (err instanceof HostRequestError) {
+          if (err.statusCode === 404) {
+            return reply.code(501).send({
+              statusCode: 501,
+              error: "Not Implemented",
+              message: "This host's Mullion is too old to change its project roots — upgrade it",
+            });
+          }
+          if (err.statusCode === 422) {
+            try {
+              const refusal = JSON.parse(err.body) as { status?: unknown; error?: unknown };
+              if (typeof refusal.error === "string") {
+                return refusal.status === 409
+                  ? reply.conflict(refusal.error)
+                  : reply.badRequest(refusal.error);
+              }
+            } catch {
+              // fall through to the generic forwarding below
+            }
+          }
+          return forwardHostRequestError(reply, err);
+        }
+        app.log.warn({ hostId: id, err }, "host unreachable, project roots not changed");
+        return reply.serviceUnavailable(`Host ${id} is unreachable`);
+      }
+    },
+  );
 
   // Issue #647 / roadmap 7.8 — per-host update status for the Settings ->
   // Hosts row: the agent's own version (via the existing #247/7.4 config
