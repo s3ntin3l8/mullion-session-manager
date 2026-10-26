@@ -4,7 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { previews } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
+import { previews, projects } from "../../src/db/schema.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
@@ -316,6 +317,17 @@ describe("previews route (issue #28)", () => {
     const rows = list.json() as Array<{ slug: string; branch: string | null }>;
     expect(rows.find((r) => r.slug === slug)?.branch).toBe("feat/links");
     expect(rows.find((r) => r.slug === external.json().slug)?.branch).toBeNull();
+
+    // A detached HEAD is not a branch a consumer could link to.
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+    const detached = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(detached.json().branch).toBeNull();
+
+    // A remote-hosted project's cwd is not readable here.
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/feat/links\n");
+    app.db.update(projects).set({ hostId: "remote-1" }).where(eq(projects.id, projectId)).run();
+    const remote = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(remote.json().branch).toBeNull();
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

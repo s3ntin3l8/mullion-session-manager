@@ -52,7 +52,8 @@ function isAllowedExternalUrl(value: string): boolean {
 // no owning session — it is one dev-server slot per project — so the branch is
 // the project checkout's own HEAD, read cheaply from `.git/HEAD`. External
 // previews and remote-hosted projects (whose cwd this host cannot read) have
-// none: null, never a guess.
+// none: null, never a guess. A detached HEAD is null too — a short SHA is not
+// a branch a consumer could link to.
 function withBranch(app: FastifyInstance, preview: PreviewSummary): PreviewSummary {
   let branch: string | null = null;
   if (preview.kind === "project" && preview.projectId !== null) {
@@ -61,7 +62,8 @@ function withBranch(app: FastifyInstance, preview: PreviewSummary): PreviewSumma
       .from(projects)
       .where(eq(projects.id, preview.projectId))
       .all();
-    if (project && project.hostId === LOCAL_HOST_ID) branch = readGitBranch(project.cwd);
+    if (project && project.hostId === LOCAL_HOST_ID)
+      branch = readGitBranch(project.cwd, { allowDetached: false });
   }
   return { ...preview, branch };
 }

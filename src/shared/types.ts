@@ -538,6 +538,12 @@ export type TabletPaneCap = 2 | 3;
 export interface IssueTriageState {
   state: "requested";
   runId: string;
+  /**
+   * When the run was dispatched (ISO 8601). The index keeps finished runs too,
+   * so `state` alone cannot tell an in-flight triage from an old one — a
+   * consumer ages it out with this.
+   */
+  dispatchedAt: string;
 }
 
 // ---------------------------------------------------------------------------

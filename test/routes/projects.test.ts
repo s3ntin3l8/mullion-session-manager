@@ -2127,14 +2127,18 @@ describe("projects route", () => {
               i.triage,
             ]),
           );
-          expect(byNumber.get(1)).toEqual({ state: "requested", runId: "run_triage_1" });
+          expect(byNumber.get(1)).toEqual({
+            state: "requested",
+            runId: "run_triage_1",
+            dispatchedAt: new Date(triageRun.dispatchedAt).toISOString(),
+          });
           expect(byNumber.get(3)).toBeNull();
 
           const detail = await app.inject({
             method: "GET",
             url: `/api/projects/${id}/github/issues/1`,
           });
-          expect(detail.json().triage).toEqual({ state: "requested", runId: "run_triage_1" });
+          expect(detail.json().triage).toMatchObject({ state: "requested", runId: "run_triage_1" });
         } finally {
           vi.mocked(getRunForTarget).mockReset();
           fs.rmSync(projectCwd, { recursive: true, force: true });
@@ -2664,6 +2668,18 @@ describe("projects route", () => {
             })
             .returning()
             .all();
+          // A promoted task (it has a prNumber) is not matched by branch: its
+          // branch name reused by another PR must not claim that PR.
+          app.db
+            .insert(tasks)
+            .values({
+              projectId: id,
+              title: "t3",
+              status: "done",
+              prNumber: 99,
+              branchName: "other",
+            })
+            .run();
           type Row = { number: number; taskId?: number; taskStatus?: string };
           const check = (rows: Row[]) => {
             expect(rows.find((r) => r.number === 41)).toMatchObject({

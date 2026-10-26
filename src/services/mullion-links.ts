@@ -21,13 +21,21 @@ export function issueTriageFor(
   issueNumber: number,
 ): IssueTriageState | null {
   const record = getRunForTarget("issue", owner, repo, issueNumber);
-  return record ? { state: "requested", runId: record.runId } : null;
+  return record
+    ? {
+        state: "requested",
+        runId: record.runId,
+        dispatchedAt: new Date(record.dispatchedAt).toISOString(),
+      }
+    : null;
 }
 
 /**
  * Joins each PR to the Task Master task that opened it — on `prNumber` (set
- * once the task is promoted to a PR), else on the task's own `branchName`
- * (a draft PR from the task's branch before `prNumber` is recorded). One
+ * once the task is promoted to a PR), else on the `branchName` of a task that
+ * has no `prNumber` yet (a draft PR from the task's branch before it is
+ * recorded). A promoted task is never matched by branch, so a reused branch
+ * name cannot attribute the wrong task. One
  * query per project; PRs with no task are returned untouched.
  */
 export function annotatePrTasks(
@@ -47,10 +55,14 @@ export function annotatePrTasks(
     .where(eq(tasks.projectId, projectId))
     .all();
   if (rows.length === 0) return prs;
+  const byPr = new Map<number, (typeof rows)[number]>();
+  const byBranch = new Map<string, (typeof rows)[number]>();
+  for (const t of rows) {
+    if (t.prNumber !== null) byPr.set(t.prNumber, t);
+    else if (t.branchName !== null) byBranch.set(t.branchName, t);
+  }
   return prs.map((pr) => {
-    const task =
-      rows.find((t) => t.prNumber === pr.number) ??
-      rows.find((t) => t.branchName !== null && t.branchName === pr.headBranch);
+    const task = byPr.get(pr.number) ?? byBranch.get(pr.headBranch);
     return task ? { ...pr, taskId: task.id, taskStatus: task.status } : pr;
   });
 }
