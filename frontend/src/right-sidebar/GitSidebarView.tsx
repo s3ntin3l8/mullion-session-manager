@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { GitBranchesSection } from "../git/GitBranchesSection.js";
-import { GitHistorySection } from "../git/GitHistorySection.js";
 import { GitWorktreesSection } from "../git/GitWorktreesSection.js";
 import { SourceControlSection } from "../SourceControlSection.js";
 import { ChevronDownIcon } from "../ui/icons.js";
@@ -8,12 +7,11 @@ import { useDashboardStore } from "../store/index.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 const STORAGE_KEY = "crs.gitSidebarSections";
-type SectionId = "changes" | "branches" | "worktrees" | "history";
+type SectionId = "changes" | "branches" | "worktrees";
 const DEFAULT_OPEN: Record<SectionId, boolean> = {
   changes: true,
   branches: false,
   worktrees: false,
-  history: true,
 };
 
 function readOpen(): Record<SectionId, boolean> {
@@ -74,16 +72,6 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
     (s) => s.gitBranchesByProject[projectId]?.worktrees?.length,
   );
 
-  // Worktree the History section is scoped to; undefined = the project root.
-  // Tied to the project it was chosen for: this component does not remount on
-  // a project switch, and another project's worktree path is invalid here.
-  const [historySelection, setHistorySelection] = useState<{
-    projectId: number;
-    cwd: string | undefined;
-  }>({ projectId, cwd: undefined });
-  const historyCwd = historySelection.projectId === projectId ? historySelection.cwd : undefined;
-  const setHistoryCwd = (cwd: string | undefined) => setHistorySelection({ projectId, cwd });
-
   const toggle = (id: SectionId) =>
     setOpen((prev) => {
       const next = { ...prev, [id]: !prev[id] };
@@ -119,14 +107,7 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
         open={open.worktrees}
         onToggle={() => toggle("worktrees")}
       >
-        <GitWorktreesSection projectId={projectId} selected={historyCwd} onSelect={setHistoryCwd} />
-      </Section>
-      <Section title="History" open={open.history} onToggle={() => toggle("history")}>
-        <GitHistorySection
-          projectId={projectId}
-          cwd={historyCwd}
-          onClearCwd={() => setHistoryCwd(undefined)}
-        />
+        <GitWorktreesSection projectId={projectId} />
       </Section>
     </div>
   );

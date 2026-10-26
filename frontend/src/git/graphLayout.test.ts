@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGraphLayout, laneColour, LANE_COLOURS } from "./graphLayout.js";
+import { computeGraphLayout, foldRow, laneColour, MAX_LANES } from "./graphLayout.js";
 
 const c = (sha: string, ...parents: string[]) => ({ sha, parents });
 
@@ -69,9 +69,48 @@ describe("computeGraphLayout", () => {
     expect(rows[3].passThrough).toEqual([]);
   });
 
-  it("returns an empty layout for no commits and cycles colours across lanes", () => {
+  it("returns an empty layout for no commits", () => {
     expect(computeGraphLayout([])).toEqual({ rows: [], width: 0 });
-    expect(laneColour(0)).toBe(LANE_COLOURS[0]);
-    expect(laneColour(LANE_COLOURS.length)).toBe(LANE_COLOURS[0]);
+  });
+
+  it("colours lanes from the --lane-* tokens and dims everything past the cap", () => {
+    expect(laneColour(0)).toBe("var(--lane-1)");
+    expect(laneColour(MAX_LANES - 1)).toBe(`var(--lane-${MAX_LANES})`);
+    expect(laneColour(MAX_LANES)).toBe("var(--lane-more)");
+    expect(laneColour(40)).toBe("var(--lane-more)");
+  });
+});
+
+describe("foldRow", () => {
+  const wide = (n: number) => {
+    // n unrelated branch tips, then a commit on the last lane they all pass.
+    const tips = Array.from({ length: n }, (_, i) => c(`t${i}`, `p${i}`));
+    return computeGraphLayout([...tips, c("p0")]).rows;
+  };
+
+  it("leaves a row within the cap untouched", () => {
+    const row = wide(3)[2];
+    const f = foldRow(row);
+    expect(f).toMatchObject({ lane: row.lane, width: row.width, hidden: 0 });
+    expect(f.passThrough).toEqual(row.passThrough);
+  });
+
+  it("folds lanes past the cap into one overflow lane and counts them", () => {
+    const rows = wide(10);
+    const row = rows[9]; // tenth tip: ten lanes wide
+    expect(row.width).toBe(10);
+    const f = foldRow(row);
+    expect(f.width).toBe(MAX_LANES + 1);
+    expect(f.hidden).toBe(10 - MAX_LANES);
+    expect(f.lane).toBe(MAX_LANES); // the dot itself sits in the overflow lane
+    expect(Math.max(...f.passThrough, ...f.parentLanes)).toBe(MAX_LANES);
+    // Several folded lanes draw as a single line.
+    expect(new Set(f.passThrough).size).toBe(f.passThrough.length);
+  });
+
+  it("is per row: a narrow row stays narrow when the graph is wide elsewhere", () => {
+    const rows = wide(10);
+    expect(foldRow(rows[0]).width).toBe(1);
+    expect(foldRow(rows[9]).width).toBeGreaterThan(foldRow(rows[0]).width);
   });
 });
