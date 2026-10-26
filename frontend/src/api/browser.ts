@@ -16,10 +16,12 @@ export const browserApi = {
   // Idempotent by projectId — reopening the same project's browser pane
   // reuses its existing preview row/slug rather than minting a new one (see
   // src/services/preview-registry.ts).
-  createProjectPreview: (projectId: number) =>
+  // `sessionId` (issue #2007) records which session serves the preview, so
+  // its branch follows that session rather than the project checkout.
+  createProjectPreview: (projectId: number, sessionId?: number) =>
     request<Preview>("/api/previews", {
       method: "POST",
-      body: JSON.stringify({ kind: "project", projectId }),
+      body: JSON.stringify({ kind: "project", projectId, sessionId }),
     }),
 
   createExternalPreview: (url: string) =>

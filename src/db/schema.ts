@@ -419,6 +419,13 @@ export const previews = sqliteTable(
     kind: text("kind", { enum: ["project", "external"] }).notNull(),
     projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
     externalUrl: text("external_url"),
+    // Issue #2007 — the session whose dev server this project preview is
+    // serving, written when a browser pane binds to a session. A preview is
+    // one row per project, so this is the most recent binder. NULL means
+    // "unbound" (and external previews never have one); the branch the preview
+    // reports is derived from it (routes/previews.ts withBranch). SET NULL, not
+    // CASCADE: deleting the session must not delete the project's preview slug.
+    sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),

@@ -112,6 +112,19 @@ export async function viaRemote<T>(
 }
 
 /**
+ * The branch `cwd` is on, on a remote host (issue #2007) — the preview
+ * route's counterpart to its local `.git/HEAD` read. A detached HEAD comes
+ * back as the agent reports it; the caller treats failure as "no branch".
+ */
+export function resolveHostGitBranch(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+): Promise<HostGitResult<string | null>> {
+  return viaRemote(app, hostId, (client) => client.resolveGitBranch(cwd));
+}
+
+/**
  * `{ isRepo, status }` for `cwd` on whichever host owns it — always a
  * `forceFresh` read (never the cached one), since every current caller
  * (task-promote.ts's dirty-tree gate) needs the same "don't serve a stale

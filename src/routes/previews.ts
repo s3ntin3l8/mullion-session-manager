@@ -1,8 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
+import { getPreviewWorktree } from "../services/git-worktree.js";
+import { resolveHostGitBranch } from "../services/host-git.js";
+import { resolveBackend } from "../services/session-backend.js";
 import {
   UnknownProjectError,
   createExternalPreview,
@@ -21,6 +24,7 @@ interface CreatePreviewBody {
   kind: "project" | "external";
   projectId?: number;
   url?: string;
+  sessionId?: number;
 }
 
 const createPreviewSchema = {
@@ -31,6 +35,7 @@ const createPreviewSchema = {
     properties: {
       kind: { type: "string", enum: ["project", "external"] },
       projectId: { type: "number" },
+      sessionId: { type: "integer" },
       url: { type: "string", minLength: 1 },
     },
   },
@@ -48,24 +53,53 @@ function isAllowedExternalUrl(value: string): boolean {
   return isAllowedHttpUrl(value, { allowLoopback: false, allowPrivate: false });
 }
 
-// The branch a project preview is serving (epic #1965, A6). A preview row has
-// no owning session — it is one dev-server slot per project — so the branch is
-// the project checkout's own HEAD, read cheaply from `.git/HEAD`. External
-// previews and remote-hosted projects (whose cwd this host cannot read) have
-// none: null, never a guess. A detached HEAD is null too — a short SHA is not
-// a branch a consumer could link to.
-function withBranch(app: FastifyInstance, preview: PreviewSummary): PreviewSummary {
-  let branch: string | null = null;
-  if (preview.kind === "project" && preview.projectId !== null) {
-    const [project] = app.db
-      .select({ cwd: projects.cwd, hostId: projects.hostId })
-      .from(projects)
-      .where(eq(projects.id, preview.projectId))
+// The branch a project preview is serving (epic #1965, A6/A7). In order:
+// the serving session's self-reported live branch, that session's tracked
+// preview worktree, then the project checkout's own HEAD — read from
+// `.git/HEAD` locally, or through the host client for a remote-hosted project
+// (whose cwd this host cannot read). External previews have none: null, never
+// a guess. A detached HEAD is null too — a short SHA is not a branch a
+// consumer could link to.
+async function withBranch(app: FastifyInstance, preview: PreviewSummary): Promise<PreviewSummary> {
+  return { ...preview, branch: await resolvePreviewBranch(app, preview) };
+}
+
+async function resolvePreviewBranch(
+  app: FastifyInstance,
+  preview: PreviewSummary,
+): Promise<string | null> {
+  if (preview.kind !== "project" || preview.projectId === null) return null;
+  const [project] = app.db
+    .select({ cwd: projects.cwd, hostId: projects.hostId })
+    .from(projects)
+    .where(eq(projects.id, preview.projectId))
+    .all();
+  if (!project) return null;
+
+  if (preview.sessionId !== null) {
+    const [session] = app.db
+      .select({ hostId: sessions.hostId })
+      .from(sessions)
+      .where(eq(sessions.id, preview.sessionId))
       .all();
-    if (project && project.hostId === LOCAL_HOST_ID)
-      branch = readGitBranch(project.cwd, { allowDetached: false });
+    if (session) {
+      const hostId = session.hostId ?? project.hostId;
+      try {
+        const live = await resolveBackend(app, hostId).liveStatus([String(preview.sessionId)], 0);
+        const liveBranch = live[String(preview.sessionId)]?.liveBranch;
+        if (liveBranch) return liveBranch;
+      } catch (err) {
+        // An unreachable host must not fail the preview read; fall through.
+        app.log.warn({ hostId, sessionId: preview.sessionId, err }, "preview live branch lookup");
+      }
+      const worktree = getPreviewWorktree(preview.sessionId);
+      if (worktree?.branch) return worktree.branch;
+    }
   }
-  return { ...preview, branch };
+
+  if (project.hostId === LOCAL_HOST_ID) return readGitBranch(project.cwd, { allowDetached: false });
+  const result = await resolveHostGitBranch(app, project.hostId, project.cwd);
+  return result.ok ? result.value : null;
 }
 
 export async function previewsRoute(app: FastifyInstance) {
@@ -75,7 +109,9 @@ export async function previewsRoute(app: FastifyInstance) {
   // than silently succeed into a dead end.
   if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
 
-  app.get("/api/previews", async () => listPreviews(app).map((p) => withBranch(app, p)));
+  app.get("/api/previews", async () =>
+    Promise.all(listPreviews(app).map((p) => withBranch(app, p))),
+  );
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",
@@ -89,9 +125,9 @@ export async function previewsRoute(app: FastifyInstance) {
           return reply.badRequest('projectId is required for kind "project"');
         }
         try {
-          const preview = getOrCreateProjectPreview(app, projectId);
+          const preview = getOrCreateProjectPreview(app, projectId, request.body.sessionId);
           reply.code(201);
-          return withBranch(app, preview);
+          return await withBranch(app, preview);
         } catch (err) {
           if (err instanceof UnknownProjectError) return reply.notFound(err.message);
           throw err;
@@ -104,14 +140,14 @@ export async function previewsRoute(app: FastifyInstance) {
       }
       const preview = createExternalPreview(app, url);
       reply.code(201);
-      return withBranch(app, preview);
+      return await withBranch(app, preview);
     },
   );
 
   app.get<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {
     const preview = getPreviewBySlug(app, request.params.slug);
     if (!preview) return reply.notFound();
-    return withBranch(app, preview);
+    return await withBranch(app, preview);
   });
 
   app.delete<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {

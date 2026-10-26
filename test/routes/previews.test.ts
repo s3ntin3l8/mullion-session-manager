@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { eq } from "drizzle-orm";
-import { previews, projects } from "../../src/db/schema.js";
+import { previews, projects, sessions } from "../../src/db/schema.js";
+import * as sessionBackendModule from "../../src/services/session-backend.js";
+import * as hostGitModule from "../../src/services/host-git.js";
+import { trackPreviewWorktree, deletePreviewWorktree } from "../../src/services/git-worktree.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
@@ -331,6 +334,136 @@ describe("previews route (issue #28)", () => {
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
+  });
+
+  describe("branch follows the session serving the preview (A7, #2007)", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    function fakeLive(liveBranch: string | null) {
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockResolvedValue({ "1": { liveBranch } }),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+    }
+
+    async function setup(app: Awaited<ReturnType<typeof buildApp>>) {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "previews-session-"));
+      fs.mkdirSync(path.join(cwd, ".git"));
+      fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/main-checkout\n");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `sess-${Math.random()}`, cwd },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "claude" })
+        .returning()
+        .all();
+      return { cwd, projectId, sessionId: session.id };
+    }
+
+    it("prefers the bound session's live branch, then its worktree, then the checkout", async () => {
+      const app = await buildApp();
+      const { cwd, projectId, sessionId } = await setup(app);
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockResolvedValue({ [String(sessionId)]: { liveBranch: "feat/live" } }),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+
+      const bound = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, sessionId },
+      });
+      expect(bound.json().sessionId).toBe(sessionId);
+      expect(bound.json().branch).toBe("feat/live");
+
+      // No live branch yet: the session's tracked worktree wins over the checkout.
+      vi.restoreAllMocks();
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockResolvedValue({}),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      trackPreviewWorktree(sessionId, {
+        worktreePath: path.join(cwd, "wt"),
+        branch: "feat/worktree",
+        worktreeRefresh: false,
+        parentCwd: cwd,
+        projectId,
+      });
+      const slug = bound.json().slug as string;
+      const viaWorktree = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaWorktree.json().branch).toBe("feat/worktree");
+
+      deletePreviewWorktree(sessionId);
+      const viaCheckout = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaCheckout.json().branch).toBe("main-checkout");
+
+      // A throwing backend (unreachable host) degrades to the checkout.
+      vi.restoreAllMocks();
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockRejectedValue(new Error("down")),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      const unreachable = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(unreachable.json().branch).toBe("main-checkout");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("ignores a session of another project and unbinds when the session is deleted", async () => {
+      const app = await buildApp();
+      const a = await setup(app);
+      const b = await setup(app);
+      fakeLive("feat/live");
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId: a.projectId, sessionId: b.sessionId },
+      });
+      expect(res.json().sessionId).toBeNull();
+      expect(res.json().branch).toBe("main-checkout");
+
+      const bound = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId: a.projectId, sessionId: a.sessionId },
+      });
+      expect(bound.json().sessionId).toBe(a.sessionId);
+      app.db.delete(sessions).where(eq(sessions.id, a.sessionId)).run();
+      const after = await app.inject({ method: "GET", url: `/api/previews/${bound.json().slug}` });
+      expect(after.json().sessionId).toBeNull();
+
+      fs.rmSync(a.cwd, { recursive: true, force: true });
+      fs.rmSync(b.cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("resolves a remote-hosted project's branch through the host client, null on failure", async () => {
+      const app = await buildApp();
+      const { cwd, projectId } = await setup(app);
+      app.db.update(projects).set({ hostId: "remote-1" }).where(eq(projects.id, projectId)).run();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId },
+      });
+      const slug = created.json().slug as string;
+
+      const spy = vi
+        .spyOn(hostGitModule, "resolveHostGitBranch")
+        .mockResolvedValue({ ok: true, value: "feat/remote" });
+      const ok = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(ok.json().branch).toBe("feat/remote");
+      expect(spy).toHaveBeenCalledWith(expect.anything(), "remote-1", cwd);
+
+      spy.mockResolvedValue({ ok: false, reason: "unreachable", detail: "x" });
+      const down = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(down.json().branch).toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 });
 
