@@ -1,6 +1,10 @@
 export { Button, type ButtonProps, type ButtonVariant } from "./Button.js";
 export { DetailHeader, type DetailHeaderProps } from "./DetailHeader.js";
 export { IconButton, type IconButtonProps } from "./IconButton.js";
+export { LinkedActions, type LinkedActionsProps } from "./LinkedActions.js";
+export { decideSessionAction, severityTone, type SessionAction } from "./linkDecisions.js";
+export { SessionPills, type SessionPillsProps } from "./SessionPills.js";
+export { TaskChip, type TaskChipProps } from "./TaskChip.js";
 export { SidebarRow, type SidebarRowProps } from "./SidebarRow.js";
 export { SidebarSection, type SidebarSectionProps } from "./SidebarSection.js";
 export { StatusChip, type StatusChipProps } from "./StatusChip.js";

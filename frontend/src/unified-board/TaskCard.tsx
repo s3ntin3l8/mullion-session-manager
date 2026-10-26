@@ -5,6 +5,7 @@ import type { Theme } from "../store/index.js";
 import type { Session, Task } from "../api/index.js";
 import type { TaskBlocker } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
+import { matchSessionPr } from "../github/matchSessionPr.js";
 import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
@@ -60,16 +61,16 @@ export function TaskCard({
 
   // Matched client-side against the project's unfiltered PR list, same
   // posture as Sidebar.tsx's own matchedPr (its doc comment explains why:
-  // avoids firing a `?branch=` request per card). Joined on task.branchName
-  // — deterministic (`mullion/task-<id>`, set at claim time) — rather than
-  // SessionRow's own displayBranch precedence dance, which exists only to
-  // handle a worktree session's hook-reported branch lagging its actual
-  // one; a task's branchName has no such ambiguity.
+  // avoids firing a `?branch=` request per card). Joined by matchSessionPr:
+  // the task's recorded PR number first (it survives the worker switching
+  // branches), else task.branchName — deterministic (`mullion/task-<id>`, set
+  // at claim time) — rather than SessionRow's own displayBranch precedence
+  // dance.
   const prsStatus = useDashboardStore((s) => (project ? s.prsByProject[project.id] : undefined));
-  const matchedPr =
-    task.branchName && prsStatus?.prs
-      ? prsStatus.prs.find((pr) => pr.headBranch === task.branchName)
-      : undefined;
+  const matchedPr = matchSessionPr(prsStatus?.prs, {
+    branch: task.branchName,
+    taskPrNumber: task.prNumber,
+  });
 
   // Hermes review — the same click-after-drag issue TaskSessionSlot had
   // (see its own comment below): a completed reorder drop on an accepting

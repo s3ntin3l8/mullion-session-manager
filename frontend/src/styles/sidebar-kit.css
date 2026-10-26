@@ -482,3 +482,70 @@ button.sb-chip:focus-visible,
     padding: 7px 8px;
   }
 }
+
+/* Mullion links (B7): session pills, linked actions. */
+.sb-pills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sb-pill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 999px;
+  /* Colours come from the .sb-chip--<tone> class on the same element. */
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+/* Guard for a pill rendered without a tone class: neutral, never currentColor. */
+.sb-pill:not([class*="sb-chip--"]) {
+  color: var(--status-neutral-fg);
+  background: var(--status-neutral-bg);
+  border-color: var(--status-neutral-border);
+}
+.sb-pill:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.sb-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.sb-pill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-pill-attn {
+  font-weight: 700;
+}
+.sb-pill-children {
+  margin-left: 10px;
+  padding-left: 6px;
+  border-left: 1px dotted var(--status-neutral-border);
+}
+.sb-linked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sb-linked-note {
+  font-size: 0.6875rem;
+  color: var(--status-warn-fg);
+}
