@@ -96,6 +96,9 @@ import {
   getPRsStatus,
   getCachedDefaultBranchCi,
   computePRSummary,
+  computeCiStatus,
+  combineCiStatus,
+  fetchRunsForHeadChecked,
   getWorkflowRunJobs,
   getJobLogs,
   getDefaultBranch,
@@ -2109,7 +2112,12 @@ export async function projectsRoute(app: FastifyInstance) {
       // annotates the cache with the landed check; this only overlays the
       // in-memory run index, so the request never waits on GitHub.
       const annotated = annotatePrTasks(app, projectId, overlayRelayRuns(prs, repoRef));
-      return { prs: annotated, prSummary: computePRSummary(annotated) };
+      return {
+        prs: annotated,
+        prSummary: computePRSummary(annotated),
+        // Served past its TTL while the poller refreshes it.
+        ...(status.stale ? { stale: true } : {}),
+      };
     },
   );
 
@@ -2250,6 +2258,13 @@ export async function projectsRoute(app: FastifyInstance) {
   // PR drill-in: one PR's header, reviews, threads, conversation and files
   // (GraphQL, 30s cached), merged with the poller's CI view so the sidebar
   // shows one coherent status.
+  const LIVE_RUNS_TTL_MS = 15_000;
+  const LIVE_RUNS_FAILED_TTL_MS = 5_000;
+  type LiveRunsMemo = {
+    expiresAt: number;
+    promise: ReturnType<typeof fetchRunsForHeadChecked>;
+  };
+  const liveRunsMemo = new Map<string, LiveRunsMemo>();
   async function loadPrDetail(
     projectId: number,
     number: number,
@@ -2263,14 +2278,52 @@ export async function projectsRoute(app: FastifyInstance) {
       (p) => p.number === number,
     );
     const cached = entry?.headSha === detail.headSha ? entry : undefined;
-    const ciStatus = cached?.ciStatus ?? null;
-    // "Ready" needs a real CI answer: either the poller fetched this PR's head
-    // runs (even if there are none) or GitHub's own merge state is CLEAN —
-    // the same rule the poller's list pill uses (derivePrPhase). Review and
-    // conflict phases don't depend on CI knowledge.
-    const ciKnown = cached?.ciFetched === true;
+    // No usable poller entry (the PR is new, or a push moved the head past the
+    // poller's last look): ask GitHub for this head's runs directly — one REST
+    // call — instead of dropping them and reporting "Checks unknown".
+    let runs = cached?.actionsRuns ?? [];
+    let runsAnswered = cached?.ciFetched === true;
+    let actionsStatus = cached?.ciStatus ?? null;
+    if (!cached) {
+      // Memoized briefly per head: the detail itself is cached 30s but this
+      // lookup is not, and the poller may not know this head for a while.
+      const memoKey = `${ctx.repoRef.owner}/${ctx.repoRef.repo}@${detail.headSha}`;
+      let memo = liveRunsMemo.get(memoKey);
+      if (!memo || Date.now() >= memo.expiresAt) {
+        // The promise is stored before it settles, so concurrent requests for
+        // the same head share one GitHub call; a failed answer (rate limit,
+        // network) is only remembered for a few seconds.
+        const entry: LiveRunsMemo = {
+          expiresAt: Date.now() + LIVE_RUNS_TTL_MS,
+          promise: fetchRunsForHeadChecked(
+            ctx.token,
+            ctx.repoRef.owner,
+            ctx.repoRef.repo,
+            detail.headSha,
+          ).then((r) => {
+            if (!r.ok) entry.expiresAt = Date.now() + LIVE_RUNS_FAILED_TTL_MS;
+            return r;
+          }),
+        };
+        if (liveRunsMemo.size >= 100) liveRunsMemo.delete(liveRunsMemo.keys().next().value!);
+        liveRunsMemo.set(memoKey, entry);
+        memo = entry;
+      }
+      const live = await memo.promise;
+      runs = live.runs;
+      runsAnswered = live.ok;
+      actionsStatus = computeCiStatus(live.runs);
+    }
+    // Checks that are not Actions runs only show up in the head commit's rollup.
+    const ciStatus = combineCiStatus(actionsStatus, detail.checksRollup);
+    // "Ready" needs a real CI answer: either this PR's head runs were fetched
+    // (even if there are none), the rollup spoke, or GitHub's own merge state
+    // is CLEAN — the same rule the poller's list pill uses (derivePrPhase).
+    // Review and conflict phases don't depend on CI knowledge.
+    const ciKnown = runsAnswered || detail.checksRollup !== null;
     const prPhase = derivePrPhase({
-      reviewStateKnown: true,
+      // A partial detail has no review data, so its review phase is unknown.
+      reviewStateKnown: detail.partial !== true,
       ciFetched: ciKnown,
       isDraft: detail.isDraft,
       mergeable: detail.mergeable,
@@ -2284,7 +2337,7 @@ export async function projectsRoute(app: FastifyInstance) {
       detail,
       ciStatus,
       ciKnown,
-      actionsRuns: cached?.actionsRuns ?? [],
+      actionsRuns: runs,
       prPhase,
       projectId,
     };

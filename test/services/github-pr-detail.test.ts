@@ -142,6 +142,56 @@ describe("getPrDetail", () => {
     await expect(getPrDetail("tok", "o", "r", 5)).rejects.toMatchObject({ statusCode: 502 });
   });
 
+  it("returns a partial detail from REST when GraphQL is unavailable, and an aged copy when it has one", async () => {
+    const rest = {
+      number: 5,
+      title: "T",
+      html_url: "u",
+      state: "closed",
+      merged: true,
+      draft: false,
+      user: { login: "me" },
+      base: { ref: "main" },
+      head: { ref: "f", sha: "s" },
+      created_at: "c",
+      updated_at: "u",
+      mergeable: false,
+    };
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/graphql")
+          ? new Response("no", { status: 500 })
+          : url.includes("/files")
+            ? new Response("[]")
+            : new Response(JSON.stringify(rest)),
+      ),
+    );
+    const partial = await getPrDetail("tok", "o", "r", 5);
+    expect(partial).toMatchObject({ partial: true, state: "MERGED", mergeable: "CONFLICTING" });
+
+    // Not cached: a later healthy answer replaces it, and the aged copy then
+    // backs a later outage.
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("/graphql") ? new Response("no", { status: 500 }) : new Response("[]"),
+      ),
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      resetPrDetailCacheForTests();
+      fetchMock.mockImplementation((url: string) =>
+        Promise.resolve(
+          url.includes("/graphql")
+            ? new Response(JSON.stringify({ data: { repository: { pullRequest: null } } }))
+            : new Response("[]"),
+        ),
+      );
+      await expect(getPrDetail("tok", "o", "r", 6)).rejects.toMatchObject({ statusCode: 404 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("pages through the file list and keeps what it has if a later page fails", async () => {
     const file = (n: number) => ({
       filename: `f${n}.ts`,

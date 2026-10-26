@@ -173,6 +173,98 @@ describe("webhook routes", () => {
     await app.close();
   });
 
+  it("keeps the cached PR status and pulls the next poll forward instead of clearing the cache", async () => {
+    const app = await buildApp();
+    // The poller plugin installs its own tracker on ready; wait for it so ours wins.
+    await app.ready();
+    const cwd = createMatchingGitRepo("acme", "widgets");
+    app.db.insert(projects).values({ name: "pr-cache-p", cwd }).run();
+    const { setRepoPRsStatus, getPRsStatus } = await import("../../src/services/github.js");
+    const { ActivityTracker } = await import("../../src/services/github-activity-tracker.js");
+    const status = { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 } };
+    setRepoPRsStatus("acme", "widgets", status);
+    const tracker = new ActivityTracker();
+    const pull = vi.fn();
+    tracker.onPullForward(pull);
+    app.githubActivityTracker = tracker;
+
+    const payload = JSON.stringify({
+      action: "synchronize",
+      repository: { full_name: "acme/widgets" },
+      pull_request: { number: 9 },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+        "x-github-event": "pull_request",
+      },
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(getPRsStatus("acme", "widgets")).toEqual(status);
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(tracker.hasDirty()).toBe(true);
+
+    // A repo no project resolves to is not marked: nothing would ever clear it.
+    tracker.clearDirty();
+    const orphan = JSON.stringify({
+      action: "synchronize",
+      repository: { full_name: "nobody/nothing" },
+      pull_request: { number: 1 },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/webhooks/github",
+      headers: {
+        "content-type": "application/json",
+        "x-hub-signature-256": signPayload(orphan, TEST_SECRET),
+        "x-github-event": "pull_request",
+      },
+      payload: orphan,
+    });
+    expect(tracker.hasDirty()).toBe(false);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("does not pull the poller forward for events that cannot change the PR list", async () => {
+    const app = await buildApp();
+    await app.ready();
+    const cwd = createMatchingGitRepo("acme", "widgets");
+    app.db.insert(projects).values({ name: "pr-cache-gate-p", cwd }).run();
+    const { ActivityTracker } = await import("../../src/services/github-activity-tracker.js");
+    const tracker = new ActivityTracker();
+    const pull = vi.fn();
+    tracker.onPullForward(pull);
+    app.githubActivityTracker = tracker;
+    const send = async (event: string, body: Record<string, unknown>) => {
+      const payload = JSON.stringify({ repository: { full_name: "acme/widgets" }, ...body });
+      return app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": event,
+        },
+        payload,
+      });
+    };
+    expect((await send("issues", { action: "opened", issue: { number: 3 } })).statusCode).toBe(200);
+    expect(
+      (await send("issue_comment", { action: "created", issue: { number: 3 } })).statusCode,
+    ).toBe(200);
+    expect(pull).not.toHaveBeenCalled();
+    // …but a comment on a PR can change its comment count.
+    await send("issue_comment", { action: "created", issue: { number: 3, pull_request: {} } });
+    expect(pull).toHaveBeenCalledTimes(1);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   // Finding AS6 — the HMAC must be verified over the exact bytes GitHub
   // signed, not a JSON.stringify(JSON.parse(...)) reconstruction of them.
   // Deliberately pretty-printed with extra whitespace and a unicode escape

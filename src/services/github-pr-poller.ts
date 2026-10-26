@@ -8,6 +8,7 @@ import { resolveGitHubToken } from "./github-integration.js";
 import {
   GitHubApiError,
   getPullRequestMergeState,
+  computePRSummary,
   getRepoPRsStatus,
   refreshDefaultBranchCi,
   setRepoPRsStatus,
@@ -90,6 +91,10 @@ function computeNextInterval(
   return next;
 }
 
+// A webhook marks a repo dirty and the next poll is pulled forward to this,
+// a debounce so a burst of deliveries (push + check runs) costs one refresh.
+const PULL_FORWARD_MS = 2_000;
+
 export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTracker): () => void {
   // Env defaults, overridable from Settings → Integrations (see
   // runtime-config.ts). A later settings change retunes the tracker in place
@@ -101,6 +106,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   app.githubActivityTracker = activityTracker;
 
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollDueAt = Infinity;
   let running = false;
   let cleanupCalled = false;
   const pendingTimers: ReturnType<typeof setTimeout>[] = [];
@@ -113,6 +119,8 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   // The branch/title/url of each open PR at the last poll: a PR that vanished
   // from the open list has no live row left to read them from.
   const lastPrMeta = new Map<string, Map<number, PrMeta>>();
+  // Projects whose browser got the first-poll nudge.
+  const nudged = new Set<number>();
 
   async function resolveAllRepos(): Promise<
     { repoRef: GitHubRepoRef | null; projectId: number }[]
@@ -144,6 +152,10 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     // null = the initial per-project sweep: it may cover only one of several
     // projects sharing this repo, so it may seed a baseline but never push.
     projectIds: number[] | null,
+    // The initial sweep's own project: told to refetch after the repo's FIRST
+    // poll (it may have loaded before the cache filled), though the sweep
+    // never diffs or emits session events.
+    sweepProjectId?: number,
   ): Promise<void> {
     const status = await getRepoPRsStatus(token, owner, repo);
     // Review state (GraphQL) is best-effort and never throws.
@@ -162,8 +174,11 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         "[github-pr-poller] the review relay's state failed, caching PRs un-annotated",
       );
     }
+    // Enrichment folds non-Actions checks into each PR's ciStatus, so the
+    // summary computed from the Actions runs alone is stale by now.
+    status.prSummary = computePRSummary(status.prs);
     setRepoPRsStatus(owner, repo, status);
-    const changes = pushPrChanges(repoKey, status.prs, projectIds);
+    const changes = pushPrChanges(repoKey, status.prs, projectIds, sweepProjectId);
     if (changes.length > 0 && projectIds) {
       // Notifications are a side channel: they must never cost the poll its
       // activity bookkeeping or the default-branch refresh below.
@@ -183,6 +198,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     repoKey: string,
     prs: (Parameters<typeof snapshotPr>[0] & PrMeta)[],
     projectIds: number[] | null,
+    sweepProjectId?: number,
   ): PrChange[] {
     const next = prs.map(snapshotPr);
     const prev = lastSnapshots.get(repoKey);
@@ -191,25 +207,39 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
         lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
         lastPrMeta.set(repoKey, metaOf(prs));
       }
+      // Each project's own sweep nudges its browser once, even when a sibling
+      // project on the same repo already seeded the baseline.
+      if (sweepProjectId !== undefined && !nudged.has(sweepProjectId)) {
+        nudged.add(sweepProjectId);
+        pushSync([sweepProjectId], []);
+      }
       return [];
     }
     lastSnapshots.set(repoKey, new Map(next.map((p) => [p.number, p])));
     const prevMeta = lastPrMeta.get(repoKey) ?? new Map<number, PrMeta>();
     const nextMeta = metaOf(prs);
     lastPrMeta.set(repoKey, new Map([...prevMeta, ...nextMeta]));
-    if (!prev) return [];
+    if (!prev) {
+      // First poll with a known audience: there is no baseline to diff, but a
+      // browser that loaded before the cache filled got a 204 and is showing
+      // nothing — tell it to refetch. No session events (nothing "changed").
+      pushSync(projectIds, []);
+      return [];
+    }
     const changes = diffPrSnapshots(prev, next);
     if (changes.length === 0) return [];
+    pushSync(
+      projectIds,
+      changes.map((c) => c.number),
+    );
+    return changes;
+  }
+
+  function pushSync(projectIds: number[], changed: number[]): void {
     for (const projectId of projectIds) {
       const pid = String(projectId);
-      broadcastToProject(pid, {
-        type: "pr",
-        action: "sync",
-        projectId: pid,
-        pr: { changed: changes.map((c) => c.number) },
-      });
+      broadcastToProject(pid, { type: "pr", action: "sync", projectId: pid, pr: { changed } });
     }
-    return changes;
   }
 
   function metaOf(prs: PrMeta[]): Map<number, PrMeta> {
@@ -316,6 +346,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
   ): Promise<void> {
     if (running) return;
     running = true;
+    activityTracker.clearDirty();
     try {
       // One refresh per repo per tick: several projects can share a repo, and
       // projectIdsFor() already fans the push out to all of them.
@@ -366,14 +397,27 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     await pollOnce(repoRows);
     if (cleanupCalled) return;
 
-    const nextInterval = computeNextInterval(
-      activityTracker,
-      repoRows,
-      activityTracker.quietInterval,
+    scheduleNext(
+      activityTracker.hasDirty()
+        ? PULL_FORWARD_MS
+        : computeNextInterval(activityTracker, repoRows, activityTracker.quietInterval),
     );
-    pollTimer = setTimeout(tick, nextInterval);
+  }
+
+  // The only place the poll timer is set: replacing (not stacking) it keeps
+  // one chain alive however many pull-forwards and sweeps race.
+  function scheduleNext(ms: number): void {
+    if (cleanupCalled) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    pollDueAt = Date.now() + ms;
+    pollTimer = setTimeout(tick, ms);
     pollTimer.unref();
   }
+
+  activityTracker.onPullForward(() => {
+    if (pollDueAt <= Date.now() + PULL_FORWARD_MS) return;
+    scheduleNext(PULL_FORWARD_MS);
+  });
 
   // Staggered initial sweep.
   async function start(): Promise<void> {
@@ -383,8 +427,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
       .all();
 
     if (rows.length === 0) {
-      pollTimer = setTimeout(tick, quietIntervalMs);
-      pollTimer.unref();
+      scheduleNext(quietIntervalMs);
       return;
     }
 
@@ -403,7 +446,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
           const token = await resolveGitHubToken(app, repoRef, "read");
           if (!token) return;
           const repoKey = `${repoRef.owner}/${repoRef.repo}`;
-          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey, null);
+          await refreshRepo(token, repoRef.owner, repoRef.repo, repoKey, null, row.id);
         } catch (err) {
           app.log.warn(
             { err, hostId: row.hostId, cwd: row.cwd },
@@ -430,6 +473,7 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
 
   return () => {
     cleanupCalled = true;
+    activityTracker.onPullForward(null);
     if (pollTimer) clearTimeout(pollTimer);
     for (const t of pendingTimers) clearTimeout(t);
     app.githubActivityTracker = undefined;

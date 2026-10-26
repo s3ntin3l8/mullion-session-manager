@@ -4,6 +4,9 @@ import {
   getRepoPRsStatus,
   setRepoPRsStatus,
   getPRsStatus,
+  normalizeRollupState,
+  combineCiStatus,
+  parseOtherChecks,
   getWorkflowRunJobs,
   getJobLogs,
   fetchRunsForHead,
@@ -347,6 +350,40 @@ describe("setRepoPRsStatus / getPRsStatus cache", () => {
     expect(got).toEqual(data);
   });
 
+  it("serves an entry past the TTL flagged stale instead of dropping it", () => {
+    vi.useFakeTimers();
+    try {
+      const data = { prs: [], prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 } };
+      setRepoPRsStatus("swr-owner", "swr-repo", data);
+      expect(getPRsStatus("swr-owner", "swr-repo")?.stale).toBeUndefined();
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(getPRsStatus("swr-owner", "swr-repo")).toEqual({ ...data, stale: true });
+      // Reading never deletes: it is still there on the next read.
+      expect(getPRsStatus("swr-owner", "swr-repo")?.stale).toBe(true);
+      // A refresh makes it fresh again.
+      setRepoPRsStatus("swr-owner", "swr-repo", data);
+      expect(getPRsStatus("swr-owner", "swr-repo")?.stale).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops serving an entry once it is older than the max stale age", () => {
+    vi.useFakeTimers();
+    try {
+      setRepoPRsStatus("old-owner", "old-repo", {
+        prs: [],
+        prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
+      });
+      vi.advanceTimersByTime(29 * 60_000);
+      expect(getPRsStatus("old-owner", "old-repo")?.stale).toBe(true);
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(getPRsStatus("old-owner", "old-repo")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns null for a different owner/repo than what was stored", () => {
     vi.stubGlobal(
       "fetch",
@@ -357,6 +394,60 @@ describe("setRepoPRsStatus / getPRsStatus cache", () => {
       prSummary: { total: 0, pass: 0, fail: 0, pending: 0, unknown: 0 },
     });
     expect(getPRsStatus("owner-b", "repo-b")).toBeNull();
+  });
+});
+
+describe("non-Actions check helpers", () => {
+  it("normalizes rollup states and folds them into the CI status", () => {
+    expect(normalizeRollupState("SUCCESS")).toBe("success");
+    expect(normalizeRollupState("ERROR")).toBe("failure");
+    expect(normalizeRollupState("EXPECTED")).toBe("pending");
+    expect(normalizeRollupState("???")).toBeNull();
+    expect(combineCiStatus("success", null)).toBe("success");
+    expect(combineCiStatus(null, null)).toBeNull();
+    expect(combineCiStatus("success", "failure")).toBe("failure");
+    expect(combineCiStatus("failure", "success")).toBe("failure");
+    expect(combineCiStatus("success", "pending")).toBe("in_progress");
+    expect(combineCiStatus("in_progress", "success")).toBe("in_progress");
+    expect(combineCiStatus(null, "success")).toBe("success");
+  });
+
+  it("keeps only the rollup contexts that are not Actions runs", () => {
+    expect(
+      parseOtherChecks([
+        null,
+        {
+          __typename: "CheckRun",
+          name: "ci",
+          status: "COMPLETED",
+          conclusion: "SUCCESS",
+          checkSuite: { app: { slug: "github-actions" } },
+        },
+        {
+          __typename: "CheckRun",
+          name: "codecov",
+          status: "COMPLETED",
+          conclusion: "FAILURE",
+          detailsUrl: "https://c/1",
+          checkSuite: { app: { slug: "codecov" } },
+        },
+        { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SKIPPED" },
+        { __typename: "CheckRun", name: "build", status: "IN_PROGRESS" },
+        {
+          __typename: "StatusContext",
+          context: "legacy",
+          state: "PENDING",
+          targetUrl: "https://s/1",
+        },
+        { __typename: "StatusContext", context: "odd", state: "weird" },
+      ]),
+    ).toEqual([
+      { name: "codecov", state: "failure", url: "https://c/1", source: "check_run" },
+      { name: "lint", state: "neutral", url: null, source: "check_run" },
+      { name: "build", state: "pending", url: null, source: "check_run" },
+      { name: "legacy", state: "pending", url: "https://s/1", source: "status" },
+      { name: "odd", state: "neutral", url: null, source: "status" },
+    ]);
   });
 });
 

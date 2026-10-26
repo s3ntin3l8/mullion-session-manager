@@ -10,6 +10,12 @@
 
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import { graphql } from "./github-pr-reviews.js";
+import {
+  normalizeRollupState,
+  parseOtherChecks,
+  type ChecksRollupState,
+  type OtherCheck,
+} from "./github.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -78,6 +84,18 @@ export interface PrDetail {
   reviews: PrDetailReview[];
   threads: PrDetailThread[];
   comments: PrDetailComment[];
+  /** The head commit's rollup state, which includes checks that are not Actions runs. */
+  checksRollup: ChecksRollupState;
+  /** Head-commit checks that are not Actions runs ("Other checks"). */
+  otherChecks: OtherCheck[];
+  /** The head has more checks than were read (50); the list above is partial. */
+  checksTruncated?: boolean;
+  /**
+   * True when GraphQL was unavailable (rate limit/backoff) and this is the
+   * best that could be assembled: no reviews/threads/conversation, possibly
+   * an older cached copy. The UI should say so rather than show "no reviews".
+   */
+  partial?: boolean;
 }
 
 interface GqlAuthor {
@@ -111,6 +129,19 @@ interface GqlPr {
         messageHeadline: string;
         committedDate: string;
         author: { name: string | null } | null;
+      };
+    } | null> | null;
+  } | null;
+  headCommit: {
+    nodes: Array<{
+      commit: {
+        statusCheckRollup: {
+          state: string;
+          contexts: {
+            totalCount: number;
+            nodes: Parameters<typeof parseOtherChecks>[0] | null;
+          } | null;
+        } | null;
       };
     } | null> | null;
   } | null;
@@ -158,6 +189,7 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       author { login }
       mergeable mergeStateStatus reviewDecision
       commits(last: 20) { totalCount nodes { commit { oid messageHeadline committedDate author { name } } } }
+      headCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { totalCount nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on StatusContext { context state targetUrl } } } } } } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
       reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt } }
@@ -224,6 +256,88 @@ async function fetchFiles(
   return out;
 }
 
+interface RestPr {
+  number: number;
+  title: string;
+  html_url: string;
+  state: string;
+  merged?: boolean;
+  draft?: boolean;
+  user: { login: string } | null;
+  base: { ref: string };
+  head: { ref: string; sha: string };
+  created_at: string;
+  updated_at: string;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+  commits?: number;
+  mergeable?: boolean | null;
+}
+
+/**
+ * GraphQL is unavailable: answer with what is still reachable instead of a
+ * 502 that blanks the whole drill-in. An older cached copy wins (it has
+ * everything, just aged); else the REST PR plus its files. Either way
+ * `partial: true`. Throws only when nothing at all can be had.
+ */
+async function partialDetail(
+  token: string,
+  owner: string,
+  repo: string,
+  number: number,
+  key: string,
+  stale: PrDetail | undefined,
+  files: PrDetailFile[],
+): Promise<PrDetail> {
+  if (stale) return { ...stale, partial: true };
+  let rest: RestPr | null = null;
+  try {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${number}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (res.status === 404) throw new GitHubApiError(`${key} not found`, 404);
+    if (res.ok) rest = (await res.json()) as RestPr;
+  } catch (err) {
+    if (err instanceof GitHubApiError && err.statusCode === 404) throw err;
+  }
+  if (!rest?.base || !rest.head)
+    throw new GitHubApiError(`Could not load ${key} (GitHub unavailable)`, 502);
+  return {
+    number: rest.number,
+    title: rest.title,
+    htmlUrl: rest.html_url,
+    state: rest.merged ? "MERGED" : rest.state === "closed" ? "CLOSED" : "OPEN",
+    isDraft: rest.draft === true,
+    author: rest.user?.login ?? null,
+    bodyHtml: "",
+    baseBranch: rest.base.ref,
+    headBranch: rest.head.ref,
+    headSha: rest.head.sha,
+    createdAt: rest.created_at,
+    updatedAt: rest.updated_at,
+    additions: rest.additions ?? 0,
+    deletions: rest.deletions ?? 0,
+    changedFiles: rest.changed_files ?? files.length,
+    commitCount: rest.commits ?? 0,
+    commits: [],
+    files,
+    mergeable:
+      rest.mergeable === true ? "MERGEABLE" : rest.mergeable === false ? "CONFLICTING" : null,
+    mergeStateStatus: null,
+    reviewDecision: null,
+    requestedReviewers: [],
+    reviewers: [],
+    reviews: [],
+    threads: [],
+    comments: [],
+    checksRollup: null,
+    otherChecks: [],
+    partial: true,
+  };
+}
+
 export async function getPrDetail(
   token: string,
   owner: string,
@@ -240,10 +354,12 @@ export async function getPrDetail(
       repo,
       number,
     }),
-    fetchFiles(token, owner, repo, number),
+    // REST can be in rate-limit backoff too (it is what makes GraphQL refuse
+    // as well); the files are then simply missing from a partial answer.
+    fetchFiles(token, owner, repo, number).catch(() => [] as PrDetailFile[]),
   ]);
   const pr = data?.repository?.pullRequest;
-  if (!data) throw new GitHubApiError(`Could not load ${key} (GraphQL unavailable)`, 502);
+  if (!data) return partialDetail(token, owner, repo, number, key, hit?.data, files);
   if (!pr) throw new GitHubApiError(`${key} not found`, 404);
 
   const toComment = (c: { author: GqlAuthor | null; bodyHTML: string; createdAt: string }) => ({
@@ -304,6 +420,13 @@ export async function getPrDetail(
       comments: (t.comments?.nodes ?? []).filter(present).map(toComment),
     })),
     comments: (pr.comments?.nodes ?? []).filter(present).map(toComment),
+    checksRollup: normalizeRollupState(pr.headCommit?.nodes?.[0]?.commit.statusCheckRollup?.state),
+    checksTruncated:
+      (pr.headCommit?.nodes?.[0]?.commit.statusCheckRollup?.contexts?.totalCount ?? 0) >
+      (pr.headCommit?.nodes?.[0]?.commit.statusCheckRollup?.contexts?.nodes?.length ?? 0),
+    otherChecks: parseOtherChecks(
+      pr.headCommit?.nodes?.[0]?.commit.statusCheckRollup?.contexts?.nodes ?? [],
+    ),
   };
 
   if (cache.size >= MAX_CACHE_ENTRIES) {

@@ -14,7 +14,13 @@
 // githubApiFetch's process-wide `rateLimitedUntil` — a GraphQL limit must
 // not pause the REST calls (CI badges) that work today.
 
-import { applyPrPhase, type PROrWithChecks } from "./github.js";
+import {
+  applyPrPhase,
+  combineCiStatus,
+  computeCiStatus,
+  normalizeRollupState,
+  type PROrWithChecks,
+} from "./github.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 
@@ -80,6 +86,7 @@ type ReviewFields = Pick<
   | "unresolvedThreads"
   | "commentCount"
   | "reviewStateKnown"
+  | "checksRollup"
 >;
 
 // Last successfully fetched review fields per PR. A failed or backed-off
@@ -99,6 +106,7 @@ function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
     unresolvedThreads: pr.unresolvedThreads,
     commentCount: pr.commentCount,
     reviewStateKnown: pr.reviewStateKnown,
+    checksRollup: pr.checksRollup,
   };
 }
 
@@ -124,6 +132,11 @@ interface GqlPrNode {
     nodes: Array<{ author: { login: string } | null; state: string } | null> | null;
   } | null;
   comments: { totalCount: number } | null;
+  // Head commit's check rollup state — only the state (cheap); per-check
+  // contexts are fetched by the single-PR detail query.
+  commits: {
+    nodes: Array<{ commit: { statusCheckRollup: { state: string } | null } } | null> | null;
+  } | null;
 }
 
 const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
@@ -135,6 +148,7 @@ const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
         reviewRequests(first: 5) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
         latestOpinionatedReviews(first: 5) { nodes { author { login } state } }
         comments { totalCount }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
   }
@@ -271,6 +285,13 @@ export async function enrichPrsWithReviewState(
     pr.mergeable = asMergeable(node.mergeable);
     pr.mergeStateStatus = node.mergeStateStatus;
     pr.commentCount = node.comments?.totalCount ?? null;
+    // Non-Actions checks (third-party check runs, commit statuses) only show
+    // up in the rollup; fold them into the Actions-derived status. Derived
+    // from `actionsRuns` each time, so re-enriching never double-counts.
+    pr.checksRollup = normalizeRollupState(
+      node.commits?.nodes?.[0]?.commit.statusCheckRollup?.state,
+    );
+    pr.ciStatus = combineCiStatus(computeCiStatus(pr.actionsRuns), pr.checksRollup);
     pr.requestedReviewers = (node.reviewRequests?.nodes ?? [])
       .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
       .filter((v): v is string => v !== null);

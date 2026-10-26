@@ -16,6 +16,10 @@ export class ActivityTracker {
   private quietIntervalMs: number;
   private readonly activeTimeoutMs: number;
   private staleThresholdMs: number;
+  // Repos whose cached PR status a webhook has made out of date, and the
+  // poller's hook to pull its next poll forward (see markDirty).
+  private dirty = new Set<string>();
+  private pullForward: (() => void) | null = null;
 
   constructor(
     opts: {
@@ -78,6 +82,35 @@ export class ActivityTracker {
     });
   }
 
+  /** The poller registers how to bring its next poll forward. */
+  onPullForward(fn: (() => void) | null): void {
+    this.pullForward = fn;
+  }
+
+  /**
+   * A webhook says this repo's PR/CI state changed: remember it and ask the
+   * poller to refresh soon. The cache is NOT cleared — readers keep serving
+   * the last answer (stale) until the pulled-forward poll replaces it.
+   */
+  markDirty(repoKey: string): void {
+    this.dirty.add(repoKey);
+    this.pullForward?.();
+  }
+
+  hasDirty(): boolean {
+    return this.dirty.size > 0;
+  }
+
+  /**
+   * A poll cycle is starting and will refresh every repo it can resolve:
+   * whatever dirtied them is covered. A key it can't resolve (an orphaned
+   * hook, an offline host) is dropped too, so it can't hold the poller at the
+   * pulled-forward cadence forever. A webhook landing mid-cycle re-dirties.
+   */
+  clearDirty(): void {
+    this.dirty.clear();
+  }
+
   recordPollResult(repoKey: string, hasActivity: boolean): void {
     const now = Date.now();
     const existing = this.repos.get(repoKey);
@@ -106,6 +139,7 @@ export class ActivityTracker {
 
   clearForTests(): void {
     this.repos.clear();
+    this.dirty.clear();
   }
 }
 
