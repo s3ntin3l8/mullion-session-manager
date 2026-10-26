@@ -24,6 +24,9 @@ export function useTreeUploads(opts: {
   const { projectId, sessionId, selectedDir } = opts;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+  // Set by "upload here" on a folder row: the next pick goes there, not to the
+  // selected folder.
+  const pickTargetRef = useRef<string | null>(null);
   // Latest tree state for callbacks that outlive a render (an upload finishing).
   const latest = useRef(opts);
   useEffect(() => {
@@ -61,8 +64,16 @@ export function useTreeUploads(opts: {
   );
 
   const pickFiles = (files: FileList | null, input: HTMLInputElement) => {
-    if (files && files.length > 0) void startUpload(itemsFromInput(files), selectedDir);
+    const target = pickTargetRef.current ?? selectedDir;
+    pickTargetRef.current = null;
+    if (files && files.length > 0) void startUpload(itemsFromInput(files), target);
     input.value = ""; // the same selection can be picked again
+  };
+
+  /** Opens a picker whose files go into `dir`. */
+  const pickUploadIn = (dir: string, input: HTMLInputElement | null) => {
+    pickTargetRef.current = dir;
+    input?.click();
   };
 
   return {
@@ -72,5 +83,6 @@ export function useTreeUploads(opts: {
     fileInputRef,
     folderInputRef,
     pickFiles,
+    pickUploadIn,
   };
 }
