@@ -176,6 +176,27 @@ describe("useRunJobs", () => {
     await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
 
+  it("collapses a burst of events into one jobs refetch (debounced trigger)", async () => {
+    const spy = vi.spyOn(api, "getGitHubRunJobs").mockResolvedValue([{ id: 1 } as never]);
+    renderHook(() => useRunJobs(1, [1], true));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    for (let n = 1; n <= 3; n++) {
+      act(() => {
+        useDashboardStore.setState((s) => ({
+          githubCache: Object.fromEntries(
+            Object.entries(s.githubCache).map(([k, v]) => [k, { ...v, fetchedAt: 0 }]),
+          ),
+          prsRefreshTriggerByProject: { 1: n },
+        }));
+      });
+    }
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    // No further refetch trails in behind the burst.
+    await new Promise((r) => setTimeout(r, 700));
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   it("handles no runs", () => {
     const { result } = renderHook(() => useRunJobs(1, [], true));
     expect(result.current).toEqual({});
