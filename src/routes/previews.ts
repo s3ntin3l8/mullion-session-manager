@@ -1,12 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq, inArray } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { eq } from "drizzle-orm";
+import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getPreviewWorktree } from "../services/git-worktree.js";
 import { resolveHostGitBranch } from "../services/host-git.js";
 import { resolveBackend } from "../services/session-backend.js";
-import { resolveSessionHostId } from "../services/session-live-info.js";
+import { resolveSessionHostIds } from "../services/session-live-info.js";
 import {
   UnknownProjectError,
   createExternalPreview,
@@ -80,15 +80,9 @@ async function liveBranchesBySession(
   const ids = previewList.flatMap((p) => (p.sessionId === null ? [] : [p.sessionId]));
   const out = new Map<number, string>();
   if (ids.length === 0) return out;
-  const rows = app.db
-    .select({ id: sessions.id, projectId: sessions.projectId, hostId: sessions.hostId })
-    .from(sessions)
-    .where(inArray(sessions.id, ids))
-    .all();
   const byHost = new Map<string, string[]>();
-  for (const row of rows) {
-    const hostId = resolveSessionHostId(app, row);
-    byHost.set(hostId, [...(byHost.get(hostId) ?? []), String(row.id)]);
+  for (const [id, hostId] of resolveSessionHostIds(app, ids)) {
+    byHost.set(hostId, [...(byHost.get(hostId) ?? []), String(id)]);
   }
   await Promise.all(
     [...byHost].map(async ([hostId, hostIds]) => {

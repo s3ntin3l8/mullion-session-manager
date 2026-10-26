@@ -74,9 +74,10 @@ export function getOrCreateProjectPreview(
 
   const where = and(eq(previews.kind, "project"), eq(previews.projectId, projectId));
 
-  // Issue #2007 — bind the pane's session. Only a session of THIS project
-  // counts; anything else is ignored rather than rejected, since the binding
-  // is a best-effort hint for the branch and must never fail a pane open.
+  // Issue #2007 — bind the session serving this preview. Only a session of
+  // THIS project counts; anything else is ignored rather than rejected, since
+  // the binding is a best-effort hint for the branch and must never fail the
+  // dev-server accept that calls this.
   if (sessionId !== undefined) {
     const [session] = app.db
       .select({ projectId: sessions.projectId })
