@@ -10,6 +10,7 @@ import { Dropdown } from "./ui/primitives.js";
 import {
   BlockedIcon,
   BotIcon,
+  ClockIcon,
   GitHubIcon,
   TerminalPromptIcon,
   WarningTriangleIcon,
@@ -397,6 +398,21 @@ export function TaskDetail({
       </div>
 
       {task.body && <div className="task-detail-body">{task.body}</div>}
+
+      {/* #1997 — a queued task's last dispatch error: it is still being
+          retried, so this reads as waiting, not as the terminal failure
+          below. */}
+      {task.status === "claimed" && task.failureReason && (
+        <div className="task-detail-dispatch">
+          <ClockIcon size={12} />
+          <span>
+            Not dispatched yet
+            {task.dispatchFailingSince &&
+              ` (failing since ${formatRelativeAge(new Date(task.dispatchFailingSince).getTime())})`}
+            : {task.failureReason}
+          </span>
+        </div>
+      )}
 
       {task.status === "failed" && task.failureReason && (
         <div className="task-detail-failure">

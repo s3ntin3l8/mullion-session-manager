@@ -112,6 +112,7 @@ function makeTask(overrides: Partial<Task>): Task {
     lastReviewVerdict: null,
     assignee: null,
     failureReason: null,
+    dispatchFailingSince: null,
     githubSyncError: null,
     baseSha: null,
     dependencyCount: null,
@@ -448,6 +449,42 @@ describe("TaskDetail", () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByText("budget exceeded")).toBeInTheDocument();
+  });
+
+  // #1997 — a QUEUED task's last dispatch error, distinct from a terminal failure.
+  it("#1997 — shows why a queued (claimed) task is not dispatching, distinct from a failure", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        failureReason: "worktree creation failed on host mac: disk full",
+        dispatchFailingSince: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const note = document.querySelector(".task-detail-dispatch");
+    expect(note?.textContent).toMatch(
+      /Not dispatched yet \(failing since 2h ago\): worktree creation failed on host mac: disk full/,
+    );
+    expect(document.querySelector(".task-detail-failure")).toBeNull();
+  });
+
+  it("#1997 — shows no dispatch note for a queued task without a recorded reason, or a failed one", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", failureReason: null })];
+    const { unmount } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(document.querySelector(".task-detail-dispatch")).toBeNull();
+    unmount();
+    tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(document.querySelector(".task-detail-dispatch")).toBeNull();
+  });
+
+  it("#1997 — omits 'failing since' when the clock is unset", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", failureReason: "spawn failed" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(document.querySelector(".task-detail-dispatch")?.textContent).toBe(
+      "Not dispatched yet: spawn failed",
+    );
   });
 
   // #485 — previously a GitHub sync/scope error was visible only in server

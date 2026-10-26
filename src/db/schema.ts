@@ -1285,6 +1285,23 @@ export const tasks = sqliteTable(
     // once set; a queued-then-dispatched task keeps this as a lifecycle
     // audit timestamp distinct from "when did its current spell start."
     queuedAt: integer("queued_at", { mode: "timestamp" }),
+    // Issue #1997/#2006 — when the CURRENT run of failed (or held) dispatch
+    // attempts began. Stamped by the first attempt that fails while the task
+    // sits "claimed" and kept by every later one; cleared when a worker
+    // spawns and when the task is (re-)enqueued. The dispatcher gives up on a
+    // task that has been failing for 6 hours, and the board shows "since".
+    // A column, not the dispatcher's in-memory backoff map: a redeploy must
+    // not restart the give-up clock.
+    dispatchFailingSince: integer("dispatch_failing_since", { mode: "timestamp" }),
+    // Issue #2006 — the task is queued because its REQUIRED host is not
+    // eligible right now (task-claim.ts's holdClaim), as opposed to a dispatch
+    // attempt that failed. Set by holdClaim; cleared with every other write of
+    // the failing run (a failed attempt, a successful dispatch, enqueue,
+    // retry, the give-up). A real flag rather than a reading of
+    // `failureReason`'s wording, because three behaviours hang off it: the
+    // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
+    // give-up's worktree clear, and dropping a stale hold.
+    dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
     // Stamped at DISPATCH (the reservation transaction that flips
     // "claimed" -> "in_progress"), not at claim/retry/enqueue time — see
     // queuedAt above. Null while a task sits queued with no session yet.

@@ -493,6 +493,28 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
 const STARTUP_STAGGER_MS = 2_000;
 
 /**
+ * How many slots auto-claim pacing treats as taken: running tasks plus queued
+ * ones that are genuinely waiting for a worker slot.
+ *
+ * A task held for a required host (issue #2006, `tasks.dispatchHeld`) is not
+ * waiting for a slot — it cannot run
+ * until its host returns — so it must not use up the pacing budget, or one
+ * sleeping Mac would stall every unrelated ready task.
+ */
+export function countOccupiedSlots(app: FastifyInstance): number {
+  return app.db
+    .select({ id: tasks.id })
+    .from(tasks)
+    .where(
+      or(
+        eq(tasks.status, "in_progress"),
+        and(eq(tasks.status, "claimed"), eq(tasks.dispatchHeld, false)),
+      ),
+    )
+    .all().length;
+}
+
+/**
  * Background poller for the task watcher (Phase 2.5's thin slice, issue
  * #214; hardened in Phase 6's 6.9/#233 and 6.4/#217). Discovers open,
  * `MULLION_TASK_LABEL`-labeled issues on every connected project's repo —
@@ -787,11 +809,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     }
 
     const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
-    const occupied = app.db
-      .select({ id: tasks.id })
-      .from(tasks)
-      .where(inArray(tasks.status, ["claimed", "in_progress"]))
-      .all().length;
+    const occupied = countOccupiedSlots(app);
     let remaining = maxConcurrent - occupied;
     if (remaining <= 0) {
       app.log.debug(

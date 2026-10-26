@@ -251,6 +251,70 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     expect(res.row.hostId).toBe(hostId);
   });
 
+  // Issue #2006 — whether waiting could change a refusal's answer. The detail
+  // (and so what a session-scoped caller learns) is the same either way.
+  describe("a refusal says whether waiting could help (issue #2006)", () => {
+    async function refusal(target: { platform: string } | { hostId: string }, projectId: number) {
+      const project = app.db.select().from(projects).where(eq(projects.id, projectId)).all()[0];
+      return resolveTargetHost(app, {
+        project: {
+          hostId: project.hostId,
+          placement: project.placement,
+          cwd: project.cwd,
+          hostCwds: project.hostCwds,
+        },
+        target,
+        unattended: true,
+      });
+    }
+
+    // ONE setup for every case: project creation is rate limited per minute
+    // (this file's other tests already use most of it), and the cases only
+    // differ in the host's state.
+    it("is transient while a matching host is parked or has no reading, permanent when none could match", async () => {
+      const { projectId, hostId } = await setup();
+
+      app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, hostId)).run();
+      expect(await refusal({ platform: "darwin" }, projectId)).toMatchObject({
+        ok: false,
+        transient: true,
+      });
+
+      app.db.update(hosts).set({ drained: false }).where(eq(hosts.id, hostId)).run();
+      const readings = vi.spyOn(app.hostCapacityTracker!, "get").mockReturnValue(undefined);
+      expect(await refusal({ hostId }, projectId)).toMatchObject({ ok: false, transient: true });
+      readings.mockRestore();
+
+      // A host that has not reported a platform yet (a Mac still offline after
+      // a backend restart) might be the one: wait for it.
+      app.db.update(hosts).set({ drained: true, platform: null }).where(eq(hosts.id, hostId)).run();
+      vi.spyOn(app.hostCapacityTracker!, "get").mockReturnValue(undefined);
+      expect(await refusal({ platform: "darwin" }, projectId)).toMatchObject({
+        ok: false,
+        transient: true,
+      });
+      vi.mocked(app.hostCapacityTracker!.get).mockRestore();
+
+      // No host of that platform exists at all.
+      app.db
+        .update(hosts)
+        .set({ drained: false, platform: "linux" })
+        .where(eq(hosts.id, hostId))
+        .run();
+      expect(await refusal({ platform: "win32" }, projectId)).toMatchObject({
+        ok: false,
+        transient: false,
+      });
+
+      // The matching host exists but the project has no path on it.
+      app.db.update(projects).set({ hostCwds: null }).where(eq(projects.id, projectId)).run();
+      expect(await refusal({ platform: "darwin" }, projectId)).toMatchObject({
+        ok: false,
+        transient: false,
+      });
+    });
+  });
+
   it("resolveTargetHost reports ok:false instead of throwing when the candidates cannot be read", async () => {
     const { projectId } = await setup();
     const project = app.db.select().from(projects).where(eq(projects.id, projectId)).all()[0];
@@ -268,7 +332,13 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       unattended: false,
     });
     spy.mockRestore();
-    expect(res).toEqual({ ok: false, detail: "no eligible host matches platform darwin" });
+    expect(res).toEqual({
+      ok: false,
+      detail: "no eligible host matches platform darwin",
+      // Could not read the fleet at all: nothing says waiting would not help.
+      transient: true,
+      unreadable: true,
+    });
   });
 
   describe("isolate", () => {

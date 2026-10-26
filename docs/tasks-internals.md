@@ -921,8 +921,9 @@ the other directives) and resolved at dispatch, in `dispatchClaimedTask`. With
 a requirement the placement goes through `resolveTargetHost` — the explicit
 spawn's filter (`#1951`), so "eligible" means exactly what it means for
 automatic placement — instead of `resolvePlacement`, and works for a `pinned`
-project. No match is a refusal, not a fallback: the task goes `claimed →
-failed` (`via: placement-refusal`, synced to the issue) with the reason in
+project. No match is never a fallback. When **nothing could ever match** (no host of
+that platform, or none with a `hostCwds` path for the project) the task goes
+`claimed → failed` (`via: placement-refusal`, synced to the issue) with the reason in
 `failureReason`, and its claim-time `branchName`/`worktreePath` are cleared,
 since nothing was cut (Retry then refuses with `no-worktree`; the recovery is
 `failed → ready`). The resolved requirement is stored as JSON on
@@ -930,6 +931,45 @@ since nothing was cut (Retry then refuses with `no-worktree`; the recovery is
 explained; a re-claim re-parses the body like every other directive. The
 reviewer, the rebase worker, reseed and Retry already follow the worker's host
 (`resolveTaskWorkerHost`), so a task pinned to a Mac reviews and retries there.
+
+When a matching host **exists but is not eligible right now** (`#2006`:
+`resolveTargetHost`'s refusal carries `transient: true` — a candidate matches
+the target and has the project's path, but is offline, parked or has no
+capacity reading, or the fleet could not be read), `holdClaim` keeps the task
+`claimed` instead: it writes the reason, the requirement and
+`dispatchFailingSince`, records **no transition**, and returns
+`placement-held`. The reason text is stable, so an unchanged hold writes
+nothing on later ticks; when it does change, a `{ kind: "dispatch" }` doorbell
+is broadcast on `/ws/tasks` so the board refetches. The sweep
+(`task-dispatch.ts`) `continue`s past a held task — never `return`, so it does
+not block the queue behind it — and records **no backoff** for it: the check is
+an in-memory placement read with no I/O and no transition, so it cannot feed the
+opportunistic-sweep loop the backoff exists to stop, and a backed-off hold
+would start up to an hour late. `resolveTargetHost`'s `detail` is unchanged
+(it names only the target, so a session-scoped caller cannot enumerate the
+fleet); the "registered but not eligible" wording exists only in the task's
+`failureReason`.
+
+**Queued-task failures are bounded** (`#1997`). `release()` (a failed dispatch)
+and `holdClaim` stamp `tasks.dispatchFailingSince` — the start of the current
+run of failures, kept by later attempts (`task.dispatchFailingSince ?? now`),
+cleared when a worker spawns and by `enqueueTask`. It is a column, not the
+in-memory backoff map, so a redeploy does not restart the clock. While the task
+is `claimed`, `failureReason` is therefore "why it is not dispatching yet" (the
+board renders it as such), and `enqueueTask` / a successful dispatch null it.
+`giveUpIfOverdue` (`task-dispatch.ts`, `DISPATCH_GIVE_UP_AFTER_MS`, 6 hours —
+deliberately longer than the 1h backoff cap) fails an overdue task through
+`failQueuedTask` (`via: dispatch-give-up`, the same `claimed → failed` write
+the placement refusal uses) with the last reason, clearing `branchName` /
+`worktreePath` — but only when the task merely waited for its host (`tasks.dispatchHeld`, the flag `holdClaim` sets and every other write clears; nothing infers a hold from the reason's wording) (a failed
+attempt may have left a partial worktree, so those fields stay and Retry can
+still find it). A hold also stops counting once placement succeeds again (the
+stale reason and clock are dropped, so waiting for a worker slot is not charged
+to the 6 hours), and auto-claim pacing (`countOccupiedSlots`, task-watcher.ts)
+does not count a held task as occupying a slot — one sleeping Mac must not
+stall every unrelated `ready` task. A host that has not reported a platform yet
+counts as a possible match for a `Platform:` target, so it holds rather than
+refuses.
 
 The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
@@ -962,8 +1002,9 @@ recorded on the task's `githubSyncError` field, rendered in the task
 detail drawer regardless of the task's status (see
 [`tasks.md`](tasks.md#the-task-board)). If claiming a task never actually
 labels/comments on its GitHub issue, the task itself will now say why —
-`githubSyncError` is not `failureReason`: the latter is only rendered when
-`status === "failed"` and also carries reject feedback, so a sync problem
+`githubSyncError` is not `failureReason`: the latter is rendered for a
+`failed` task (and, as the last dispatch error, for a `claimed` one — see
+`dispatchFailingSince` above) and also carries reject feedback, so a sync problem
 never overwrites it.
 
 ## Task → PR promotion

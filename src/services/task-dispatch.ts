@@ -22,7 +22,7 @@ import { asc, eq, inArray } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { dispatchClaimedTask } from "./task-claim.js";
+import { dispatchClaimedTask, failQueuedTask } from "./task-claim.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
@@ -36,6 +36,14 @@ import { registerTaskTransitionListener } from "./task-state.js";
 // concrete loop this prevents.
 const DISPATCH_RETRY_TTL_MS = 5 * 60 * 1000;
 const DISPATCH_RETRY_MAX_TTL_MS = 60 * 60 * 1000;
+// Issue #1997 — a task whose dispatch has been failing (or held for a host
+// that is not eligible) for this long is failed with the last reason, instead
+// of retrying forever. Longer than the backoff cap on purpose: a Mac asleep
+// through a long meeting, or an agent restart, should not cost the task its
+// place, but a host that never comes back must surface the same day. Measured
+// from `tasks.dispatchFailingSince` (a column), so a redeploy does not
+// restart the clock.
+const DISPATCH_GIVE_UP_AFTER_MS = 6 * 60 * 60 * 1000;
 // Hermes review, PR #770 — bounded, not just process-lifetime-scoped: a
 // task that fails dispatch once and is then deleted (or never gets picked
 // again) would otherwise leave its entry in this Map forever. Map
@@ -190,12 +198,63 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // this task's own dispatch, no backoff, just move on.
       continue;
     }
+    if (outcome.reason === "placement-held") {
+      // Issue #2006 — waiting for a required host. `continue`, never `return`:
+      // a held task at the top of the board must not block the rest of the
+      // queue. No backoff either: the check is a cheap in-memory placement
+      // read (no I/O) and records no transition, so it cannot feed the
+      // opportunistic-sweep loop the backoff exists to prevent — and a
+      // backed-off hold would start up to an hour after the host came back.
+      giveUpIfOverdue(app, taskId, now);
+      continue;
+    }
     app.log.warn(
       { taskId, reason: outcome.reason, detail: outcome.detail },
       "[task-dispatch] dispatch failed, backing off this task",
     );
+    if (giveUpIfOverdue(app, taskId, now)) {
+      clearDispatchBackoff(taskId);
+      continue;
+    }
     recordDispatchFailure(taskId, now);
   }
+}
+
+/** Issue #1997 — fails a queued task that has been failing/held longer than
+ * DISPATCH_GIVE_UP_AFTER_MS, with the last recorded reason. Returns whether
+ * it did. */
+function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boolean {
+  const [row] = app.db
+    .select({
+      status: tasks.status,
+      since: tasks.dispatchFailingSince,
+      failureReason: tasks.failureReason,
+      held: tasks.dispatchHeld,
+    })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .all();
+  if (!row || row.status !== "claimed" || row.since === null) return false;
+  if (now - row.since.getTime() < DISPATCH_GIVE_UP_AFTER_MS) return false;
+  const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
+  // A held task never failed an attempt, so its own reason ("it will start
+  // once one is") would read as a contradiction after the give-up.
+  const detail = row.held
+    ? `gave up after ${hours}h waiting for a host that matches the task's Platform:/Host: requirement to become eligible`
+    : `gave up after ${hours}h of failed dispatch attempts — last: ${row.failureReason ?? "unknown"}`;
+  app.log.warn({ taskId, detail }, "[task-dispatch] giving up on a task that cannot be dispatched");
+  return failQueuedTask(app, taskId, {
+    detail,
+    via: "dispatch-give-up",
+    hostId: null,
+    // A task that only ever waited for its host cut nothing: the branch and
+    // path stamped at claim time name nothing it owns, and clearing them makes
+    // Retry refuse cleanly (`no-worktree`) rather than try to resume a branch
+    // that was never created. After a failed ATTEMPT they are left alone — a
+    // partial or unclean worktree may exist on the host, and Retry (or the
+    // user) can still find it through them.
+    extra: row.held ? { worktreePath: null, branchName: null } : {},
+  });
 }
 
 // Hermes review, PR #770 — `app.addHook("onClose", ...)` registers a NEW,

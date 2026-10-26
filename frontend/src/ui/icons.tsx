@@ -374,6 +374,18 @@ export function WarningTriangleIcon(props: IconProps) {
   );
 }
 
+// #1997 — a clock, for a queued task that is waiting to dispatch (TaskCard,
+// TaskDetail): "not yet", deliberately not the warning triangle a terminal
+// failure gets.
+export function ClockIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15.5 14" />
+    </Svg>
+  );
+}
+
 // #667 — a "no entry" circle-with-slash, for a task blocked on an open
 // GitHub issue dependency (UnifiedBoard.tsx's TaskCard, TaskDetail.tsx).
 // Deliberately not a padlock: a lock reads as "permissions", not

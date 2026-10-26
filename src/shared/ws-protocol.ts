@@ -184,4 +184,9 @@ export type TaskEvent =
   // recurring refresh — see that function's own doc comment). Without this,
   // a filled title is invisible to a user already looking at the board
   // until some unrelated event happens to trigger a refetch.
-  | { taskId: number; projectId: number; kind: "hierarchy"; ts: number };
+  | { taskId: number; projectId: number; kind: "hierarchy"; ts: number }
+  // #1997/#2006 — a queued task's dispatch status changed without a state
+  // transition: the reason it is not dispatching was recorded, changed, or
+  // cleared (task-claim.ts's holdClaim). Same "doorbell" shape: the frontend
+  // refetches, the payload carries nothing.
+  | { taskId: number; projectId: number; kind: "dispatch"; ts: number };
