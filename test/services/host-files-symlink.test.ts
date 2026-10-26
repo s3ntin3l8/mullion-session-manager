@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type * as Fs from "node:fs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // Issue #1728 — createSymlink() turns Windows' bare EPERM (no Developer Mode,
 // not an administrator) into an error that says what to do, and changes
@@ -8,6 +11,9 @@ import type * as Fs from "node:fs";
 
 let symlinkError: NodeJS.ErrnoException | null = null;
 const symlinkCalls: Array<[string, string]> = [];
+/** What readlinkSync reports for an existing link; null = the real call. */
+let readlinkResult: string | null = null;
+const rmCalls: string[] = [];
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof Fs>();
@@ -17,16 +23,25 @@ vi.mock("node:fs", async (importOriginal) => {
       symlinkCalls.push([target, linkPath]);
       if (symlinkError) throw symlinkError;
     },
+    readlinkSync: (...args: Parameters<typeof actual.readlinkSync>) =>
+      readlinkResult ?? actual.readlinkSync(...args),
+    rmSync: (...args: Parameters<typeof actual.rmSync>) => {
+      rmCalls.push(String(args[0]));
+      return actual.rmSync(...args);
+    },
   };
 });
 
-const { createSymlink, sameSymlinkTarget } = await import("../../src/services/host-files.js");
+const { createSymlink, sameSymlinkTarget, writeEntriesLocally } =
+  await import("../../src/services/host-files.js");
 
 const errno = (code: string) => Object.assign(new Error(code), { code });
 
 beforeEach(() => {
   symlinkError = null;
   symlinkCalls.length = 0;
+  readlinkResult = null;
+  rmCalls.length = 0;
 });
 
 describe("createSymlink", () => {
@@ -57,6 +72,48 @@ describe("createSymlink", () => {
     expect(() => createSymlink("a", "b", "win32")).toThrow(symlinkError);
     symlinkError = errno("EPERM");
     expect(() => createSymlink("a", "b", "linux")).toThrow(symlinkError);
+  });
+});
+
+describe("writeEntriesLocally — an already-correct link is left alone", () => {
+  const entry = {
+    path: ".claude/skills/x/SKILL.md",
+    kind: "symlink" as const,
+    target: "../../../shared/SKILL.md",
+  };
+
+  function withPlatform(platform: NodeJS.Platform, fn: () => void) {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    try {
+      fn();
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  }
+
+  it("on Windows, where the link reads back with backslashes, nothing is removed or recreated", () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "host-files-symlink-"));
+    try {
+      // How Node on Windows reports the link it wrote for `entry.target`.
+      readlinkResult = "..\\..\\..\\shared\\SKILL.md";
+      withPlatform("win32", () => writeEntriesLocally(cwd, [entry]));
+      expect(symlinkCalls).toEqual([]);
+      expect(rmCalls).toEqual([]);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("off Windows the same backslash form is a different link, so it is replaced", () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "host-files-symlink-"));
+    try {
+      readlinkResult = "..\\..\\..\\shared\\SKILL.md";
+      withPlatform("linux", () => writeEntriesLocally(cwd, [entry]));
+      expect(symlinkCalls).toHaveLength(1);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 

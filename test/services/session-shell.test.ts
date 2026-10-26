@@ -119,4 +119,13 @@ describe("sessionShellOrNull", () => {
   it("is null, not a throw, on a Windows host with no Git Bash", () => {
     expect(sessionShellOrNull({}, "win32", () => false)).toBeNull();
   });
+
+  it("lets any other failure through instead of reading it as 'no shell'", () => {
+    const failing = () => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    };
+    expect(() =>
+      sessionShellOrNull({ ProgramFiles: "C:\\Program Files" }, "win32", failing),
+    ).toThrow("EACCES");
+  });
 });

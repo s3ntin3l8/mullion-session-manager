@@ -7,6 +7,7 @@ import {
   applyMouseModeChanges,
   carryPartialEscape,
   detectCwdChange,
+  msysToWindowsPath,
   carryPartialOsc,
   advanceAttention,
   ATTENTION_CONFIRM_MS,
@@ -265,6 +266,40 @@ describe("carryPartialEscape", () => {
     // check for the dangling one at the end.
     expect(carryPartialEscape(`${ESC}[?1049h${ESC}[?100`)).toBe(`${ESC}[?100`);
   });
+});
+
+describe("detectCwdChange on Windows (Git Bash, #1728)", () => {
+  it("converts Git Bash's MSYS $PWD into the Windows path it names", () => {
+    expect(detectCwdChange(`${ESC}]7;file://host/c/Users/me/proj${BEL}`, "win32")).toBe(
+      "C:\\Users\\me\\proj",
+    );
+  });
+
+  it("converts a file:///C:/ URL too", () => {
+    expect(detectCwdChange(`${ESC}]7;file:///D:/work/repo${BEL}`, "win32")).toBe("D:\\work\\repo");
+  });
+
+  it("leaves the path untouched off Windows", () => {
+    expect(detectCwdChange(`${ESC}]7;file://host/c/Users/me${BEL}`, "linux")).toBe("/c/Users/me");
+  });
+});
+
+describe("msysToWindowsPath", () => {
+  it.each([
+    ["/c/Users/me/proj", "C:\\Users\\me\\proj"],
+    ["/C:/Users/me", "C:\\Users\\me"],
+    ["/d", "D:\\"],
+    ["/e/", "E:\\"],
+  ])("maps %s to %s", (msys, windows) => {
+    expect(msysToWindowsPath(msys)).toBe(windows);
+  });
+
+  it.each(["/tmp", "/usr/bin", "/home/me", "/cc/x"])(
+    "leaves %s alone — not under a drive letter",
+    (msys) => {
+      expect(msysToWindowsPath(msys)).toBe(msys);
+    },
+  );
 });
 
 describe("detectCwdChange", () => {

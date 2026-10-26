@@ -42,16 +42,27 @@ export function sessionShell(
   if (platform !== "win32") return env.SHELL || "/bin/bash";
   const found = findGitBash(env, exists);
   if (found) return found;
-  throw new Error(
-    "no Git Bash found: Mullion runs sessions on Windows in Git for Windows' bash.exe — " +
-      "install Git for Windows (https://git-scm.com/download/win), or set " +
-      "CLAUDE_CODE_GIT_BASH_PATH to the full path of its bin\\bash.exe",
-  );
+  throw new NoSessionShellError();
+}
+
+/** This host has no shell a session can run in (Windows without Git Bash). */
+export class NoSessionShellError extends Error {
+  constructor() {
+    super(
+      "no Git Bash found: Mullion runs sessions on Windows in Git for Windows' bash.exe — " +
+        "install Git for Windows (https://git-scm.com/download/win), or set " +
+        "CLAUDE_CODE_GIT_BASH_PATH to the full path of its bin\\bash.exe",
+    );
+    this.name = "NoSessionShellError";
+  }
 }
 
 /**
  * The session shell, or null where there is none — for the probes, which
  * report "not found" rather than fail when the host cannot run a session.
+ * Only that case reads as null; any other error (a bug, an unexpected
+ * filesystem failure) propagates rather than turning into a silent "no
+ * agents found".
  */
 export function sessionShellOrNull(
   env: NodeJS.ProcessEnv = process.env,
@@ -60,8 +71,9 @@ export function sessionShellOrNull(
 ): string | null {
   try {
     return sessionShell(env, platform, exists);
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof NoSessionShellError) return null;
+    throw err;
   }
 }
 

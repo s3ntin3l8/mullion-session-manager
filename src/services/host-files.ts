@@ -141,7 +141,10 @@ export function sameSymlinkTarget(
  * for the REMOTE case, for the identical reason readFilesLocally above is.
  *
  * Handles BOTH ScaffoldEntry variants identically on either host: a
- * `kind: "symlink"` entry creates a real symlink via `symlinkSync` — once a
+ * `kind: "symlink"` entry creates a real symlink via `createSymlink` (on
+ * Windows that needs Developer Mode or an administrator, and fails saying
+ * so — see that function), skipped when an identical link is already
+ * there (`sameSymlinkTarget`) — once a
  * write request reaches whichever host actually owns `cwd`, creating a
  * symlink there is exactly as safe and straightforward as writing a plain
  * file (same containment check, same host-local filesystem call), so there
