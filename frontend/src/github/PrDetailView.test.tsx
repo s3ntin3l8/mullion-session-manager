@@ -642,6 +642,26 @@ describe("PrDetailView", () => {
       expect(pin).not.toHaveTextContent("## Review");
     });
 
+    it("clamps rendered review HTML and offers Read more", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<p>short html</p>",
+            createdAt: "2026-01-02T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({ latest: [latest({ body: "short html" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body--html.pr-pin-body--clamp")).not.toBeNull();
+      await userEvent.click(within(pin).getByRole("button", { name: "Read more" }));
+      expect(pin.querySelector(".pr-pin-body--html.pr-pin-body--clamp")).toBeNull();
+    });
+
     it("keeps the pinned body when the timeline review is an older round by the same author", async () => {
       stub({
         ...PR,
@@ -659,6 +679,8 @@ describe("PrDetailView", () => {
       const pin = await screen.findByRole("region", { name: /Latest review/ });
       expect(pin.querySelector(".pr-pin-body")).toHaveTextContent("NEW round");
       expect(pin).not.toHaveTextContent("OLD round");
+      // The older round is not the pinned review, so it is not marked as such.
+      expect(screen.queryByText("pinned above")).toBeNull();
     });
 
     it("falls back to the plain body when no timeline review matches the pinned one", async () => {
