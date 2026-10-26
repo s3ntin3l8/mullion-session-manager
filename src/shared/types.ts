@@ -604,6 +604,44 @@ export interface RelayReviewState {
   htmlUrl?: string;
 }
 
+/**
+ * One review worth showing in full (epic #1965, A2): the latest human and the
+ * latest bot review that has a body or leaves threads open.
+ */
+export interface ReviewSummaryEntry {
+  author: string;
+  isBot: boolean;
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, … */
+  state: string;
+  /** Plain-text body, bounded server-side; empty for an inline-threads-only review. */
+  body: string;
+  submittedAt: string | null;
+  /** The commit the review was made on ("" when unknown). */
+  reviewedSha: string;
+  /** The PR head has moved since `reviewedSha`. */
+  stale: boolean;
+}
+
+/**
+ * The PR's review status, computed ONCE on the server so the list pill and the
+ * detail's Reviews row cannot disagree. GitHub's `latestReviews` (every state,
+ * COMMENTED included — `latestOpinionatedReviews` drops what bots post) feeds
+ * the buckets; the relay's state is folded in so it needs no block of its own.
+ */
+export interface ReviewSummary {
+  /** GitHub's decision when it has one, else derived from the reviews. */
+  decision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "COMMENTED" | null;
+  approved: string[];
+  changesRequested: string[];
+  commented: string[];
+  requested: string[];
+  relay: { state: "requested" | "landed"; reviewer: string | null; url: string | null } | null;
+  /** null = not fetched. */
+  unresolvedThreads: number | null;
+  /** Max 2: the latest human + the latest bot review with something to read. */
+  latest: ReviewSummaryEntry[];
+}
+
 // The placement mode of a project — issue #1723 / roadmap 8.9 — is NOT
 // declared here. It is derived from PLACEMENT_MODES in
 // src/shared/constants.ts (the TaskStatus/TASK_STATUSES precedent in that

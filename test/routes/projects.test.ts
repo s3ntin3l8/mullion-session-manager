@@ -2327,6 +2327,7 @@ describe("projects route", () => {
         commits: { totalCount: 0, nodes: [] },
         reviewRequests: { nodes: [] },
         latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
+        latestReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
         reviews: { nodes: [] },
         reviewThreads: {
           nodes: [

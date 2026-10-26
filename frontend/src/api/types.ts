@@ -36,6 +36,8 @@ import type {
   TabletPaneCap,
   IssueTriageState,
   RelayReviewState,
+  ReviewSummary,
+  ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
@@ -52,7 +54,7 @@ export type {
 };
 // The review relay's state for a pull request (issue #1630) — shared with the
 // backend so the two cannot drift.
-export type { IssueTriageState, RelayReviewState };
+export type { IssueTriageState, RelayReviewState, ReviewSummary, ReviewSummaryEntry };
 
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };
@@ -1151,6 +1153,8 @@ export interface GitHubPROrWithChecks {
   mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   mergeStateStatus?: string | null;
   reviewers?: { login: string; state: string }[];
+  /** Server-computed review status, shared with the PR detail (epic #1965, A2). */
+  reviewSummary?: ReviewSummary;
   requestedReviewers?: string[];
   /** null = not fetched (yet), as opposed to a known zero. */
   unresolvedThreads?: number | null;
@@ -1176,6 +1180,7 @@ export type GitHubPrPhase =
   | "ci_failing"
   | "changes_requested"
   | "review_pending"
+  | "reviewed"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
@@ -1219,6 +1224,8 @@ export interface GitHubPrDetail {
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   requestedReviewers: string[];
   reviewers: { login: string; state: string }[];
+  /** Server-computed review status (counts COMMENTED, folds in the relay). */
+  reviewSummary?: ReviewSummary;
   reviews: (GitHubPrDetailComment & { state: string })[];
   threads: GitHubPrDetailThread[];
   comments: GitHubPrDetailComment[];

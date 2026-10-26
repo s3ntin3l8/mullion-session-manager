@@ -6,7 +6,7 @@ import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
-import type { GitHubPrDetail } from "../api/types.js";
+import type { GitHubPrDetail, ReviewSummary } from "../api/types.js";
 
 const PR: GitHubPrDetail = {
   number: 12,
@@ -73,6 +73,18 @@ const PR: GitHubPrDetail = {
   prPhase: "ready_to_merge",
 };
 
+const summaryOf = (over: Partial<ReviewSummary>): ReviewSummary => ({
+  decision: null,
+  approved: [],
+  changesRequested: [],
+  commented: [],
+  requested: [],
+  relay: null,
+  unresolvedThreads: 0,
+  latest: [],
+  ...over,
+});
+
 function stub(pr: GitHubPrDetail, extra?: (url: string, init?: RequestInit) => Response | null) {
   const fn = vi.fn((url: string, init?: RequestInit) => {
     const custom = extra?.(url, init);
@@ -86,7 +98,7 @@ function stub(pr: GitHubPrDetail, extra?: (url: string, init?: RequestInit) => R
 // The review relay's state for the PR (issue #1630) — its own endpoint, so
 // it needs its own stub. `states` may hold one state for every PR, or one
 // per PR number (so a test can tell two PRs apart).
-function stubReview(state: unknown) {
+function stubReview(state: unknown, detail: GitHubPrDetail = PR) {
   const byPr =
     typeof state === "object" && state !== null && !("state" in state)
       ? (state as Record<string, unknown>)
@@ -97,7 +109,7 @@ function stubReview(state: unknown) {
       const per = byPr ? byPr[match[1]] : state;
       return Promise.resolve(jsonResponse(200, per));
     }
-    return Promise.resolve(jsonResponse(200, PR));
+    return Promise.resolve(jsonResponse(200, detail));
   });
 }
 
@@ -108,22 +120,31 @@ describe("PrDetailView", () => {
   it("shows that a review was requested while it has not landed", async () => {
     vi.stubGlobal("fetch", stubReview({ state: "requested", runId: "run_1", status: "running" }));
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    expect(await screen.findByText(/A review was requested/)).toBeInTheDocument();
+    expect(await screen.findByText(/review requested — /)).toBeInTheDocument();
   });
 
   it("shows the landed review, with its verdict and what the bot said", async () => {
     vi.stubGlobal(
       "fetch",
-      stubReview({
-        state: "landed",
-        verdict: "CHANGES_REQUESTED",
-        author: "hermes[bot]",
-        body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
-        htmlUrl: "https://github.com/a/b/pull/12#pullrequestreview-1",
-      }),
+      stubReview(
+        {
+          state: "landed",
+          verdict: "CHANGES_REQUESTED",
+          author: "hermes[bot]",
+          body: "## Review\n\n**Verdict:** REQUEST_CHANGES",
+          htmlUrl: "https://github.com/a/b/pull/12#pullrequestreview-1",
+        },
+        {
+          ...PR,
+          reviewDecision: null,
+          reviewers: [{ login: "hermes[bot]", state: "CHANGES_REQUESTED" }],
+          reviewSummary: summaryOf({ changesRequested: ["hermes[bot]"] }),
+        },
+      ),
     );
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByText(/Changes requested by hermes\[bot\]/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Reviews/ }));
     expect(screen.getByText(/Verdict/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "open on GitHub" })).toBeInTheDocument();
   });
@@ -188,6 +209,14 @@ describe("PrDetailView", () => {
     // assertion below is about the previous PR's verdict lingering, not about
     // a payload that eventually shows up.
     const fetchMock = vi.fn((url: string, _init?: RequestInit) => {
+      if (/\/github\/prs\/12$/.test(String(url))) {
+        return Promise.resolve(
+          jsonResponse(200, {
+            ...PR,
+            reviewSummary: summaryOf({ decision: "APPROVED", approved: ["hermes[bot]"] }),
+          }),
+        );
+      }
       if (String(url).includes("/github/prs/12/review")) {
         return Promise.resolve(
           jsonResponse(200, {
@@ -210,6 +239,47 @@ describe("PrDetailView", () => {
     // the new PR's own state arrives.
     rerender(<PrDetailView projectId={1} number={13} onBack={vi.fn()} />);
     expect(screen.queryByText(/Approved by hermes\[bot\]/)).toBeNull();
+  });
+
+  it("counts a COMMENTED-only bot review instead of saying `No reviews yet`", async () => {
+    stub({
+      ...PR,
+      reviewDecision: null,
+      reviewers: [{ login: "hermes", state: "COMMENTED" }],
+      reviewSummary: summaryOf({
+        decision: "COMMENTED",
+        commented: ["hermes"],
+        unresolvedThreads: 2,
+      }),
+    });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText("Commented by hermes · 2 open")).toBeInTheDocument();
+    expect(screen.queryByText(/No reviews yet/)).toBeNull();
+  });
+
+  it("falls back to the lean reviewer list when the server sent no summary", async () => {
+    stub({ ...PR, reviewSummary: undefined, reviewDecision: null, reviewers: [] });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByText("No reviews yet")).toBeInTheDocument();
+  });
+
+  it("shows the relay inside the Reviews row, without a block of its own", async () => {
+    stub({
+      ...PR,
+      reviewSummary: summaryOf({
+        decision: "COMMENTED",
+        commented: ["hermes"],
+        relay: {
+          state: "landed",
+          reviewer: "hermes[bot]",
+          url: "https://github.com/a/b/pull/12#r",
+        },
+      }),
+    });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: /Reviews/ }));
+    expect(screen.getByText(/Review relay · hermes\[bot\]/)).toBeInTheDocument();
+    expect(screen.queryByText("Review", { selector: ".github-panel-section-title" })).toBeNull();
   });
 
   it("shows nothing when no relay run is known for the PR", async () => {

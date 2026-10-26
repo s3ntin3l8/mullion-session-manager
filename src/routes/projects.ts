@@ -122,6 +122,7 @@ import {
   mergePullRequest,
 } from "../services/github-write.js";
 import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js";
+import { withRelay } from "../services/review-summary.js";
 import { derivePrPhase } from "../services/github-pr-phase.js";
 import { buildHandoffPrompt } from "../services/pr-handoff.js";
 import {
@@ -2331,10 +2332,28 @@ export async function projectsRoute(app: FastifyInstance) {
       reviewDecision: detail.reviewDecision,
       requestedReviewers: detail.requestedReviewers,
       reviewers: detail.reviewers,
+      hasCommentedReview: detail.reviewSummary.commented.length > 0,
       ciStatus,
     });
+    // Fold the relay's state into the review summary so the Reviews row is the
+    // one place it shows. Best effort: the relay is decorative next to the
+    // reviews themselves, so a failed lookup leaves the summary as it is.
+    let reviewSummary = detail.reviewSummary;
+    if (detail.partial !== true) {
+      try {
+        const relay = await getRelayReviewState(app, {
+          owner: ctx.repoRef.owner,
+          repo: ctx.repoRef.repo,
+          prNumber: number,
+          token: ctx.token,
+        });
+        reviewSummary = withRelay(reviewSummary, relay);
+      } catch (err) {
+        app.log.warn({ err, projectId, number }, "pr detail: relay state unavailable");
+      }
+    }
     return {
-      detail,
+      detail: { ...detail, reviewSummary },
       ciStatus,
       ciKnown,
       actionsRuns: runs,

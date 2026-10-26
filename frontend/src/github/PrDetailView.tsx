@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail } from "../hooks/useGitHubData.js";
-import type { GitHubPrDetail, GitHubPrDetailThread, RelayReviewState } from "../api/types.js";
+import type {
+  GitHubPrDetail,
+  GitHubPrDetailThread,
+  RelayReviewState,
+  ReviewSummary,
+} from "../api/types.js";
 import { checkDotClass } from "./checkDot.js";
 import { runStatusText } from "../lib/statusTone.js";
 import { formatRelativeAge } from "../relativeTime.js";
@@ -58,37 +63,97 @@ const REVIEW_GLYPH: Record<string, string> = {
   DISMISSED: "○",
 };
 
-function reviewsSummary(pr: GitHubPrDetail): {
+/** The list of names as prose: "a", "a and b", "a, b and c". */
+function joinNames(names: readonly string[]): string {
+  return names.length <= 1
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The Reviews row, read from the server's `ReviewSummary` (the same one the
+ * list pill reads) so COMMENTED reviews count and the relay's state is part of
+ * it. An older server without the summary falls back to the lean fields.
+ */
+function reviewsSummary(
+  pr: GitHubPrDetail,
+  relayRun: RelayReviewState | null,
+): {
   tone: "good" | "bad" | "warn" | "dim";
   glyph: string;
   text: string;
+  relay: ReviewSummary["relay"];
 } {
-  const names = (state: string) =>
-    pr.reviewers
-      .filter((r) => r.state === state)
-      .map((r) => r.login)
-      .join(", ");
-  if (pr.reviewDecision === "CHANGES_REQUESTED" || names("CHANGES_REQUESTED")) {
+  const sum: ReviewSummary = pr.reviewSummary ?? {
+    decision: pr.reviewDecision,
+    approved: pr.reviewers.filter((r) => r.state === "APPROVED").map((r) => r.login),
+    changesRequested: pr.reviewers
+      .filter((r) => r.state === "CHANGES_REQUESTED")
+      .map((r) => r.login),
+    commented: pr.reviewers.filter((r) => r.state === "COMMENTED").map((r) => r.login),
+    requested: pr.requestedReviewers,
+    relay: null,
+    unresolvedThreads: null,
+    latest: [],
+  };
+  // The live relay read (polled while the drill-in is open) wins over the
+  // summary's snapshot: it knows the run's status and lands a review sooner.
+  const relay: ReviewSummary["relay"] =
+    relayRun && (relayRun.state === "requested" || relayRun.state === "landed")
+      ? { state: relayRun.state, reviewer: relayRun.author ?? null, url: relayRun.htmlUrl ?? null }
+      : sum.relay;
+  // The run's own status ("running", "failed", …) is the one thing the summary
+  // does not carry; the live relay read supplies it while a review is pending.
+  const relaySuffix =
+    relay?.state === "requested"
+      ? ` · review requested — ${pendingLabel(relayRun?.status, relayRun?.landedChecked)}`
+      : "";
+  const threads =
+    sum.unresolvedThreads && sum.unresolvedThreads > 0 ? ` · ${sum.unresolvedThreads} open` : "";
+  if (sum.changesRequested.length > 0 || sum.decision === "CHANGES_REQUESTED") {
     return {
       tone: "bad",
       glyph: "✎",
-      text: `Changes requested by ${names("CHANGES_REQUESTED") || "a reviewer"}`,
+      relay,
+      text: `Changes requested by ${joinNames(sum.changesRequested) || "a reviewer"}${threads}${relaySuffix}`,
     };
   }
-  if (pr.reviewDecision === "APPROVED") {
-    return { tone: "good", glyph: "✓", text: `Approved by ${names("APPROVED") || "a reviewer"}` };
+  if (sum.decision === "APPROVED") {
+    return {
+      tone: "good",
+      glyph: "✓",
+      relay,
+      text: `Approved by ${joinNames(sum.approved) || "a reviewer"}${relaySuffix}`,
+    };
   }
-  if (pr.requestedReviewers.length > 0) {
+  if (sum.commented.length > 0) {
+    return {
+      tone: "warn",
+      glyph: "💬",
+      relay,
+      text: `Commented by ${joinNames(sum.commented)}${threads}${relaySuffix}`,
+    };
+  }
+  if (sum.requested.length > 0) {
     return {
       tone: "warn",
       glyph: "○",
-      text: `Awaiting review from ${pr.requestedReviewers.join(", ")}`,
+      relay,
+      text: `Awaiting review from ${sum.requested.join(", ")}${relaySuffix}`,
     };
   }
-  if (pr.reviewDecision === "REVIEW_REQUIRED") {
-    return { tone: "warn", glyph: "○", text: "Review required" };
+  if (sum.decision === "REVIEW_REQUIRED") {
+    return { tone: "warn", glyph: "○", text: `Review required${relaySuffix}`, relay };
   }
-  return { tone: "dim", glyph: "○", text: pr.reviewers.length > 0 ? "Reviewed" : "No reviews yet" };
+  if (relay?.state === "requested") {
+    return {
+      tone: "warn",
+      glyph: "○",
+      relay,
+      text: `Review requested — ${pendingLabel(relayRun?.status, relayRun?.landedChecked)}`,
+    };
+  }
+  return { tone: "dim", glyph: "○", text: "No reviews yet", relay };
 }
 
 function checksSummary(pr: GitHubPrDetail): {
@@ -201,71 +266,6 @@ function pendingLabel(status: string | undefined, landedChecked: boolean | undef
   }
 }
 
-/** A review's GitHub state, in words. */
-function verdictLabel(verdict: string | undefined): string {
-  switch (verdict) {
-    case "APPROVED":
-      return "Approved";
-    case "CHANGES_REQUESTED":
-      return "Changes requested";
-    case "COMMENTED":
-      return "Commented";
-    default:
-      return verdict ?? "Review posted";
-  }
-}
-
-/**
- * The review relay's state for this pull request (issue #1630) — the same
- * relay the agent-facing `review_status` reports, seen from the operator's
- * side.
- *
- * `"none"` means no relay run is known for this PR (never requested here, or
- * the server restarted). It does NOT mean "no review is pending" — the relay's
- * run index is in-memory — so this renders nothing at all in that case,
- * rather than claiming there is no review.
- */
-function RelayReviewBlock({ state }: { state: RelayReviewState | null }) {
-  // Anything but a known state renders nothing: "no relay run is known" and
-  // "the server answered with something else" must both look like silence,
-  // never like "no review is pending".
-  if (!state || (state.state !== "requested" && state.state !== "landed")) return null;
-  if (state.state === "requested") {
-    return (
-      <div className="github-panel-section">
-        <div className="github-panel-section-title">Review</div>
-        <div className="github-panel-empty-row">
-          A review was requested — {pendingLabel(state.status, state.landedChecked)}.
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="github-panel-section">
-      <div className="github-panel-section-title">Review</div>
-      <div className="github-panel-empty-row">
-        {verdictLabel(state.verdict)}
-        {state.author ? ` by ${state.author}` : ""}
-        {state.htmlUrl ? (
-          <>
-            {" — "}
-            <a href={state.htmlUrl} target="_blank" rel="noreferrer" className="gh-link-button">
-              open on GitHub
-            </a>
-          </>
-        ) : null}
-      </div>
-      {state.body && (
-        <div className="gh-detail-meta">
-          {/* Cut by code point, so an emoji on the boundary is not split. */}
-          {[...state.body].length > 600 ? `${[...state.body].slice(0, 600).join("")}…` : state.body}
-          {state.bodyTruncated ? " (the review text was cut short)" : ""}
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function PrDetailView({
   projectId,
   number,
@@ -376,7 +376,7 @@ export function PrDetailView({
     );
   }
 
-  const reviews = reviewsSummary(pr);
+  const reviews = reviewsSummary(pr, relayReview);
   const checks = checksSummary(pr);
   const mergeInfo = mergeSummary(pr);
   const openThreads = pr.threads.filter((t) => !t.isResolved);
@@ -407,7 +407,6 @@ export function PrDetailView({
         {pr.baseBranch} ← {pr.headBranch} · {pr.author ?? "unknown"} · updated{" "}
         {formatRelativeAge(Date.parse(pr.updatedAt))}
       </div>
-      <RelayReviewBlock state={relayReview} />
       {pr.bodyHtml && (
         <>
           <SafeHtml className={`gh-html${showBody ? "" : " gh-clamp"}`} html={pr.bodyHtml} />
@@ -472,7 +471,37 @@ export function PrDetailView({
               <span className="github-panel-row-number">requested</span>
             </div>
           ))}
-          {pr.reviewers.length === 0 && pr.requestedReviewers.length === 0 && (
+          {reviews.relay && (
+            <div className="github-panel-row">
+              <span>{reviews.relay.state === "landed" ? "✓" : "⋯"}</span>
+              <span className="github-panel-row-title">
+                Review relay
+                {reviews.relay.reviewer ? ` · ${reviews.relay.reviewer}` : ""}
+              </span>
+              {reviews.relay.url ? (
+                <a
+                  href={reviews.relay.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="gh-link-button"
+                >
+                  open on GitHub
+                </a>
+              ) : (
+                <span className="github-panel-row-number">{reviews.relay.state}</span>
+              )}
+            </div>
+          )}
+          {relayReview?.state === "landed" && relayReview.body && (
+            <div className="gh-detail-meta">
+              {/* Cut by code point, so an emoji on the boundary is not split. */}
+              {[...relayReview.body].length > 600
+                ? `${[...relayReview.body].slice(0, 600).join("")}…`
+                : relayReview.body}
+              {relayReview.bodyTruncated ? " (the review text was cut short)" : ""}
+            </div>
+          )}
+          {pr.reviewers.length === 0 && pr.requestedReviewers.length === 0 && !reviews.relay && (
             <div className="github-panel-empty-row">No reviewers</div>
           )}
         </StatusRow>

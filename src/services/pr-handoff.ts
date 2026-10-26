@@ -37,6 +37,9 @@ function clip(text: string): string {
   return text.length > MAX_COMMENT_CHARS ? `${text.slice(0, MAX_COMMENT_CHARS)}…` : text;
 }
 
+/** A latest review in one of these states lifted the reviewer's earlier request. */
+const SUPERSEDING = new Set(["APPROVED", "DISMISSED"]);
+
 export function buildHandoffPrompt(
   pr: Pick<PrDetail, "number" | "title" | "htmlUrl" | "headBranch" | "threads" | "reviews">,
   failingChecks: string[],
@@ -54,12 +57,25 @@ export function buildHandoffPrompt(
     }
     lines.push("");
   }
-  const changes = pr.reviews.filter((r) => r.state === "CHANGES_REQUESTED" && r.bodyHtml.trim());
+  // Per reviewer: their newest request/remark that has text — unless their
+  // latest review is an approval or a dismissal, which lifts what they said before. An
+  // inline-only review (no text, its threads are listed above) must not hide
+  // the earlier review that did carry the text.
+  const latestByAuthor = new Map<string, PrDetail["reviews"][number]>();
+  const textByAuthor = new Map<string, PrDetail["reviews"][number]>();
+  for (const r of pr.reviews) {
+    const who = r.author ?? "";
+    latestByAuthor.set(who, r);
+    if ((r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED") && r.bodyHtml.trim()) {
+      textByAuthor.set(who, r);
+    }
+  }
+  const changes = [...textByAuthor]
+    .filter(([who]) => !SUPERSEDING.has(latestByAuthor.get(who)?.state ?? ""))
+    .map(([, r]) => r);
   for (const r of changes) {
-    lines.push(
-      `Changes requested by ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`,
-      "",
-    );
+    const verb = r.state === "CHANGES_REQUESTED" ? "Changes requested by" : "Review comments from";
+    lines.push(`${verb} ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`, "");
   }
   if (failingChecks.length > 0) {
     lines.push(`Failing checks: ${failingChecks.join(", ")}`, "");

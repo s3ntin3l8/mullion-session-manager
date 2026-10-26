@@ -52,6 +52,67 @@ describe("buildHandoffPrompt", () => {
     expect(text).toContain("`feat-thing`");
   });
 
+  it("includes COMMENTED review bodies, each reviewer's latest only, but not approvals", () => {
+    const review = (author: string, state: string, bodyHtml: string) => ({
+      author,
+      state,
+      bodyHtml,
+      createdAt: "t",
+    });
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        threads: [],
+        reviews: [
+          review("hermes", "COMMENTED", "<p>first pass</p>"),
+          review("hermes", "COMMENTED", "<p>second pass</p>"),
+          review("bob", "CHANGES_REQUESTED", "<p>nope</p>"),
+          review("bob", "APPROVED", "<p>fine now</p>"),
+          review("eve", "COMMENTED", "  "),
+        ],
+      },
+      [],
+    );
+    expect(text).toContain("Review comments from hermes: second pass");
+    expect(text).not.toContain("first pass");
+    expect(text).not.toContain("nope");
+    expect(text).not.toContain("fine now");
+    expect(text).not.toContain("nothing outstanding");
+  });
+
+  it("an inline-only latest review does not hide the author's earlier text", () => {
+    const review = (state: string, bodyHtml: string) => ({
+      author: "hermes",
+      state,
+      bodyHtml,
+      createdAt: "t",
+    });
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        threads: [],
+        reviews: [review("CHANGES_REQUESTED", "<p>fix the race</p>"), review("COMMENTED", "")],
+      },
+      [],
+    );
+    expect(text).toContain("Changes requested by hermes: fix the race");
+  });
+
+  it("drops a reviewer's request once their latest review is DISMISSED", () => {
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        threads: [],
+        reviews: [
+          { author: "bob", state: "CHANGES_REQUESTED", bodyHtml: "<p>nope</p>", createdAt: "t" },
+          { author: "bob", state: "DISMISSED", bodyHtml: "", createdAt: "t" },
+        ],
+      },
+      [],
+    );
+    expect(text).not.toContain("nope");
+  });
+
   it("strips nested/spliced tags and script blocks completely", () => {
     const text = buildHandoffPrompt(
       {
