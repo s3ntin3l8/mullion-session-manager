@@ -153,7 +153,7 @@ export function createWorktree({ cwd, name }) {
       if (isRegisteredWorktree(root, dest)) {
         if (canReuseWorktree(dest, branch)) return dest;
       } else {
-        let entries = null;
+        let entries;
         try {
           entries = fs.readdirSync(dest);
         } catch {
