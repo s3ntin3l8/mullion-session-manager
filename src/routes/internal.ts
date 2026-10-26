@@ -96,6 +96,7 @@ import {
   ProjectFileError,
   listProjectDir,
   readProjectFile,
+  statProjectFile,
   writeProjectFile,
   makeProjectDir,
   deleteProjectPath,
@@ -1685,6 +1686,20 @@ export async function internalRoutes(app: FastifyInstance) {
       if (resolvedCwd === null) return;
       try {
         return readProjectFile(resolvedCwd, request.body.path);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesReadBody }>(
+    "/internal/project-files/stat",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesReadSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        return statProjectFile(resolvedCwd, request.body.path);
       } catch (err) {
         return replyProjectFileError(reply, err);
       }

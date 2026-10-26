@@ -3,12 +3,14 @@ import { api, ApiError } from "./api/index.js";
 import type { ProjectDirEntry, ProjectFileContent, ProjectSearchListing } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
 import { NonTextFileView, type NonTextReason } from "./components/NonTextFileView.js";
+import { refreshGitStatuses, useTreeGitDecorations } from "./hooks/useTreeGitDecorations.js";
 import { useTreeUploads } from "./hooks/useTreeUploads.js";
 import { useTreeDropTarget } from "./hooks/useTreeDropTarget.js";
 import { useFileTreeMutations } from "./hooks/useFileTreeMutations.js";
 import { hasDirtyFileUnder, setFileDirty, useDirtyFilesVersion } from "./lib/dirtyFiles.js";
 import { emitFilePathGone } from "./lib/filePathEvents.js";
 import { endFileDrag, startFileDrag, type FileDragPayload } from "./lib/fileDrag.js";
+import { GitBadge } from "./ui/GitBadge.js";
 import { TreeUploadInputs } from "./ui/TreeUploadInputs.js";
 import { UploadStatus } from "./ui/UploadStatus.js";
 import {
@@ -52,6 +54,9 @@ interface DirState {
 // The editor binds Mod-s: Cmd+S on macOS, Ctrl+S elsewhere.
 const SAVE_SHORTCUT = isMacPlatform() ? "⌘S" : "Ctrl+S";
 
+// How often an open file is checked for a change on disk (also on focus).
+const CHANGE_POLL_MS = 10_000;
+
 // Highlight key for the tree-wide drop target (uploads into the selected folder).
 const ROOT_DROP_KEY = "\0root";
 
@@ -92,6 +97,7 @@ function FileEditorBody({
       ? st.projects.find((p) => p.id === projectId)?.cwd
       : st.sessions.find((x) => x.id === sessionId)?.cwd,
   );
+  const decorate = useTreeGitDecorations(projectId, sessionId);
   const editorOnly = params.mode === "editor";
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
@@ -171,13 +177,20 @@ function FileEditorBody({
   );
 
   const openFile = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, opts: { onlyIfClean?: boolean } = {}) => {
       const seq = ++openSeq.current;
       setActionError(null);
       setConflict(false);
       try {
         const loaded = await api.readProjectFile(projectId, filePath, sessionId);
         if (seq !== openSeq.current) return;
+        // A background reload (the file changed on disk) was started when there was
+        // no draft; the user may have typed while the read was in flight. Never
+        // replace that: surface the change as a conflict instead.
+        if (opts.onlyIfClean && dirtyRef.current) {
+          setConflict(true);
+          return;
+        }
         setFile(loaded);
         setDraft(loaded.content);
         setFileNote(null);
@@ -309,6 +322,7 @@ function FileEditorBody({
           prev ? { ...prev, content: saved, size: res.size, mtimeMs: res.mtimeMs } : prev,
         );
         setConflict(false);
+        refreshGitStatuses();
       } catch (err) {
         if (err instanceof ApiError && err.code === "conflict") setConflict(true);
         else setActionError(errorMessage(err, "Failed to save"));
@@ -332,6 +346,51 @@ function FileEditorBody({
     if (file) void openFile(file.path);
   }, [file, openFile]);
 
+  // The open file can change under us — an agent in a terminal edits it. While
+  // it is open, look at its mtime now and then (a cheap stat, not a re-read),
+  // and whenever the window or tab comes back. With no unsaved edits the new
+  // content simply loads (the cursor stays put: CodeEditor applies only what
+  // differs); with unsaved edits the existing "changed on disk" banner offers
+  // Reload or Overwrite, so a draft is never silently replaced.
+  const loadedMtime = file?.mtimeMs;
+  const loadedSize = file?.size;
+  useEffect(() => {
+    if (!openPath || loadedMtime === undefined || loadedSize === undefined) return;
+    let stopped = false;
+    let inFlight = false;
+    const check = async () => {
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      try {
+        const st = await api.statProjectFile(projectId, openPath, sessionId);
+        // Size too: a write that keeps the mtime (a coarse-grained filesystem, a
+        // tool restoring timestamps) would otherwise go unnoticed.
+        if (stopped || (st.mtimeMs === loadedMtime && st.size === loadedSize)) return;
+        if (dirtyRef.current) setConflict(true);
+        else void openFile(openPath, { onlyIfClean: true });
+      } catch (err) {
+        if (stopped) return;
+        // Gone from disk: keep what is on screen (it may be the only copy) and say so.
+        if (err instanceof ApiError && err.code === "not_found") {
+          setActionError(`${openPath} was deleted on disk. Saving will recreate it.`);
+        }
+        // anything else (a network blip, rate limit): the next tick tries again
+      } finally {
+        inFlight = false;
+      }
+    };
+    const timer = setInterval(() => void check(), CHANGE_POLL_MS);
+    const onVisible = () => void check();
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [projectId, sessionId, openPath, loadedMtime, loadedSize, openFile]);
+
   const handleCreate = useCallback(async () => {
     const name = (newEntry?.name ?? "").trim();
     if (!newEntry || !name) return;
@@ -353,6 +412,7 @@ function FileEditorBody({
       }
       setNewEntry(null);
       await loadDir(selectedDir);
+      refreshGitStatuses();
       setExpanded((prev) => new Set(prev).add(selectedDir));
       if (newEntry.kind === "file") await openFile(target);
     } catch (err) {
@@ -376,6 +436,7 @@ function FileEditorBody({
   // listing of a closed one so expanding it later doesn't show stale rows.
   const relist = useCallback(
     (changed: string[]) => {
+      refreshGitStatuses(); // a rename/move/delete changed the working tree
       for (const dirPath of changed) {
         if (dirPath === "" || expandedRef.current.has(dirPath)) void loadDir(dirPath);
         else
@@ -480,6 +541,7 @@ function FileEditorBody({
     loadDir,
     onTruncated: () =>
       setTreeError("That folder is too large to upload in one go — some files were left out"),
+    onBatchDone: refreshGitStatuses,
   });
   const { dropKey, dropProps } = useTreeDropTarget({
     onUpload: tree.onUpload,
@@ -540,6 +602,7 @@ function FileEditorBody({
               )}
               <FolderIcon size={13} />
               <span className="agent-rules-panel-row-name">{entry.name}</span>
+              <GitBadge decoration={decorate(entryPath, true)} />
             </button>
           ) : (
             <button
@@ -561,6 +624,7 @@ function FileEditorBody({
               <FileTextIcon size={13} />
               <span className="agent-rules-panel-row-name">{entry.name}</span>
               {entry.kind === "symlink" && <span className="agent-rules-panel-row-meta">link</span>}
+              <GitBadge decoration={decorate(entryPath, false)} />
             </button>
           );
           return (

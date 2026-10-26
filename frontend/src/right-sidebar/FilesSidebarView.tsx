@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useFileTreeMutations } from "../hooks/useFileTreeMutations.js";
+import { refreshGitStatuses, useTreeGitDecorations } from "../hooks/useTreeGitDecorations.js";
 import { useTreeUploads } from "../hooks/useTreeUploads.js";
 import { useTreeDropTarget } from "../hooks/useTreeDropTarget.js";
 import { hasDirtyFileUnder, useDirtyFilesVersion } from "../lib/dirtyFiles.js";
@@ -9,6 +10,7 @@ import { baseName, joinRel } from "../lib/fileTreeMove.js";
 import { joinAbs } from "../lib/posixPath.js";
 import { useDashboardStore } from "../store/index.js";
 import { KebabMenu, type KebabMenuItem } from "../ui/KebabMenu.js";
+import { GitBadge } from "../ui/GitBadge.js";
 import { TreeUploadInputs } from "../ui/TreeUploadInputs.js";
 import { UploadStatus } from "../ui/UploadStatus.js";
 import { api, ApiError } from "../api/index.js";
@@ -86,6 +88,7 @@ export function FilesSidebarView({
     sessionId === undefined ? undefined : s.sessions.find((x) => x.id === sessionId)?.cwd,
   );
   const rootCwd = (sessionId === undefined ? projectCwd : sessionCwd) ?? null;
+  const decorate = useTreeGitDecorations(projectId, sessionId);
   // A listing that resolves after the followed project/checkout changed
   // belongs to the old one and must not land in the new one's tree.
   const activeRoot = useRef(rootKey);
@@ -164,6 +167,7 @@ export function FilesSidebarView({
   // listing of a closed one so expanding it later doesn't show stale rows.
   const relist = useCallback(
     (changed: string[]) => {
+      refreshGitStatuses(); // a rename/move/delete changed the working tree
       for (const dirPath of changed) {
         if (dirPath === "" || expandedRef.current.has(dirPath)) void loadDir(dirPath);
         else
@@ -201,6 +205,7 @@ export function FilesSidebarView({
     loadDir,
     onTruncated: () =>
       setError("That folder is too large to upload in one go — some files were left out"),
+    onBatchDone: refreshGitStatuses,
   });
 
   const moveInto = useCallback(
@@ -259,6 +264,7 @@ export function FilesSidebarView({
       setNewEntry(null);
       setError(null);
       await loadDir(selectedDir);
+      refreshGitStatuses();
       if (newEntry.kind === "file") actions.onOpenFile(projectId, target, sessionId);
     } catch (err) {
       if (activeRoot.current !== forRoot) return;
@@ -416,6 +422,7 @@ export function FilesSidebarView({
                 {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
                 <FolderIcon size={13} />
                 <span className="agent-rules-panel-row-name">{entry.name}</span>
+                <GitBadge decoration={decorate(entryPath, true)} />
               </button>
             ) : (
               <button
@@ -434,6 +441,7 @@ export function FilesSidebarView({
                 {entry.kind === "symlink" && (
                   <span className="agent-rules-panel-row-meta">link</span>
                 )}
+                <GitBadge decoration={decorate(entryPath, false)} />
               </button>
             );
             return (

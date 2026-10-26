@@ -541,6 +541,39 @@ describe("project-files routes", () => {
     }
   });
 
+  describe("file stat (change detection)", () => {
+    it("returns size and mtime, notices a write, and refuses what a read would", async () => {
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "one");
+      fs.mkdirSync(path.join(projectCwd, "dir"));
+      const { app, projectId } = await createProject();
+      const stat = (rel: string) =>
+        app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/file/stat?path=${encodeURIComponent(rel)}`,
+        });
+      const first = await stat("a.txt");
+      expect(first.statusCode).toBe(200);
+      expect(first.json()).toMatchObject({ path: "a.txt", size: 3 });
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "three");
+      fs.utimesSync(path.join(projectCwd, "a.txt"), new Date(), new Date(Date.now() + 5000));
+      const second = (await stat("a.txt")).json();
+      expect(second.size).toBe(5);
+      expect(second.mtimeMs).not.toBe(first.json().mtimeMs);
+      expect((await stat("nope")).statusCode).toBe(404);
+      expect((await stat("dir")).statusCode).toBe(400);
+      expect((await stat("../x")).statusCode).toBe(400);
+      expect(
+        (await app.inject({ method: "GET", url: `/api/projects/${projectId}/file/stat` }))
+          .statusCode,
+      ).toBe(400);
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/999999/file/stat?path=a" }))
+          .statusCode,
+      ).toBe(404);
+      await app.close();
+    });
+  });
+
   describe("raw transfer", () => {
     const upload = (
       app: Awaited<ReturnType<typeof buildApp>>,
@@ -1002,6 +1035,40 @@ describe("project-files routes", () => {
       expect(out).toEqual({ status: 409 });
       await primary.close();
       await agentApp.close();
+    });
+
+    it("stats through the agent, forwards its coded errors, and 501s an agent without the route", async () => {
+      fs.writeFileSync(path.join(projectCwd, "r.txt"), "remote");
+      const { agentApp, port } = await startAgent("pf-token-stat");
+      const { primary, projectId } = await remoteProject(port, "pf-token-stat", projectCwd);
+      const ok = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file/stat?path=r.txt`,
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json()).toMatchObject({ path: "r.txt", size: 6 });
+      const missing = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file/stat?path=nope`,
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json().code).toBe("not_found");
+      await primary.close();
+      await agentApp.close();
+
+      const bare = (await import("fastify")).default();
+      bare.setNotFoundHandler((_req, reply) => reply.code(404).send({ message: "Not Found" }));
+      await bare.listen({ port: 0, host: "127.0.0.1" });
+      const address = bare.server.address();
+      if (address === null || typeof address === "string") throw new Error("no address");
+      const old = await remoteProject(address.port, "any", projectCwd);
+      const res = await old.primary.inject({
+        method: "GET",
+        url: `/api/projects/${old.projectId}/file/stat?path=r.txt`,
+      });
+      expect(res.statusCode).toBe(501);
+      await old.primary.close();
+      await bare.close();
     });
 
     it("replies 501 to upload/download when the agent lacks the routes", async () => {

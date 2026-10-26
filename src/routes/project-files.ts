@@ -22,6 +22,7 @@ import {
   listProjectDir,
   readProjectFile,
   readExternalFile,
+  statProjectFile,
   writeProjectFile,
   makeProjectDir,
   deleteProjectPath,
@@ -32,6 +33,9 @@ import {
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+// Routes a client polls or fires as the user types (filename search; the change
+// check on every open editor), so they get a higher ceiling than the editor's own.
+const POLLED_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
 // A folder upload is one request per file (up to the drop walker's 5000-entry
 // cap, three at a time, a few ms each on loopback), so the transfer routes get
 // a ceiling far above the editor's own. The client also honours Retry-After
@@ -283,6 +287,29 @@ export async function projectFilesRoute(app: FastifyInstance) {
     },
   );
 
+  // Size + mtime only, for an open editor to notice a change on disk: polled
+  // every few seconds per open panel, so it gets the search route's higher
+  // ceiling rather than the editor's own.
+  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+    "/api/projects/:id/file/stat",
+    {
+      ...POLLED_RATE_LIMIT,
+      schema: { params: idParams, querystring: pathQuery },
+    },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) return reply.badRequest("path is required");
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => statProjectFile(cwd, relPath),
+        (client, cwd) => client.statProjectFile(cwd, relPath),
+      );
+    },
+  );
+
   // Read-only view of a file outside the project (an agent's plan under
   // ~/.claude/plans, ...), gated by Settings' externalReadRoots allowlist —
   // there is deliberately no write/list/rename/delete twin. Local hosts only:
@@ -527,14 +554,10 @@ export async function projectFilesRoute(app: FastifyInstance) {
     },
   );
 
-  // Filename search is fired as the user types (debounced client-side), so it
-  // gets a higher ceiling than the other file routes.
-  const SEARCH_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
-
   app.get<{ Params: { id: string }; Querystring: { q?: string; sessionId?: string } }>(
     "/api/projects/:id/files/search",
     {
-      ...SEARCH_RATE_LIMIT,
+      ...POLLED_RATE_LIMIT,
       schema: {
         params: idParams,
         querystring: {

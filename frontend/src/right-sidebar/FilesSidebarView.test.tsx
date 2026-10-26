@@ -814,4 +814,77 @@ describe("FilesSidebarView", () => {
       }
     });
   });
+
+  describe("git status in the tree", () => {
+    const status = (files: { path: string; status: "M" | "A" | "D" | "U" | "?" }[]) => ({
+      branch: "main",
+      hash: null,
+      ahead: 0,
+      behind: 0,
+      files,
+      isClean: files.length === 0,
+      hasConflicts: files.some((f) => f.status === "U"),
+    });
+
+    it("badges changed files and the folders above them, and leaves clean rows plain", async () => {
+      resetStore({
+        projects: [makeProject({ id: 4, cwd: "/work/app" })],
+        sessions: [],
+        gitStatuses: {
+          4: status([
+            { path: "src/index.ts", status: "M" },
+            { path: "README.md", status: "?" },
+          ]),
+        },
+      });
+      const user = userEvent.setup();
+      renderView();
+      await user.click(await screen.findByText("src"));
+      await screen.findByText("index.ts");
+      expect(within(rowOf("src")).getByRole("img", { name: "Contains changes" })).toBeTruthy();
+      expect(within(rowOf("index.ts")).getByRole("img", { name: "Modified" })).toBeTruthy();
+      expect(within(rowOf("README.md")).getByRole("img", { name: "Untracked" })).toBeTruthy();
+      expect(within(rowOf("escape")).queryByRole("img")).toBeNull();
+    });
+
+    it("uses the worktree session's own status for a worktree tree", async () => {
+      resetStore({
+        projects: [makeProject({ id: 4, cwd: "/work/app" })],
+        sessions: [makeSession({ id: 9, projectId: 4, cwd: "/work/app/.mullion-worktrees/feat" })],
+        gitStatuses: { 4: status([{ path: "README.md", status: "M" }]) },
+        sessionGitStatuses: { 9: status([{ path: "README.md", status: "A" }]) },
+      });
+      render(<FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />);
+      await screen.findByText("README.md");
+      expect(within(rowOf("README.md")).getByRole("img", { name: "Added" })).toBeTruthy();
+    });
+
+    it("asks for fresh statuses after the tree changes the working tree", async () => {
+      const refresh = vi.fn().mockResolvedValue(undefined);
+      resetStore({
+        projects: [makeProject({ id: 4, cwd: "/work/app" })],
+        sessions: [],
+        refreshGitStatuses: refresh,
+      });
+      vi.mocked(api.renameProjectPath).mockResolvedValue({ path: "x" });
+      vi.mocked(api.deleteProjectPath).mockResolvedValue({ path: "x" });
+      vi.mocked(api.writeProjectFile).mockResolvedValue({ size: 0, mtimeMs: 1 });
+      const user = userEvent.setup();
+      renderView();
+      await screen.findByText("README.md");
+      // delete
+      await user.click(menuOf("README.md"));
+      await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+      await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+      // create
+      await user.click(screen.getByRole("button", { name: "New file in project root" }));
+      await user.type(screen.getByPlaceholderText("New file in /"), "z.ts{Enter}");
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(2));
+      // upload
+      vi.mocked(api.uploadProjectFile).mockResolvedValue({ path: "x", size: 1 });
+      await user.upload(screen.getByLabelText("Upload files"), new File(["x"], "up.txt"));
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(3));
+    });
+  });
 });
