@@ -87,14 +87,15 @@ describe("RightSidebar", () => {
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  it("puts the project picker and the view's toolbar in one sub-bar row", async () => {
+  it("shows the Source Control header under the project picker", async () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByRole("button", { name: "Git" }));
 
     const subbar = document.querySelector(".right-sidebar-subbar")!;
     expect(subbar.contains(screen.getByRole("combobox", { name: "Project" }))).toBe(true);
-    expect(subbar.contains(screen.getByRole("button", { name: "Open Git panel" }))).toBe(true);
+    expect(screen.getByText("Source Control")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Fetch" })).toBeTruthy();
   });
 
   it("shows a changed-file count badge on the rail", () => {
@@ -357,15 +358,6 @@ describe("RightSidebar", () => {
 
     await user.click(screen.getByRole("button", { name: "Close sidebar" }));
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
-  });
-
-  it("the Git view's open-full button calls the injected opener with the project", async () => {
-    const user = userEvent.setup();
-    useDashboardStore.setState({ rightSidebarOpen: true });
-    renderSidebar();
-
-    await user.click(screen.getByRole("button", { name: "Open Git panel" }));
-    expect(actions.onOpenGit).toHaveBeenCalledWith(1);
   });
 
   it("a project request from the store pins the drawer to that project", () => {

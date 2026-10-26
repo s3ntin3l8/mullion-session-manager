@@ -75,6 +75,8 @@ let pendingSettingsPatchDiscarder: (() => void) | null = null;
  * then the fetch has already been made (api.patchSettings reaches fetch()
  * synchronously), so the assertion needs no wait at all.
  */
+let historyRequestSeq = 0;
+
 export function __flushPendingSettingsPatchForTests(): void {
   pendingSettingsPatchFlusher?.();
 }
@@ -174,6 +176,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     sidebarWidth: readStoredSidebarWidth(),
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
     rightSidebarProjectRequest: null,
+    rightSidebarHistoryRequest: null,
     githubOpenPrByProject: {},
     rightSidebarPinned,
     // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
@@ -328,6 +331,17 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     // PR from a session row also moves an open dock panel to that PR.
     setGithubOpenPr: (projectId, number) =>
       set((s) => ({ githubOpenPrByProject: { ...s.githubOpenPrByProject, [projectId]: number } })),
+
+    openRightSidebarHistory: (projectId, scope) => {
+      // Module-level sequence, not "previous + 1": the request is cleared once
+      // applied, and a restart at 1 would collide with the nonce a still-mounted
+      // History view has already handled.
+      historyRequestSeq += 1;
+      set({ rightSidebarHistoryRequest: { projectId, scope, nonce: historyRequestSeq } });
+      get().openRightSidebarView("history", projectId);
+    },
+
+    clearRightSidebarHistoryRequest: () => set({ rightSidebarHistoryRequest: null }),
 
     openRightSidebarPr: (projectId, number) => {
       get().setGithubOpenPr(projectId, number);

@@ -49,13 +49,34 @@ remote-host support uses.
 
 ## The sidebar's Git view
 
-The right sidebar's Git view (`right-sidebar/GitSidebarView.tsx`) composes
-three collapsible sections (open/closed state is kept per user in
-`localStorage`): **Changes** (the source-control section with inline working-tree
-diffs), **Branches** (ahead/behind, last-commit age, merged tag — fetched with
-`?detail=1` — the PR's phase chip, and two-step branch deletion with `Force`
-override) and **Worktrees** (the sessions running in each, `Prune stale`, and
-two-step worktree removal with `Force` override).
+The right sidebar's Source Control view (`right-sidebar/GitSidebarView.tsx`,
+parts in `git/`) is the only Git UI that is replacing this panel (the panel is
+retired separately). Its header shows the branch, ahead/behind, the remote-host
+label, **Fetch** / **Pull**, a **clone-health** check (dot = last verdict; a
+damaged clone shows the repair plan and a confirmed **Repair**, #1896), an
+**Auto-fetch** toggle and the open-repo-on-GitHub link. Sections:
+
+- **Changes** — working-tree files with inline diffs.
+- **Branches** — filterable, grouped _Current · With open PR · Task branches ·
+  Prunable · Other_. Rows carry the PR chip (click opens it in the GitHub
+  view), a merge-state chip (`merged`, `squash-merged`, `upstream gone`; the
+  reason is in the tooltip), live session pills and a task chip. Task branches
+  show their lock up front and cannot be deleted from here. Hover actions: open
+  a session on the branch, preview, **View in History** (opens History scoped
+  to `branch:<name>`) and two-step delete with `Force`. Click a row for the
+  **branch detail** (status triad, Mullion links, upstream/base ahead-behind,
+  commits only on the branch).
+- **Prunable → Prune…** opens the **prune preview**: a dry run lists the
+  candidates with reasons and the skipped branches with why; the two-step
+  **Delete** removes exactly the ticked names, locally only (remotes are never
+  touched; the server re-validates each name).
+- **Worktrees** — session pills, PR phase, **Open session here**, dock-preview
+  worktrees marked `auto`, `.wt/` worktrees grouped with "safe to remove" once
+  their branch is merged or gone, `Prune stale`, and two-step removal.
+
+A pending promote request shows as a banner (Review… opens the promote dialog),
+and a remote host that cannot be reached shows an "unreachable" state with Retry
+instead of an empty list.
 
 ## The sidebar's History view
 

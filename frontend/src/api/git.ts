@@ -4,6 +4,8 @@
 import { request } from "./client.js";
 import type {
   GitBranchesResult,
+  GitBranchDetail,
+  GitBranchPruneResult,
   DeleteBranchResult,
   RemoveWorktreeResult,
   GitStatusesBatchResult,
@@ -142,6 +144,23 @@ export const gitApi = {
     request<DeleteBranchResult>(`/api/projects/${projectId}/git-branch-delete`, {
       method: "POST",
       body: JSON.stringify({ name, force }),
+    }),
+
+  // A3 — one branch's drilldown. undefined (204) on a remote-host project.
+  getProjectGitBranch: (projectId: number, name: string) =>
+    request<GitBranchDetail | undefined>(
+      `/api/projects/${projectId}/git-branch?name=${encodeURIComponent(name)}`,
+    ),
+
+  // A3 — local-only prune. `dryRun` previews; `confirm` deletes `names`, each
+  // re-validated server-side. undefined (204) on a remote-host project.
+  pruneProjectGitBranches: (
+    projectId: number,
+    body: { dryRun?: boolean; confirm?: boolean; names?: string[] },
+  ) =>
+    request<GitBranchPruneResult | undefined>(`/api/projects/${projectId}/git-branch-prune`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   // Issue #442 — GitPanel manual worktree removal. Same "refusal is a 200,

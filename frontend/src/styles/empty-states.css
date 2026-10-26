@@ -2113,13 +2113,6 @@ button.github-panel-row.gh-issue-row {
 }
 /* Git sidebar: collapsible sections and the commit graph (git/*.tsx). */
 /* Git sidebar: collapsible sections, cards, and the commit graph (git/*.tsx). */
-.git-sidebar-section {
-  border-bottom: 1px solid var(--border-soft);
-  margin-bottom: 0;
-}
-.git-sidebar-section:last-child {
-  border-bottom: none;
-}
 .gh-section-toggle {
   display: flex;
   align-items: center;
@@ -2153,9 +2146,6 @@ button.github-panel-row.gh-issue-row {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   color: var(--dim);
   font-weight: 500;
-}
-.git-sidebar-section-body {
-  padding: 4px 6px 8px;
 }
 .gh-graph {
   flex: none;
@@ -2308,42 +2298,6 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   flex-direction: column;
 }
-.git-branch-card {
-  margin-bottom: 2px;
-}
-.git-branch-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
-}
-.git-branch-name {
-  font-weight: 500;
-}
-.git-worktree-card {
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--fg) 2%, var(--sidebar));
-  padding: 6px 8px;
-  margin-bottom: 6px;
-  transition: border-color 0.15s;
-}
-.git-worktree-card:hover {
-  border-color: color-mix(in srgb, var(--fg) 18%, var(--border-soft));
-}
-.git-worktree-header-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-}
-.git-worktree-title-btn {
-  font-weight: 500;
-  font-size: 0.75rem;
-}
-.git-worktree-branch {
-  color: var(--dim);
-  font-size: 0.71875rem;
-}
 .git-worktree-sessions {
   display: flex;
   flex-wrap: wrap;
@@ -2375,11 +2329,6 @@ button.github-panel-row.gh-issue-row {
 .git-worktree-session-pill:hover {
   background: color-mix(in srgb, var(--fg) 8%, transparent);
   border-color: var(--accent-solid);
-}
-.git-worktrees-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 6px;
 }
 .gh-history-toolbar {
   display: flex;
