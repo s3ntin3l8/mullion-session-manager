@@ -39,6 +39,15 @@ describe("GitHub client cache (githubFetch)", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+  it("drops a response that lands after a cache reset instead of writing it back fresh", async () => {
+    let resolve!: (v: string) => void;
+    const slow = fetchCached("1:late", () => new Promise<string>((r) => (resolve = r)));
+    __resetGithubCacheForTests();
+    resolve("stale payload");
+    await slow;
+    expect(useDashboardStore.getState().githubCache["1:late"]).toBeUndefined();
+  });
+
   it("force bypasses freshness", async () => {
     const fetcher = vi.fn().mockResolvedValueOnce("one").mockResolvedValueOnce("two");
     await fetchCached("1:prs", fetcher);

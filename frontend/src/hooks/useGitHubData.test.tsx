@@ -96,6 +96,13 @@ describe("usePrList", () => {
     expect(result.current?.prs[0].number).toBe(7);
   });
 
+  it("does not fetch the list when the store already has it", () => {
+    const spy = vi.spyOn(api, "getProjectGitHubPRs").mockResolvedValue(PRS(3));
+    useDashboardStore.setState({ prsByProject: { 1: PRS(7) } });
+    renderHook(() => usePrList(1));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("falls back to the fetched list", async () => {
     vi.spyOn(api, "getProjectGitHubPRs").mockResolvedValue(PRS(3));
     const { result } = renderHook(() => usePrList(1));
@@ -151,6 +158,22 @@ describe("useRunJobs", () => {
     rerender({ on: false });
     rerender({ on: true });
     expect(spy.mock.calls.filter(([, id]) => id === 1)).toHaveLength(1);
+  });
+
+  it("refetches the jobs when its project's trigger moves", async () => {
+    const spy = vi.spyOn(api, "getGitHubRunJobs").mockResolvedValue([{ id: 1 } as never]);
+    renderHook(() => useRunJobs(1, [1], true));
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useDashboardStore.setState((s) => ({
+        githubCache: Object.fromEntries(
+          Object.entries(s.githubCache).map(([k, v]) => [k, { ...v, fetchedAt: 0 }]),
+        ),
+        prsRefreshTriggerByProject: { 1: 1 },
+      }));
+    });
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
   });
 
   it("handles no runs", () => {

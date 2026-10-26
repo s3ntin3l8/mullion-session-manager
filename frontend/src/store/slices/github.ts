@@ -47,9 +47,13 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
   // In-flight dedup: concurrent callers for one key (a hover prefetch and the
   // panel's own mount fetch) share a single request.
   const inFlight = new Map<string, Promise<unknown>>();
+  // Bumped by the test reset: a request still in flight from before it must
+  // not write its (previous test's) response back as fresh.
+  let generation = 0;
   registerGithubCacheReset(() => {
+    generation++;
     inFlight.clear();
-    set({ githubCache: {} });
+    set({ githubCache: {}, githubOpenIssueByProject: {}, githubIssueUiByProject: {} });
   });
 
   const putEntry = (key: string, entry: GithubCacheEntry) =>
@@ -73,20 +77,23 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
       }
       const pending = inFlight.get(key);
       if (pending) return pending as Promise<T>;
+      const startedIn = generation;
       const request = new Promise<T>((resolve) => resolve(fetcher()))
         .then((data) => {
-          putEntry(key, { data, fetchedAt: Date.now(), error: null });
+          if (startedIn === generation) putEntry(key, { data, fetchedAt: Date.now(), error: null });
           return data;
         })
         .catch((err: unknown) => {
           // Keep the last good data (and its staleness) so the view degrades
           // to "stale + an error" instead of blanking.
           const prev = get().githubCache[key];
-          putEntry(key, {
-            data: prev?.data,
-            fetchedAt: 0,
-            error: err instanceof Error ? err.message : "Request failed",
-          });
+          if (startedIn === generation) {
+            putEntry(key, {
+              data: prev?.data,
+              fetchedAt: 0,
+              error: err instanceof Error ? err.message : "Request failed",
+            });
+          }
           throw err;
         })
         .finally(() => {

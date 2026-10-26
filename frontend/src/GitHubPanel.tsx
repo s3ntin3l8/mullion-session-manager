@@ -2,7 +2,7 @@ import { checkDotClass } from "./github/checkDot.js";
 import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./github/prPhase.js";
 import { PrDetailView } from "./github/PrDetailView.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type {
   GitHubActionsRun,
@@ -230,6 +230,8 @@ function relayPillTitle(relay: RelayReviewState): string {
   return "A review was requested for this pull request";
 }
 
+const HOVER_PREFETCH_MS = 120;
+
 function PRCard({
   pr,
   projectId,
@@ -251,11 +253,31 @@ function PRCard({
 
   // Expanding shows every run's jobs as one flat list.
   const toggle = () => setExpanded((e) => !e);
-  const warmDetail = () => prefetchGithubPr(projectId, pr.number);
+  // A short intent delay, so sweeping the pointer down a long list doesn't
+  // fire a live GitHub call per row it crosses.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelWarm = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = null;
+  };
+  const warmDetail = () => {
+    cancelWarm();
+    hoverTimer.current = setTimeout(
+      () => prefetchGithubPr(projectId, pr.number),
+      HOVER_PREFETCH_MS,
+    );
+  };
+  useEffect(() => cancelWarm, []);
   const summary = prCiSummary(pr, jobsByRun);
 
   return (
-    <div className="github-panel-pr-card" onMouseEnter={warmDetail} onFocus={warmDetail}>
+    <div
+      className="github-panel-pr-card"
+      onMouseEnter={warmDetail}
+      onMouseLeave={cancelWarm}
+      onFocus={warmDetail}
+      onBlur={cancelWarm}
+    >
       <button className="github-panel-pr-header" onClick={toggle}>
         <span className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`} />
         <a

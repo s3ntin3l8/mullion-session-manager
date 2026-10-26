@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubPanel } from "./GitHubPanel.js";
 import type {
@@ -302,6 +302,18 @@ describe("GitHubPanel", () => {
     await vi.waitFor(() =>
       expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/github/prs/42"))).toBe(true),
     );
+  });
+
+  it("does not prefetch the detail when the pointer only sweeps past the card (#1970)", async () => {
+    const fetchMock = mockFetch({ status: STATUS, prs: PRS_LOADED });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+    const header = await screen.findByRole("button", { name: /Fix attention race/ });
+    const card = header.closest(".github-panel-pr-card")!;
+    fireEvent.mouseEnter(card);
+    fireEvent.mouseLeave(card);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/github/prs/42"))).toBe(false);
   });
 
   it("lists pull requests and issues with titles and links once loaded", async () => {

@@ -89,7 +89,9 @@ export function useGitHubStatus(projectId: number): GitHubStatus | null | undefi
  */
 export function usePrList(projectId: number): GitHubPRsStatus | null | undefined {
   const storePrs = useDashboardStore((s) => s.prsByProject[projectId]);
+  // The store's list wins below, so don't spend a request on one we'd discard.
   const r = useGithubResource(prsKey(projectId), () => fetchPrs(projectId), {
+    enabled: !storePrs,
     trigger: useProjectTrigger(projectId),
   });
   if (storePrs) return storePrs;
@@ -124,6 +126,7 @@ export function useRunJobs(
 ): Record<number, GitHubJob[] | null | undefined> {
   const cache = useDashboardStore((s) => s.githubCache);
   const githubFetch = useDashboardStore((s) => s.githubFetch);
+  const trigger = useProjectTrigger(projectId);
   const idsKey = runIds.join(",");
   useEffect(() => {
     if (!enabled) return;
@@ -132,7 +135,7 @@ export function useRunJobs(
         () => undefined,
       );
     }
-  }, [projectId, idsKey, enabled, githubFetch]);
+  }, [projectId, idsKey, enabled, trigger, githubFetch]);
   return useMemo(() => {
     const out: Record<number, GitHubJob[] | null | undefined> = {};
     for (const id of runIds) {
