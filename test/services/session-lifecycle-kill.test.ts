@@ -109,6 +109,62 @@ describe("session-lifecycle (kill + create)", () => {
     await app.close();
   });
 
+  describe("reclaiming an isolated session's own worktree (#1964)", () => {
+    async function spyReclaim() {
+      const reclaimModule = await import("../../src/services/session-worktree-reclaim.js");
+      return vi
+        .spyOn(reclaimModule, "reclaimSessionWorktree")
+        .mockResolvedValue({ status: "skipped", reason: "no-worktree" });
+    }
+
+    it("tries to reclaim a session's worktree once it has been killed", async () => {
+      const { app, projectId } = await setup();
+      const reclaim = await spyReclaim();
+      const row = app.db.insert(sessions).values({ projectId, command: "bash" }).returning().get();
+
+      await killSession(app, row.id);
+
+      expect(reclaim).toHaveBeenCalledWith(app, row.id);
+      await app.close();
+    });
+
+    it("tries every session of a cascade kill, children included", async () => {
+      const { app, projectId } = await setup();
+      const reclaim = await spyReclaim();
+      const parent = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .get();
+      const kid = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", parentSessionId: parent.id })
+        .returning()
+        .get();
+
+      await killSession(app, parent.id, "kill");
+
+      const tried = reclaim.mock.calls.map(([, id]) => id).sort();
+      expect(tried).toEqual([parent.id, kid.id].sort());
+      await app.close();
+    });
+
+    it("does not try when the kill did nothing (already killed, or only dismissed)", async () => {
+      const { app, projectId } = await setup();
+      const reclaim = await spyReclaim();
+      const killed = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "killed" })
+        .returning()
+        .get();
+
+      await killSession(app, killed.id);
+
+      expect(reclaim).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
   it("cascade kill terminates every live child concurrently", async () => {
     const { app, projectId, backend } = await setup();
     const parent = app.db.insert(sessions).values({ projectId, command: "bash" }).returning().get();

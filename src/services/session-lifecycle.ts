@@ -27,6 +27,7 @@ import {
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
+import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveHostBaseRef, viaRemote } from "./host-git.js";
@@ -411,6 +412,13 @@ export type CreateSessionParams = CreateSessionBody & {
   // `targetPlatform`, and `sessions.spawn_child` forwards it from a session
   // scope. Mutually exclusive with `hostId`.
   target?: PlacementTarget;
+  // Issue #1964 — "this session OWNS the worktree it runs in": recorded on the
+  // row so it can be reclaimed once the session ends. For a worktree the
+  // caller cut ITSELF and passes as `cwd` (`promote_to_worktree`); a worktree
+  // created here (`worktree: {baseRef}`, `isolate`) is recorded without this.
+  //
+  // NOT part of CreateSessionBody: no public route sets it.
+  ownedWorktree?: { branch: string; repoCwd: string };
 };
 
 export type CreateSessionResult =
@@ -1182,6 +1190,16 @@ async function createSessionRecordInner(
     // Issue #1724 — the decision's own words, so the row can explain itself
     // later without the server log.
     placement.reason,
+    // Issue #1964 — the worktree this session owns, if any: one the caller cut
+    // itself (promote), or the one prepareWorktree just created for it
+    // (`worktree: {baseRef}` / `isolate`). A Task Master session never owns
+    // its worktree — the task does, and reclaims it itself — and a dock
+    // preview checks out an existing branch (no `rb.branch`), cleaned by its
+    // own tracking.
+    params.ownedWorktree ??
+      (params.taskId === undefined && rb.branch !== undefined && rb.parentCwd !== undefined
+        ? { branch: rb.branch, repoCwd: rb.parentCwd }
+        : undefined),
   );
   if (!insert.ok) return insert.result;
   const created = insert.row;
@@ -1375,6 +1393,8 @@ function insertRow(
   // row so the decision can be read back later (the UI shows it, #1726);
   // the server log is where it comes from.
   placementReason?: string,
+  // Issue #1964 — the worktree this session owns (see sessions.worktree_branch).
+  ownedWorktree?: { branch: string; repoCwd: string },
 ): Step<{ row: SessionRow }> {
   const {
     projectId,
@@ -1409,6 +1429,10 @@ function insertRow(
           hostId,
           // Issue #1724 — why the session is on that host.
           ...(placementReason !== undefined ? { placementReason } : {}),
+          // Issue #1964 — what Mullion has to reclaim when the session ends.
+          ...(ownedWorktree !== undefined
+            ? { worktreeBranch: ownedWorktree.branch, worktreeRepoCwd: ownedWorktree.repoCwd }
+            : {}),
           command,
           name: name ?? null,
           cwd: cwd ?? null,
@@ -1948,6 +1972,12 @@ export async function killSession(
   // permanently leaked: cleanupPreviewWorktree marks it pendingRemoval on
   // failure, and the sync tick actually retries it (git-worktree.ts).
   await cleanupPreviewWorktree(sessionId, app.log);
+
+  // Issue #1964 — an isolated session's own worktree, if it is clean and its
+  // branch is pushed or merged. Not awaited: it is git round trips (possibly
+  // to another host) and the kill has already succeeded; whatever it cannot
+  // reclaim yet, the periodic sweep retries.
+  void reclaimSessionWorktree(app, sessionId);
 
   return updated ?? null;
 }

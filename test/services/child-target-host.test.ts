@@ -65,6 +65,8 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       terminate: vi.fn().mockResolvedValue(undefined),
       stashSeed: vi.fn().mockResolvedValue(undefined),
       spawn: vi.fn().mockResolvedValue({}),
+      // A dock preview checks out an EXISTING branch, detached.
+      checkoutBranchWorktree: vi.fn(async () => ({ path: WT })),
     };
   }
 
@@ -332,6 +334,106 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       expect(res.ok).toBe(false);
       if (res.ok || res.reason !== "worktree-failed") return;
       expect(res.detail).toMatch(/too old/);
+    });
+  });
+
+  // Issue #1964 — a session records the worktree it owns, so it can be
+  // reclaimed when the session ends (services/session-worktree-reclaim.ts).
+  describe("worktree ownership", () => {
+    it("records the worktree an isolated child owns, and the repo it was cut from on that host", async () => {
+      const { projectId, hostId } = await setup();
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "abc123" },
+      });
+
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        target: { hostId },
+        isolate: true,
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.worktreeBranch).toBe("mullion/child-x");
+      // The repo ON THE PLACEMENT HOST — `git worktree remove` has to run there.
+      expect(res.row.worktreeRepoCwd).toBe(REMOTE_CWD);
+      expect(res.row.worktreeReclaimedAt).toBeNull();
+    });
+
+    it("records the worktree the launcher's isolate toggle cut", async () => {
+      const { projectId } = await setup();
+
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        worktree: { baseRef: "main" },
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.worktreeBranch).toBe("mullion/child-x");
+      expect(res.row.worktreeRepoCwd).toBe(LOCAL_CWD);
+    });
+
+    it("records the worktree a caller cut itself and handed over (promote)", async () => {
+      const { projectId } = await setup();
+
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        cwd: WT,
+        ownedWorktree: { branch: "mullion/promote-1", repoCwd: LOCAL_CWD },
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.worktreeBranch).toBe("mullion/promote-1");
+      expect(res.row.worktreeRepoCwd).toBe(LOCAL_CWD);
+    });
+
+    it("records nothing for a Task Master session — the task owns its worktree", async () => {
+      const { projectId } = await setup();
+
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        worktree: { baseRef: "main", branchName: "mullion/task-7" },
+        taskId: 7,
+        unattended: true,
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.worktreeBranch).toBeNull();
+      expect(res.row.worktreeRepoCwd).toBeNull();
+    });
+
+    it("records nothing for a dock preview, which checks out an existing branch", async () => {
+      const { projectId } = await setup();
+
+      const res = await createSessionRecord(app, {
+        projectId,
+        command: "bash",
+        worktree: { branch: "feature/x" },
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.cwd).toBe(WT);
+      expect(res.row.worktreeBranch).toBeNull();
+    });
+
+    it("records nothing for an ordinary session", async () => {
+      const { projectId } = await setup();
+
+      const res = await createSessionRecord(app, { projectId, command: "bash" });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+
+      expect(res.row.worktreeBranch).toBeNull();
+      expect(res.row.worktreeRepoCwd).toBeNull();
     });
   });
 

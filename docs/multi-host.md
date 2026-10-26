@@ -292,10 +292,14 @@ chooses among the hosts that match.
 host it runs on: a new `mullion/child-…` branch cut from the default base
 ref, **resolved on that host**. The remote child commits and pushes that
 branch; the coordinator fetches and reviews it. `--isolate` cannot be
-combined with `--cwd`. The worktree is **kept** after the child ends — it
-holds the child's commits and any unpushed work, exactly like the launcher's
-"isolate" toggle — so remove it yourself with `git worktree remove` once the
-branch is merged; automatic reclamation is tracked in #1964.
+combined with `--cwd`. When the child ends, Mullion removes the worktree
+directory **on that host** itself — once its branch is pushed (`git push -u
+origin <branch>`, so it has an upstream) or merged, and its tree is clean; the
+branch is always kept. A worktree that is not ready yet (unpushed commits,
+uncommitted changes, another session inside it) is left in place with the
+reason on the session row (`worktreeKeptReason`) and retried every half hour,
+so telling the child to commit and push `-u` before it finishes is all it takes.
+See [Isolated session worktrees](disk-cleanup.md#isolated-session-worktrees).
 
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),

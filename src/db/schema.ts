@@ -480,6 +480,35 @@ export const sessions = sqliteTable(
     // ("pinned to the project's host ..."), so NULL no longer means pinned.
     // Those older rows are unaffected.
     placementReason: text("placement_reason"),
+    // Issue #1964 — the git worktree this session OWNS, when Mullion cut one
+    // for it: the launcher's "isolate" toggle (#271), a child spawned with
+    // `--isolate` (#1951) and `promote_to_worktree`. Recorded so that after the
+    // session ends there is something that knows the directory (`cwd`) is
+    // Mullion's to reclaim — a session row alone cannot say it: `cwd` is just a
+    // path, and the branch name is not recoverable from it.
+    //
+    // NULL = this session owns no worktree: an ordinary session, a dock
+    // preview (cleaned up by its own tracking, git-worktree.ts) and every Task
+    // Master session (the task owns its worktree and reclaims it itself).
+    //
+    // `worktreeRepoCwd` is the repository the worktree was cut FROM, on the
+    // session's host — `git worktree remove` has to run there, not in the
+    // worktree being removed.
+    worktreeBranch: text("worktree_branch"),
+    worktreeRepoCwd: text("worktree_repo_cwd"),
+    // When the worktree directory was removed (the branch is always kept).
+    // NULL while it still exists.
+    worktreeReclaimedAt: integer("worktree_reclaimed_at", { mode: "timestamp" }),
+    // Why the last reclaim attempt left the worktree in place: "dirty",
+    // "conflicts", "unpushed", "in-use", "still-running", "branch-missing", "remove-failed".
+    // NULL before any attempt and once reclaimed. Rides on the session row
+    // (`GET /api/sessions`), so a leftover can be found without a new surface.
+    worktreeKeptReason: text("worktree_kept_reason"),
+    // When the last reclaim attempt ran, whatever its outcome (including "the
+    // host could not be asked", which records nothing else). The sweep orders by
+    // it, least recently tried first, so sessions stuck on a dead host or a
+    // dirty tree cannot crowd out the ones that have not been tried yet.
+    worktreeLastAttemptAt: integer("worktree_last_attempt_at", { mode: "timestamp" }),
     // Cosmetic label the user can rename; falls back to `command` when unset.
     name: text("name"),
     // True only once the user has explicitly renamed this session (PATCH
