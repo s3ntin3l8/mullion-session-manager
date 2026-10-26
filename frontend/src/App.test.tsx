@@ -14,6 +14,8 @@ const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoi
       addPanel: (opts: { id: string; params?: { sessionId?: number } }) => void;
       onDidActivePanelChange: () => { dispose: () => void };
       onDidAddPanel: () => { dispose: () => void };
+      onWillMutateLayout: () => { dispose: () => void };
+      onDidMutateLayout: () => { dispose: () => void };
     } | null,
     launch: null as {
       id: number;
@@ -567,6 +569,8 @@ describe("App tablet pane-cap notice", () => {
       }),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onWillMutateLayout: () => ({ dispose: vi.fn() }),
+      onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };
   }
 
@@ -666,6 +670,8 @@ describe("App sidebar workspace scope", () => {
       addPanel: vi.fn(),
       onDidActivePanelChange: () => ({ dispose: vi.fn() }),
       onDidAddPanel: () => ({ dispose: vi.fn() }),
+      onWillMutateLayout: () => ({ dispose: vi.fn() }),
+      onDidMutateLayout: () => ({ dispose: vi.fn() }),
     };
   }
 
