@@ -6,6 +6,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { deriveSessionStatus } from "./session-status.js";
 import { getPreviewWorktree } from "./git-worktree.js";
 import { resolveBackend } from "./session-backend.js";
+import { HostRequestError } from "./remote-host-client.js";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -378,9 +379,14 @@ export async function readSessionLiveInfo(
     // gone": it is "we cannot tell what is going on there". The session is
     // reported as SUSPENDED (host unreachable — may still be running) rather
     // than as the idle no-signal fallback a quiet session gets.
+    // Say which it was: a host that ANSWERED with an error (its rate limit, a
+    // stale token) is not a network fault, and a log that blames one sends
+    // whoever reads it looking in the wrong place.
     app.log.warn(
       { hostId, sessionId: row.id, err },
-      "host unreachable, reporting default live status",
+      err instanceof HostRequestError
+        ? "host answered the live-status request with an error, reporting default live status"
+        : "host unreachable, reporting default live status",
     );
     return { info: null, hostReachable: false, error: err };
   }
