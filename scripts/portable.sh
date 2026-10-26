@@ -111,6 +111,10 @@ run_with_timeout() {
   # update for no good reason. A leftover marker only means the watchdog's
   # kill check stays armed — it also checks that the pid is still alive.
   rm -f "$marker" 2>/dev/null || true
+  # Killing the subshell alone orphans its `sleep` (reparented to init, alive
+  # for the whole budget — a leaked `sleep 600` per npm ci), so reap the
+  # subshell's children first.
+  pkill -P "$watchdog" 2>/dev/null || true
   kill "$watchdog" 2>/dev/null || true
   return "$status"
 }
