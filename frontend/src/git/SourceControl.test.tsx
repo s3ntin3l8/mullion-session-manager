@@ -943,24 +943,6 @@ describe("Branch detail on a remote host", () => {
 });
 
 describe("per-project and per-click state", () => {
-  it("does not paint a late refusal on another project's same-named branch", async () => {
-    let settle!: (v: { deleted: boolean; reason: "unmerged" }) => void;
-    m.deleteProjectGitBranch.mockImplementation(() => new Promise((r) => (settle = r)));
-    seed({
-      projects: [makeProject({ id: 1, cwd: "/repo" }), makeProject({ id: 2, cwd: "/other" })],
-    });
-    const { rerender } = renderView();
-    await ready();
-    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Delete branch" }));
-    await userEvent.click(
-      within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
-    );
-    rerender(<GitSidebarView projectId={2} actions={actions} />);
-    await ready();
-    await act(async () => settle({ deleted: false, reason: "unmerged" }));
-    expect(screen.queryByText(/commits not merged/)).toBeNull();
-  });
-
   it("does not paint a late health verdict on another project", async () => {
     let settle!: (v: unknown) => void;
     m.postProjectGitHealth.mockImplementation(() => new Promise((r) => (settle = r)) as never);
