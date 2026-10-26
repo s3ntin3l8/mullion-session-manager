@@ -274,3 +274,71 @@ describe("reclaimSocketPath retries timed-out probes (#1502)", () => {
     },
   );
 });
+
+// Issue #1728 — a Windows named pipe (cli/ipc-path.mjs) is probed by connect
+// alone. These run on any platform: the branch is keyed on the path's shape,
+// and the connection itself is mocked.
+describe("probeSocket / reclaimSocketPath on a named pipe", () => {
+  const PIPE = "\\\\.\\pipe\\mullion-0123456789abcdef-hooks";
+
+  function mockConnect(outcome: "connect" | { error: string }) {
+    return vi.spyOn(net, "createConnection").mockImplementation((() => {
+      const fake = new EventEmitter() as EventEmitter & { destroy: () => void };
+      fake.destroy = vi.fn();
+      queueMicrotask(() =>
+        outcome === "connect"
+          ? fake.emit("connect")
+          : fake.emit("error", Object.assign(new Error("x"), { code: outcome.error })),
+      );
+      return fake as unknown as net.Socket;
+    }) as unknown as typeof net.createConnection);
+  }
+
+  it("connects without a filesystem pre-check — a live pipe reads live", async () => {
+    // There is no file at this path on any platform, so an existsSync()
+    // pre-check would have short-circuited to "dead" without connecting.
+    const spy = mockConnect("connect");
+    try {
+      await expect(probeSocket(PIPE)).resolves.toBe("live");
+      expect(spy).toHaveBeenCalledWith(PIPE);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reads ENOENT as dead — a pipe with no server does not exist at all", async () => {
+    const spy = mockConnect({ error: "ENOENT" });
+    try {
+      await expect(probeSocket(PIPE)).resolves.toBe("dead");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not read ECONNREFUSED as dead on a pipe — it is not a pipe's answer for 'no server'", async () => {
+    const spy = mockConnect({ error: "ECONNREFUSED" });
+    try {
+      await expect(probeSocket(PIPE)).resolves.toBe("unknown");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("reclaims a dead pipe without touching the filesystem", async () => {
+    const spy = mockConnect({ error: "ENOENT" });
+    try {
+      await expect(reclaimSocketPath(PIPE)).resolves.toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses to reclaim a live pipe", async () => {
+    const spy = mockConnect("connect");
+    try {
+      await expect(reclaimSocketPath(PIPE)).rejects.toThrow(SocketAlreadyListeningError);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});

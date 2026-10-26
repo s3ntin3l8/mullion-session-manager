@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { URL } from "node:url";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 import { probeSocket } from "./unix-socket.js";
+import { ipcPath, isPipePath } from "../cli/ipc-path.mjs";
 
 const APP_VERSION: string = (() => {
   try {
@@ -1501,7 +1502,8 @@ export class Session {
       // stale socket file behind (dtach doesn't clean these up itself) —
       // either way, `-a` alone would fail, so bootstrap a fresh master.
       try {
-        unlinkSync(this.socketPath);
+        // A dead named pipe leaves no file behind (Windows) — nothing to remove.
+        if (!isPipePath(this.socketPath)) unlinkSync(this.socketPath);
       } catch {
         // ENOENT is the expected case (no prior session at all).
       }
@@ -3682,7 +3684,14 @@ export class PtyManager {
   // M2 — per-session unsubscribe closures for the manager-level event
   // fan-out subscription made in getOrCreate(); called from kill().
   private eventUnsubs = new Map<string, () => void>();
-  private readonly sessionsDir: string;
+  /**
+   * The directory this instance's per-session files (hook/MCP configs, the
+   * agent guide, task findings, ...) and endpoints live in — ensureSessionsDir's
+   * resolved value, which may be a short fallback rather than SESSIONS_DIR.
+   * Read this rather than deriving it from `hookSocketPath`: on Windows that
+   * is a named pipe (cli/ipc-path.mjs), which has no parent directory.
+   */
+  readonly sessionsDir: string;
   // Issue #1140 (PR 1) — a short, deterministic id for THIS instance's own
   // sessionsDir, derived once here (never from app.config.SESSIONS_DIR
   // directly — see deriveInstanceId's own doc comment on why that could
@@ -3900,8 +3909,9 @@ export class PtyManager {
     // Lives alongside the per-session dtach sockets in the same directory —
     // SESSIONS_DIR is already host-local, per-install storage with no other
     // sanctioned reader, and src/plugins/hooks.ts locks this file down to
-    // 0600 once it starts listening.
-    this.hookSocketPath = path.join(this.sessionsDir, "hooks.sock");
+    // 0600 once it starts listening. On Windows both this and the control
+    // socket below are named pipes mapped from these paths (cli/ipc-path.mjs).
+    this.hookSocketPath = ipcPath(path.join(this.sessionsDir, "hooks.sock"));
     // Empty/unset MULLION_SOCKET_PATH (opts.controlSocketPath) means
     // "derive from sessionsDir", same fallback shape as hookSocketPath — see
     // env.ts's MULLION_SOCKET_PATH comment for why an explicit override is
@@ -3914,9 +3924,15 @@ export class PtyManager {
     // fails loudly at boot rather than silently relocating a path the
     // operator asked for by name.
     this.controlUnavailable = opts.controlUnavailable === true;
-    this.controlSocketPath = opts.controlSocketPath
-      ? path.resolve(opts.controlSocketPath)
-      : path.join(this.sessionsDir, "mullion.sock");
+    // An override that already names a pipe is taken as given — resolving
+    // it as a filesystem path would mangle it.
+    this.controlSocketPath = ipcPath(
+      opts.controlSocketPath
+        ? isPipePath(opts.controlSocketPath)
+          ? opts.controlSocketPath
+          : path.resolve(opts.controlSocketPath)
+        : path.join(this.sessionsDir, "mullion.sock"),
+    );
     // Resolved here, once, for the same reason as controlSocketPath just
     // above: dtach (and every session shell) runs with cwd set to the
     // *session's* project directory, not this process's cwd, so a relative

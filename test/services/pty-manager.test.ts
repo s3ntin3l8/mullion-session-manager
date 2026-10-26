@@ -4169,6 +4169,16 @@ describe("PtyManager", () => {
       const overridden = new PtyManager({ sessionsDir, controlSocketPath: "relative.sock" });
       expect(overridden.controlSocketPath).toBe(path.resolve("relative.sock"));
     });
+
+    it("takes a named-pipe override as given instead of resolving it as a file path (issue #1728)", () => {
+      const pipe = "\\\\.\\pipe\\operator-chosen";
+      const overridden = new PtyManager({ sessionsDir, controlSocketPath: pipe });
+      expect(overridden.controlSocketPath).toBe(pipe);
+    });
+
+    it("exposes the sessions dir itself, so no caller has to derive it from a socket path", () => {
+      expect(manager.sessionsDir).toBe(sessionsDir);
+    });
   });
 
   describe("emitHookEvent (issue #176)", () => {

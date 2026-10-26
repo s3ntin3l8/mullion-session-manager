@@ -1,6 +1,5 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import path from "node:path";
 import { materializeSshAgentSocket, sshAgentSocketPath } from "../services/ssh-agent-socket.js";
 import { pickBridge } from "../services/ssh-agent-fanout.js";
 import { SocketAlreadyListeningError } from "../services/unix-socket.js";
@@ -96,7 +95,7 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   // free instead of re-deriving it.
   // sshAgentSocketPath is the same helper resolveSshAuthSock/buildAgentConfig
   // use (PR5d) so the filename never drifts from where this actually binds.
-  const socketPath = sshAgentSocketPath(path.dirname(app.pty.hookSocketPath));
+  const socketPath = sshAgentSocketPath(app.pty.sessionsDir);
 
   // Post-ship audit follow-up (#873, PR-B) — a bind failure here used to
   // throw out of plugin registration and crash the whole process at boot,

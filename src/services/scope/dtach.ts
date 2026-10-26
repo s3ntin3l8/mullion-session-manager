@@ -1,4 +1,5 @@
 import path from "node:path";
+import { ipcPath } from "../../cli/ipc-path.mjs";
 
 /**
  * The dtach conventions, shared by the scope backends.
@@ -94,7 +95,10 @@ export function isDtachCreateFor(commandLine: string, socketPath: string): boole
  * ONE definition of the convention, so the backend that looks for a
  * session's master and the code that creates the session cannot disagree
  * about where that session's socket lives.
+ *
+ * On Windows that is a named pipe mapped from the same path (see
+ * cli/ipc-path.mjs); everywhere else `ipcPath` returns the path unchanged.
  */
 export function sessionSocketPath(sessionsDir: string, id: string): string {
-  return path.join(sessionsDir, `${id}.sock`);
+  return ipcPath(path.join(sessionsDir, `${id}.sock`));
 }

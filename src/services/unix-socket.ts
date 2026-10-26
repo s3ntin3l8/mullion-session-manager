@@ -1,5 +1,6 @@
 import net from "node:net";
 import { existsSync, unlinkSync } from "node:fs";
+import { isPipePath } from "../cli/ipc-path.mjs";
 
 // A Unix domain socket file outlives the process that created it — a hard
 // kill (kill -9, an OOM, a crash) leaves the filesystem entry behind even
@@ -61,13 +62,22 @@ interface DetailedProbeResult {
  *     at that path, ...). There's no way to positively confirm this case is
  *     safe, so callers should treat it the same as "live" unless they have
  *     their own reason not to (see isSocketLive vs. reclaimSocketPath below).
+ *
+ * A Windows named pipe (cli/ipc-path.mjs) answers differently, and is read
+ * accordingly: a pipe with no server is not a stale file but no object at
+ * all, so connecting fails with ENOENT — that is "dead" there. The
+ * existsSync() pre-check is skipped for a pipe, because stat-ing a live
+ * pipe OPENS client connections to its server (measured: three per
+ * existsSync()), which a probe must never do beyond its own one connect.
  */
 export function probeSocket(socketPath: string): Promise<SocketProbeResult> {
   return probeSocketDetailed(socketPath, PROBE_TIMEOUT_MS).then((d) => d.result);
 }
 
 function probeSocketDetailed(socketPath: string, timeoutMs: number): Promise<DetailedProbeResult> {
-  if (!existsSync(socketPath)) return Promise.resolve({ result: "dead", timedOut: false });
+  const pipe = isPipePath(socketPath);
+  if (!pipe && !existsSync(socketPath)) return Promise.resolve({ result: "dead", timedOut: false });
+  const deadCode = pipe ? "ENOENT" : "ECONNREFUSED";
   return new Promise((resolve) => {
     let settled = false;
     const finish = (result: SocketProbeResult, timedOut = false) => {
@@ -86,7 +96,7 @@ function probeSocketDetailed(socketPath: string, timeoutMs: number): Promise<Det
     const timer = setTimeout(() => finish("unknown", true), timeoutMs);
     probe.once("connect", () => finish("live"));
     probe.once("error", (err) => {
-      finish((err as NodeJS.ErrnoException).code === "ECONNREFUSED" ? "dead" : "unknown");
+      finish((err as NodeJS.ErrnoException).code === deadCode ? "dead" : "unknown");
     });
   });
 }
@@ -158,6 +168,9 @@ export async function reclaimSocketPath(
   if (result !== "dead") {
     throw new SocketAlreadyListeningError(socketPath, result);
   }
+  // A named pipe leaves nothing behind when its server dies, so a dead pipe
+  // has no stale file to remove — the name is simply free.
+  if (isPipePath(socketPath)) return;
   try {
     unlinkSync(socketPath);
   } catch (err) {

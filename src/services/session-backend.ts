@@ -1,6 +1,5 @@
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
-import path from "node:path";
 import type { SessionInfo } from "./pty-manager.js";
 import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
@@ -564,13 +563,13 @@ class LocalBackend implements SessionBackend {
     return pruneWorktreeMetadata(cwd);
   }
 
-  // #760 — same path derivation task-reconciler.ts's own local-only
-  // ingestion already used (`path.dirname(hookSocketPath)`, not
-  // `app.config.SESSIONS_DIR` directly) — kept identical on purpose, zero
-  // divergence risk from the exact expression already proven correct in
-  // production.
+  // #760 — the resolved sessions dir (`app.pty.sessionsDir`, not
+  // `app.config.SESSIONS_DIR` directly, which ensureSessionsDir may have
+  // redirected). It used to be derived as `path.dirname(hookSocketPath)`,
+  // which stopped being a directory once the hook socket became a named pipe
+  // on Windows (issue #1728).
   private findingsPath(taskId: number, round: number): string {
-    return taskReviewFindingsPath(path.dirname(this.app.pty.hookSocketPath), taskId, round);
+    return taskReviewFindingsPath(this.app.pty.sessionsDir, taskId, round);
   }
 
   async readTaskReviewFindings(taskId: number, round: number): Promise<string | null> {
@@ -589,22 +588,18 @@ class LocalBackend implements SessionBackend {
   // kept identical on purpose (zero divergence risk), just given a name
   // other callers can use without reaching into `app.pty` themselves.
   async resolveSessionsDir(): Promise<string> {
-    return path.dirname(this.app.pty.hookSocketPath);
+    return this.app.pty.sessionsDir;
   }
 
   async readTaskCommitTitle(taskId: number): Promise<string | null> {
-    const titlePath = taskCommitTitlePath(path.dirname(this.app.pty.hookSocketPath), taskId);
+    const titlePath = taskCommitTitlePath(this.app.pty.sessionsDir, taskId);
     if (!existsSync(titlePath)) return null;
     const content = readFileSync(titlePath, "utf8").trim();
     return content.length > 0 ? content : null;
   }
 
   async readTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
-    const requestPath = taskRereviewRequestPath(
-      path.dirname(this.app.pty.hookSocketPath),
-      taskId,
-      key,
-    );
+    const requestPath = taskRereviewRequestPath(this.app.pty.sessionsDir, taskId, key);
     if (!existsSync(requestPath)) return null;
     // The file's existence is the request, so an empty file still counts.
     return readFileSync(requestPath, "utf8").trim() || "(no reason given)";
@@ -936,6 +931,6 @@ export async function resolveSessionsDirWithFallback(
       { err, ...logContext },
       "session-backend: failed to resolve the owning host's own sessionsDir — falling back to the primary's local path (wrong for a remote host whose SESSIONS_DIR differs)",
     );
-    return path.dirname(app.pty.hookSocketPath);
+    return app.pty.sessionsDir;
   }
 }

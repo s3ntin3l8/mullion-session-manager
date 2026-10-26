@@ -2,6 +2,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
+import { ipcPath } from "./ipc-path.mjs";
 
 // Phase 4 (#134, PR6) — the transport behind every `mullion` subcommand
 // except `notify` (which speaks the hook socket directly, see core.mjs) and
@@ -33,12 +34,17 @@ export const WAIT_SOCKET_SLACK_MS = 15_000;
  * session, e.g. from a systemd --user install with the default data dir). */
 export function resolveSocketPath(env = process.env) {
   if (typeof env.MULLION_SOCKET_PATH === "string" && env.MULLION_SOCKET_PATH.length > 0) {
-    return env.MULLION_SOCKET_PATH;
+    // Mapped too: inside a session this is already the backend's own pipe
+    // name (ipcPath leaves a pipe unchanged), but an operator may set the
+    // same filesystem path for both the backend and their own shell.
+    return ipcPath(env.MULLION_SOCKET_PATH);
   }
+  // Every path goes through the same mapping the backend used to create the
+  // socket (a named pipe on Windows, see ipc-path.mjs).
   if (typeof env.SESSIONS_DIR === "string" && env.SESSIONS_DIR.length > 0) {
-    return path.join(env.SESSIONS_DIR, "mullion.sock");
+    return ipcPath(path.join(env.SESSIONS_DIR, "mullion.sock"));
   }
-  return path.join(os.homedir(), ".local", "state", "mullion", "sessions", "mullion.sock");
+  return ipcPath(path.join(os.homedir(), ".local", "state", "mullion", "sessions", "mullion.sock"));
 }
 
 /** MULLION_AUTH_TOKEN (the operator's own credential, full scope) takes

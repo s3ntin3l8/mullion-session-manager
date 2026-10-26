@@ -1,10 +1,10 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import net from "node:net";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
+import { isPipePath } from "../cli/ipc-path.mjs";
 import type {
   ReviewGateHookMessage,
   BrowserActionHookMessage,
@@ -528,7 +528,7 @@ function handleConnection(
           }
           const effectiveInjectAgentGuide = session?.injectAgentGuide ?? true;
           const effectiveInjectProjectBriefing = session?.injectProjectBriefing ?? true;
-          const sessionsDir = path.dirname(app.pty.hookSocketPath);
+          const sessionsDir = app.pty.sessionsDir;
           const guidePath = sessionAgentGuidePath(sessionsDir, sessionId);
           // agentGuideSourceExists(), not just the setting: a checkout/
           // install that hasn't shipped docs/agent-guide.md (see
@@ -805,8 +805,10 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // 0600: this socket accepts session-attributed agent messages (eventually
   // review-gate decisions, issue #178) — filesystem perms are the first
   // line of defense alongside the per-session handshake token above. See
-  // the roadmap's "Security & trust" design note.
-  chmodSync(socketPath, 0o600);
+  // the roadmap's "Security & trust" design note. A named pipe (Windows,
+  // cli/ipc-path.mjs) has no mode bits — its access is an ACL, and the
+  // handshake token is the gate there (issue #1728).
+  if (!isPipePath(socketPath)) chmodSync(socketPath, 0o600);
 
   app.decorate("hookServer", server);
 
@@ -898,7 +900,8 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
     for (const pending of pendingPromotes.values()) clearTimeout(pending.timer);
     pendingPromotes.clear();
     try {
-      unlinkSync(socketPath);
+      // A named pipe vanishes with its server; there is no file to remove.
+      if (!isPipePath(socketPath)) unlinkSync(socketPath);
     } catch {
       // Already gone is fine.
     }

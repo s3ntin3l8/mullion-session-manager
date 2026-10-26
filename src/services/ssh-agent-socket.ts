@@ -2,6 +2,7 @@ import net from "node:net";
 import path from "node:path";
 import { chmodSync } from "node:fs";
 import { reclaimSocketPath } from "./unix-socket.js";
+import { ipcPath, isPipePath } from "../cli/ipc-path.mjs";
 import {
   DEFAULT_MAX_CHANNELS,
   PONG_TIMEOUT_MS,
@@ -100,8 +101,9 @@ export async function materializeSshAgentSocket(
   // 0600: this socket hands out a live SSH-agent-protocol channel to
   // whatever connects to it — filesystem perms are the only gate (there's
   // no protocol-level auth on a unix socket the way the bridge WS itself
-  // has a pairing/session credential), same posture as hooks.sock.
-  chmodSync(opts.socketPath, 0o600);
+  // has a pairing/session credential), same posture as hooks.sock. A named
+  // pipe has no mode bits to set — its access is an ACL (issue #1728).
+  if (!isPipePath(opts.socketPath)) chmodSync(opts.socketPath, 0o600);
 
   return {
     socketPath: opts.socketPath,
@@ -120,7 +122,7 @@ export async function materializeSshAgentSocket(
 // filename and risks drifting from where materializeSshAgentSocket above
 // actually listens.
 export function sshAgentSocketPath(sessionsDir: string): string {
-  return path.join(sessionsDir, "ssh-agent.sock");
+  return ipcPath(path.join(sessionsDir, "ssh-agent.sock"));
 }
 
 // Issue #820 (Hermes review, PR #865; updated #873 PR-B) — mirrors
