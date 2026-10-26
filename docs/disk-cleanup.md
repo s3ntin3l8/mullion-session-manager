@@ -251,9 +251,11 @@ Task Master's worktrees are not these: the task reclaims its own.
 
 It is removed only when **all** of these hold:
 
-- No other active session is working inside it, and the session's own process
-  is confirmed gone (a kill whose `terminate` failed still marks it ended; its
-  agent may be running there yet, which is recorded as `still-running`).
+- No other session is working inside it — an active one, or an ended one whose
+  process has not been confirmed gone (a cascade kill marks children killed
+  while their agents may still be exiting there) — and the session's own
+  process is confirmed gone too (a kill whose `terminate` failed still marks it
+  ended; that is recorded as `still-running`).
 - Its branch is **pushed** (it has an upstream it is not ahead of), its
   upstream was **deleted** (a merged PR's auto-deleted branch), or it is
   **merged** into the default branch. A session branch is created without
@@ -279,6 +281,10 @@ unreachable is simply tried again later; only the attempt is stamped
 tried first, then the least recently tried — so leftovers that cannot be
 resolved (a decommissioned host, an abandoned dirty tree) rotate to the back
 instead of crowding out the rest. The server log says what each pass did.
+
+A worktree that is already gone — removed by hand, or its project moved or
+deleted so that neither path is a repository any more — is counted as reclaimed;
+`branch-missing` is only for a worktree that still exists but has lost its branch.
 
 Known limits: a worktree whose session row was deleted is no longer known to
 Mullion; one created before this existed is not tracked (they carry no

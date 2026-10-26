@@ -201,6 +201,21 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       expect(fs.existsSync(dir)).toBe(false);
     });
 
+    it("counts a worktree as reclaimed when neither it nor its repository exists any more", async () => {
+      // Removed by hand, or the project moved or was deleted: both branch
+      // lookups come back empty. Not `branch-missing` forever.
+      const gone = path.join(base, "no-such-repo");
+      const session = sessionOwning(path.join(gone, ".mullion-worktrees", "x"), "mullion/x", {
+        worktreeRepoCwd: gone,
+      });
+
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "reclaimed",
+      });
+      expect(rowOf(session.id).worktreeReclaimedAt).toBeInstanceOf(Date);
+      expect(rowOf(session.id).worktreeKeptReason).toBeNull();
+    });
+
     it("counts a worktree already gone from disk as reclaimed, and touches nothing", async () => {
       const { dir, branch } = addWorktree("vanished");
       commit(dir, "work.txt", "work");
@@ -384,19 +399,36 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       });
     }
 
+    type Liveness = "alive" | "dead" | "unknown";
     function fakeBackend(
       removal: { removed: boolean; reason?: string },
-      liveness: "alive" | "dead" | "unknown" = "dead",
+      // One answer for every session, or one per session id.
+      liveness: Liveness | ((id: string) => Liveness) = "dead",
     ) {
       const removeWorktreeIfClean = vi.fn().mockResolvedValue(removal);
       vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
         removeWorktreeIfClean,
         liveness: vi.fn(async (ids: string[]) =>
-          Object.fromEntries(ids.map((id) => [id, liveness])),
+          Object.fromEntries(
+            ids.map((id) => [id, typeof liveness === "function" ? liveness(id) : liveness]),
+          ),
         ),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
       return removeWorktreeIfClean;
     }
+
+    /** An ENDED session that worked inside the remote child's worktree. */
+    function endedSibling(status: "killed" | "exited" = "killed") {
+      return sessionOwning("/srv/proj/.mullion-worktrees/child/packages/app", null, {
+        hostId: REMOTE,
+        status,
+      });
+    }
+
+    const pushed = {
+      ok: true as const,
+      value: [{ name: "mullion/child", isCurrent: false, upstream: "origin/mullion/child" }],
+    };
 
     it("reads the branch and removes the worktree through that host, not the primary", async () => {
       const removeWorktreeIfClean = fakeBackend({ removed: true });
@@ -469,6 +501,65 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       expect(removeWorktreeIfClean).not.toHaveBeenCalled();
       expect(branchesSpy).not.toHaveBeenCalled();
       expect(rowOf(session.id).worktreeKeptReason).toBe("still-running");
+    });
+
+    it("keeps a worktree a just-killed sibling's process is still exiting inside", async () => {
+      // A cascade kill marks the children killed while their agents may still be
+      // running in the parent's directory.
+      const session = remoteSession();
+      const sibling = endedSibling();
+      const removeWorktreeIfClean = fakeBackend({ removed: true }, (id) =>
+        id === String(sibling.id) ? "alive" : "dead",
+      );
+      const branchesSpy = vi.spyOn(hostGitModule, "resolveHostBranches").mockResolvedValue(pushed);
+
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "kept",
+        reason: "in-use",
+      });
+
+      expect(removeWorktreeIfClean).not.toHaveBeenCalled();
+      expect(branchesSpy).not.toHaveBeenCalled();
+    });
+
+    it("defers when it cannot tell whether an ended sibling's process is gone", async () => {
+      const session = remoteSession();
+      const sibling = endedSibling();
+      const removeWorktreeIfClean = fakeBackend({ removed: true }, (id) =>
+        id === String(sibling.id) ? "unknown" : "dead",
+      );
+
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "deferred",
+      });
+      expect(removeWorktreeIfClean).not.toHaveBeenCalled();
+      expect(rowOf(session.id).worktreeKeptReason).toBeNull();
+    });
+
+    it("is not held up by an ended sibling whose process is confirmed gone", async () => {
+      const session = remoteSession();
+      endedSibling("exited");
+      fakeBackend({ removed: true });
+      vi.spyOn(hostGitModule, "resolveHostBranches").mockResolvedValue(pushed);
+
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "reclaimed",
+      });
+    });
+
+    it("ignores an ended session on a different host that merely shares the path", async () => {
+      const session = remoteSession();
+      sessionOwning("/srv/proj/.mullion-worktrees/child/x", null, {
+        hostId: "another-host",
+        status: "killed",
+      });
+      // `another-host`'s process would read as alive — but it is another machine.
+      fakeBackend({ removed: true }, "dead");
+      vi.spyOn(hostGitModule, "resolveHostBranches").mockResolvedValue(pushed);
+
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "reclaimed",
+      });
     });
 
     it("defers, touching nothing, when it cannot tell whether the process is gone", async () => {
