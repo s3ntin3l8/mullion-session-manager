@@ -1511,13 +1511,16 @@ export async function sweepOpenReviewMarkers(
   const open = [...runsById.values()].filter((r) => r.markerCheckRunId !== undefined);
   if (open.length === 0) return 0;
   let key: string;
+  let root: string;
   try {
     key = assertReviewerConfigured(app);
+    root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
   } catch {
-    // Hermes is not configured (any more): there is no run to read.
+    // Hermes is not configured (or its URL is unusable): there is no run to
+    // read. The status route reports the misconfiguration; a sweep that threw
+    // it every minute would only add noise.
     return 0;
   }
-  const root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
   // One token mint per repository per pass, not one per marker.
   const tokens = new Map<string, string | null>();
   let closed = 0;
@@ -1525,11 +1528,8 @@ export async function sweepOpenReviewMarkers(
     const checkRunId = record.markerCheckRunId;
     if (checkRunId === undefined) continue;
     try {
-      const { status } = await fetchRun(root, key, record);
-      const conclusion =
-        markerConclusionForRunStatus(status) ??
-        (now - record.dispatchedAt > MARKER_MAX_AGE_MS ? "neutral" : null);
-      if (!conclusion) continue;
+      // The token first: a repository that cannot mint one cannot close
+      // anything, so it must not cost a Hermes read per marker per pass.
       const repoKey = `${record.owner}/${record.repo}`.toLowerCase();
       if (!tokens.has(repoKey)) {
         const { markerToken } = await resolveMarkerTokens(app, {
@@ -1540,6 +1540,17 @@ export async function sweepOpenReviewMarkers(
       }
       const token = tokens.get(repoKey);
       if (!token) continue;
+      const expired = now - record.dispatchedAt > MARKER_MAX_AGE_MS;
+      let conclusion: "success" | "failure" | "neutral" | null = null;
+      try {
+        conclusion = markerConclusionForRunStatus((await fetchRun(root, key, record)).status);
+      } catch (err) {
+        // An unreadable status (Hermes down, a revoked key) must not pin the
+        // marker past its age limit: that is the outage the limit is for.
+        if (!expired) throw err;
+      }
+      conclusion ??= expired ? "neutral" : null;
+      if (!conclusion) continue;
       await completeReviewMarkerCheckRun(token, record.owner, record.repo, checkRunId, conclusion);
       record.markerCheckRunId = undefined;
       closed += 1;

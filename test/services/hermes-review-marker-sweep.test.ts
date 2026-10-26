@@ -148,6 +148,41 @@ describe("review marker sweep", () => {
     expect(patched[0]).toMatchObject({ conclusion: "neutral" });
   });
 
+  it("closes an expired marker as neutral even when the run's status cannot be read", async () => {
+    // A Hermes outage or a revoked key is the case the age limit is for.
+    runStatus = () => new Response("{}", { status: 500 });
+    const later = Date.now() + MARKER_MAX_AGE_MS + 1;
+    await expect(sweepOpenReviewMarkers(app, later)).resolves.toBe(1);
+    expect(patched[0]).toMatchObject({ conclusion: "neutral" });
+  });
+
+  it("keeps a young marker open, and retries, when the run's status cannot be read", async () => {
+    runStatus = () => new Response("{}", { status: 500 });
+    await expect(sweepOpenReviewMarkers(app)).resolves.toBe(0);
+    expect(patched).toHaveLength(0);
+    expect(getReviewRunForPr("acme", "widgets", 7)?.markerCheckRunId).toBe(MARKER_ID);
+  });
+
+  it("keeps the marker open when the token mint throws, and reads no run for it", async () => {
+    mintMarkerToken.mockRejectedValue(new Error("mint failed"));
+    fetchMock.mockClear();
+    await expect(sweepOpenReviewMarkers(app)).resolves.toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(patched).toHaveLength(0);
+  });
+
+  it("reads no run for a repository that has no App token", async () => {
+    mintMarkerToken.mockResolvedValue({ markerToken: null, markerUnavailable: "not-installed" });
+    fetchMock.mockClear();
+    await sweepOpenReviewMarkers(app);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing, rather than throwing, when the Hermes URL is unusable", async () => {
+    applySettingsPatch(app, { reviewRelay: { apiUrl: "not a url" } });
+    await expect(sweepOpenReviewMarkers(app)).resolves.toBe(0);
+  });
+
   it("closes a marker only once: a finished marker is not swept again", async () => {
     runStatus = () => new Response(JSON.stringify({ run_id: "run_1", status: "completed" }));
     await sweepOpenReviewMarkers(app);
