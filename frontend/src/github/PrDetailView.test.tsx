@@ -642,6 +642,25 @@ describe("PrDetailView", () => {
       expect(pin).not.toHaveTextContent("## Review");
     });
 
+    it("keeps the pinned body when the timeline review is an older round by the same author", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<p>OLD round</p>",
+            createdAt: "2025-12-01T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({ latest: [latest({ body: "NEW round" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body")).toHaveTextContent("NEW round");
+      expect(pin).not.toHaveTextContent("OLD round");
+    });
+
     it("falls back to the plain body when no timeline review matches the pinned one", async () => {
       stub({
         ...PR,

@@ -434,7 +434,16 @@ export function PrDetailView({
     });
     if (best >= 0) {
       pinnedAt.add(best);
-      if (p.body && pr.reviews[best].bodyHtml) pinnedHtml.set(p, pr.reviews[best].bodyHtml);
+      // Author + state can match an older round by the same bot; only the
+      // review submitted at the pinned entry's own time is the same review.
+      const r = pr.reviews[best];
+      if (
+        p.body &&
+        r.bodyHtml &&
+        p.submittedAt &&
+        Date.parse(p.submittedAt) === Date.parse(r.createdAt)
+      )
+        pinnedHtml.set(p, r.bodyHtml);
     }
   }
   const timeline = [
