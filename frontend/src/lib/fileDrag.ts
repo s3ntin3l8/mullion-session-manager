@@ -21,8 +21,25 @@ export interface FileDragPayload {
 let active: FileDragPayload | null = null;
 export const activeFileDrag = (): FileDragPayload | null => active;
 
+// Set on <body> while a row is being dragged. The right sidebar floats over
+// the grid under a click-away scrim; that scrim would swallow the drop on a
+// terminal beneath it, so CSS lets the pointer through it for the duration.
+export const FILE_DRAGGING_CLASS = "file-dragging";
+let stopWatching: (() => void) | null = null;
+
 export function startFileDrag(dt: DataTransfer, payload: FileDragPayload): void {
   active = payload;
+  document.body.classList.add(FILE_DRAGGING_CLASS);
+  // dragend is not guaranteed (a source row re-rendered away mid-drag never
+  // fires it), and a stuck class would leave the click-away scrim dead: so any
+  // drop/dragend anywhere, or the next press, also ends it.
+  stopWatching?.();
+  const end = () => endFileDrag();
+  const events = ["dragend", "drop", "pointerdown"] as const;
+  for (const e of events) window.addEventListener(e, end, true);
+  stopWatching = () => {
+    for (const e of events) window.removeEventListener(e, end, true);
+  };
   dt.effectAllowed = "copyMove";
   dt.setData(FILE_DRAG_MIME, JSON.stringify(payload));
   // Other drop targets (another app, a text field) get the plain path.
@@ -31,6 +48,9 @@ export function startFileDrag(dt: DataTransfer, payload: FileDragPayload): void 
 
 export function endFileDrag(): void {
   active = null;
+  document.body.classList.remove(FILE_DRAGGING_CLASS);
+  stopWatching?.();
+  stopWatching = null;
 }
 
 export function hasFileDrag(dt: DataTransfer): boolean {
