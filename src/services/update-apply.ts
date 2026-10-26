@@ -103,6 +103,19 @@ export async function spawnSelfUpdate(
   app: FastifyInstance,
   body: ApplyUpdateBody,
 ): Promise<SpawnSelfUpdateResult> {
+  // Windows has neither of the detached runners below (systemd-run,
+  // launchd), and a running session master holds node-pty's DLL open, which
+  // an in-place update could not replace anyway — so refuse plainly rather
+  // than report a 202 for an update that cannot start (issue #1728).
+  if (process.platform === "win32") {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        "self-update is not supported on Windows yet (issue #1728) — update this host by " +
+        "reinstalling the new release",
+    };
+  }
   const mullionHome = app.config.MULLION_HOME;
   if (mullionHome.trim() === "") {
     return {

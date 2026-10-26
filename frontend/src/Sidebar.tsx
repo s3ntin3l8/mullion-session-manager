@@ -75,6 +75,7 @@ import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
 import { sessionIdFromPanelId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
+import { sameCwd } from "./lib/sameCwd.js";
 import { Header } from "./session-row/Header.js";
 import { Details } from "./session-row/Details.js";
 import { QuotaBadge } from "./session-row/QuotaBadge.js";
@@ -1946,7 +1947,7 @@ export function SessionRow({
   // resolveSessionCwdTargets + OSC 7 liveCwd tracking. Outside a worktree,
   // liveBranch still takes priority. Falls back to project.currentBranch.
   const effectiveCwd = session.liveCwd ?? session.cwd ?? project.cwd;
-  const inWorktree = effectiveCwd !== project.cwd;
+  const inWorktree = !sameCwd(effectiveCwd, project.cwd);
   const displayBranch = inWorktree
     ? (gitStatus?.branch ?? session.liveBranch ?? project.currentBranch)
     : (session.liveBranch ?? gitStatus?.branch ?? project.currentBranch);

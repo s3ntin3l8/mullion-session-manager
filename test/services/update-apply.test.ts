@@ -165,6 +165,24 @@ describe("spawnSelfUpdate", async () => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
   }
 
+  it("refuses on Windows rather than accepting an update that cannot start (#1728)", async () => {
+    setPlatform("win32");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+    try {
+      stubSelfUpdateScript(home);
+      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+        version: "1.2.3",
+        assetUrl: "https://example.invalid/a.tar.gz",
+        checksumUrl: "https://example.invalid/a.sha256",
+      });
+      expect(result).toMatchObject({ ok: false, status: 400 });
+      expect(!result.ok && result.message).toMatch(/not supported on Windows/);
+      expect(spawnCalls).toEqual([]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("bootstraps a one-shot launchd job on macOS", async () => {
     setPlatform("darwin");
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-macos-"));

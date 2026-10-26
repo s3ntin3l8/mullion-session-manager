@@ -9,6 +9,8 @@
 // neither pattern and falls through to the caller's own sustained-output
 // heuristic (see pty-manager.ts's toInfo()).
 
+import path from "node:path";
+
 export interface AttentionSignal {
   /** A BEL (0x07) byte appeared anywhere in the chunk — either a bare
    * terminal bell or an OSC sequence terminated with BEL instead of ST. */
@@ -636,8 +638,16 @@ const OSC_CWD_SEQUENCE = /\x1b\]7;([\s\S]*?)(?:\x07|\x1b\\)/g;
  * or null if none is present (the common case: most output carries no cwd
  * announcement at all). "Last wins" for a chunk containing more than one
  * directory change, same contract as detectAltScreenSwitch below.
+ *
+ * On Windows the shell is Git Bash (session-shell.ts), whose `$PWD` — and so
+ * its OSC 7 path — is an MSYS path (`/c/Users/me/proj`) that nothing else on
+ * the host can resolve; it is converted to the Windows path it names
+ * (msysToWindowsPath). Every other platform gets the path exactly as sent.
  */
-export function detectCwdChange(chunk: string): string | null {
+export function detectCwdChange(
+  chunk: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   let result: string | null = null;
   for (const match of chunk.matchAll(OSC_CWD_SEQUENCE)) {
     const payload = match[1];
@@ -648,7 +658,8 @@ export function detectCwdChange(chunk: string): string | null {
     const withoutScheme = payload.replace(/^file:\/\/[^/]*/, "");
     if (!withoutScheme.startsWith("/")) continue; // not a well-formed file:// URL — ignore
     try {
-      result = decodeURIComponent(withoutScheme);
+      const decoded = decodeURIComponent(withoutScheme);
+      result = platform === "win32" ? msysToWindowsPath(decoded) : decoded;
     } catch {
       // A malformed percent-escape (e.g. a stray "%" from a non-conforming
       // emitter) — skip this match rather than throwing, same "ignore what
@@ -657,6 +668,19 @@ export function detectCwdChange(chunk: string): string | null {
     }
   }
   return result;
+}
+
+/**
+ * The Windows path an MSYS/Git Bash drive path names: `/c/Users/me` (what
+ * Git Bash's `$PWD` looks like) and `/C:/Users/me` (a `file:///C:/...` URL)
+ * both become `C:\Users\me`. A path that is not under a drive letter
+ * (`/tmp`, `/usr/bin` — MSYS's own mounts) is returned unchanged: mapping it
+ * needs the MSYS mount table, and leaving it alone is no worse than before.
+ */
+export function msysToWindowsPath(p: string): string {
+  const match = /^\/([a-zA-Z]):?(?=\/|$)(.*)$/.exec(p);
+  if (!match) return p;
+  return path.win32.normalize(`${match[1].toUpperCase()}:${match[2] || "/"}`);
 }
 
 // Mirrors carryPartialEscape's role below for the CSI shape (ALT_SCREEN_SWITCH/

@@ -130,6 +130,15 @@ describe("applyShellIntegrationEnv", () => {
     );
   });
 
+  it("recognises Windows' Git Bash (C:\\...\\bash.exe) as bash (#1728)", () => {
+    const sessionsDir = mkTmpDir("shell-integration-env-gitbash-");
+    const env: NodeJS.ProcessEnv = { HOME: "C:\\Users\\me" };
+
+    applyShellIntegrationEnv("C:\\Program Files\\Git\\bin\\bash.exe", env, sessionsDir);
+
+    expect(env.PROMPT_COMMAND).toContain("printf");
+  });
+
   it("sets PROMPT_COMMAND from scratch for bash when none was set before", () => {
     const sessionsDir = mkTmpDir("shell-integration-env-bash-fresh-");
     const env: NodeJS.ProcessEnv = { HOME: "/home/user" };
