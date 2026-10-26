@@ -4,13 +4,27 @@
 //
 // The sweep is the only trigger available for codex: codex fires no hook at
 // all for a turn that failed, so nothing else in the backend can notice.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see mock-pty.ts's header comment.
+import { buildTestApp } from "../helpers/app.js";
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTestApp } from "../helpers/app.js";
+import type * as ChildProcess from "node:child_process";
 import { detectCodexRateLimits } from "../../src/services/codex-rate-limit.js";
 import type { StopFailureHookMessage } from "../../src/services/hook-protocol.js";
+
+// app.pty.getOrCreate() below launches a real session. Unmocked, that is a
+// real `systemd-run` + dtach scope per session id, which nothing here stops
+// (issue #2003: this file alone leaked 8 scopes per run).
+vi.mock("node-pty", () => plainNodePtyMock());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return mockChildProcessSpawn(actual);
+});
 
 function rolloutWithError(error: Record<string, unknown>): string {
   return `${JSON.stringify({

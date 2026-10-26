@@ -36,8 +36,8 @@
 // instance is actually live, and block every push. This stays a standalone,
 // human-invoked check (`npm run check:scope-leaks` / `make check-scope-leaks`).
 // The test-time guard against THIS issue's actual regression (this repo's
-// own test suite leaking a scope) is the file-local `afterAll` in
-// test/services/pty-manager-file-change-ignore.test.ts instead.
+// own test suite leaking a scope) is the suite-wide systemd-run shim and
+// leak check in test/global-setup.ts (issue #2003) instead.
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import os from "node:os";
