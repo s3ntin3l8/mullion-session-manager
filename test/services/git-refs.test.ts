@@ -570,6 +570,13 @@ describe("listBranches mergeState and getBranchDetail", () => {
     commitAll(tmpDir, "gone work");
     git(tmpDir, ["config", "branch.gone.remote", "origin"]);
     git(tmpDir, ["config", "branch.gone.merge", "refs/heads/gone"]);
+    git(tmpDir, ["update-ref", "refs/remotes/origin/elsewhere", "gone"]);
+    // gone upstream but unpushed work: not a done signal
+    git(tmpDir, ["checkout", "-b", "gone-unpushed", "main"]);
+    fs.writeFileSync(path.join(tmpDir, "u.txt"), "u");
+    commitAll(tmpDir, "unpushed work");
+    git(tmpDir, ["config", "branch.gone-unpushed.remote", "origin"]);
+    git(tmpDir, ["config", "branch.gone-unpushed.merge", "refs/heads/gone-unpushed"]);
     git(tmpDir, ["checkout", "main"]);
 
     const plain = await listBranches(tmpDir);
@@ -578,6 +585,7 @@ describe("listBranches mergeState and getBranchDetail", () => {
     const detailed = await listBranches(tmpDir, { detail: true });
     expect(detailed?.find((b) => b.name === "anc")?.mergeState).toBe("ancestor");
     expect(detailed?.find((b) => b.name === "gone")?.mergeState).toBe("upstream-gone");
+    expect(detailed?.find((b) => b.name === "gone-unpushed")?.mergeState).toBeUndefined();
     expect(detailed?.find((b) => b.name === "main")?.mergeState).toBeUndefined();
   });
 

@@ -3956,6 +3956,7 @@ export async function projectsRoute(app: FastifyInstance) {
         names: {
           type: "array",
           maxItems: 200,
+          uniqueItems: true,
           items: { type: "string", minLength: 1, maxLength: 255 },
         },
       },
@@ -3976,9 +3977,17 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      const { confirm, names } = request.body ?? {};
+      const { dryRun, names } = request.body ?? {};
+      // Deleting needs an explicit confirm; dryRun:true always wins.
+      const confirm = request.body?.confirm === true && dryRun !== true;
       if (confirm && (!names || names.length === 0)) {
         return reply.badRequest("confirm requires names");
+      }
+      // Local only, like the branch detail route: a remote host's branches
+      // are not ours to delete through this preview-and-confirm flow.
+      if (project.hostId !== LOCAL_HOST_ID) {
+        reply.code(204);
+        return;
       }
 
       let refs: ProjectGitBranchesResult | null;
@@ -4016,9 +4025,14 @@ export async function projectsRoute(app: FastifyInstance) {
           // `ancestor` is provably contained in the base, so plain -d. The
           // other signals (squash-merged PR, upstream gone) can't satisfy -d
           // and were re-validated above, hence -D.
-          const result = await backend.deleteBranch(project.cwd, name, {
-            force: candidate.reason !== "ancestor",
-          });
+          const force = candidate.reason !== "ancestor";
+          if (force) {
+            app.log.warn(
+              { projectId: project.id, branchName: name, reason: candidate.reason },
+              "git-branch-prune: force-deleting a branch that is not an ancestor of the base",
+            );
+          }
+          const result = await backend.deleteBranch(project.cwd, name, { force });
           if (result.deleted) deleted.push(name);
           else failed.push({ name, why: result.reason ?? "delete-failed" });
         } catch (err) {

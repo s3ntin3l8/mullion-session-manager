@@ -108,6 +108,21 @@ function parseUpstreamTrack(
   return result;
 }
 
+/** True when the branch holds commits no remote-tracking ref has. `[gone]`
+ * drops the ahead count, so an upstream deleted while the branch still had
+ * unpushed work must not read as "done". An unreadable answer counts as
+ * unpushed (fail closed). */
+async function hasUnpushedCommits(cwd: string, name: string): Promise<boolean> {
+  const out = await runGit(cwd, [
+    "rev-list",
+    "--count",
+    `refs/heads/${name}`,
+    "--not",
+    "--remotes",
+  ]);
+  return out === null || out.trim() !== "0";
+}
+
 /**
  * Lists local branches (`git for-each-ref refs/heads`), marking whichever one
  * HEAD points at, plus the free upstream/ahead/behind/relative-date
@@ -175,7 +190,9 @@ export async function listBranches(
           branch.isMerged = branch.name !== defaultBranchName && mergedNames.has(branch.name);
           if (branch.name === defaultBranchName) continue;
           if (branch.isMerged) branch.mergeState = "ancestor";
-          else if (branch.upstreamGone) branch.mergeState = "upstream-gone";
+          else if (branch.upstreamGone && !(await hasUnpushedCommits(cwd, branch.name))) {
+            branch.mergeState = "upstream-gone";
+          }
         }
       }
     }
@@ -449,8 +466,9 @@ export interface GitBranchDetail {
   lastCommit: GitBranchCommit | null;
 }
 
-/** Same rejection rules as `deleteBranch`'s name check: no flags, globs,
- * whitespace, `..` or control bytes may reach a git argv or ref pattern. */
+/** The one branch-name validator (also used by `deleteBranch`): no flags,
+ * globs, revision syntax, whitespace, `..` or control bytes may reach a git
+ * argv or ref pattern. */
 export function isPlainBranchName(name: string): boolean {
   if (name.length === 0 || name.length > 255) return false;
   if (name.startsWith("-") || name.includes("..")) return false;

@@ -6123,6 +6123,13 @@ describe("projects route", () => {
       commitFile(dir, "g.txt", "gone work");
       sh(dir, "config", "branch.gone.remote", "origin");
       sh(dir, "config", "branch.gone.merge", "refs/heads/gone");
+      // its commit still lives on some other remote ref, so nothing is lost
+      sh(dir, "update-ref", "refs/remotes/origin/elsewhere", "gone");
+      // upstream gone AND a commit no remote has: must never be a candidate
+      sh(dir, "checkout", "-q", "-b", "gone-unpushed", "main");
+      commitFile(dir, "u.txt", "unpushed work");
+      sh(dir, "config", "branch.gone-unpushed.remote", "origin");
+      sh(dir, "config", "branch.gone-unpushed.merge", "refs/heads/gone-unpushed");
       // squash-merged on GitHub: unique commit, PR head sha == tip
       sh(dir, "checkout", "-q", "-b", "squashed", "main");
       commitFile(dir, "s.txt", "squashed work");
@@ -6215,6 +6222,7 @@ describe("projects route", () => {
       const names = body.candidates.map((c: { name: string }) => c.name);
       expect(names).not.toContain("abandoned");
       expect(names).not.toContain("reused");
+      expect(names).not.toContain("gone-unpushed");
       expect(body.skipped).toEqual(
         expect.arrayContaining([
           { name: "inwt", why: "worktree" },
@@ -6263,6 +6271,29 @@ describe("projects route", () => {
       expect(res.json().deleted).toEqual(["anc"]);
       expect(res.json().failed).toEqual([{ name: "squashed", why: "not-prunable" }]);
       expect(sh(dir, "branch", "--list", "squashed")).toContain("squashed");
+      await cleanup();
+    });
+
+    it("never deletes without an explicit confirm, even with dryRun:false or names", async () => {
+      const { app, dir, id, cleanup } = await setup();
+      for (const payload of [
+        { dryRun: false, names: ["anc"] },
+        { dryRun: true, confirm: true, names: ["anc"] },
+      ]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/git-branch-prune`,
+          payload,
+        });
+        expect(res.json()).toMatchObject({ dryRun: true, deleted: [] });
+      }
+      expect(sh(dir, "branch", "--list", "anc")).toContain("anc");
+      const dup = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: { confirm: true, names: ["anc", "anc"] },
+      });
+      expect(dup.statusCode).toBe(400);
       await cleanup();
     });
 
