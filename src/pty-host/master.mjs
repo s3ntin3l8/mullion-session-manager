@@ -16,6 +16,16 @@ const SERVE_READY_POLL_MS = 50;
 /** How long the master lingers after its program exits, so the EXIT frames flush. */
 const EXIT_FLUSH_MS = 200;
 
+/**
+ * How much unsent output the master holds for one client before it starts
+ * DROPPING that client's output. A client that stops reading (a hung
+ * backend, a stalled probe) must not make the master grow without bound —
+ * dtach does not buffer for a stuck client either. The client loses a stretch
+ * of output, never the session; Mullion keeps its own scrollback, and the
+ * next attach repaints the screen.
+ */
+export const MAX_CLIENT_BACKLOG_BYTES = 8 * 1024 * 1024;
+
 /** Resolves true when something accepts a connection on `endpoint`. */
 export function isServing(endpoint) {
   return new Promise((resolve) => {
@@ -129,7 +139,10 @@ export function serve(endpoint, program, args, opts) {
     }
     term.onData((data) => {
       const frame = encodeFrame(FRAME_DATA, Buffer.from(data, "utf8"));
-      for (const client of clients) client.write(frame);
+      for (const client of clients) {
+        // Whole frames only, so a client that catches up is never mid-frame.
+        if (client.writableLength < MAX_CLIENT_BACKLOG_BYTES) client.write(frame);
+      }
     });
     term.onExit(({ exitCode }) => {
       const frame = encodeExit(exitCode ?? -1);

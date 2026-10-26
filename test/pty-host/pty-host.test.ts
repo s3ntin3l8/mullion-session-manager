@@ -39,8 +39,10 @@ const ECHO_PROGRAM = [
 ];
 
 const cleanups: Array<() => void | Promise<void>> = [];
+// Last registered, first run — so a session is ended before the temp dir
+// holding its endpoint is removed.
 afterEach(async () => {
-  for (const fn of cleanups.splice(0)) await fn();
+  for (const fn of cleanups.splice(0).reverse()) await fn();
 });
 
 function tmpDir(): string {
@@ -138,9 +140,13 @@ describe("serve (the master)", () => {
     let bOutput = "";
     b.onData((d) => (bOutput += d));
     cleanups.push(() => b.kill());
-    await sleep(200);
-    a.client.write("both\r");
-    await until(() => bOutput.includes("got:both"));
+    // No sleep-and-hope: the master keeps no scrollback, so `b` only sees
+    // output produced after it connected. Keep typing until it does.
+    for (let attempt = 0; !bOutput.includes("got:both"); attempt++) {
+      if (attempt > 60) throw new Error("the second client never saw the output");
+      a.client.write("both\r");
+      await sleep(150);
+    }
   }, 30_000);
 
   it("stop() kills the program, which ends the master", async () => {
@@ -243,6 +249,15 @@ describe("pty-host.mjs (the command line)", () => {
       [PTY_HOST, "-n", endpoint, process.execPath, ...ECHO_PROGRAM],
       { encoding: "utf8", timeout: 20_000 },
     );
+    // This master is detached from the test process, so end it even if an
+    // assertion below fails: tell its program to quit, over the session.
+    cleanups.push(async () => {
+      if (!(await isServing(endpoint))) return;
+      const stopper = attachPtyHost(endpoint, { cols: 80, rows: 24 });
+      stopper.write("quit\r");
+      await sleep(500);
+      stopper.kill();
+    });
     expect(launched.stderr).toBe("");
     expect(launched.status).toBe(0);
     // The launcher has exited; the master it started is still serving.

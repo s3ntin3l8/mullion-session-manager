@@ -159,13 +159,10 @@ export class WindowsScopeBackend implements ScopeBackend {
     const table = await this.readProcessTable();
     if (table === null) return null;
     const endpoint = this.endpointFor(id);
-    // Several matches only during `-n`'s own brief overlap, which cannot
-    // match (it is `-n`, not `--serve`); the highest pid is the newest.
-    const masters = table.filter((entry) => isPtyHostMasterFor(entry.command, endpoint));
-    const master = masters.reduce<number | undefined>(
-      (best, entry) => (best === undefined || entry.pid > best ? entry.pid : best),
-      undefined,
-    );
+    // At most one master can hold a pipe (a second `--serve` fails to listen
+    // and exits), and the `-n` launcher never matches — so the first match
+    // is the master.
+    const master = table.find((entry) => isPtyHostMasterFor(entry.command, endpoint))?.pid;
     return { table, master };
   }
 

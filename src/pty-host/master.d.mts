@@ -14,3 +14,4 @@ export function serve(
   args: string[],
   opts: { onExit: (code: number) => void; log?: (line: string) => void },
 ): { stop: () => void };
+export const MAX_CLIENT_BACKLOG_BYTES: number;
