@@ -21,6 +21,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
+const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
 const { createSessionRecord } = await import("../../src/services/session-lifecycle.js");
 
 // Issue #1958 — `promote_to_worktree` cuts the worktree and places the
@@ -51,7 +52,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     vi.restoreAllMocks();
     app.db.delete(sessions).run();
     app.db.delete(projects).run();
-    app.db.delete(hosts).where(ne(hosts.id, "local")).run();
+    app.db.delete(hosts).where(ne(hosts.id, LOCAL_HOST_ID)).run();
   });
 
   async function addHost(name: string, loadAverage1m: number): Promise<string> {
@@ -202,7 +203,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     // The worktree is cut from the project's root ON THE REMOTE HOST — not
     // from the local project path, and not from the session's subdirectory.
     expect(backendFor(remote).createWorktree.mock.calls[0]?.[0]).toBe(REMOTE_CWD);
-    expect(backendFor("local").createWorktree).not.toHaveBeenCalled();
+    expect(backendFor(LOCAL_HOST_ID).createWorktree).not.toHaveBeenCalled();
     expect(sessionRow(res.json().id as number)?.hostId).toBe(remote);
   });
 
@@ -232,7 +233,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     expect(res.statusCode).toBe(502);
     expect(backendFor(remote).removeWorktree).toHaveBeenCalledWith(WORKTREE, REMOTE_CWD);
     expect(backendFor(remote).deleteBranch).toHaveBeenCalled();
-    expect(backendFor("local").removeWorktree).not.toHaveBeenCalled();
+    expect(backendFor(LOCAL_HOST_ID).removeWorktree).not.toHaveBeenCalled();
   });
 
   it("judges seed delivery against the host the replacement runs on", async () => {
@@ -293,6 +294,8 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
 
     expect(res.statusCode).toBe(201);
     expect(backendFor(remote).createWorktree.mock.calls[0]?.[0]).toBe("/srv/other-repo");
+    // ...and the replacement is pinned to that host, not left to the project's.
+    expect(sessionRow(res.json().id as number)?.hostId).toBe(remote);
   });
 
   it("refuses with a 409 when the project has no path on the host and the session has no cwd", async () => {
