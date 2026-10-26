@@ -454,6 +454,24 @@ export interface SessionInfo {
    * `lastTurnEndedAt`.
    */
   workFinishedAt: number | null;
+  /**
+   * Issue #1962 — the session's event counter (`Session.eventSeqHead`), so a
+   * primary waiting on a session that lives on THIS host can arm
+   * `sessions.wait`'s "a new turn started" guard against the host's own
+   * counter instead of its own (which has no such session).
+   *
+   * OPTIONAL on the wire: an agent build that predates this omits it, and the
+   * primary then runs the wait without the guard (today's behaviour). Never
+   * surfaced to the frontend — see session-live-info.ts's `LiveInfoKey`.
+   */
+  eventSeqHead?: number;
+  /**
+   * Issue #1962 — `Session.agentTurnInFlight`: a prompted turn has begun and
+   * its end has not been seen. `sessions.prompt` + `wait` refuses a busy
+   * child with it (`agent_busy`), so for a child on another host it has to
+   * travel with the rest of the info. Optional for the same reason as above.
+   */
+  agentTurnInFlight?: boolean;
   /** Issue #428 — the raw `backgroundTasks` list off the most recent
    * `progress`/`subagent` hook message that carried one (present-only
    * update: a message with no `backgroundTasks` field, e.g. Claude Code's

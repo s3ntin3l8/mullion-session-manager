@@ -350,6 +350,49 @@ describe("multi-host proxy (issue #26)", () => {
     ws.close();
   });
 
+  it("prompts a remote session and reports its event head and in-flight turn back to the primary (#1962)", async () => {
+    const before = fakePtyChildren.length;
+    const created = await primary.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "claude" },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = String(created.json().id);
+    await waitUntil(() => fakePtyChildren.length > before);
+    const { resolveBackend } = await import("../../src/services/session-backend.js");
+    const backend = resolveBackend(primary.app, hostId);
+    const liveOf = async () =>
+      (await backend.liveStatus([id], 30_000, undefined, { fresh: true }))[id];
+
+    // Quiet: the agent reports its own event counter, and no turn in flight.
+    const quiet = await liveOf();
+    expect(quiet).toMatchObject({
+      alive: true,
+      agentTurnInFlight: false,
+      eventSeqHead: expect.any(Number),
+    });
+
+    // The prompt runs on the AGENT, and its reply carries the agent's event
+    // head right after the turn began — the counter the primary's `wait`
+    // guard has to compare against (the primary has no such session).
+    const outcome = await backend.prompt(id, { text: "run the build", submit: true });
+    expect(outcome).toMatchObject({
+      ok: true,
+      outputOffset: expect.any(Number),
+      afterSeq: expect.any(Number),
+    });
+    if (!outcome.ok) throw new Error("expected the prompt to be delivered");
+    expect(outcome.afterSeq).toBe(agent.app.pty.get(id)?.eventSeqHead);
+    expect(primary.app.pty.get(id)).toBeUndefined();
+
+    // A fresh read now sees the prompted turn in flight (the `agent_busy`
+    // refusal reads this), with the head the prompt reply reported.
+    const busy = await liveOf();
+    expect(busy?.agentTurnInFlight).toBe(true);
+    expect(busy?.eventSeqHead).toBe(outcome.afterSeq);
+  });
+
   it("terminates a remote session through the proxy and marks it killed", async () => {
     const created = await primary.app.inject({
       method: "POST",

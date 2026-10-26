@@ -3653,6 +3653,8 @@ export class Session {
       questionHeader: this.questionHeader,
       questionAt: this.questionAt,
       lastTurnEndedAt: this.attention.lastTurnEndedAt,
+      eventSeqHead: this.eventSeqHead,
+      agentTurnInFlight: this.agentTurnInFlight,
       // Issue #1735 — the last turn end that meant "the work is done".
       workFinishedAt: this.attention.workFinishedAt,
       backgroundTasks: this.attention.backgroundTasks,

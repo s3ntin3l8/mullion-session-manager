@@ -6,6 +6,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { deriveSessionStatus } from "./session-status.js";
 import { getPreviewWorktree } from "./git-worktree.js";
 import { resolveBackend } from "./session-backend.js";
+import { HostRequestError } from "./remote-host-client.js";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -28,6 +29,9 @@ import { resolveBackend } from "./session-backend.js";
 // (issue #271 follow-up) is excluded the same way: it's read directly off
 // `app.pty.get(id)` by the (local-only) promote route's own transfer
 // decision, never surfaced to the frontend or consumed by deriveSessionStatus.
+// `eventSeqHead` / `agentTurnInFlight` (issue #1962) are excluded likewise:
+// the control socket's remote `sessions.wait` / `sessions.prompt` read them
+// straight off the host's SessionInfo, they are not part of the session view.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
   | "id"
@@ -43,6 +47,8 @@ type LiveInfoKey = Exclude<
   | "staleHooks"
   | "restoredVersion"
   | "hookEmits"
+  | "eventSeqHead"
+  | "agentTurnInFlight"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,
@@ -338,23 +344,73 @@ export async function withLiveStatus(
   idleThresholdMs: number,
   hostId: string,
 ) {
-  let info: SessionInfo | null = null;
-  let hostReachable = true;
+  const { info, hostReachable } = await readSessionLiveInfo(app, row, idleThresholdMs, hostId);
+  return withLiveInfo(app, row, info, hostId, { hostReachable });
+}
+
+/**
+ * One session's `SessionInfo` from the host that owns it, plus whether that
+ * host ANSWERED — the read `withLiveStatus` builds the session view from, shared
+ * so the REST path and the control socket's remote wait (issue #1962) cannot
+ * drift apart.
+ *
+ * `fresh` (a remote host only) bypasses the host client's 1.5 s cache. On any
+ * failure `info` is null, `hostReachable` is false, `failure` says which kind
+ * (`unreachable` or `refused`) and `error` is what was thrown; callers that
+ * only want a view ignore the last two, a caller that must tell "the host is
+ * down" from "the host answered and refused" reads `failure`.
+ */
+export async function readSessionLiveInfo(
+  app: FastifyInstance,
+  row: typeof sessions.$inferSelect,
+  idleThresholdMs: number,
+  hostId: string,
+  opts: { fresh?: boolean } = {},
+): Promise<{
+  info: SessionInfo | null;
+  hostReachable: boolean;
+  /** Why the read failed, classified once here: the host `unreachable` (a
+   * network fault, a timeout) or `refused` the request (it ANSWERED with an
+   * error: its rate limit, a stale token). Absent when the read succeeded. */
+  failure?: "unreachable" | "refused";
+  error?: unknown;
+}> {
+  const id = String(row.id);
+  // The one place the result is built, so `hostReachable` and `failure` cannot
+  // disagree: a read reached the host exactly when it did not fail.
+  const outcome = (
+    info: SessionInfo | null,
+    failure?: "unreachable" | "refused",
+    error?: unknown,
+  ) => ({
+    info,
+    hostReachable: failure === undefined,
+    ...(failure === undefined ? {} : { failure, error }),
+  });
   try {
-    const map = await resolveBackend(app, hostId).liveStatus([String(row.id)], idleThresholdMs);
-    info = map[String(row.id)] ?? null;
+    const backend = resolveBackend(app, hostId);
+    const map =
+      opts.fresh === true
+        ? await backend.liveStatus([id], idleThresholdMs, undefined, { fresh: true })
+        : await backend.liveStatus([id], idleThresholdMs);
+    return outcome(map[id] ?? null);
   } catch (err) {
     // Issue #1727 — the host did not answer. That is not "the session is
     // gone": it is "we cannot tell what is going on there". The session is
     // reported as SUSPENDED (host unreachable — may still be running) rather
     // than as the idle no-signal fallback a quiet session gets.
-    hostReachable = false;
+    // Say which it was: a host that ANSWERED with an error (its rate limit, a
+    // stale token) is not a network fault, and a log that blames one sends
+    // whoever reads it looking in the wrong place.
+    const failure = err instanceof HostRequestError ? "refused" : "unreachable";
     app.log.warn(
       { hostId, sessionId: row.id, err },
-      "host unreachable, reporting default live status",
+      failure === "refused"
+        ? "host answered the live-status request with an error, reporting default live status"
+        : "host unreachable, reporting default live status",
     );
+    return outcome(null, failure, err);
   }
-  return withLiveInfo(app, row, info, hostId, { hostReachable });
 }
 
 // One corrupt `env` column must not 500 GET /api/sessions for every session.

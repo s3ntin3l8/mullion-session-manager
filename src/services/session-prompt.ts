@@ -36,9 +36,13 @@ export type PromptDelivery =
     }
   | ({ ok: false } & PromptRefusal);
 
-/** What `SessionBackend.prompt` reports — the delivery without the `afterSeq`
- * a remote host cannot usefully hand a primary (see sessions.prompt). */
-export type PromptOutcome = { ok: true; outputOffset: number } | ({ ok: false } & PromptRefusal);
+/** What `SessionBackend.prompt` reports. `afterSeq` is the HOST's event head
+ * right after the turn began (issue #1962): a remote host hands it to the
+ * primary so `sessions.prompt` + `wait` can arm the "a new turn started"
+ * guard against the counter that actually moves. Absent from an agent build
+ * that predates it — the wait then runs without the guard. */
+export type PromptOutcome =
+  { ok: true; outputOffset: number; afterSeq?: number } | ({ ok: false } & PromptRefusal);
 
 /** One output wait, as the control socket asks a host to run it. */
 export interface WaitOutputRequest {
