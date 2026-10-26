@@ -56,6 +56,7 @@ import {
 import {
   listBranches,
   listRemoteBranches,
+  isWithinAnyWorktree,
   listWorktrees,
   resolveDefaultBaseRefForPicker,
   type GitBranchInfo,
@@ -578,32 +579,6 @@ async function resolveSessionCwdTargets(
     targets.push({ sessionId: row.id, hostId: row.hostId ?? project.hostId, cwd });
   }
   return targets;
-}
-
-/** True when `candidate` IS one of `worktreePaths`, or is nested below one
- * of them — never a bare string-prefix compare (`/repo-2` must not match a
- * `worktreePaths` entry of `/repo`). Both sides are `path.resolve`d first so
- * a `..`-free but non-canonical path (e.g. a trailing slash) still matches
- * correctly.
- *
- * Known, accepted tradeoff (flagged in review — see PR #335): a `candidate`
- * inside a git SUBMODULE of one of these worktrees has its own separate
- * `.git` (so it passes the caller's `isGitRepo` check) but is never itself
- * one of `git worktree list`'s own entries, so it's rejected here and falls
- * back to the session's static cwd rather than showing the submodule's own
- * branch. Treating a submodule as "this project's own repo" for
- * branch-tracking purposes would be the wrong call anyway — it's a distinct
- * repository with its own independent branch/HEAD — so this is the correct
- * side to fail on, not just an unhandled gap. */
-function isWithinAnyWorktree(candidate: string, worktreePaths: string[]): boolean {
-  const resolvedCandidate = path.resolve(candidate);
-  return worktreePaths.some((worktreePath) => {
-    const resolvedWorktree = path.resolve(worktreePath);
-    return (
-      resolvedCandidate === resolvedWorktree ||
-      resolvedCandidate.startsWith(resolvedWorktree + path.sep)
-    );
-  });
 }
 
 // Issue #442 — the two primary-side guards that run BEFORE delegating to a

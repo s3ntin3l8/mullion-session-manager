@@ -3,7 +3,8 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
-import { getGitStatus } from "../services/git-status.js";
+import { getGitStatus, isGitRepo } from "../services/git-status.js";
+import { isWithinAnyWorktree, listWorktrees } from "../services/git-refs.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken, resolveMarkerTokens } from "../services/github-integration.js";
@@ -197,6 +198,25 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
 }
 
 /**
+ * A session's self-reported `liveCwd` (OSC 7 on every `cd`) only when it is
+ * inside this project's own repository: the main checkout or one of its
+ * worktrees. An agent wanders into any repo it visits, and resolving THAT
+ * repo's branch here would look up a PR in this project's repo. Same rule as
+ * routes/projects.ts's resolveSessionCwdTargets.
+ */
+async function trustedLiveCwd(projectCwd: string, liveCwd: string): Promise<string | null> {
+  if (!isGitRepo(liveCwd)) return null;
+  const worktrees = await listWorktrees(projectCwd);
+  if (!worktrees) return null;
+  return isWithinAnyWorktree(
+    liveCwd,
+    worktrees.map((w) => w.path),
+  )
+    ? liveCwd
+    : null;
+}
+
+/**
  * The branch a session is working on, resolved on the host that owns it
  * (issue #1628).
  *
@@ -250,7 +270,12 @@ async function resolveSessionBranch(
   // The live cwd wins over a reported branch: a worktree the agent moved into
   // is what the PR is on, and the launch cwd is still the main checkout. A
   // status read that finds nothing falls through to the older sources.
-  const liveCwdBranch = live?.liveCwd ? (await getGitStatus(live.liveCwd))?.branch : null;
+  // forceFresh: this decides which PR gets reviewed, so a 5s-old cached
+  // answer for a directory the agent just switched branches in won't do.
+  const trusted = live?.liveCwd ? await trustedLiveCwd(project.cwd, live.liveCwd) : null;
+  const liveCwdBranch = trusted
+    ? (await getGitStatus(trusted, { forceFresh: true }))?.branch
+    : null;
   return liveCwdBranch ?? live?.liveBranch ?? (await getGitStatus(cwd))?.branch ?? null;
 }
 

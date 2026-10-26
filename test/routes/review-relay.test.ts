@@ -6,6 +6,7 @@ import type * as HostGit from "../../src/services/host-git.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as GithubWrite from "../../src/services/github-write.js";
 import type * as GitStatus from "../../src/services/git-status.js";
+import type * as GitRefs from "../../src/services/git-refs.js";
 import type * as HermesReview from "../../src/services/hermes-review.js";
 import type * as RemoteHostClient from "../../src/services/remote-host-client.js";
 
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   findPullRequestByHead: vi.fn(),
   getPullRequestByNumber: vi.fn(),
   getGitStatus: vi.fn(),
+  isGitRepo: vi.fn(),
+  listWorktrees: vi.fn(),
   requestHermesReview: vi.fn(),
   requestRelay: vi.fn(),
   getRelayStatus: vi.fn(),
@@ -58,6 +61,11 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
   getGitStatus: mocks.getGitStatus,
+  isGitRepo: mocks.isGitRepo,
+}));
+vi.mock("../../src/services/git-refs.js", async (orig) => ({
+  ...(await orig<typeof GitRefs>()),
+  listWorktrees: mocks.listWorktrees,
 }));
 vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   ...(await orig<typeof HermesReview>()),
@@ -154,6 +162,11 @@ describe("review-request routes", () => {
       markerReadToken: "ghs_checks",
     });
     mocks.getGitStatus.mockResolvedValue({ branch: "feat/thing" });
+    mocks.isGitRepo.mockReturnValue(true);
+    mocks.listWorktrees.mockResolvedValue([
+      { path: "/tmp/review-local", branch: "main", isMain: true },
+      { path: "/tmp/review-local/.wt/feat-x", branch: "feat/x", isMain: false },
+    ]);
     mocks.findPullRequestByHead.mockResolvedValue({ number: 42 });
     mocks.getPullRequestByNumber.mockImplementation(async (_t, _o, _r, number: number) => ({
       number,
@@ -1006,7 +1019,7 @@ describe("review-request routes", () => {
   });
 
   describe("a session that moved into a worktree", () => {
-    const worktree = "/srv/project/.wt/feat-x";
+    const worktree = "/tmp/review-local/.wt/feat-x";
     const withLive = async (live: object) => {
       const spy = vi
         .spyOn(app.pty, "get")
@@ -1017,52 +1030,63 @@ describe("review-request routes", () => {
         spy.mockRestore();
       }
     };
+    const expectLookup = (branch: string) =>
+      expect(mocks.findPullRequestByHead).toHaveBeenLastCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        `acme:${branch}`,
+      );
 
     it("finds the PR for the live cwd's branch, not the launch cwd's", async () => {
       mocks.getGitStatus.mockImplementation(async (dir: string) =>
         dir === worktree ? { branch: "feat/x" } : { branch: "main" },
       );
-      await withLive({ liveCwd: worktree });
-      expect(mocks.getGitStatus).toHaveBeenCalledWith(worktree);
-      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
-        "ghs_token",
-        "acme",
-        "widgets",
-        "acme:feat/x",
-      );
+      const res = await withLive({ liveCwd: worktree });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ status: "dispatched", prNumber: 42 });
+      // A fresh read: this decides which PR is reviewed.
+      expect(mocks.getGitStatus).toHaveBeenCalledWith(worktree, { forceFresh: true });
+      expectLookup("feat/x");
     });
 
     it("prefers the live cwd over a stale reported branch", async () => {
       mocks.getGitStatus.mockResolvedValue({ branch: "feat/x" });
-      await withLive({ liveCwd: worktree, liveBranch: "stale/branch" });
-      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
-        "ghs_token",
-        "acme",
-        "widgets",
-        "acme:feat/x",
-      );
+      const res = await withLive({ liveCwd: worktree, liveBranch: "stale/branch" });
+      expect(res.statusCode).toBe(200);
+      expectLookup("feat/x");
     });
 
     it("falls back to the reported branch, then the launch cwd, when the live cwd has no status", async () => {
       mocks.getGitStatus.mockResolvedValue(null);
-      await withLive({ liveCwd: worktree, liveBranch: "live/branch" });
-      expect(mocks.findPullRequestByHead).toHaveBeenLastCalledWith(
-        "ghs_token",
-        "acme",
-        "widgets",
-        "acme:live/branch",
+      expect((await withLive({ liveCwd: worktree, liveBranch: "live/branch" })).statusCode).toBe(
+        200,
       );
+      expectLookup("live/branch");
 
       mocks.getGitStatus.mockImplementation(async (dir: string) =>
         dir === worktree ? null : { branch: "feat/thing" },
       );
-      await withLive({ liveCwd: worktree });
-      expect(mocks.findPullRequestByHead).toHaveBeenLastCalledWith(
-        "ghs_token",
-        "acme",
-        "widgets",
-        "acme:feat/thing",
+      expect((await withLive({ liveCwd: worktree })).statusCode).toBe(200);
+      expectLookup("feat/thing");
+    });
+
+    it("ignores a live cwd that wandered into another repository", async () => {
+      mocks.getGitStatus.mockImplementation(async (dir: string) =>
+        dir === "/home/me/other-repo" ? { branch: "other/branch" } : { branch: "feat/thing" },
       );
+      const res = await withLive({ liveCwd: "/home/me/other-repo", liveBranch: "live/branch" });
+      expect(res.statusCode).toBe(200);
+      expect(mocks.getGitStatus).not.toHaveBeenCalledWith("/home/me/other-repo", expect.anything());
+      expectLookup("live/branch");
+    });
+
+    it("ignores a live cwd that is not itself a git repository", async () => {
+      mocks.isGitRepo.mockReturnValue(false);
+      const res = await withLive({ liveCwd: `${worktree}/src`, liveBranch: "live/branch" });
+      expect(res.statusCode).toBe(200);
+      expect(mocks.listWorktrees).not.toHaveBeenCalled();
+      expectLookup("live/branch");
     });
   });
 
