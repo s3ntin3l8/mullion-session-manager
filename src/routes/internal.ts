@@ -5,7 +5,11 @@ import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
-import { taskReviewFindingsPath, taskCommitTitlePath } from "../services/task-prompt.js";
+import {
+  taskReviewFindingsPath,
+  taskCommitTitlePath,
+  taskRereviewRequestPath,
+} from "../services/task-prompt.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -2110,6 +2114,30 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!existsSync(titlePath)) return { content: null };
       const content = readFileSync(titlePath, "utf8").trim();
       return { content: content.length > 0 ? content : null };
+    },
+  );
+
+  // The agent-side counterpart of SessionBackend's readTaskRereviewRequest —
+  // a remote-hosted suggestions-round worker's "review this" request. Same
+  // identifier-only shape as `/internal/task-commit-title` above; `key` is
+  // the integer the path helper keys on, so there is nothing path-like for a
+  // traversal attempt to reach.
+  app.get<{ Querystring: { taskId?: string; key?: string } }>(
+    "/internal/task-rereview-request",
+    INTERNAL_RATE_LIMIT,
+    async (request, reply) => {
+      const taskId = Number(request.query.taskId);
+      const key = Number(request.query.key);
+      if (!Number.isInteger(taskId) || !Number.isInteger(key)) {
+        return reply.badRequest("taskId and key query params must be integers");
+      }
+      const requestPath = taskRereviewRequestPath(
+        path.dirname(app.pty.hookSocketPath),
+        taskId,
+        key,
+      );
+      if (!existsSync(requestPath)) return { content: null };
+      return { content: readFileSync(requestPath, "utf8").trim() || "(no reason given)" };
     },
   );
 

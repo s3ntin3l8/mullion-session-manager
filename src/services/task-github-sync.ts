@@ -38,7 +38,12 @@ import {
   createPullRequestReview,
 } from "./github-write.js";
 import { GitHubApiError } from "./github.js";
-import { severityPrefix, type ReviewFinding } from "./task-prompt.js";
+import {
+  isApprovingVerdict,
+  severityPrefix,
+  type ReviewFinding,
+  type ReviewVerdict,
+} from "./task-prompt.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "./task-state.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { getDiffStats, type GitDiffStats } from "./git-diff.js";
@@ -629,7 +634,7 @@ export async function isIssueStillTrackable(
  * yet).
  *
  * `event` defaults to `"COMMENT"`. When `verdict` is given, maps onto a
- * gating event instead — `clean` → `APPROVE`, `changes-requested` →
+ * gating event instead — `approved` / `approved-with-suggestions` → `APPROVE`, `changes-requested` →
  * `REQUEST_CHANGES` — and, ONLY for that call, resolves a token from the
  * reviewer identity (`resolveReviewerToken`, #737) rather than the primary
  * one: the primary identity authored the PR
@@ -689,7 +694,7 @@ export async function postReviewFindingsComment(
      * `task-reconciler.ts`) means this post isn't a verdict on the diff at
      * all, so it always stays `COMMENT`, same as an explicit
      * `"inconclusive"`. */
-    verdict?: "clean" | "changes-requested" | "inconclusive";
+    verdict?: ReviewVerdict | "inconclusive";
   } & (
     | {
         /** Round header + summary only, no bullets — the PR review's body
@@ -719,12 +724,11 @@ export async function postReviewFindingsComment(
   // #737 — verdict -> gating event. `undefined` (no verdict, or explicitly
   // "inconclusive") stays `COMMENT`, posted from the primary identity like
   // every review before this feature existed.
-  const gatingEvent =
-    params.verdict === "clean"
-      ? "APPROVE"
-      : params.verdict === "changes-requested"
-        ? "REQUEST_CHANGES"
-        : undefined;
+  const gatingEvent = isApprovingVerdict(params.verdict)
+    ? "APPROVE"
+    : params.verdict === "changes-requested"
+      ? "REQUEST_CHANGES"
+      : undefined;
 
   if (task.prNumber !== null) {
     try {

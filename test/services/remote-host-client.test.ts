@@ -1008,6 +1008,26 @@ describe("RemoteHostClient", () => {
       await expect(client().resolveReadTaskCommitTitle(7)).rejects.toThrow(HostUnreachableError);
     });
 
+    it("resolveReadTaskRereviewRequest GETs /internal/task-rereview-request and unwraps { content }", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: "grew into a refactor" }));
+      await expect(client().resolveReadTaskRereviewRequest(7, 1234)).resolves.toBe(
+        "grew into a refactor",
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://example.invalid:1234/internal/task-rereview-request?taskId=7&key=1234",
+        expect.anything(),
+      );
+    });
+
+    it("resolveReadTaskRereviewRequest resolves null for an absent file, and throws (not null) on a 404 from an old peer", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: null }));
+      await expect(client().resolveReadTaskRereviewRequest(7, 1234)).resolves.toBeNull();
+      fetchMock.mockResolvedValue(new Response("not found", { status: 404 }));
+      await expect(client().resolveReadTaskRereviewRequest(7, 1234)).rejects.toThrow(
+        HostRequestError,
+      );
+    });
+
     // These four calls each wrap an agent-side git shell-out well above
     // REQUEST_TIMEOUT_MS's 5s default (git-push.ts 30s, git-refs.ts up to
     // ~50s across its chained calls, git-worktree.ts 15s) — without an

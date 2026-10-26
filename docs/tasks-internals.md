@@ -542,10 +542,11 @@ It deliberately does not restate anything already in this preamble.
 The review agent's own counterpart, `task-reviewer`
 (`src/bundle/skills/task-reviewer/`, issue #955, same delivery mechanism),
 elaborates on `buildReviewPrompt` the same way: what actually earns a
-`findings` entry (a verdict of `changes-requested` spends one of the round
-budget above regardless of finding severity — nothing in the code gates on
-severity, so an all-nits verdict costs exactly the same round a blocker
-would), what a `clean` verdict should mean, and the constraint of verifying
+`findings` entry (a finding's severity decides the verdict: only a
+`critical` or `warning` sends the task back and earns another review, while
+an all-`suggestion` review is _approved_ and its suggestions are applied once
+with no re-review), how a follow-up round is a delta review of the range
+since the last reviewed commit, what an `approved` verdict should mean, and the constraint of verifying
 a diff from inside the worker's own live worktree without dirtying it. It
 gates on the review prompt's own opening line, excludes the worker's prompt
 shape, and is deliberately self-contained: it does not depend on or
@@ -625,27 +626,41 @@ reviewing` transition itself — `task-reconciler.ts`'s
   write a round-suffixed file outside the worktree (`task-prompt.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
-  `{verdict: "clean" | "changes-requested", summary, findings: [{path, line,
-side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
-  verdict sentence; `verified`/`notes`/`looksGood` are optional string
-  arrays for what was checked, cross-cutting observations that don't anchor
-  to a line, and what's solid about the change, respectively. Written to a
+  `{verdict: "approved" | "approved-with-suggestions" | "changes-requested",
+summary, findings: [{path, line, side, severity, body}], previous?,
+verified?, notes?, looksGood?}` — `summary` is one verdict sentence;
+  `severity` is `critical | warning | suggestion` (the old `blocker`/`major`/
+  `minor`/`nit` and a `clean` verdict are accepted as aliases); `previous` is,
+  on a follow-up round, a disposition `{ref, status: addressed | still-open |
+re-broken, evidence}` for each earlier finding; `verified`/`notes`/
+  `looksGood` are optional string arrays for what was checked, cross-cutting
+  observations that don't anchor to a line, and what's solid about the
+  change, respectively. **The verdict is derived, not trusted**
+  (`deriveVerdict`, `task-prompt.ts`): any `still-open`/`re-broken` earlier
+  finding, or any `critical`/`warning`/severity-less finding, makes it
+  `changes-requested`; only `suggestion` findings make it
+  `approved-with-suggestions`; none make it `approved`. The reviewer's own
+  `verdict` field is only cross-checked — a disagreement is logged into
+  `notes`. (One fail-safe: a bare `changes-requested` with no findings and no
+  dispositions stays `changes-requested`, since there is nothing to derive from.)
+  Written to a
   temp file and moved into place as the last step, not written directly, so
   a reconcile tick can never observe a torn/partial write.
   `parseReviewFindings` tolerantly falls back to `changes-requested` (the
   whole file as `summary`, no anchored findings, no `verified`/`notes`/
   `looksGood`) for anything that isn't valid JSON in that shape — an agent
-  that ignores the contract must never silently read as a clean review.
+  that ignores the contract must never silently read as an approval.
   `renderReviewFindingsMarkdown` renders the parsed verdict into the
   Hermes-style sectioned body actually posted: `**Verdict:**` line, then
-  `### Critical` (severity `blocker`/`major`), `### Warnings`
-  (`minor`/unset), `### Suggestions` (`nit`) — each with `- None` when
-  empty — followed by `### Verified`/`### Notes`/`### Looks Good` when
+  `### Critical` (severity `critical`), `### Warnings`
+  (`warning`/unset), `### Suggestions` (`suggestion`) — each with `- None`
+  when empty — preceded by `### Earlier findings` on a follow-up round and
+  followed by `### Verified`/`### Notes`/`### Looks Good` when
   non-empty. A freeform (non-JSON) review renders verbatim instead, since
   its `summary` holds the whole file, not one sentence.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
-  "clean" — but not on the very first tick that observes it missing.
+  "approved" — but not on the very first tick that observes it missing.
   `task-reconciler.ts`'s `processReviewingTasks` only accepts a missing file
   as genuinely absent once the review session has either `exited` (nothing
   more can ever be written) or been alive past `REVIEW_FINDINGS_GRACE_MS`
@@ -670,7 +685,8 @@ side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
   becomes an inline comment on its own `path`/`line`, with the round header
   and summary as the review's own body. Falls back to a plain issue comment
   only when the task has no PR yet. **#737 — the verdict maps onto a gating
-  review event**: `clean` → `event: "APPROVE"`, `changes-requested` →
+  review event**: `approved` and `approved-with-suggestions` →
+  `event: "APPROVE"` (`isApprovingVerdict`), `changes-requested` →
   `event: "REQUEST_CHANGES"`, missing/inconclusive → `event: "COMMENT"`
   (unchanged). A gating event is only ever posted from a second, separately
   configured **reviewer App** identity (`resolveReviewerToken`,
@@ -706,8 +722,29 @@ side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
   genuinely idle session with nobody watching to feed it anything. `force`
   terminates that survivor first, then always spawns fresh via the same
   argv-prompt mechanism every other Task Master spawn uses — it never
-  injects keystrokes into a live, possibly mid-tool-call TUI. A `clean`
+  injects keystrokes into a live, possibly mid-tool-call TUI. An `approved`
   verdict never auto-returns — nor does an inconclusive (missing-file) one.
+- **An approval with suggestions gets one more round, and no re-review.** On
+  `approved-with-suggestions`, `processReviewingTasks` calls `autoReturnTask`
+  with `reason: "suggestions"` and `buildSuggestionsPrompt`: the worker is told
+  the work was approved, to apply what it agrees with, skip (and explain) the
+  rest, and that nobody reviews the result. This round **spends no budget**
+  (`autoReturnRounds` is not incremented, and it's allowed on a task that
+  has used every round it had) and is the only auto-return that sets
+  `tasks.approvalCarriedAt`. When the worker finishes, the
+  `in_progress → reviewing` transition (`task-reconciler.ts`) sees that marker
+  and an approving `lastReviewVerdict` and **keeps the review pointers instead
+  of nulling them**: no review agent is respawned, and
+  `reviewFindingsIngestedSessionId` still equals `reviewSessionId`, which is
+  exactly what the auto-approve gate reads — so the task proceeds to the CI /
+  auto-approve gates on the carried verdict. A fresh review's ingest, a human
+  Reject, and Retry all clear the marker. **Escape hatch:** the suggestions
+  prompt names a file (`taskRereviewRequestPath`, keyed by the ingested verdict's
+  timestamp, outside the worktree) the worker writes a reason to when its fix
+  outgrew a small suggestion; the transition reads it through the same
+  backend → `/internal/task-rereview-request` path as the PR-title file, and its
+  presence makes the return a normal review. An unreadable request (host down,
+  an older peer build) is read as "no request" and the approval is carried.
 - **The round budget** (`tasks.autoReturnRounds`, renamed from
   `reviewRounds` — the TS property only; the SQL column stays
   `review_rounds`, since every other migration in this repo is a purely
@@ -723,11 +760,14 @@ side, severity, body}], verified?, notes?, looksGood?}` — `summary` is one
   round. A task that wants another round but has none left gets one extra
   sentence folded into its posted review comment, naming the cap, so it's
   distinguishable from a task that was never going to auto-return in the
-  first place — and stays in `reviewing` for a human either way.
-- A `clean` or inconclusive verdict (or a review agent whose adapter can't
-  receive a seed at all — see [Seed delivery](#seed-delivery) below) simply
-  stays in `reviewing`; the review still posts, so a finished review is
-  never silently invisible, but nothing auto-transitions.
+  first place — and stays in `reviewing` for a human either way. Only a
+  `changes-requested` review (and the CI / PR-comment triggers) spends a
+  round; the `suggestions` return above never does.
+- An inconclusive verdict (or a review agent whose adapter can't receive a
+  seed at all — see [Seed delivery](#seed-delivery) below) simply stays in
+  `reviewing`; the review still posts, so a finished review is never silently
+  invisible, but nothing auto-transitions. An approving verdict with nothing
+  to apply likewise stays put until the CI / auto-approve gates move it.
 
 `processReviewingTasks` is a genuinely separate poll from the
 claimed/in_progress reconcile loop: it never touches session liveness or the
@@ -1102,7 +1142,7 @@ setting, **`mergeOnApprove`** (Project Settings; a column on `projects`, no
 install-wide equivalent — same "opt-in per project" posture as
 `defaultReviewAgent`), changes that: approving a task also requests a merge
 for its PR. A related setting, **`autoApprove`**, has a `reviewing` task
-approve itself once its review agent's last verdict was `clean` and CI is
+approve itself once its review agent's last verdict was approving (`approved` or `approved-with-suggestions`) and CI is
 green — see [Auto-approve](#auto-approve) below.
 
 Both default off. `mergeOnApprove` alone still requires a human to click
@@ -1476,8 +1516,10 @@ once **all** of the following hold:
 2. The task's current review round has actually been ingested
    (`reviewFindingsIngestedSessionId === reviewSessionId` — the _latest_
    round's verdict, not a stale one from an earlier round).
+   A suggestions round that carried its approval (see above) keeps both
+   pointers, so it passes this gate on the verdict it already earned.
 3. That round's verdict (`tasks.lastReviewVerdict`, written alongside
-   ingestion by `processReviewingTasks`) is `clean`.
+   ingestion by `processReviewingTasks`) is approving (`isApprovingVerdict`).
 4. CI on the PR head reads an explicit `success` — via the same
    PR-plus-Actions-runs lookup the review-agent spawn already uses to wait
    for CI (`fetchCurrentCiStatus`, factored out of `resolveReviewCi`).
@@ -1495,7 +1537,7 @@ once **all** of the following hold:
    auto-approved. `attemptAutoApprove` (`task-reconciler.ts`) evaluates these
    in a specific order, not the 1–5 numbering above: CI is fetched first
    (feeding the CI-return and PR-comment-return auto-return checks below),
-   then steps 2 and 3 (round ingestion, clean verdict), then the
+   then steps 2 and 3 (round ingestion, approving verdict), then the
    dirty/mergeable check right below, then step 5 (`mergeable === true`),
    and only then step 4 (`status === "success"`) as the final gate before
    `approveTask` runs. If the PR is `dirty` or `mergeable === false` once
@@ -1515,7 +1557,7 @@ the transition with `via: "auto-approve"`, distinct from a human's `via:
 
 This gate is Mullion's own, enforced before a merge is ever requested — a
 GitHub required-review is a separate, independent gate. **#737 — now
-shipped**: when a reviewer App is configured, the same `clean` verdict
+shipped**: when a reviewer App is configured, the same approving verdict
 that drives auto-approve here is what `postReviewFindingsComment`
 (`task-github-sync.ts`) maps onto an actual `event: "APPROVE"` on GitHub,
 so both gates can be satisfied by the same review round rather than needing

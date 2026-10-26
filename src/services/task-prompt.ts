@@ -340,7 +340,7 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "- Look over your own diff with fresh eyes before committing. A separate",
     "  reviewer sees this diff afterwards but cannot edit anything in it — so a",
     "  defect you catch now is free, and the same defect caught downstream costs",
-    "  this task one of a small, non-renewing number of automatic fix-up rounds.",
+    "  this task an automatic fix-up round and a fresh review.",
     `- Commit your work on ${branchName}. Uncommitted changes never reach the pull`,
     '  request, and the review summary reports them as "nothing changed".',
     "- Leave the worktree clean. Untracked files count as dirty and block approval",
@@ -443,6 +443,23 @@ export function taskReviewFindingsPath(sessionsDir: string, taskId: number, roun
 }
 
 /**
+ * Where a worker of a SUGGESTIONS round says "this grew past a small
+ * suggestion, review it" — a `sessionsDir`-relative path for the same reason
+ * `taskReviewFindingsPath` and `taskCommitTitlePath` are (a file inside the
+ * worktree would dirty it). The file's existence, with any content, is the
+ * request; its content is the worker's reason.
+ *
+ * Keyed by `key` (the ingested verdict's timestamp in epoch seconds) rather
+ * than round-suffixed or deleted after reading: each suggestions round gets
+ * its own path, so an old request can never be mistaken for a new one, and
+ * there is no DELETE counterpart to carry across hosts. The reconciler and
+ * `buildSuggestionsPrompt` both derive the path from the same key.
+ */
+export function taskRereviewRequestPath(sessionsDir: string, taskId: number, key: number): string {
+  return path.join(sessionsDir, `task-${taskId}.rereview.${key}`);
+}
+
+/**
  * Where a worker should write its Conventional Commits PR title (`#761`) —
  * a `sessionsDir`-relative path, same convention `taskReviewFindingsPath`
  * documents: a file written INSIDE the worktree dirties the tree and trips
@@ -525,22 +542,45 @@ export function resolvePrTitle(task: { title: string; prTitle: string | null }):
 
 /** A single anchored review comment — GitHub's own review-comment shape
  * (`path`/`line`/`side`), so `task-github-sync.ts` can pass these straight
- * through to `createPullRequestReview` with no reshaping. */
+ * through to `createPullRequestReview` with no reshaping.
+ *
+ * `severity` is the one thing that decides the verdict (`deriveVerdict`):
+ * `critical`/`warning` block, `suggestion` is applied once with no re-review.
+ * `null` (the reviewer gave none, or an unknown word) is treated as a
+ * `warning` — it fails safe toward a human-visible `changes-requested`. */
 export interface ReviewFinding {
   path: string;
   line: number;
   side: "LEFT" | "RIGHT";
-  severity: "blocker" | "major" | "minor" | "nit" | null;
+  severity: "critical" | "warning" | "suggestion" | null;
   body: string;
 }
 
-/** The review agent's parsed verdict — deliberately only two values a
- * reviewer can assert. "unknown" (an inconclusive/missing review) is NOT
- * a member here: it's a `task-reconciler.ts`-level fact about the absence
- * of a parseable file, never something `parseReviewFindings` itself
- * returns, so a caller can't accidentally treat "I couldn't tell" as a
- * verdict the agent actually reached. */
-export type ReviewVerdict = "clean" | "changes-requested";
+/** The verdict a parsed review carries. `approved-with-suggestions` is an
+ * approval whose only findings are suggestions: the worker applies them once
+ * and the task does NOT get another review. "inconclusive" (an
+ * inconclusive/missing review) is deliberately NOT a member: it's a
+ * `task-reconciler.ts`-level fact about the absence of a parseable file,
+ * never something `parseReviewFindings` itself returns, so a caller can't
+ * accidentally treat "I couldn't tell" as a verdict the agent reached. */
+export type ReviewVerdict = "approved" | "approved-with-suggestions" | "changes-requested";
+
+/** `true` for both approving verdicts. Also accepts the legacy `"clean"`
+ * (rows written before the rename, in-flight files from an old prompt) so
+ * no caller has to remember the alias. One helper, so the auto-approve gate,
+ * the merge sweep, the own-thread resolver and the GitHub mapping can never
+ * disagree about what counts as an approval. */
+export function isApprovingVerdict(v: string | null | undefined): boolean {
+  return v === "approved" || v === "approved-with-suggestions" || v === "clean";
+}
+
+/** How the reviewer judged an earlier round's finding on this round (a
+ * delta review: Hermes's ADDRESSED / STILL OPEN / RE-BROKEN table). */
+export interface ReviewDisposition {
+  ref: string;
+  status: "addressed" | "still-open" | "re-broken";
+  evidence: string;
+}
 
 export interface ParsedReviewFindings {
   verdict: ReviewVerdict;
@@ -556,6 +596,10 @@ export interface ParsedReviewFindings {
   notes: string[];
   /** What's solid about the change — Hermes-parity "Looks Good" content. */
   looksGood: string[];
+  /** The reviewer's disposition for each earlier round's blocking finding.
+   * Empty on a first round. A `still-open`/`re-broken` entry forces
+   * `changes-requested` whatever `findings` says (`deriveVerdict`). */
+  previous: ReviewDisposition[];
   /** `true` only when `raw` parsed as the JSON contract `buildReviewPrompt`
    * asks for; `false` on the freeform-fallback branch, where `summary` holds
    * the ENTIRE raw file content rather than one verdict sentence.
@@ -587,15 +631,82 @@ function normalizeReviewFinding(f: unknown): ReviewFinding | null {
     path: rec.path,
     line,
     side: rec.side === "LEFT" ? "LEFT" : "RIGHT",
-    severity:
-      rec.severity === "blocker" ||
-      rec.severity === "major" ||
-      rec.severity === "minor" ||
-      rec.severity === "nit"
-        ? rec.severity
-        : null,
+    severity: normalizeSeverity(rec.severity),
     body: rec.body,
   };
+}
+
+/** Maps a reviewer's severity word onto `critical | warning | suggestion`.
+ * The old vocabulary (`blocker`/`major`/`minor`/`nit`) is accepted as an alias
+ * so a reviewer still following an older prompt keeps its meaning; anything
+ * else is `null`, which `deriveVerdict` treats as a blocking `warning`. */
+function normalizeSeverity(raw: unknown): ReviewFinding["severity"] {
+  switch (raw) {
+    case "critical":
+    case "blocker":
+    case "major":
+      return "critical";
+    case "warning":
+    case "minor":
+      return "warning";
+    case "suggestion":
+    case "nit":
+      return "suggestion";
+    default:
+      return null;
+  }
+}
+
+function normalizeDispositions(raw: unknown): ReviewDisposition[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ReviewDisposition[] = [];
+  for (const d of raw) {
+    if (d === null || typeof d !== "object") continue;
+    const rec = d as Record<string, unknown>;
+    if (typeof rec.ref !== "string" || rec.ref.length === 0) continue;
+    const status =
+      rec.status === "addressed" || rec.status === "still-open" || rec.status === "re-broken"
+        ? rec.status
+        : null;
+    if (status === null) continue;
+    out.push({
+      ref: rec.ref,
+      status,
+      evidence: typeof rec.evidence === "string" ? rec.evidence : "",
+    });
+  }
+  return out;
+}
+
+/**
+ * The verdict, derived from what the reviewer actually found rather than
+ * from a field it could write inconsistently with its own findings:
+ *
+ * 1. an earlier blocker still `still-open`/`re-broken` → `changes-requested`
+ *    (an unfixed blocker keeps blocking even if this round forgot to list it);
+ * 2. otherwise the highest finding severity decides — any `critical`/`warning`
+ *    (or severity-less) finding → `changes-requested`, only `suggestion`s →
+ *    `approved-with-suggestions`, no findings → `approved`.
+ *
+ * `notes`/`looksGood` never count. One exception, fail-safe: a reviewer that
+ * wrote `changes-requested` with NO findings and NO dispositions gave us
+ * nothing to derive from, so its own word stands rather than silently
+ * becoming an approval.
+ */
+export function deriveVerdict(parts: {
+  findings: ReviewFinding[];
+  previous: ReviewDisposition[];
+  claimed: string;
+}): ReviewVerdict {
+  if (parts.previous.some((d) => d.status !== "addressed")) return "changes-requested";
+  if (parts.findings.length === 0) {
+    return parts.claimed === "changes-requested" && parts.previous.length === 0
+      ? "changes-requested"
+      : "approved";
+  }
+  return parts.findings.some((f) => f.severity !== "suggestion")
+    ? "changes-requested"
+    : "approved-with-suggestions";
 }
 
 /** Normalizes an optional raw string-array field (`verified`/`notes`/
@@ -630,8 +741,7 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
     if (
       obj !== null &&
       typeof obj === "object" &&
-      ((obj as Record<string, unknown>).verdict === "clean" ||
-        (obj as Record<string, unknown>).verdict === "changes-requested") &&
+      CLAIMED_VERDICTS.has((obj as Record<string, unknown>).verdict as string) &&
       typeof (obj as Record<string, unknown>).summary === "string"
     ) {
       const rec = obj as Record<string, unknown>;
@@ -639,13 +749,23 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
       const findings: ReviewFinding[] = Array.isArray(rawFindings)
         ? rawFindings.map(normalizeReviewFinding).filter((f): f is ReviewFinding => f !== null)
         : [];
+      const previous = normalizeDispositions(rec.previous);
+      const claimed = rec.verdict === "clean" ? "approved" : (rec.verdict as string);
+      const verdict = deriveVerdict({ findings, previous, claimed });
+      const notes = normalizeStringArray(rec.notes);
+      if (verdict !== claimed) {
+        // The findings, not the field, decide — but say so, so a human reading
+        // the review can see the reviewer's own word disagreed.
+        notes.push(`Reviewer wrote "${claimed}"; its findings make this "${verdict}".`);
+      }
       return {
-        verdict: rec.verdict as ReviewVerdict,
+        verdict,
         summary: rec.summary as string,
         findings,
         verified: normalizeStringArray(rec.verified),
-        notes: normalizeStringArray(rec.notes),
+        notes,
         looksGood: normalizeStringArray(rec.looksGood),
+        previous,
         structured: true,
       };
     }
@@ -660,9 +780,18 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
     verified: [],
     notes: [],
     looksGood: [],
+    previous: [],
     structured: false,
   };
 }
+
+/** What a reviewer may write in `verdict`. `clean` is the pre-rename word. */
+const CLAIMED_VERDICTS = new Set([
+  "clean",
+  "approved",
+  "approved-with-suggestions",
+  "changes-requested",
+]);
 
 /** `"[severity] "`, or `""` when the reviewer gave none — the one piece of
  * finding-rendering shared between this file's own bullet form and
@@ -681,8 +810,8 @@ export function severityPrefix(severity: ReviewFinding["severity"]): string {
 function findingSection(
   severity: ReviewFinding["severity"],
 ): "critical" | "warnings" | "suggestions" {
-  if (severity === "blocker" || severity === "major") return "critical";
-  if (severity === "nit") return "suggestions";
+  if (severity === "critical") return "critical";
+  if (severity === "suggestion") return "suggestions";
   return "warnings";
 }
 
@@ -766,6 +895,13 @@ export function renderReviewFindingsMarkdown(
     for (const f of parsed.findings) {
       lines.push(`- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`);
     }
+    for (const d of parsed.previous) {
+      if (d.status !== "addressed") {
+        lines.push(
+          `- **${d.ref}** is still ${d.status === "re-broken" ? "broken" : "open"}${d.evidence ? `: ${d.evidence}` : ""}`,
+        );
+      }
+    }
     for (const n of parsed.notes) lines.push(`- ${n}`);
     return lines.join("\n").trimEnd();
   }
@@ -780,24 +916,26 @@ export function renderReviewFindingsMarkdown(
   if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH) return parsed.summary;
 
   const findingsMode = mode === "review-body" ? "count" : "bullets";
-  // A `changes-requested` verdict whose findings are ALL nits/warnings (no
-  // blocker/major) would otherwise post a REQUEST_CHANGES review above an
-  // empty "### Critical\n- None" — `autonomous-pr-review` §5 calls exactly
-  // this state ("a REQUEST_CHANGES next to an empty Critical section")
-  // a sign one of the two is wrong. It isn't wrong here — `wantsAutoReturn`
-  // (task-reconciler.ts) still correctly spends the task's one auto-return
-  // round on it — so the fix is saying so in the verdict line, not
-  // suppressing the section.
-  const nonBlockingNote =
-    parsed.verdict === "changes-requested" && critical.length === 0
-      ? " (non-blocking findings only)"
-      : "";
-  const verdictLabel = parsed.verdict === "clean" ? "clean" : "changes requested";
+  const verdictLabel =
+    parsed.verdict === "approved"
+      ? "approved"
+      : parsed.verdict === "approved-with-suggestions"
+        ? "approved with suggestions"
+        : "changes requested";
   // Hermes review, PR #992 — an empty `summary` (the reviewer left it
   // blank) must not leave a dangling " — " with nothing after it.
   const summarySuffix = parsed.summary ? ` — ${parsed.summary}` : "";
 
-  const lines: string[] = [`**Verdict:** ${verdictLabel}${nonBlockingNote}${summarySuffix}`, ""];
+  const lines: string[] = [`**Verdict:** ${verdictLabel}${summarySuffix}`, ""];
+  if (parsed.previous.length > 0) {
+    lines.push(
+      "### Earlier findings",
+      ...parsed.previous.map(
+        (d) => `- **${d.ref}** — ${d.status}${d.evidence ? `: ${d.evidence}` : ""}`,
+      ),
+      "",
+    );
+  }
   lines.push(...renderFindingsSection("Critical", critical, findingsMode));
   lines.push(...renderFindingsSection("Warnings", warnings, findingsMode));
   lines.push(...renderFindingsSection("Suggestions", suggestions, findingsMode));
@@ -892,10 +1030,11 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
 export function renderRoundsRemaining(roundsRemaining: number): string {
   if (roundsRemaining > 0) {
     return [
-      `This task has ${roundsRemaining} automatic fix-up round(s) left — a shared`,
-      "budget, also spent by a red CI check or an unresolved PR review comment,",
-      'and never reset. A "changes-requested" verdict spends one of them regardless',
-      "of how severe your findings are.",
+      `This task has ${roundsRemaining} automatic fix-up round(s) left — a backstop`,
+      "shared with a red CI check or an unresolved PR review comment, not a budget",
+      "to ration. Judge each finding by its severity alone: only a critical or",
+      "warning finding sends the task back; suggestions are applied once without",
+      "another review.",
     ].join("\n");
   }
   return [
@@ -949,6 +1088,11 @@ export function buildReviewPrompt(opts: {
    * triggers (task-reconciler.ts), so it may already be partly spent for
    * reasons this review had nothing to do with. */
   roundsRemaining?: number;
+  /** Set from the second review on: the commit the previous review covered
+   * and what it found, so this round is a DELTA review (new findings only
+   * from `reviewedSha..HEAD`, plus a disposition for each earlier finding).
+   * Omitted on a first review. */
+  priorRound?: { reviewedSha: string | null; findings: string };
 }): string {
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
@@ -967,35 +1111,72 @@ export function buildReviewPrompt(opts: {
     "as a real, if malformed, verdict. Shape:",
     "",
     "{",
-    '  "verdict": "clean" | "changes-requested",',
+    '  "verdict": "approved" | "approved-with-suggestions" | "changes-requested",',
     '  "summary": "one sentence: your overall verdict, nothing more",',
     '  "findings": [',
     '    { "path": "relative/file/path", "line": 42, "side": "RIGHT",',
-    '      "severity": "blocker" | "major" | "minor" | "nit",',
+    '      "severity": "critical" | "warning" | "suggestion",',
     '      "body": "the defect and the concrete fix" }',
+    "  ],",
+    '  "previous": [',
+    '    { "ref": "path:line of an earlier finding", "status": "addressed" | "still-open" | "re-broken",',
+    '      "evidence": "the commit or the command you re-ran" }',
     "  ],",
     '  "verified": ["what you actually ran/checked, e.g. the exact commands"],',
     '  "notes": ["cross-cutting observations that do not anchor to one line"],',
     '  "looksGood": ["what is solid about this change"]',
     "}",
     "",
-    "`verified`/`notes`/`looksGood` are all optional arrays of strings — omit",
-    "any that don't apply, but keep `summary` to one sentence: the detail",
-    "belongs in `verified`, not folded into `summary`.",
+    "`previous`/`verified`/`notes`/`looksGood` are all optional arrays — omit any",
+    "that don't apply, but keep `summary` to one sentence: the detail belongs in",
+    "`verified`, not folded into `summary`.",
     "",
-    'Write "clean" only when you found nothing at all. A missing or unparseable',
-    'file is treated as an inconclusive review, never as "clean" — writing the',
-    "file is what lets a genuinely clean review be told apart from one that",
-    "crashed or was killed before reporting anything.",
+    "Severity is what decides the outcome, so assign it honestly:",
+    "- critical — security, data loss, a crash, or broken core behavior.",
+    "- warning — a defect or missed case that must be fixed before this merges.",
+    "- suggestion — a preference, a refactor idea, a style point, or a defect you",
+    "  could only find by reading and not reproduce (say so in the body).",
+    "Any critical or warning finding sends the task back to the worker and earns",
+    "another review. If you only have suggestions the work is APPROVED: the worker",
+    "applies them once and nobody reviews that again — so do not hold back a real",
+    "defect as a suggestion, and do not inflate a preference into a warning. Approving",
+    "is the default whenever nothing must be fixed. Mullion derives the final",
+    "verdict from your findings, so keep `verdict` consistent with them.",
+    "",
+    "A missing or unparseable file is treated as an inconclusive review, never as",
+    '"approved" — writing the file is what lets a genuinely clean review be told',
+    "apart from one that crashed or was killed before reporting anything.",
     "",
     'Every entry in "findings" must be a real file:line in this diff: a finding',
     'is an inline anchored comment, never prose citing "file:42" inside the',
     '"summary" or "notes" fields.',
     "",
-    "Write findings as clear, actionable instructions, not just observations: a",
-    '"changes-requested" verdict may be sent back to the worker automatically',
-    "to act on before a human reviews again.",
+    "Write findings as clear, actionable instructions, not just observations: they",
+    "may be sent back to the worker automatically to act on.",
     "",
+    ...(opts.priorRound
+      ? [
+          "This is a FOLLOW-UP review, not a fresh one. An earlier review found:",
+          "",
+          opts.priorRound.findings,
+          "",
+          ...(opts.priorRound.reviewedSha
+            ? [
+                `Review \`git diff ${opts.priorRound.reviewedSha}..HEAD\` for NEW findings, and do`,
+                "not re-file the earlier ones as new. Still check the final HEAD for",
+                "regressions — a fix can re-break something earlier in the PR.",
+              ]
+            : ["Do not re-file the earlier findings as new ones."]),
+          "In `previous`, give every earlier finding a status — addressed (with the",
+          "evidence), still-open, or re-broken — re-running whatever showed the defect",
+          "rather than re-reading the diff. An earlier critical or warning that is not",
+          "fixed keeps its severity and keeps the verdict at changes-requested.",
+          "A NEW problem in code this round did not change, which the earlier review",
+          "could have raised, blocks only if it is critical; otherwise it is a",
+          "suggestion. Likewise a problem that already exists on the base branch.",
+          "",
+        ]
+      : []),
     ...(opts.roundsRemaining !== undefined
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
@@ -1045,6 +1226,36 @@ export function buildReviewFeedbackPrompt(
   const preamble = buildTaskMasterPreamble(opts);
   const feedback = `An automated review of your work found the following:\n\n${opts.findings}`;
   return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}
+
+/**
+ * The suggestions round's prompt (`task-reconciler.ts`) — sent when the
+ * review APPROVED the work and left only suggestions. Unlike
+ * `buildReviewFeedbackPrompt`, nothing here is a defect: the worker applies
+ * what it agrees with and skips (and says why) what it doesn't, and is told
+ * up front that no one reviews the result, which is what keeps this from
+ * becoming another round of nits.
+ */
+export function buildSuggestionsPrompt(
+  opts: WorkerPreambleOptions & { suggestions: string; rereviewRequestPath: string },
+): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const body = [
+    "An automated review APPROVED your work and left only suggestions:",
+    "",
+    opts.suggestions,
+    "",
+    "Apply the ones you agree with. Skip any you judge wrong or out of scope, and",
+    "say why in your final message. Keep each change small and do not widen the",
+    "scope of this task. Run the repo's verification gate again before you commit.",
+    "",
+    "Nobody will review this round — it goes straight to CI and the approve gates —",
+    "so make each change something you are confident in. If a change grew past a",
+    "small suggestion and genuinely needs a second pair of eyes, write a line",
+    `saying why to ${opts.rereviewRequestPath} (outside the worktree, so it does not`,
+    "dirty it) and it will be reviewed. Do not do that for ordinary suggestions.",
+  ].join("\n");
+  return `${preamble}${SECTION_BREAK}${body}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
 
 /**

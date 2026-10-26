@@ -106,12 +106,13 @@ describe("task-reviewer skill — elaborates buildReviewPrompt, does not restate
     });
   }
 
-  // The single most load-bearing external claim the whole "calibrate at
-  // the finding, not the verdict" section depends on — if this ever gets
-  // reworded to permit "clean with nits", the skill's entire spine no
-  // longer describes the real contract.
-  it('the review prompt still fixes the verdict mechanically ("clean" only when nothing found)', () => {
-    expect(REVIEW_PROMPT).toContain('Write "clean" only when you found nothing at all');
+  // The single most load-bearing external claim the whole severity
+  // calibration section depends on — if the prompt ever stops saying that
+  // severity decides the outcome and that suggestions are applied once with
+  // no re-review, the skill's spine no longer describes the real contract.
+  it("the review prompt still says severity decides the outcome and suggestions are not re-reviewed", () => {
+    expect(REVIEW_PROMPT).toContain("Severity is what decides the outcome");
+    expect(REVIEW_PROMPT).toContain("applies them once and nobody reviews that again");
   });
 
   it("the review prompt still has a verified field for what was actually checked", () => {
@@ -123,7 +124,9 @@ describe("task-reviewer skill — elaborates buildReviewPrompt, does not restate
   // on — the JSON shape block and the atomic-write recipe belong in the
   // force-delivered prompt only.
   it("does not re-paste the JSON verdict shape", () => {
-    expect(skillBodyNoFrontmatter).not.toContain('"verdict": "clean" | "changes-requested"');
+    expect(skillBodyNoFrontmatter).not.toContain(
+      '"verdict": "approved" | "approved-with-suggestions" | "changes-requested"',
+    );
   });
 
   it("does not re-paste the atomic findings-file write recipe", () => {
