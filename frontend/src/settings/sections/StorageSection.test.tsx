@@ -797,7 +797,10 @@ describe("Settings -> Storage", () => {
       });
       render(<StorageSection />);
       expect(await screen.findByText("mullion / feat")).toBeInTheDocument();
-      expect(screen.getByText("mullion / feat").nextElementSibling).toHaveTextContent("2.0 GiB");
+      const value = screen.getByText("mullion / feat").nextElementSibling;
+      expect(value).toHaveTextContent("2.0 GiB");
+      // The path is on screen, not only in a tooltip: it's what gets deleted by hand.
+      expect(value).toHaveTextContent("/p/.wt/feat");
       expect(screen.getByText(/git doesn't know \(not removed\)/)).toBeInTheDocument();
       expect(screen.getByText(/cleanup leaves them alone/)).toBeInTheDocument();
       expect(

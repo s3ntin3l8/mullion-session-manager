@@ -110,7 +110,8 @@ async function main() {
     } else if (result?.type === "postToolUse") {
       // Issue #1979 — the off-convention `git worktree add` nudge (see
       // forwarder-core.mjs's worktreeNudge). Only ever returned for an agent
-      // formatPostToolUseOutput has a reply shape for.
+      // formatPostToolUseOutput has a reply shape for; the `?? {}` just keeps
+      // a future mismatch between the two from printing a bare `null`.
       console.log(
         JSON.stringify(formatPostToolUseOutput(process.argv[2], result.additionalContext) ?? {}),
       );

@@ -443,10 +443,13 @@ export function StorageSection() {
                 key={candidate.path}
                 className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}
               >
-                <span className="settings-info-key" title={candidate.path}>
+                <span className="settings-info-key">
                   {candidate.projectName} / {candidate.slug}
                 </span>
-                <span className="settings-info-value">{formatBytes(candidate.bytes)}</span>
+                {/* The full path, not just a tooltip: deleting by hand is the only remedy. */}
+                <span className="settings-info-value">
+                  <code>{candidate.path}</code> · {formatBytes(candidate.bytes)}
+                </span>
               </div>
             ))}
           </div>
