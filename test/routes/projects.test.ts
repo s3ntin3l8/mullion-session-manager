@@ -7044,6 +7044,103 @@ describe("projects route", () => {
         await app.close();
       });
 
+      it("refuses when the owning session's process cannot be confirmed gone", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue({
+          [String(ownerId)]: "unknown",
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(res.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(ownerId),
+        });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        vi.restoreAllMocks();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("503s when the session's host cannot be asked, and frees the reclaim slot", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        vi.spyOn(app.pty, "isMasterAliveStateBatch").mockRejectedValue(new Error("down"));
+        const { claimReclaimSlot, releaseReclaimSlot } =
+          await import("../../src/services/session-worktree-reclaim.js");
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: ownerId },
+        });
+        expect(res.statusCode).toBe(503);
+        expect(claimReclaimSlot(ownerId)).toBe(true);
+        releaseReclaimSlot(ownerId);
+
+        vi.restoreAllMocks();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("409s while the reclaim sweep holds the session, and 400s for an active owner", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+        });
+        const { claimReclaimSlot, releaseReclaimSlot } =
+          await import("../../src/services/session-worktree-reclaim.js");
+
+        expect(claimReclaimSlot(ownerId)).toBe(true);
+        try {
+          const busy = await app.inject({
+            method: "POST",
+            url: `/api/projects/${projectId}/git-worktree-remove`,
+            payload: { worktreePath, sessionId: ownerId },
+          });
+          expect(busy.statusCode).toBe(409);
+        } finally {
+          releaseReclaimSlot(ownerId);
+        }
+
+        const activeId = await insertOwner(app, {
+          projectId,
+          cwd: worktreePath,
+          repoCwd: projectCwd,
+          status: "active",
+        });
+
+        const active = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, sessionId: activeId, force: true },
+        });
+        expect(active.statusCode).toBe(400);
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
       it("rejects a session from another project, one without a worktree, or a mismatched path", async () => {
         const app = await buildApp();
         const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);

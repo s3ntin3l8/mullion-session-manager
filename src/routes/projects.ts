@@ -25,7 +25,11 @@ import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
-import { recordReclaimed } from "../services/session-worktree-reclaim.js";
+import {
+  claimReclaimSlot,
+  recordReclaimed,
+  releaseReclaimSlot,
+} from "../services/session-worktree-reclaim.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
 import {
   resolveHostGitCommit,
@@ -4187,6 +4191,10 @@ export async function projectsRoute(app: FastifyInstance) {
           return reply.badRequest("worktreePath is not this session's worktree");
         }
         if (owner.worktreeReclaimedAt) return { removed: false, reason: "not-listed" };
+        // A live session's worktree is not a leftover — even under force.
+        if (owner.status === "active") {
+          return reply.badRequest("This session is still active");
+        }
         target = {
           id: project.id,
           hostId: resolveSessionHostId(app, owner),
@@ -4227,21 +4235,26 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
+      // The reclaim sweep may be working on this same session right now;
+      // share its in-flight slot rather than run git against it twice.
+      if (owner && !claimReclaimSlot(owner.id)) {
+        return reply.conflict("Mullion is reclaiming this worktree right now — try again shortly");
+      }
       const backend = resolveBackend(app, target.hostId);
       try {
         // The owning session has ENDED, but its agent may still be exiting
         // inside the directory (a cascade kill, a kill whose terminate
-        // failed) — the reclaim sweep's `still-running`. Same guard, same
-        // force override.
+        // failed) — the reclaim sweep's `still-running`. Same rule as the
+        // sweep: only a confirmed-dead process proceeds; force overrides.
         if (owner) {
-          const liveness = await backend.liveness([String(owner.id)]);
-          if (liveness[String(owner.id)] === "alive") {
+          const liveness = (await backend.liveness([String(owner.id)]))[String(owner.id)];
+          if (liveness !== "dead") {
             if (!force) {
               return { removed: false, reason: "sessions-active", detail: String(owner.id) };
             }
             app.log.warn(
-              { projectId: project.id, worktreePath, sessionId: owner.id },
-              "force-removing a session worktree whose process is still running",
+              { projectId: project.id, worktreePath, sessionId: owner.id, liveness },
+              "force-removing a session worktree whose process is not confirmed gone",
             );
           }
         }
@@ -4251,6 +4264,8 @@ export async function projectsRoute(app: FastifyInstance) {
       } catch (err) {
         app.log.warn({ hostId: target.hostId, err }, "host unreachable, worktree remove failed");
         return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+      } finally {
+        if (owner) releaseReclaimSlot(owner.id);
       }
     },
   );

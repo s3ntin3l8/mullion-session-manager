@@ -282,13 +282,14 @@ tried. Each row says what to do about it:
 - `dirty`, `conflicts`: commit the work (and push it with `-u`) or discard it.
 - `in-use`, `still-running`: nothing; it goes once nothing runs in it.
 - Any row: **Remove worktree**, for one you have decided to drop. It goes
-  through the same removal as the Git panel's (`POST
-/api/projects/:id/git-worktree-remove`, with the session's `sessionId`), so it
-  runs on the session's own host against the repository the worktree was cut
-  from, refuses while a session is active inside it or the session's own
-  process is still running, and refuses uncommitted changes or conflicts unless
-  you confirm a second, **Force remove** step. The branch is kept either way, and
-  the row drops off once the directory is gone.
+  through the Git panel's removal route
+  (`POST /api/projects/:id/git-worktree-remove`, given the session's
+  `sessionId`), so it runs on the session's own host against the repository
+  the worktree was cut from. It refuses while a session is active inside the
+  worktree, while the session's own process is not confirmed gone, and on
+  uncommitted changes or conflicts — each of which a second, separately
+  confirmed **Force remove** overrides. The branch is kept either way, and the
+  row drops off once the directory is gone.
 
 The same fields ride on `GET /api/sessions` (`mullion session list --json`) for
 scripting. The sweep retries every kept worktree, so pushing the branch or
