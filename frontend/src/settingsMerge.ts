@@ -102,3 +102,18 @@ export function mergePartialPatch<T>(base: T, patch: T): T {
   }
   return result as T;
 }
+
+// `runway.providerMap` is the one settings field whose KEYS are data
+// (operator-chosen Runway provider ids), not schema. deepMerge only carries
+// keys the base already has, and mergePartialPatch unions two patches' keys,
+// so either would turn a whole-map edit into a partial one: an added entry
+// vanishes, a removed one survives. The settings form always commits the
+// WHOLE map, so when the patch carries one it replaces the merged value
+// (mirrors withRawProviderMap in the backend's services/settings.ts).
+export function withWholeProviderMap<T>(merged: T, patch: unknown): T {
+  const map = (patch as { runway?: { providerMap?: unknown } } | null)?.runway?.providerMap;
+  if (!isPlainObject(map)) return merged;
+  const runway = (merged as { runway?: unknown }).runway;
+  if (!isPlainObject(runway)) return merged;
+  return { ...merged, runway: { ...runway, providerMap: { ...map } } };
+}

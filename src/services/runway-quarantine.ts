@@ -22,6 +22,7 @@
 // - A quarantine lifts itself when the quota window resets, so no operator
 //   action is needed to recover.
 import type { FastifyInstance } from "fastify";
+import { KNOWN_AGENTS } from "./agent-detect.js";
 import { getStoredSettings } from "./settings.js";
 import {
   fetchRunwayLimits,
@@ -95,9 +96,29 @@ export function resetRunwayQuarantine(): void {
  * none.
  */
 export function agentForProvider(app: FastifyInstance, providerId: string): string | null {
-  const settings = getStoredSettings(app.db);
-  const agent = settings.runway?.providerMap?.[providerId];
+  return agentFromMap(getStoredSettings(app.db).runway?.providerMap, providerId);
+}
+
+/**
+ * The same lookup against a map the caller already holds — a route walking
+ * many cards reads the settings once instead of once per card.
+ */
+export function agentFromMap(
+  map: Record<string, string> | undefined,
+  providerId: string,
+): string | null {
+  const agent = map?.[providerId];
   return typeof agent === "string" && agent.trim() !== "" ? agent.trim() : null;
+}
+
+/**
+ * Whether a mapped agent name can ever match a claim. The gate compares it
+ * with the task's RESOLVED command, which is always a KNOWN_AGENTS name, so
+ * a typo or a CLI display name (`claude-code`) is inert: it counts as
+ * "mapped" to the eye but never holds a task.
+ */
+export function isEnforceableAgent(agent: string): boolean {
+  return (KNOWN_AGENTS as readonly string[]).includes(agent);
 }
 
 /**

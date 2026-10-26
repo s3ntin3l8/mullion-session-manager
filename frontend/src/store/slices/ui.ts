@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import { api, DEFAULT_SETTINGS } from "../../api/index.js";
 import type { AppSettings, SettingsPatch } from "../../api/index.js";
-import { deepMerge, mergePartialPatch } from "../../settingsMerge.js";
+import { deepMerge, mergePartialPatch, withWholeProviderMap } from "../../settingsMerge.js";
 import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
@@ -51,6 +51,7 @@ function deriveTerminalPrefs(settings: AppSettings): UiSlice["terminalPrefs"] {
 // fetch mock, and the debounce timer then fires into that mock — a PATCH
 // from the previous test showing up in this one's assertions.
 let pendingSettingsPatchFlusher: (() => void) | null = null;
+let settingsPatchSettler: (() => Promise<void>) | null = null;
 let pendingSettingsPatchDiscarder: (() => void) | null = null;
 
 /**
@@ -78,6 +79,17 @@ let pendingSettingsPatchDiscarder: (() => void) | null = null;
 let historyRequestSeq = 0;
 let gitRequestSeq = 0;
 
+/**
+ * Send any pending settings PATCH now and resolve once it has been answered
+ * (or failed — a failure is already logged). For a read that must see the
+ * server's copy of an edit the user just made: updateSettings only ARMS the
+ * debounced PATCH, so a GET issued straight after it is answered from the
+ * pre-edit state.
+ */
+export function settleSettingsPatch(): Promise<void> {
+  return settingsPatchSettler ? settingsPatchSettler() : Promise.resolve();
+}
+
 export function __flushPendingSettingsPatchForTests(): void {
   pendingSettingsPatchFlusher?.();
 }
@@ -103,6 +115,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
   let patchTimer: ReturnType<typeof setTimeout> | null = null;
   let highlightTimer: ReturnType<typeof setTimeout> | null = null;
 
+  let patchInFlight: Promise<void> = Promise.resolve();
+
   function flushPendingPatch() {
     if (!pendingPatch) return;
     const patch = pendingPatch;
@@ -112,9 +126,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     // failure here just means the next hydrateSettings()/reload sees the
     // pre-patch server value, which is an acceptable degrade for a
     // preferences PATCH (no user-facing error surface for this exists yet).
-    void api.patchSettings(patch).catch((err) => {
-      console.error("Failed to persist settings", err);
-    });
+    patchInFlight = api
+      .patchSettings(patch)
+      .then(() => undefined)
+      .catch((err) => {
+        console.error("Failed to persist settings", err);
+      });
   }
 
   // Settle the pending PATCH now. `send` decides whether it goes out or is
@@ -132,6 +149,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
   }
   pendingSettingsPatchFlusher = () => settlePendingSettingsPatch(true);
   pendingSettingsPatchDiscarder = () => settlePendingSettingsPatch(false);
+  settingsPatchSettler = () => {
+    settlePendingSettingsPatch(true);
+    return patchInFlight;
+  };
 
   function applySettings(next: AppSettings) {
     set({
@@ -264,10 +285,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       // infer a field's nullability from it alone. See deepMerge's own doc
       // comment (settingsMerge.ts) for the null <-> value transition bug
       // this fixes.
-      const next = deepMerge(get().settings, patch, DEFAULT_SETTINGS);
+      const next = withWholeProviderMap(deepMerge(get().settings, patch, DEFAULT_SETTINGS), patch);
       applySettings(next);
 
-      pendingPatch = pendingPatch ? mergePartialPatch(pendingPatch, patch) : patch;
+      pendingPatch = pendingPatch
+        ? withWholeProviderMap(mergePartialPatch(pendingPatch, patch), patch)
+        : patch;
       if (patchTimer) clearTimeout(patchTimer);
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
     },

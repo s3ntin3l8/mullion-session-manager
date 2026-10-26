@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
-import type { RunwayIntegration } from "../../api/index.js";
+import type { RunwayIntegration, RunwayQuota } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
+import { settleSettingsPatch } from "../../store/slices/ui.js";
 import {
   GroupHeading,
   ListRow,
@@ -196,6 +197,31 @@ export function RunwaySection() {
   // only the integration summary can.
   const ready = runway.apiUrl !== "" && !!integration?.hasKey;
 
+  // Issue #1841 — which providers Runway reports have no map entry. Read
+  // straight from the quota route (not the shared badge cache) so editing
+  // the map re-asks: the server derives the list from the CURRENT map.
+  // `null` is "no reading", which renders nothing — never "all mapped".
+  const [quota, setQuota] = useState<RunwayQuota | null>(null);
+  const mapKey = JSON.stringify(runway.providerMap);
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    // The server derives the list from ITS copy of the map, and
+    // updateSettings only arms a debounced PATCH — so the edit is settled
+    // first, or the answer comes from the pre-edit map.
+    settleSettingsPatch()
+      .then(() => api.getRunwayQuota())
+      .then((q) => {
+        if (!cancelled) setQuota(q);
+      })
+      .catch(() => {
+        if (!cancelled) setQuota(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready, mapKey]);
+
   return (
     <div style={{ marginTop: 24 }} data-testid="runway-section">
       <GroupHeading
@@ -266,7 +292,7 @@ export function RunwaySection() {
       </Row>
       <Row
         label="Provider map"
-        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
+        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
         align="start"
       >
         <ProviderMapField
@@ -275,6 +301,13 @@ export function RunwaySection() {
           onCommit={(v) => updateSettings({ runway: { providerMap: v } })}
         />
       </Row>
+      {ready && quota?.configured && quota.fetchedAt !== null && (
+        <div className="settings-row-desc" data-testid="runway-unmapped">
+          {quota.unmappedProviders.length === 0
+            ? "Every provider Runway reports is mapped."
+            : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped to an agent Mullion can run.`}
+        </div>
+      )}
       {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
     </div>
   );

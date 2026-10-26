@@ -15,6 +15,9 @@ describe("Settings -> Integrations -> Runway quota", () => {
   let settingsPatches: Array<Record<string, unknown>>;
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
+  let quota: Record<string, unknown>;
+  // When set, answers /api/runway/quota from the server's CURRENT state.
+  let quotaFn: (() => Record<string, unknown>) | null;
 
   beforeEach(() => {
     // The store is a module singleton: an earlier test's committed field must
@@ -26,6 +29,8 @@ describe("Settings -> Integrations -> Runway quota", () => {
     runway = { hasKey: false, updatedAt: null };
     settingsPatches = [];
     unexpectedCalls = [];
+    quota = { configured: true, fetchedAt: null, agents: [], unmappedProviders: [] };
+    quotaFn = null;
 
     fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -33,6 +38,9 @@ describe("Settings -> Integrations -> Runway quota", () => {
 
       if (url === "/api/integrations/runway" && method === "GET") {
         return Promise.resolve(jsonResponse(200, runway));
+      }
+      if (url === "/api/runway/quota" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, quotaFn ? quotaFn() : quota));
       }
       if (url === "/api/integrations/runway/key" && method === "PUT") {
         const { key } = JSON.parse(String(init?.body)) as { key: string };
@@ -219,5 +227,78 @@ describe("Settings -> Integrations -> Runway quota", () => {
     await renderSection();
     expect(screen.getByText(/name PROVIDERS/)).toBeInTheDocument();
     expect(screen.getByText(/never quarantined/)).toBeInTheDocument();
+  });
+  describe("unmapped providers (#1841)", () => {
+    function configure() {
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          runway: { ...DEFAULT_SETTINGS.runway, apiUrl: "https://runway.example.com" },
+        },
+        settingsLoaded: true,
+      });
+      runway = { hasKey: true, updatedAt: "2026-01-01T00:00:00.000Z" };
+    }
+
+    it("lists the providers Runway reports that have no map entry", async () => {
+      configure();
+      quota = {
+        configured: true,
+        fetchedAt: "2026-10-26T12:00:00.000Z",
+        agents: [],
+        unmappedProviders: ["gemini", "xai"],
+      };
+      await renderSection();
+      const note = await screen.findByTestId("runway-unmapped");
+      expect(note.textContent).toContain("gemini, xai");
+    });
+
+    it("says so when every reported provider is mapped", async () => {
+      configure();
+      quota = {
+        configured: true,
+        fetchedAt: "2026-10-26T12:00:00.000Z",
+        agents: [],
+        unmappedProviders: [],
+      };
+      await renderSection();
+      expect((await screen.findByTestId("runway-unmapped")).textContent).toContain(
+        "Every provider Runway reports is mapped",
+      );
+    });
+
+    it("re-asks only after the edited map reached the server (#1841)", async () => {
+      configure();
+      // The server answers from the map IT holds, which changes only when
+      // the settings PATCH has been received.
+      quotaFn = () => ({
+        configured: true,
+        fetchedAt: "2026-10-26T12:00:00.000Z",
+        agents: [],
+        unmappedProviders: settingsPatches.length === 0 ? ["gemini"] : [],
+      });
+      const user = userEvent.setup();
+      await renderSection();
+      expect((await screen.findByTestId("runway-unmapped")).textContent).toContain("gemini");
+
+      const field = screen.getByLabelText("Provider map");
+      await user.clear(field);
+      await user.click(field);
+      await user.paste('{"anthropic":"claude","gemini":"agy"}');
+      await user.tab();
+
+      expect(
+        (await screen.findByText(/Every provider Runway reports is mapped/)).textContent,
+      ).toBeTruthy();
+    });
+
+    it("shows nothing without a reading — absence is not 'all mapped'", async () => {
+      configure();
+      await renderSection();
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith("/api/runway/quota", expect.anything()),
+      );
+      expect(screen.queryByTestId("runway-unmapped")).toBeNull();
+    });
   });
 });

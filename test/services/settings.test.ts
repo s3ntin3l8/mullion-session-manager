@@ -198,6 +198,25 @@ describe("sanitizeSettings — the Runway provider map (issue #29)", () => {
     expect(result.runway.providerMap.anthropic).toBe("claude");
   });
 
+  it("keeps an operator-added mapping and honours a removed default (#1841)", () => {
+    // deepMerge only carries keys the base already has, so without the raw
+    // map taking over, `chatgpt` would vanish and `opencode` would return.
+    const loaded = mergeSettings({
+      runway: { providerMap: { anthropic: "claude", chatgpt: "codex" } },
+    });
+    expect({ ...loaded.runway.providerMap }).toEqual({ anthropic: "claude", chatgpt: "codex" });
+  });
+
+  it("defaults to the verified provider → agent map (#1841)", () => {
+    expect(mergeSettings({}).runway.providerMap).toEqual({
+      anthropic: "claude",
+      opencode: "opencode",
+      chatgpt: "codex",
+      antigravity: "agy",
+      minimax: "mcode",
+    });
+  });
+
   it("drops an empty provider id or agent name", () => {
     const result = sanitizeSettings({
       ...DEFAULT_SETTINGS,

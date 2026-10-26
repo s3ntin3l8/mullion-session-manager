@@ -704,6 +704,8 @@ export interface RunwayQuota {
   configured: boolean;
   fetchedAt: string | null;
   agents: RunwayAgentQuota[];
+  /** Provider ids Runway reports that the provider map has no entry for (issue #1841). */
+  unmappedProviders: string[];
 }
 
 /** One review run this Mullion dispatched (GET /api/reviews). */
