@@ -137,7 +137,7 @@ export function GitHistorySection({
   cwd?: string;
   /**
    * Controlled scope. The History rail view owns it (tagged with the project,
-   * since the view does not remount on a project switch); GitPanel leaves it
+   * since the view does not remount on a project switch); Source Control leaves it
    * uncontrolled.
    */
   scope?: HistoryScope;

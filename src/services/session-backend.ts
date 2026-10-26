@@ -275,7 +275,7 @@ export interface SessionBackend {
     branchName: string,
   ): Promise<ClearOrphanedTaskWorktreeResult>;
   // Issue #442 — deletes a local branch on whichever host owns `cwd`'s
-  // filesystem, for the GitPanel's manual branch-management UI. The
+  // filesystem, for Source Control's manual branch-management UI. The
   // `task-branch` refusal reason isn't produced here — it needs the tasks
   // DB table, which this DB-less seam has no access to; that guard lives
   // one layer up, in routes/projects.ts (see git-branch-delete.ts's own

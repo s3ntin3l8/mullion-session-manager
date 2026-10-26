@@ -115,7 +115,7 @@ export function summarizeFileChanges(events: NotificationEvent[] | undefined): F
   return Array.from(byPath.values()).sort((a, b) => b.lastSeq - a.lastSeq);
 }
 
-// Reuses the same letter+dot language as GitPanel.tsx's own per-file status
+// Reuses the same letter+dot language as Source Control's own per-file status
 // badges (create/A -> good, delete/D -> bad, modify/M -> pending) rather
 // than inventing a fourth dot vocabulary for this one strip.
 export function fileChangeDotClass(

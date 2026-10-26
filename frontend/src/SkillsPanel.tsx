@@ -39,7 +39,7 @@ const AGENT_LABEL: Record<string, string> = {
 };
 
 // A dockview panel (opened from the CommandPalette's Integrations section,
-// same pattern as GitPanel/AgentRulesPanel) showing every skill, subagent,
+// same pattern as AgentRulesPanel) showing every skill, subagent,
 // and slash command discovered for a project — discovery (issue #432's
 // slice 1, extended to the latter two kinds by issue #885) plus, for
 // Codex/opencode SKILLS only, an enable/disable toggle (issue #463; see

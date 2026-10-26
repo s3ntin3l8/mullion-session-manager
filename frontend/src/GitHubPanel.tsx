@@ -20,7 +20,7 @@ export interface GitHubPanelParams {
 
 // #744 — reason→copy for the Release section's Run/Merge refusals. Same
 // "a domain refusal is a normal 200, only a real HTTP error throws"
-// contract GitPanel's own reasonMessage covers for Pull — see that
+// contract Source Control's own reasonMessage covers for Pull — see that
 // function's own doc comment.
 function runReasonMessage(
   reason: ReleaseRunReason | undefined,

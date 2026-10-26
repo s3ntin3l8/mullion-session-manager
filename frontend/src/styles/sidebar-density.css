@@ -315,7 +315,7 @@
 
 /* SkillsPanel.tsx's per-agent enable/disable toggle row (issue #463) —
    reuses .git-panel-toggle-label's look, stacked one row per toggleable
-   agent rather than GitPanel's single inline row. */
+   agent rather than Source Control's single inline row. */
 .skills-panel-toggle-row {
   display: flex;
   align-items: center;

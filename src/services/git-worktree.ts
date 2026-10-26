@@ -700,7 +700,7 @@ export async function commitWipChanges(
 }
 
 // ── User-facing worktree removal (issue #442) ─────────────────────────────
-// The GitPanel's manual counterpart to 6.8's task-scoped removal above:
+// The Source Control's manual counterpart to 6.8's task-scoped removal above:
 // membership in `listWorktrees(cwd)` is the validity gate, not a path
 // prefix (the plan's binding decision #3) — this must remove dock-preview
 // worktrees, agent-created ones, and hand-made `git worktree add` ones,

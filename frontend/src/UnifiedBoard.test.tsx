@@ -1015,7 +1015,7 @@ describe("UnifiedBoard task load failure (audit finding 15)", () => {
   // The board keeps the last-known-good list on a failed refresh, so the
   // columns below the note are REAL tasks — saying "Couldn't load tasks."
   // next to them would read as if there were no tasks at all. This is the
-  // same split Sidebar and GitPanel already make.
+  // same split Sidebar and Source Control already make.
   it("says the tasks on screen are the last known ones when the refresh fails", () => {
     tasks = [makeTask({ id: 5, status: "ready", title: "Still here" })];
     tasksError = "Failed to fetch";

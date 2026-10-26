@@ -208,7 +208,7 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
   [`auth.md`](auth.md)), `root` (placeholder `/`, disabled once the
   frontend build exists — template-inherited), `projects` (CRUD, discovery,
-  per-project actions/dock, and GitPanel's branch/worktree endpoints, see
+  per-project actions/dock, and Source Control's branch/worktree endpoints, see
   [`git-panel.md`](git-panel.md)), `sessions` (durable terminal sessions,
   including `POST /api/sessions/:id/review-gate` — the minimal review
   gate's decision endpoint, see [`agent-hooks.md`](agent-hooks.md), and

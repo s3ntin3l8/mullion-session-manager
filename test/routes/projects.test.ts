@@ -5137,7 +5137,7 @@ describe("projects route", () => {
     });
 
     // Hermes review, PR #506 — the sidebar's Source Control section and
-    // GitPanel both call this route right after a manual "Fetch" to show
+    // Source Control both call this route right after a manual "Fetch" to show
     // the result immediately; without a way to bypass git-status.ts's own
     // ~5s in-memory cache, that call would typically just hand back
     // whatever was cached before the fetch ran.
@@ -5215,7 +5215,7 @@ describe("projects route", () => {
 
     // Distinguishes "not a repo" (204, durable) from "is a repo but git
     // status itself failed" (503, transient) — the fix for the sidebar/
-    // GitPanel flicker: a client that treats 503 as "keep my last-known-good"
+    // Source Control flicker: a client that treats 503 as "keep my last-known-good"
     // and only clears to empty on 204 stops flickering on a single failed
     // poll tick.
     it("503s (not 204) for a local project that IS a repo but git status fails transiently", async () => {

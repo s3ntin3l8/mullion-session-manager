@@ -853,7 +853,7 @@ export class RemoteHostClient {
    * avoid. `opts.fresh` (#484) requests the same cache-bypassing read
    * task-promote.ts's local dirty-tree gate already uses — a stale "clean"
    * result could let a push silently exclude work committed moments ago
-   * (see the route's own comment). Every existing caller (sidebar/GitPanel
+   * (see the route's own comment). Every existing caller (sidebar
    * polls) omits it and keeps the cached read, at the default timeout. */
   resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
     const url = `/internal/git-status?cwd=${encodeURIComponent(cwd)}${opts?.fresh ? "&fresh=1" : ""}`;
@@ -870,7 +870,7 @@ export class RemoteHostClient {
   }
 
   /** Local branches + worktrees (issue #162), plus remote-tracking branches
-   * (issue #271's base-ref picker) for a remote-hosted project's GitPanel —
+   * (issue #271's base-ref picker) for a remote-hosted project's Source Control —
    * same reasoning as resolveGitStatus above. `detail` (issue #442) mirrors
    * the public route's `?detail=1` — omitted (not `&detail=0`) when falsy,
    * matching every other optional query param in this file. */

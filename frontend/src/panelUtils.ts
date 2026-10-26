@@ -422,7 +422,7 @@ function positioningForTier(
 // A dockview panel's `params` is untyped (Parameters = Record<string,
 // unknown> | undefined) from the group/board's point of view — only a
 // `terminal` component panel's params are actually `{ sessionId: number }`;
-// a sibling panel could in principle be a GitHubPanel/GitPanel/BrowserPanel
+// a sibling panel could in principle be a GitHubPanel/BrowserPanel
 // with no sessionId at all, so every caller must guard rather than assume.
 // Shared by PaneTab.tsx (the tab-group attention accent) and
 // MobileSessionBar.tsx (the phone session switcher) so the two don't
@@ -1140,6 +1140,13 @@ function collectFloatingPanelIds(
 // post-restore scheduleSave) instead of carrying the id forever.
 export const LEGACY_PANEL_IDS = ["tasks"] as const;
 
+// Component kinds whose panels are swept by *kind* rather than by fixed id,
+// because their ids are per project (`git-<projectId>`, the retired dock Git
+// panel — Source Control now lives in the right sidebar; see
+// GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
+// registered in panels/registry.tsx.
+export const LEGACY_PANEL_KINDS = ["git"] as const;
+
 // The five per-project setup panels that now live as tabs of one
 // `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
 // kinds stay registered (panels/registry.tsx renders the hub on the matching
@@ -1194,6 +1201,12 @@ export function migrateLegacyProjectPanels(
 // panels for unrelated reasons.
 export function closeLegacyPanels(api: DockviewApi): boolean {
   let closed = false;
+  for (const panel of [...api.panels]) {
+    if ((LEGACY_PANEL_KINDS as readonly string[]).includes(panel.api.component)) {
+      panel.api.close();
+      closed = true;
+    }
+  }
   for (const id of LEGACY_PANEL_IDS) {
     const panel = api.getPanel(id);
     if (panel) {

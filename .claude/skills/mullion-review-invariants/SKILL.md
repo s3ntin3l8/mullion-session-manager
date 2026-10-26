@@ -66,7 +66,7 @@ file under `drizzle/`.
 
 See `AGENTS.md` for the base rule. Reconciliation detail beyond its
 one-line summary: `.mullion-worktrees/` reconciliation is scoped to the
-`mullion-task-` prefix plus manual GitPanel removal — an interactive
+`mullion-task-` prefix plus manual Source Control removal — an interactive
 "promote to worktree" session's own worktree has no reconciler at all and
 needs manual cleanup.
 

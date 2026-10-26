@@ -5,8 +5,7 @@ import { TerminalPane } from "../TerminalPane.js";
 import type { TerminalPaneParams } from "../TerminalPane.js";
 import { GitHubPanel } from "../GitHubPanel.js";
 import type { GitHubPanelParams } from "../GitHubPanel.js";
-import { GitPanel } from "../GitPanel.js";
-import type { GitPanelParams } from "../GitPanel.js";
+import { GitPanelRedirect } from "../GitPanelRedirect.js";
 import { ProjectHubPanel } from "../ProjectHubPanel.js";
 import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
 import type { BrowserPanelParams } from "../BrowserPanel.js";
@@ -304,27 +303,26 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
 // whole dashboard.
 const GitHubPanelWrapper = makePanelWrapper<GitHubPanelParams>(GitHubPanel);
 
-// Same reasoning as GitHubPanelWrapper above. Resolves onOpenSession via
-// props.containerApi rather than needing App()'s own onOpenSession closure
-// threaded down, same shape as TaskDetailWrapper below.
-function GitPanelWrapper(props: IDockviewPanelProps<GitPanelParams>) {
+// The dock Git panel is retired (Source Control is a right-sidebar view now);
+// this keeps the `git` kind registered so a saved workspace layout that still
+// names one doesn't throw on restore (an unregistered kind makes fromJSON wipe
+// the whole layout) — GitPanelRedirect opens Source Control for the panel's
+// project and the wrapper closes the panel; panelUtils.ts's closeLegacyPanels
+// sweeps the ones that never mount. Never delete this key.
+function GitPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
   const [resetKey, resetPanel] = useResetKey();
-  const projects = useDashboardStore((s) => s.projects);
-  const layout = useLayoutContext();
+  const openRightSidebarView = useDashboardStore((s) => s.openRightSidebarView);
+  const { projectId } = props.params;
+  const { api, containerApi } = props;
+  const onOpen = useCallback(() => {
+    openRightSidebarView("git", projectId);
+    // Closed through the container so a panel the restore sweep already
+    // removed is a no-op rather than a throw.
+    containerApi.getPanel(api.id)?.api.close();
+  }, [openRightSidebarView, projectId, api, containerApi]);
   return (
     <ErrorBoundary onReset={resetPanel}>
-      <GitPanel
-        key={resetKey}
-        params={props.params}
-        onOpenSession={(session) => {
-          openSessionPanel(props.containerApi, session, layout, projects);
-        }}
-        onEditFile={(path) => {
-          openFileEditorPanel(props.containerApi, props.params.projectId, projects, layout, {
-            path,
-          });
-        }}
-      />
+      <GitPanelRedirect key={resetKey} onOpen={onOpen} />
     </ErrorBoundary>
   );
 }
@@ -597,7 +595,7 @@ function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
 export const components = {
   terminal: TerminalPanelWrapper,
   github: GitHubPanelWrapper,
-  git: GitPanelWrapper,
+  git: GitPanelRedirectWrapper,
   "agent-rules": AgentRulesPanelWrapper,
   "file-editor": FileEditorPanelWrapper,
   "external-file": ExternalFilePanelWrapper,

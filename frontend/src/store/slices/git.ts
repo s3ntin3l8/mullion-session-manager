@@ -101,7 +101,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
           ),
         });
       } catch (err) {
-        console.warn("[GitPanel] refreshGitStatuses batch failed", err);
+        console.warn("[git] refreshGitStatuses batch failed", err);
       }
     };
 
@@ -135,7 +135,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
           },
         });
       } catch (err) {
-        console.warn("[GitPanel] refreshGitDiffStats batch failed", err);
+        console.warn("[git] refreshGitDiffStats batch failed", err);
       }
     };
 
@@ -228,7 +228,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
             defaultBranchCiByProject[p.id] = result.defaultBranchCi[p.id] ?? undefined;
         }
       } catch (err) {
-        console.warn("[GitPanel] refreshGitRefs batch failed", err);
+        console.warn("[git] refreshGitRefs batch failed", err);
       }
       set({ gitBranchesByProject, prsByProject, defaultBranchCiByProject });
     };

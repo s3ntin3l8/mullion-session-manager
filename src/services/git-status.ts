@@ -112,7 +112,7 @@ function classifyFailure(stderr: string): GitStatusFailure {
  * exists but whose `git status` still fails transiently (e.g. `.git/index
  * .lock` contention from a concurrent git operation) previously failed
  * silently, with nothing to root-cause the ~10s-periodic failures users saw
- * in the sidebar/GitPanel. Same capture shape as git-worktree.ts's own
+ * in the sidebar. Same capture shape as git-worktree.ts's own
  * `runGit`. */
 function runGitStatus(cwd: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -310,7 +310,7 @@ function classifyXY(xy: string): GitFileStatusCode {
 /** In-memory `{ cwd → { ts, result } }` cache, mirroring
  * remote-host-client.ts's bulkLiveStatus cache shape — a ~5s TTL (issue
  * #76, raised from 3s in #166 to span the frontend's 4s live-refresh
- * interval so the batch endpoint and an open GitPanel don't each pay for
+ * interval so the batch endpoint and an open Source Control don't each pay for
  * their own `git status` shell-out on every tick). Concurrent misses on
  * the same cwd (a poll tick landing mid-flight of another caller's
  * request) share one child process rather than each spawning their own,
@@ -362,7 +362,7 @@ export function isGitRepo(cwd: string): boolean {
  * — for a caller like task-promote.ts's dirty-tree gate, where a stale
  * "clean" read served from up to CACHE_TTL_MS ago could let a push
  * silently exclude work an agent committed moments before approve ran.
- * Every other caller (the sidebar/GitPanel polls) keeps the cached read;
+ * Every other caller (the sidebar polls) keeps the cached read;
  * this is opt-in, not a behavior change for them.
  */
 export async function getGitStatus(

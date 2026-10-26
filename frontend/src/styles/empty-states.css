@@ -1839,7 +1839,7 @@
 }
 
 /* PR 25 (frontend refactor plan) — was `.github-panel-empty`, borrowed
-   as-is by six other panels (GitPanel, UnifiedBoard, DockConfigPanel,
+   as-is by five other panels (UnifiedBoard, DockConfigPanel,
    AgentRulesPanel, SkillsPanel, TaskDetail) plus GitHubPanel itself.
    Renamed under `ui/EmptyState.tsx`'s shared `ui-empty-state*` prefix, but
    kept as its own selector (`-note`, not `-compact`) rather than composed
@@ -1869,32 +1869,6 @@
   height: auto;
   padding: 0;
 }
-.github-panel-repo {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--fg);
-  text-decoration: none;
-  margin-bottom: 14px;
-  /* A branch name with no break opportunity (no `/` or `-`) can't wrap, and
-     `.github-panel`'s own `overflow-y: auto` computes overflow-x to `auto`
-     too (CSS Overflow: a `visible` axis paired with a non-`visible` one
-     resolves to `auto`) — so it scrolled the whole panel sideways instead
-     of truncating. min-width: 0 lets the inline-flex item shrink below its
-     content size so .github-panel-repo-name's own ellipsis (below) applies. */
-  min-width: 0;
-}
-.github-panel-repo:hover {
-  color: var(--accent-solid);
-}
-.github-panel-repo-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
 .github-panel-section {
   margin-bottom: 16px;
 }
@@ -1905,14 +1879,6 @@
   color: var(--dim);
   font-weight: 700;
   margin-bottom: 6px;
-}
-/* GitPanel.tsx's Worktrees section header seats a "Prune stale" button
-   beside the title — was an inline style on that one instance; every other
-   section title is a bare label. */
-.github-panel-section-title.with-action {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
 }
 .github-panel-empty-row {
   font-size: 0.75rem;
@@ -2375,30 +2341,14 @@ button.github-panel-row.gh-issue-row {
 .github-panel-ci-dot.pending {
   background: var(--o);
 }
-/* GitPanel.tsx's conflict callout (issue #76) — reuses the same panel
+/* The Source Control conflict callout (issue #76) — reuses the same panel
    shell/spacing as everything above, just a distinct warning color. */
 .github-panel-conflicts {
   color: var(--r);
 }
 
-/* GitPanel.tsx's Option A sync controls (issue #369) — the row below the
-   repo header that shows ahead/behind, manual Fetch, and the auto-fetch
-   toggle. Flex layout: ahead/behind on the left, controls on the right. */
-.git-panel-sync-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.75rem;
-  color: var(--dim);
-  margin-bottom: 14px;
-}
 .git-panel-ahead-behind {
   flex: 1;
-}
-.git-panel-sync-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 .git-panel-fetch-btn {
   background: none;
@@ -2447,21 +2397,9 @@ button.github-panel-row.gh-issue-row {
   opacity: 1;
   color: var(--r);
 }
-/* GitPanel.tsx's branch/worktree row action buttons (issue #442) — a
-   right-aligned group of buttons within a .github-panel-row, which is
-   already `display: flex` with `.github-panel-row-title` taking `flex: 1`
-   (pushing this group to the row's trailing edge for free). Reuses
-   .git-panel-fetch-btn/button.danger for the buttons themselves — this is
-   only the grouping container. */
-.git-panel-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
 
 /* Source Control sidebar section (issue #433 scope B) — an always-visible
-   complement to the dockview GitPanel, sitting between the Projects list and
+   summary, sitting between the Projects list and
    DiscoverProjects. Reuses .sidebar-section-header/.github-panel-* wholesale
    for the row/dot/diff vocabulary; only the bits with no existing analogue
    (the sticky combined totals, branch row, action row) get their own

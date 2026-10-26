@@ -541,7 +541,7 @@ export interface GitBranchDeleteBody {
 }
 
 // Issue #442 — the agent-side counterpart of deleteBranch, for a
-// remote-hosted project's GitPanel manual branch-management UI.
+// remote-hosted project's Source Control manual branch-management UI.
 export const gitBranchDeleteSchema = schemaFor({
   required: ["cwd", "name"],
   optional: ["force"],

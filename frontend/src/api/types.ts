@@ -1346,7 +1346,7 @@ export interface WebhookRegistrationResult {
 }
 
 // GET /api/projects/:id/git-branches' response (issue #442's base-ref
-// picker). Branch/worktree lists are fetched on demand when the GitPanel
+// picker). Branch/worktree lists are fetched on demand when Source Control
 // opens, not on the sidebar's 4s live-refresh tick (they change far less
 // often than working-tree status).
 export interface GitLogCommit {

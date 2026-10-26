@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import type { DependencyList } from "react";
 
 // Shared `setInterval`-on-mount hook, extracted from the ~9 near-identical
-// hand-rolled copies across the frontend (GitHubDeviceFlowModal, GitPanel,
+// hand-rolled copies across the frontend (GitHubDeviceFlowModal, Source Control,
 // Dock, Settings x2, App.tsx x2, BrowserPanel — see each call site's own
 // comment for which options it needs). store.ts's own `startLiveRefresh` is
 // deliberately NOT one of these call sites: it's a Zustand store action (not
@@ -13,7 +13,7 @@ import type { DependencyList } from "react";
 // bespoke `fn` shape just for one caller. It stays hand-written; this hook's
 // `pauseWhenHidden` option mirrors the same "stop polling while the tab is
 // hidden" behavior it already has, ported to the two component-level sites
-// (GitPanel, Settings' HostsSection) that had independently grown a softer
+// (Settings' HostsSection) that had independently grown a softer
 // version of the same idea (skip the tick's call instead of tearing the
 // timer down — see that option's own doc comment below).
 //
@@ -58,7 +58,7 @@ export interface UsePollingOptions {
   /** Skip invoking `fn` on any tick where the tab is hidden
    * (`document.visibilityState !== "visible"`) — the interval itself keeps
    * running at its normal cadence; hidden ticks just become no-ops, same
-   * "soft pause" GitPanel.tsx and Settings.tsx's HostsSection already did
+   * "soft pause" the Source Control view and Settings.tsx's HostsSection already did
    * by hand before this extraction (as opposed to store.ts's
    * `startLiveRefresh`, which stops/restarts the timer itself via a
    * `visibilitychange` listener — behaviorally equivalent from `fn`'s point

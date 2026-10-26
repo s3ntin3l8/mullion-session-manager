@@ -52,7 +52,7 @@ const CODEX_OVERRIDE = makeTarget({
 });
 
 // Routes a mocked fetch by URL/method — unhandled requests reject loudly,
-// same "trap for unexpected requests" convention as GitPanel.test.tsx's own
+// same "trap for unexpected requests" convention as the Source Control tests's own
 // mockFetch.
 function mockFetch(opts: {
   list?: () => Response | Promise<Response>;

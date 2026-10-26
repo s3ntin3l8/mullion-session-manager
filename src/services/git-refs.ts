@@ -10,7 +10,7 @@ import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
 
 export type { GitBranchInfo, GitWorktreeInfo };
 
-// Branch + worktree enumeration for the GitPanel (issue #162's "worktree
+// Branch + worktree enumeration for Source Control (issue #162's "worktree
 // awareness" half): the repo's first `git branch`/`git worktree list`-style
 // calls — everything else that reads git state (git-status.ts, git-branch.ts,
 // git-worktree.ts) resolves only the *current* branch of the project root.
@@ -18,7 +18,7 @@ export type { GitBranchInfo, GitWorktreeInfo };
 // shell string), stdout captured on `'close'` (not `'exit'` — see
 // git-status.ts's own comment on that race), best-effort and never throws —
 // a missing/non-repo cwd or a failed `git` call is just "nothing to show"
-// (null), not an error. Deliberately fetched on demand (GitPanel open) rather
+// (null), not an error. Deliberately fetched on demand (Source Control open) rather
 // than on the sidebar's 4s live-refresh tick — branch/worktree lists change
 // far less often than working-tree status and cost more to enumerate.
 //
@@ -150,7 +150,7 @@ async function branchesWithUnpushedTips(cwd: string): Promise<Set<string> | null
  * 1-3 spawns to resolve the default base ref (never `resolveDefaultBaseRef`
  * itself, which runs `git fetch origin` first; a no-fetch fallback chain is
  * shared via `resolveDefaultBaseRefNoFetch` below) plus one `git branch
- * --merged <base>` call. Set only by the GitPanel's explicit fetch
+ * --merged <base>` call. Set only by Source Control's explicit fetch
  * (`?detail=1` on the route), never by the unconditional poll above.
  */
 export async function listBranches(
@@ -219,7 +219,7 @@ export async function listBranches(
  * base-ref picker issue #271's promote/launcher-toggle flows offer (the
  * roadmap's "not one hardcoded rule" note — a human present may want to
  * branch off a remote branch, not just a local one). Kept separate from
- * `listBranches` rather than folding into it: the GitPanel's own "Branches"
+ * `listBranches` rather than folding into it: Source Control's own "Branches"
  * section already renders `listBranches`' result unchanged, and merging
  * remotes into that shape would silently change what it displays. Strips
  * the symbolic `origin/HEAD` entry (`for-each-ref` includes it, but it's

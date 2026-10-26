@@ -35,7 +35,7 @@ export function ConfirmButton({
   // Settings -> Session management's "Confirm before kill" toggle, off —
   // fires immediately on the first click instead of arming.
   skipConfirm?: boolean;
-  // Issue #442 (GitPanel branch/worktree management) — a caller-computed
+  // Issue #442 (Source Control branch/worktree management) — a caller-computed
   // "this action isn't valid right now" state (e.g. the current branch, or
   // one checked out elsewhere), distinct from `skipConfirm`: this disables
   // the click entirely rather than changing whether it arms first.

@@ -191,14 +191,6 @@ vi.mock("../panelUtils.js", async (importOriginal) => ({
   openExternalFilePanel: (...args: unknown[]) => openExternalFilePanelMock(...args),
 }));
 
-let capturedOnEditFile: ((path: string) => void) | null = null;
-vi.mock("../GitPanel.js", () => ({
-  GitPanel: (props: { onEditFile?: (path: string) => void }) => {
-    capturedOnEditFile = props.onEditFile ?? null;
-    return <div data-testid="git-panel" />;
-  },
-}));
-
 describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave storm fix)", () => {
   beforeEach(() => {
     capturedOnTitleChange = null;
@@ -366,24 +358,40 @@ describe("TerminalPanelWrapper — onOpenFile (terminal path links -> file edito
   });
 });
 
-describe("GitPanelWrapper — onEditFile", () => {
-  it("opens the file editor at the changed path for this project", () => {
-    capturedOnEditFile = null;
-    openFileEditorPanelMock.mockClear();
-    resetStore();
-    useDashboardStore.setState({ projects: [makeProject({ id: 7, name: "demo", cwd: "/proj" })] });
-    const containerApi = { tag: "containerApi" };
+describe("GitPanelRedirectWrapper — the retired dock Git panel", () => {
+  function renderGitPanel(close: ReturnType<typeof vi.fn>, params: { projectId?: number }) {
+    const containerApi = { getPanel: vi.fn(() => ({ api: { close } })) };
     const props = {
-      params: { projectId: 7 },
-      api: {},
+      params,
+      api: { id: "git-7" },
       containerApi,
-    } as unknown as IDockviewPanelProps<{ projectId: number }>;
+    } as unknown as IDockviewPanelProps<{ projectId?: number }>;
     render(<components.git {...props} />);
-    capturedOnEditFile!("src/changed.ts");
-    const [api, projectId, , , target] = openFileEditorPanelMock.mock.calls[0]!;
-    expect(api).toBe(containerApi);
-    expect(projectId).toBe(7);
-    expect(target).toEqual({ path: "src/changed.ts" });
+    return containerApi;
+  }
+
+  it("opens Source Control for the saved panel's project and closes itself, once", () => {
+    resetStore();
+    const close = vi.fn();
+    const containerApi = renderGitPanel(close, { projectId: 7 });
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("git");
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarProjectRequest?.projectId).toBe(7);
+    expect(containerApi.getPanel).toHaveBeenCalledWith("git-7");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw when the panel is already gone (swept by closeLegacyPanels)", () => {
+    resetStore();
+    const containerApi = { getPanel: vi.fn(() => undefined) };
+    const props = {
+      params: {},
+      api: { id: "git-7" },
+      containerApi,
+    } as unknown as IDockviewPanelProps<{ projectId?: number }>;
+    expect(() => render(<components.git {...props} />)).not.toThrow();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
   });
 });
 

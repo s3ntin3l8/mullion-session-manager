@@ -768,7 +768,7 @@ export function UnifiedBoard({
                 // tasks." here would read as if there were no tasks at
                 // all, and the board's real state (a populated board that
                 // could not be re-synced) would be a lie. Same split
-                // Sidebar ("showing the last known list") and GitPanel
+                // Sidebar ("showing the last known list") and Source Control
                 // (its stale marker) already make.
                 <>
                   <div>Could not refresh tasks — showing the last known list.</div>

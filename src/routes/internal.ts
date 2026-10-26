@@ -1231,7 +1231,7 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   // Fuller git status (issue #76) — branch/hash/ahead-behind/file-list — for
-  // a remote-hosted project's GitPanel and sidebar badge. Backed by
+  // a remote-hosted project's Source Control and sidebar badge. Backed by
   // git-status.ts's `git status --porcelain=v2 --branch` shell-out, which
   // has to run on *this* agent's own filesystem for the same reason
   // /internal/github-repo and /internal/git-branch do.
@@ -1250,7 +1250,7 @@ export async function internalRoutes(app: FastifyInstance) {
   // promotion (see getGitStatus's own `forceFresh` doc comment): a stale
   // "clean" read served from up to CACHE_TTL_MS ago could let a push
   // silently exclude work an agent committed moments before approve ran.
-  // Every other caller (the sidebar/GitPanel polls) omits it and keeps the
+  // Every other caller (the sidebar polls) omits it and keeps the
   // cached read.
   app.get<{ Querystring: { cwd?: string; fresh?: string } }>(
     "/internal/git-status",
@@ -1390,7 +1390,7 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   // Local branches + worktrees (issue #162) for a remote-hosted project's
-  // GitPanel — same reasoning as /internal/git-status: git-refs.ts's
+  // Source Control — same reasoning as /internal/git-status: git-refs.ts's
   // `for-each-ref`/`worktree list` shell-outs have to run on *this* agent's
   // own filesystem.
   app.get<{ Querystring: { cwd?: string; detail?: string } }>(
@@ -2256,7 +2256,7 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   // Issue #442 — deletes a local branch on THIS agent's own filesystem, for
-  // a remote-hosted project's GitPanel manual branch-management UI. Always
+  // a remote-hosted project's Source Control manual branch-management UI. Always
   // 200 with a reason envelope, never a 5xx for a git-level refusal — see
   // deleteBranch's own DeleteBranchResult shape and the module-level
   // reasoning on every other route in this file that returns one.

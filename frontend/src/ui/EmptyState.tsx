@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 //    → the default export below, composed from the named sub-parts.
 //  - `.github-panel-empty` (a plain muted text block — "Loading…", error
 //    text, "No tasks yet.") borrowed as-is by six panels that aren't
-//    GitHubPanel (GitPanel, UnifiedBoard, DockConfigPanel, AgentRulesPanel,
+//    GitHubPanel (UnifiedBoard, DockConfigPanel, AgentRulesPanel,
 //    SkillsPanel, TaskDetail) → `EmptyStateNote` below.
 // The two are visually distinct rule sets (flex/centered card vs. a plain
 // padded block) and were kept as two selectors rather than composed, so

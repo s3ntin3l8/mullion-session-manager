@@ -18,7 +18,7 @@ import type { DependencyList } from "react";
 //    comment explains why: streaming updates, not a single batched result).
 //    A single-`fetcher` hook would need `Promise.all` (delaying every
 //    result to the slowest) to fit this shape — a real behavior change.
-//  - AgentRulesPanel/SkillsPanel/DockConfigPanel, and GitPanel's own
+//  - AgentRulesPanel/SkillsPanel/DockConfigPanel, and Source Control's own
 //    `fetchStatus`/`refreshBranches`, wrap their fetch in a `useCallback`
 //    taking an *optional* `cancelledRef` param specifically so mutation
 //    handlers elsewhere in the same component can re-run the identical

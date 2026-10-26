@@ -7,13 +7,7 @@ import { parseUnifiedDiff, type DiffLine } from "./diffUtils.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
 import { ErrorText } from "./ui/ErrorText.js";
-import {
-  ChevronDownIcon,
-  ExternalLinkIcon,
-  GitBranchIcon,
-  PullIcon,
-  RefreshIcon,
-} from "./ui/icons.js";
+import { ChevronDownIcon, GitBranchIcon, PullIcon, RefreshIcon } from "./ui/icons.js";
 import { SidebarToolbar } from "./right-sidebar/SidebarToolbar.js";
 import { useFollowedProject } from "./hooks/useFollowedProject.js";
 import type { FollowedProject } from "./hooks/useFollowedProject.js";
@@ -107,9 +101,9 @@ export interface SourceControlSectionProps {
   embedded?: boolean;
 }
 
-// Always-visible complement to the dockview GitPanel (issue #433 scope B) —
-// branch, ahead/behind, per-file change list with inline diff, Fetch, and
-// "Open Git Panel", for whichever project the sidebar currently considers
+// Always-visible Source Control summary (issue #433 scope B) — branch,
+// ahead/behind, per-file change list with inline diff, Fetch, and (in the
+// left sidebar) "Open Source Control", for whichever project the sidebar currently considers
 // "active". Collapsed by default; persists that across reloads the same way
 // Sidebar.tsx's own row-expand state does (single boolean here, since this
 // is one section rather than one entry per id).
@@ -340,7 +334,7 @@ function SourceControlView({
 
           {/* Same last-known-good convention as the store's batched
               gitStatuses map elsewhere (ProjectSection's own gitDotClass,
-              GitPanel's pre-first-poll state): "not fetched yet" and
+              Source Control's pre-first-poll state): "not fetched yet" and
               "durably not a repo" both render as this one empty state
               rather than a distinct loading spinner, since a project that's
               never been a repo would otherwise flash "Loading…" forever. A
@@ -397,12 +391,6 @@ function SourceControlView({
                       onClick: handlePull,
                       disabled: isPulling || isFetching || gitStatus.behind === 0,
                     },
-                    {
-                      key: "open",
-                      label: "Open Git panel",
-                      icon: ExternalLinkIcon,
-                      onClick: () => onOpenGit(effectiveProjectId),
-                    },
                   ]}
                 />
               ) : (
@@ -430,7 +418,7 @@ function SourceControlView({
                     className="git-panel-fetch-btn"
                     onClick={() => onOpenGit(effectiveProjectId)}
                   >
-                    Open Git Panel
+                    Open Source Control
                   </button>
                 </div>
               )}
