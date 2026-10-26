@@ -92,6 +92,7 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
   });
 
   beforeEach(() => {
+    nextIssueNumber = 100;
     mockClaimTask.mockReset();
     mockClaimTask.mockResolvedValue({ ok: true });
     mockResolveRepoRef.mockReset();
@@ -131,6 +132,10 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
   // (excludes dependencyCount === 0 rows) — this file is only about the
   // parent-title pass, and a stray listBlockedByIssues/claimTask call would
   // be noise unrelated to what these tests assert.
+  // Per-file counter (reset in beforeEach) so children in one project never
+  // collide on the (project_id, issue_number) unique index.
+  let nextIssueNumber = 100;
+
   function insertChildTask(
     projectId: number,
     overrides: Partial<typeof tasks.$inferInsert> = {},
@@ -139,7 +144,7 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       .insert(tasks)
       .values({
         projectId,
-        issueNumber: 100 + Math.floor(Math.random() * 100_000),
+        issueNumber: nextIssueNumber++,
         title: "child",
         status: "backlog",
         boardOrder: 0,
