@@ -117,4 +117,53 @@ describe("QuotaBadge", () => {
     const badge = screen.getByTestId("quota-badge");
     expect(badge.getAttribute("title")).toContain("just now");
   });
+
+  describe("opencode provider targets (#2054)", () => {
+    const xai = agent({ agent: "opencode/xai", providerId: "xai", pctUsed: 100, exhausted: true });
+    const go = agent({ agent: "opencode/opencode-go", providerId: "opencode", pctUsed: 20 });
+
+    it("reads the quota of the provider the session's model runs on", () => {
+      render(
+        <QuotaBadge quota={quota({ agents: [go, xai] })} command="opencode" model="xai/grok-4" />,
+      );
+      expect(screen.getByTestId("quota-badge").textContent).toBe("quota out");
+    });
+
+    it("stays silent for a model whose provider Runway says nothing about", () => {
+      render(
+        <QuotaBadge quota={quota({ agents: [xai] })} command="opencode" model="openrouter/x" />,
+      );
+      expect(screen.queryByTestId("quota-badge")).not.toBeInTheDocument();
+    });
+
+    it("shows the bare agent being out even when the session's own provider is fine", () => {
+      // The gate holds on ANY target, so the chip must not reassure.
+      const bareOut = agent({
+        agent: "opencode",
+        providerId: "opencode",
+        pctUsed: 100,
+        exhausted: true,
+      });
+      const xaiOk = agent({ agent: "opencode/xai", providerId: "xai", pctUsed: 10 });
+      render(
+        <QuotaBadge
+          quota={quota({ agents: [xaiOk, bareOut] })}
+          command="opencode"
+          model="xai/grok-4"
+        />,
+      );
+      expect(screen.getByTestId("quota-badge").textContent).toBe("quota out");
+    });
+
+    it("with no model, shows any opencode provider that is out — as the gate treats it", () => {
+      render(<QuotaBadge quota={quota({ agents: [go, xai] })} command="opencode" model={null} />);
+      expect(screen.getByTestId("quota-badge").textContent).toBe("quota out");
+    });
+
+    it("with no model and no provider out, shows the bare agent's reading", () => {
+      const bare = agent({ agent: "opencode", providerId: "opencode", pctUsed: 42 });
+      render(<QuotaBadge quota={quota({ agents: [bare, go] })} command="opencode" model={null} />);
+      expect(screen.getByTestId("quota-badge").textContent).toBe("quota 42%");
+    });
+  });
 });

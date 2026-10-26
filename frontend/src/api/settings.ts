@@ -251,7 +251,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     apiUrl: "",
     providerMap: {
       anthropic: "claude",
-      opencode: "opencode",
+      opencode: "opencode/opencode-go",
       chatgpt: "codex",
       antigravity: "agy",
       minimax: "mcode",

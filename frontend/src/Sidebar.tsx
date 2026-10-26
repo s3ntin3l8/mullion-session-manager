@@ -2241,7 +2241,9 @@ export function SessionRow({
           agentBinary={agentBinary}
           dot={dot}
           statusLabel={statusLabel}
-          quotaBadge={<QuotaBadge quota={runwayQuota} command={session.command} />}
+          quotaBadge={
+            <QuotaBadge quota={runwayQuota} command={session.command} model={session.model} />
+          }
           hasDetails={detailsAvailable}
           alwaysExpandGit={alwaysExpandGit}
           gitLineExpanded={gitLineExpanded}

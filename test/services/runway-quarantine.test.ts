@@ -53,7 +53,10 @@ import { tasks } from "../../src/db/schema.js";
 import { applySettingsPatch } from "../../src/services/settings.js";
 import { enqueueTask } from "../../src/services/task-claim.js";
 import {
-  agentForProvider,
+  targetsForProvider,
+  claimTargets,
+  isEnforceableTarget,
+  quarantinedTarget,
   agentQuarantineInfo,
   applyRunwaySnapshot,
   isAgentQuarantined,
@@ -222,9 +225,87 @@ describe("the Runway quota quarantine (issue #29)", () => {
   });
 
   it("maps a provider to its agent through the settings map", () => {
-    expect(agentForProvider(app, "anthropic")).toBe("claude");
-    expect(agentForProvider(app, "opencode")).toBe("opencode");
-    expect(agentForProvider(app, "gemini")).toBeNull();
+    expect(targetsForProvider(app, "anthropic")).toEqual(["claude"]);
+    expect(targetsForProvider(app, "opencode")).toEqual(["opencode"]);
+    expect(targetsForProvider(app, "gemini")).toEqual([]);
+  });
+
+  describe("opencode provider targets (issue #2054)", () => {
+    beforeEach(() => {
+      applySettingsPatch(app, {
+        runway: {
+          providerMap: {
+            opencode: "opencode/opencode-go",
+            xai: "opencode/xai",
+            minimax: ["mcode", "opencode/minimax-coding-plan"],
+          },
+        },
+      });
+    });
+
+    it("quarantines only the exhausted provider's target, not every opencode task", () => {
+      applyRunwaySnapshot(app, snapshot([{ providerId: "opencode", pctUsed: 100 }]));
+      expect(isAgentQuarantined(app, "opencode/opencode-go")).toBe(true);
+      expect(isAgentQuarantined(app, "opencode/xai")).toBe(false);
+      expect(isAgentQuarantined(app, "opencode")).toBe(false);
+    });
+
+    it("quarantines every target of a provider mapped to a list", () => {
+      applyRunwaySnapshot(app, snapshot([{ providerId: "minimax", pctUsed: 100 }]));
+      expect(isAgentQuarantined(app, "mcode")).toBe(true);
+      expect(isAgentQuarantined(app, "opencode/minimax-coding-plan")).toBe(true);
+    });
+
+    it("holds a bare `opencode` target for every opencode task", () => {
+      applySettingsPatch(app, { runway: { providerMap: { opencode: "opencode" } } });
+      applyRunwaySnapshot(app, snapshot([{ providerId: "opencode", pctUsed: 100 }]));
+      const held = quarantinedTarget(app, claimTargets(app, "opencode", "xai/grok-4"));
+      expect(held?.target).toBe("opencode");
+      expect(quarantinedTarget(app, claimTargets(app, "opencode", null))?.target).toBe("opencode");
+    });
+
+    it("derives the claim's targets from the resolved model", () => {
+      expect(claimTargets(app, "opencode", "xai/grok-4")).toEqual(["opencode", "opencode/xai"]);
+      // A model with a nested path still names its first segment's provider.
+      expect(claimTargets(app, "opencode", "openrouter/anthropic/claude")).toEqual([
+        "opencode",
+        "opencode/openrouter",
+      ]);
+      // No resolved model: opencode picks its own, so every opencode
+      // provider the map names is checked.
+      expect(claimTargets(app, "opencode", null)).toEqual([
+        "opencode",
+        "opencode/opencode-go",
+        "opencode/xai",
+        "opencode/minimax-coding-plan",
+      ]);
+      expect(claimTargets(app, "claude", "xai/grok-4")).toEqual(["claude"]);
+    });
+
+    it("holds a task on the exhausted provider's model and not on another's", () => {
+      applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+      expect(quarantinedTarget(app, claimTargets(app, "opencode", "xai/grok-4"))?.target).toBe(
+        "opencode/xai",
+      );
+      expect(quarantinedTarget(app, claimTargets(app, "opencode", "opencode-go/glm"))).toBeNull();
+    });
+
+    it("classifies which targets can ever match a claim", () => {
+      expect(isEnforceableTarget("claude")).toBe(true);
+      expect(isEnforceableTarget("opencode/xai")).toBe(true);
+      expect(isEnforceableTarget("claude-code")).toBe(false); // a display name
+      expect(isEnforceableTarget("xai")).toBe(false); // a bare provider id
+      expect(isEnforceableTarget("claude/xai")).toBe(false); // only opencode has providers
+      expect(isEnforceableTarget("opencode/")).toBe(false);
+      expect(isEnforceableTarget("opencode/a/b")).toBe(false);
+    });
+
+    it("releases a target the map no longer names", () => {
+      applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+      applySettingsPatch(app, { runway: { providerMap: { opencode: "opencode/opencode-go" } } });
+      applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+      expect(isAgentQuarantined(app, "opencode/xai")).toBe(false);
+    });
   });
 
   it("reads the settings ONCE for the staleness ceiling, not once per candidate", () => {
@@ -511,6 +592,72 @@ describe("the Runway quota quarantine (issue #29)", () => {
       expect(outcome.ok).toBe(true);
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.status).toBe("claimed");
+    });
+
+    describe("opencode provider targets (issue #2054)", () => {
+      async function opencodeProject(): Promise<number> {
+        const cwd = mkdtempSync(path.join(os.tmpdir(), "runway-claim-"));
+        const projectId = await createProject(cwd);
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { defaultAgent: "opencode" },
+        });
+        applySettingsPatch(app, {
+          runway: { providerMap: { opencode: "opencode/opencode-go", xai: "opencode/xai" } },
+        });
+        return projectId;
+      }
+
+      function insertModelTask(projectId: number, issueNumber: number, model: string | null) {
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, issueNumber, title: "t", body: "d", status: "ready", model })
+          .returning()
+          .all();
+        return row;
+      }
+
+      it("refuses an auto-claim whose model's provider is out of quota", async () => {
+        const projectId = await opencodeProject();
+        const task = insertModelTask(projectId, 81, "xai/grok-4");
+        applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+
+        const outcome = await enqueueTask(app, task.id, { auto: true });
+
+        expect(outcome).toMatchObject({ ok: false, reason: "agent-quarantined" });
+        expect(outcome.ok === false && outcome.detail).toContain("opencode/xai");
+      });
+
+      it("does not hold a task on another provider's model", async () => {
+        const projectId = await opencodeProject();
+        const task = insertModelTask(projectId, 82, "openrouter/some-model");
+        applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+
+        const outcome = await enqueueTask(app, task.id, { auto: true });
+
+        expect(outcome.ok).toBe(true);
+      });
+
+      it("holds a task with no resolved model when any opencode provider it could run on is out", async () => {
+        const projectId = await opencodeProject();
+        const task = insertModelTask(projectId, 83, null);
+        applyRunwaySnapshot(app, snapshot([{ providerId: "xai", pctUsed: 100 }]));
+
+        const outcome = await enqueueTask(app, task.id, { auto: true });
+
+        expect(outcome).toMatchObject({ ok: false, reason: "agent-quarantined" });
+      });
+
+      it("claims a task with no resolved model when no opencode provider is out", async () => {
+        const projectId = await opencodeProject();
+        const task = insertModelTask(projectId, 84, null);
+        applyRunwaySnapshot(app, snapshot([{ providerId: "anthropic", pctUsed: 100 }]));
+
+        const outcome = await enqueueTask(app, task.id, { auto: true });
+
+        expect(outcome.ok).toBe(true);
+      });
     });
   });
 });

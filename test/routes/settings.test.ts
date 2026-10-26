@@ -105,6 +105,29 @@ describe("settings route", () => {
     await app.close();
   });
 
+  it("round-trips a runway provider map with list targets, replacing it wholesale (#2054)", async () => {
+    const app = await buildApp();
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: {
+        runway: {
+          providerMap: { minimax: ["mcode", "opencode/minimax-coding-plan"], xai: "opencode/xai" },
+        },
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+    const expected = { minimax: ["mcode", "opencode/minimax-coding-plan"], xai: "opencode/xai" };
+    expect(patched.json().runway.providerMap).toEqual(expected);
+
+    // Persisted, and reloaded through the merge that used to clamp the keys.
+    const fetched = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(fetched.json().runway.providerMap).toEqual(expected);
+
+    await app.close();
+  });
+
   it("replaces arrays outright rather than merging element-wise", async () => {
     const app = await buildApp();
 

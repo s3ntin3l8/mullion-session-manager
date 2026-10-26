@@ -89,8 +89,8 @@ function ProviderMapField({
   value,
   onCommit,
 }: {
-  value: Record<string, string>;
-  onCommit: (v: Record<string, string>) => void;
+  value: Record<string, string | string[]>;
+  onCommit: (v: Record<string, string | string[]>) => void;
 }) {
   // Same `key`-remount trick as TextSettingRow: the draft is the JSON text,
   // the committed value is the parsed object, and a change made elsewhere
@@ -115,7 +115,9 @@ function ProviderMapField({
       return;
     }
     if (!isProviderMap(parsed)) {
-      setError('The provider map must be a JSON object of "provider id" -> "agent name".');
+      setError(
+        'The provider map must be a JSON object of "provider id" -> "agent" or ["agent", …].',
+      );
       return;
     }
     setError(null);
@@ -144,11 +146,16 @@ function ProviderMapField({
   );
 }
 
-// A provider map only maps provider ids to agent names — anything else (an
-// array, a nested object, a number as a value) is a typo, not a mapping.
-function isProviderMap(value: unknown): value is Record<string, string> {
+// A provider map only maps provider ids to targets — an agent name, or an
+// array of them (issue #2054) — anything else (a nested object, a number as
+// a value) is a typo, not a mapping.
+function isProviderMap(value: unknown): value is Record<string, string | string[]> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  return Object.values(value).every((entry) => typeof entry === "string");
+  return Object.values(value).every(
+    (entry) =>
+      typeof entry === "string" ||
+      (Array.isArray(entry) && entry.every((target) => typeof target === "string")),
+  );
 }
 
 export function RunwaySection() {
@@ -292,7 +299,7 @@ export function RunwaySection() {
       </Row>
       <Row
         label="Provider map"
-        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. An agent that is not in the map is never quarantined."
+        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. opencode spends several providers, so a value can be opencode/PROVIDER (e.g. xai → opencode/xai) to hold only tasks on that provider's models, and can be a list. An agent that is not in the map is never quarantined."
         align="start"
       >
         <ProviderMapField

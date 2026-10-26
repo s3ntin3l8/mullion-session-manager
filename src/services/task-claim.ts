@@ -52,7 +52,7 @@ import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
-import { agentQuarantineInfo, isAgentQuarantined } from "./runway-quarantine.js";
+import { claimTargets, quarantinedTarget } from "./runway-quarantine.js";
 
 // Shared by claimTask's and retryTask's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
@@ -166,17 +166,34 @@ export async function enqueueTask(
   // A MANUAL claim is not refused: a human is present, they may know the
   // quota recovered, and refusing a deliberate act would be worse than
   // letting it fail. It is logged instead.
-  if (isAgentQuarantined(app, command)) {
-    const info = agentQuarantineInfo(app, command);
+  //
+  // Issue #2054 — opencode spends several providers' quota, so for it the
+  // model this claim would run is resolved first and its provider
+  // (`opencode/<provider>`) is checked alongside the bare agent.
+  const heldBy = quarantinedTarget(
+    app,
+    claimTargets(
+      app,
+      command,
+      commandIsOpencode(command)
+        ? resolveOpenCodeModel(app, {
+            taskModel: task.model ?? null,
+            issueBody: task.body,
+            role: "implementer",
+          })
+        : null,
+    ),
+  );
+  if (heldBy !== null) {
     if (opts.auto) {
       return {
         ok: false,
         reason: "agent-quarantined",
-        detail: `The resolved agent (${command}) is out of quota (${info.reason ?? "quota exhausted"}) — refusing to auto-claim.`,
+        detail: `The resolved agent (${heldBy.target}) is out of quota (${heldBy.reason ?? "quota exhausted"}) — refusing to auto-claim.`,
       };
     }
     app.log.warn(
-      { agent: command, reason: info.reason },
+      { agent: heldBy.target, reason: heldBy.reason },
       "[task-claim] claiming a quarantined agent manually — the provider is out of quota",
     );
   }
