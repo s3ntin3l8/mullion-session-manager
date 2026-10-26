@@ -39,6 +39,7 @@ import {
   postReviewFindingsComment,
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { HostUnreachableError } from "./remote-host-client.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
   buildReviewPrompt,
@@ -4927,6 +4928,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   );
                 }
               } catch (err) {
+                // A host that is merely unreachable right now may well hold a
+                // request the worker wrote: wait a tick rather than skip a
+                // review it asked for. Anything else (a peer build with no
+                // such route, a 5xx) will not heal by waiting, so carry.
+                if (err instanceof HostUnreachableError) {
+                  app.log.warn(
+                    { err, taskId: task.id },
+                    "task reconcile: host unreachable reading the worker's re-review request — retrying next tick",
+                  );
+                  return;
+                }
                 app.log.warn(
                   { err, taskId: task.id },
                   "task reconcile: failed to read the worker's re-review request — carrying the approval",

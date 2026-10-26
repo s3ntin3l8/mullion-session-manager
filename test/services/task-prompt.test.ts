@@ -1297,7 +1297,7 @@ describe("verdict derivation", () => {
 
   it("approves when every earlier finding is addressed", () => {
     const parsed = parse({
-      verdict: "changes-requested",
+      verdict: "approved",
       previous: [{ ref: "a.ts:1", status: "addressed", evidence: "abc" }],
     });
     expect(parsed.verdict).toBe("approved");
@@ -1314,6 +1314,12 @@ describe("verdict derivation", () => {
 
   it("fails safe: a bare changes-requested with nothing to derive from stays changes-requested", () => {
     expect(parse({ verdict: "changes-requested" }).verdict).toBe("changes-requested");
+    expect(
+      parse({
+        verdict: "changes-requested",
+        previous: [{ ref: "a.ts:1", status: "addressed", evidence: "abc" }],
+      }).verdict,
+    ).toBe("changes-requested");
   });
 
   it("notes when the reviewer's own verdict disagrees with its findings", () => {

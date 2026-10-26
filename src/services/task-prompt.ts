@@ -689,7 +689,7 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
  *    `approved-with-suggestions`, no findings → `approved`.
  *
  * `notes`/`looksGood` never count. One exception, fail-safe: a reviewer that
- * wrote `changes-requested` with NO findings and NO dispositions gave us
+ * wrote `changes-requested` with NO findings gave us
  * nothing to derive from, so its own word stands rather than silently
  * becoming an approval.
  */
@@ -700,9 +700,7 @@ export function deriveVerdict(parts: {
 }): ReviewVerdict {
   if (parts.previous.some((d) => d.status !== "addressed")) return "changes-requested";
   if (parts.findings.length === 0) {
-    return parts.claimed === "changes-requested" && parts.previous.length === 0
-      ? "changes-requested"
-      : "approved";
+    return parts.claimed === "changes-requested" ? "changes-requested" : "approved";
   }
   return parts.findings.some((f) => f.severity !== "suggestion")
     ? "changes-requested"

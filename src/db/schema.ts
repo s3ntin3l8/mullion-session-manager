@@ -279,7 +279,7 @@ export const projects = sqliteTable("projects", {
   mergeOnApprove: integer("merge_on_approve", { mode: "boolean" }),
   // autoApprove: task-reconciler.ts's processAutoApprovals sweep approves a
   // "reviewing" task on its own once its review agent's last verdict is
-  // "clean" AND CI on the PR head is green — see tasks.lastReviewVerdict.
+  // approving (approved or approved-with-suggestions) AND CI on the PR head is green — see tasks.lastReviewVerdict.
   autoApprove: integer("auto_approve", { mode: "boolean" }),
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its

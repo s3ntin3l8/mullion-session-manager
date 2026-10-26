@@ -7053,6 +7053,67 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      // The read goes through the backend, which for a remote host can fail.
+      // A host that is only unreachable may hold a request the worker wrote,
+      // so wait; any other failure (an old peer, a 5xx) can't heal, so carry.
+      async function returnedWithFinishedWorker(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        readRequest: () => Promise<string | null>,
+      ) {
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+        await reconcileTasks(app);
+        const returned = await getTask(app, taskId);
+        mockFinishedSessionIds(app, returned.sessionId as number);
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const spy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockImplementation((appArg, hostId) => {
+            const real = realResolveBackend(appArg, hostId);
+            return new Proxy(real, {
+              get(target, prop, receiver) {
+                if (prop === "readTaskRereviewRequest") return readRequest;
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          });
+        return { taskId, reviewSessionId, spy };
+      }
+
+      it("waits a tick, without leaving in_progress, when the host is unreachable for the re-review request", async () => {
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const app = await buildApp();
+        const { taskId, spy } = await returnedWithFinishedWorker(app, () =>
+          Promise.reject(new HostUnreachableError("h", "down")),
+        );
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+
+        spy.mockRestore();
+        await app.close();
+      });
+
+      it("carries the approval when the re-review request can't be read for any other reason", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId, spy } = await returnedWithFinishedWorker(app, () =>
+          Promise.reject(new Error("HTTP 404 from an old peer")),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBe(reviewSessionId);
+        expect(row.approvalCarriedAt).not.toBeNull();
+
+        spy.mockRestore();
+        await app.close();
+      });
+
       it("a human Reject clears the carried approval so the next finish is reviewed", async () => {
         const app = await buildApp();
         const { taskId } = await claimIntoReviewing(app, "codex");

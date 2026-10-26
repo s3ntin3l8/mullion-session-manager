@@ -641,8 +641,8 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   `changes-requested`; only `suggestion` findings make it
   `approved-with-suggestions`; none make it `approved`. The reviewer's own
   `verdict` field is only cross-checked — a disagreement is logged into
-  `notes`. (One fail-safe: a bare `changes-requested` with no findings and no
-  dispositions stays `changes-requested`, since there is nothing to derive from.)
+  `notes`. (One fail-safe: a bare `changes-requested` with no findings stays
+  `changes-requested`, since there is nothing to derive from.)
   Written to a
   temp file and moved into place as the last step, not written directly, so
   a reconcile tick can never observe a torn/partial write.
