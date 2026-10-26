@@ -2,7 +2,13 @@ export { Button, type ButtonProps, type ButtonVariant } from "./Button.js";
 export { DetailHeader, type DetailHeaderProps } from "./DetailHeader.js";
 export { IconButton, type IconButtonProps } from "./IconButton.js";
 export { LinkedActions, type LinkedActionsProps } from "./LinkedActions.js";
-export { decideSessionAction, severityTone, type SessionAction } from "./linkDecisions.js";
+export {
+  decideSessionAction,
+  gatedSessions,
+  severityTone,
+  type SessionAction,
+} from "./linkDecisions.js";
+export { ReviewGateChip, type ReviewGateChipProps } from "./ReviewGateChip.js";
 export { SessionPills, type SessionPillsProps } from "./SessionPills.js";
 export { TaskChip, type TaskChipProps } from "./TaskChip.js";
 export { SidebarRow, type SidebarRowProps } from "./SidebarRow.js";

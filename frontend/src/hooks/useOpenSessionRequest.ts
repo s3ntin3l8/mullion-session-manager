@@ -52,7 +52,14 @@ export function useOpenSessionRequest({
   const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
-    if (!openSessionRequest || openSessionRequest.nonce === resolvedNonceRef.current) return;
+    if (!openSessionRequest) {
+      // The store's nonce restarts at 1 once a resolved request is cleared,
+      // so the next request would carry the nonce just resolved and be
+      // skipped as already handled. Forget it once the request is gone.
+      resolvedNonceRef.current = 0;
+      return;
+    }
+    if (openSessionRequest.nonce === resolvedNonceRef.current) return;
     const workspaceRestored =
       activeWorkspaceId !== null && restoredWorkspaceIdRef.current === activeWorkspaceId;
     if (!dockviewApi || !workspaceRestored || !sessionsLoaded) return;

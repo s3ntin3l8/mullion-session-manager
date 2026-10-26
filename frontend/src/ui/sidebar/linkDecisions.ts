@@ -1,5 +1,5 @@
-import type { SessionSeverity } from "../../api/index.js";
-import type { MullionLinkEntry } from "../../hooks/useMullionLinks.js";
+import type { Session, SessionSeverity } from "../../api/index.js";
+import type { MullionLinkEntry, SessionLink } from "../../hooks/useMullionLinks.js";
 import type { Tone } from "../../lib/statusTone.js";
 
 /** Severity → the sidebar kit's one tone vocabulary (dot colour). */
@@ -27,6 +27,23 @@ export function decideSessionAction(entry: MullionLinkEntry | undefined): Sessio
   // a live process beats an exited pane that merely sorts first.
   const first = entry?.sessions.find((l) => l.session.alive) ?? entry?.sessions[0];
   return first ? { kind: "open-existing", sessionId: first.session.id } : { kind: "start" };
+}
+
+/**
+ * The linked sessions (children included) held at Mullion's review gate — the
+ * session status, not a task state (#2019). Shared so a PR row and its detail
+ * card agree on whether the gate is holding the PR.
+ */
+export function gatedSessions(links: readonly SessionLink[] | undefined): Session[] {
+  const out: Session[] = [];
+  const walk = (ls: readonly SessionLink[]) => {
+    for (const l of ls) {
+      if (l.session.sessionStatus === "awaiting_review_gate") out.push(l.session);
+      walk(l.children);
+    }
+  };
+  walk(links ?? []);
+  return out;
 }
 
 /** Task status → the kit's tone; shared so every task chip agrees. */

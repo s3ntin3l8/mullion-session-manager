@@ -21,10 +21,12 @@ import {
   StatusChip,
   TaskChip,
   decideSessionAction,
+  gatedSessions,
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
 import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
+import { ReviewGateActions } from "./ReviewGateActions.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -520,6 +522,7 @@ export function PrDetailView({
           <div className="pr-card-h">Mullion</div>
           <div className="pr-card-b">
             {entry && entry.sessions.length > 0 && <SessionPills links={entry.sessions} />}
+            <ReviewGateActions sessions={gatedSessions(entry?.sessions)} />
             {entry?.task && (
               <div className="pr-pin-foot">
                 <TaskChip task={entry.task} />

@@ -190,6 +190,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     kanbanOrder: {},
     splitRequest: null,
     openSessionRequest: null,
+    openTaskRequest: null,
     highlightedPanelId: null,
     activePanelId: null,
     activeWorkspaceId: readStoredActiveWorkspaceId(),
@@ -422,6 +423,16 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set((state) =>
         state.openSessionRequest?.nonce === nonce ? { openSessionRequest: null } : state,
       );
+    },
+
+    requestOpenTask: (taskId) => {
+      set((state) => ({
+        openTaskRequest: { taskId, nonce: (state.openTaskRequest?.nonce ?? 0) + 1 },
+      }));
+    },
+
+    clearOpenTaskRequest: (nonce) => {
+      set((state) => (state.openTaskRequest?.nonce === nonce ? { openTaskRequest: null } : state));
     },
 
     startThemeWatch: () => {

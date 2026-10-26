@@ -6,11 +6,13 @@ import { useDashboardStore } from "../store/index.js";
 import { ThreadIcon } from "../ui/icons.js";
 import {
   Button,
+  ReviewGateChip,
   SessionPills,
   SidebarRow,
   StatusChip,
   StatusTriad,
   TaskChip,
+  gatedSessions,
   type TriadItem,
 } from "../ui/sidebar/index.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
@@ -71,6 +73,7 @@ export function PrRow({
 
   const sessions = links?.sessions ?? [];
   const showLinks = sessions.length > 0 || !!task || !!run;
+  const gated = gatedSessions(sessions);
 
   return (
     <div
@@ -109,6 +112,7 @@ export function PrRow({
               <div className="pr-row-links">
                 {sessions.length > 0 && <SessionPills links={sessions} />}
                 {task && <TaskChip task={task} />}
+                <ReviewGateChip sessions={gated} />
                 {run && (
                   <StatusChip
                     tone={
