@@ -913,12 +913,32 @@
 .session-item.status-finished:hover {
   background: color-mix(in srgb, var(--c) 18%, transparent);
 }
-.session-item.status-exited,
-.session-item.status-killed {
+/* Issue #1886 — an ended row used to set `opacity: 0.5` on `.session-item`
+   itself (0.7 while hovered). The status label is already `var(--dim)`, and
+   an ancestor's opacity multiplies with that colour: the label was painted
+   at half strength over `--sidebar`, about 2.3:1 in the dark theme and 2.0:1
+   in the light one, under the 3:1 it needs to stay readable. Opacity groups
+   an element with its descendants into one translucent layer, so a child
+   cannot opt back out — the fade has to stop short of the label.
+
+   The label lives in `.session-status-group` (Sidebar.tsx), a direct child
+   of `.session-item-row`. Fading every other direct child of the row, and
+   every direct child of that strip except the group, keeps the name, the
+   dot, the meta lines and the actions at half strength — the same fade the
+   whole row used to have — so an ended session still reads as quieter than
+   a live one. The host badge shares the group, so it keeps its own
+   `opacity: 0.75` instead of being multiplied by the row fade a second time.
+   That extra multiply was the same failure the label had.
+
+   Only `.status-exited`. `rowClassNameForSeverity` never returns
+   `.status-killed` — a killed session is filtered out before a row is
+   built — so a killed half of this rule could not match. */
+.session-item.status-exited > :not(.session-item-row),
+.session-item.status-exited .session-item-row > :not(.session-status-group) {
   opacity: 0.5;
 }
-.session-item.status-exited:hover,
-.session-item.status-killed:hover {
+.session-item.status-exited:hover > :not(.session-item-row),
+.session-item.status-exited:hover .session-item-row > :not(.session-status-group) {
   opacity: 0.7;
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's
