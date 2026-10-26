@@ -219,11 +219,30 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     expect(plan.envAdditions).toBeUndefined();
   });
 
-  it("maps a small model to ANTHROPIC_DEFAULT_HAIKU_MODEL, and refuses an unsafe one", () => {
-    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: "haiku" });
-    expect(plan.envAdditions).toEqual({ ANTHROPIC_DEFAULT_HAIKU_MODEL: "haiku" });
+  it("maps a full-id small model to ANTHROPIC_DEFAULT_HAIKU_MODEL, and refuses an unsafe one", () => {
+    const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: "claude-haiku-5-5" });
+    expect(plan.envAdditions).toEqual({ ANTHROPIC_DEFAULT_HAIKU_MODEL: "claude-haiku-5-5" });
     const bad = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: "$(x); y" });
     expect(bad.envAdditions).toBeUndefined();
+  });
+
+  // Issue #2032 — ANTHROPIC_DEFAULT_HAIKU_MODEL is what the `haiku` ALIAS resolves
+  // to, so exporting an alias there makes it resolve to itself and every
+  // haiku-backed Claude Code feature (e.g. /goal's evaluator) fails.
+  it("never exports a model alias as ANTHROPIC_DEFAULT_HAIKU_MODEL", () => {
+    for (const alias of [
+      "haiku",
+      "sonnet",
+      "opus",
+      "opusplan",
+      "sonnet[1m]",
+      "best",
+      "default",
+      "newalias",
+    ]) {
+      const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: alias });
+      expect(plan.envAdditions).toBeUndefined();
+    }
   });
 });
 

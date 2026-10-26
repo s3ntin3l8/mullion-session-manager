@@ -1,7 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
-import { validateCliModel, validateOpenCodeModel } from "./hook-adapters/shared.js";
+import {
+  isClaudeModelAlias,
+  validateClaudeSmallModel,
+  validateCliModel,
+  validateOpenCodeModel,
+} from "./hook-adapters/shared.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -223,10 +228,16 @@ export function resolveClaudeSmallModel(
   ];
   for (const [source, value] of candidates) {
     if (!value) continue;
-    if (validateCliModel(value)) return value;
+    if (validateClaudeSmallModel(value)) return value;
+    // An alias ("haiku") is a valid --model but not a valid small model: the
+    // value becomes ANTHROPIC_DEFAULT_HAIKU_MODEL, which the `haiku` alias
+    // itself resolves to, so it needs a full model id (issue #2032). A stored
+    // alias (the Settings picker used to offer them) is treated as unset.
     app.log.warn(
       { model: value },
-      `[task-model-resolve] ${source} is not a valid claude-code model name, falling through`,
+      isClaudeModelAlias(value)
+        ? `[task-model-resolve] ${source} is a model alias, not a full model id — ignoring it (exporting an alias as ANTHROPIC_DEFAULT_HAIKU_MODEL breaks every haiku-backed feature), falling through`
+        : `[task-model-resolve] ${source} is not a valid claude-code model name, falling through`,
     );
   }
   return null;
@@ -246,7 +257,8 @@ export function resolveClaudeSmallModel(
  *   is nothing to validate it against, so it is always accepted here; the
  *   route drops it before it reaches the session row. For claude-code it
  *   is a real setting (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) and gets the same
- *   `validateCliModel` check as `model`.
+ *   `validateCliModel` check as `model`, plus a rejection of model ALIASES
+ *   (a full model id is required there — issue #2032).
  * - opencode commands: both `model` and `smallModel` must pass
  *   `validateModel` (the `provider/model` shape) AND `validateCliModel` (the
  *   charset allowlist) — `validateModel` alone doesn't reject a value like
@@ -268,6 +280,11 @@ export function explicitModelError(
   const cli = commandModelCli(command);
   if (cli !== null) {
     if (field === "smallModel" && cli !== "claude-code") return null;
+    // claude-code's small model is exported as ANTHROPIC_DEFAULT_HAIKU_MODEL,
+    // which an alias would point at itself (issue #2032) — reject it outright.
+    if (field === "smallModel" && cli === "claude-code" && isClaudeModelAlias(value)) {
+      return "smallModel must be a full model id (e.g. claude-haiku-5-5), not an alias like haiku, sonnet or opus";
+    }
     return validateCliModel(value)
       ? null
       : `${field} must match the CLI model name format (letters, digits, and . _ : / @ [ ] - only, starting with a letter or digit)`;

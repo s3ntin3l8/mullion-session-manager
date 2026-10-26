@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { CLI_MODEL_RE, isValidCliModelName, isValidOpenCodeModel } from "./cliModel.js";
+import {
+  CLI_MODEL_RE,
+  isClaudeModelAlias,
+  isValidCliModelName,
+  isValidOpenCodeModel,
+} from "./cliModel.js";
 
 // The two validators are mirrors of the backend's own — CLI_MODEL_RE in
 // src/services/hook-adapters/shared.ts, and validateModel in
@@ -80,5 +85,42 @@ describe("CLI_MODEL_RE", () => {
     // A direct assertion on the regex, so a change to the character class
     // is visible here rather than only as a behavioural drift.
     expect(CLI_MODEL_RE.source).toBe("^[A-Za-z0-9][A-Za-z0-9._:/@[\\]-]{0,127}$");
+  });
+});
+
+// Issue #2032 — mirror of isClaudeModelAlias (src/services/hook-adapters/shared.ts).
+// The SAME case set is pinned server-side in test/services/task-model-resolve.test.ts,
+// so a backend change to what counts as an alias has to be made on both.
+describe("isClaudeModelAlias", () => {
+  it("treats a bare word (letters, optional [1m]) as an alias, including ones that don't exist yet", () => {
+    for (const a of [
+      "haiku",
+      "sonnet",
+      "opus",
+      "fable",
+      "opusplan",
+      "best",
+      "default",
+      "opus[1m]",
+      "Haiku",
+      "newalias",
+      "newalias[1m]",
+    ]) {
+      expect(isClaudeModelAlias(a)).toBe(true);
+    }
+  });
+
+  it("never treats a real model id as an alias — ids carry a digit or a separator", () => {
+    for (const full of [
+      "claude-haiku-5-5",
+      "claude-opus-4-5[1m]",
+      "haiku-default",
+      "gpt-6",
+      "anthropic.claude-haiku-5-5-v1:0",
+      "claude-haiku@20260101",
+      "arn:aws:bedrock:us-east-1:123456789012:inference-profile/haiku",
+    ]) {
+      expect(isClaudeModelAlias(full)).toBe(false);
+    }
   });
 });

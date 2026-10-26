@@ -28,6 +28,12 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { value: "opusplan[1m]" },
 ];
 
+// Full model ids only (anything else goes through Custom…). Empty = Claude
+// Code's own default, which is the safe choice when unsure.
+export const CLAUDE_SMALL_MODELS: ModelOption[] = [
+  { value: "claude-haiku-5-5", label: "claude-haiku-5-5 — Haiku 5.5" },
+];
+
 // Fallback for when `codex debug models` yields nothing (codex missing, or its
 // output format changed). It's a snapshot and will age; the live catalog wins
 // whenever it returns anything, and Custom… covers the rest.

@@ -48,3 +48,24 @@ export function isValidOpenCodeModel(value: string | null | undefined): value is
   if (value.length < 3 || /\s/.test(value)) return false;
   return value.slice(1, -1).includes("/");
 }
+
+/**
+ * Mirror of the backend's `isClaudeModelAlias`
+ * (src/services/hook-adapters/shared.ts, issue #2032). A Claude Code model
+ * ALIAS is a bare word — letters only, plus an optional `[1m]` suffix
+ * (`haiku`, `opusplan`, `sonnet[1m]`, and any letter-only alias added later;
+ * one that carries a digit would be read as an id — keep in step with the
+ * backend rule). Real model
+ * ids always carry a digit or a separator (`claude-haiku-5-5`,
+ * `anthropic.claude-haiku-5-5-v1:0`).
+ *
+ * Fine for the main model, but the small model becomes
+ * ANTHROPIC_DEFAULT_HAIKU_MODEL — the variable the `haiku` alias itself
+ * resolves to — so there an alias is ignored by the backend and the Settings
+ * UI warns about a stored one.
+ */
+export const CLAUDE_MODEL_ALIAS_RE = /^[a-z]+(\[1m\])?$/i;
+
+export function isClaudeModelAlias(value: string): boolean {
+  return CLAUDE_MODEL_ALIAS_RE.test(value);
+}

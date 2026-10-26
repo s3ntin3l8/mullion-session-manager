@@ -103,17 +103,49 @@ describe("Settings -> Models", () => {
     await expectPatch({ claudeCode: { defaultModel: "opusplan" } });
   });
 
-  it("saves a Claude Code small model", async () => {
+  it("saves a Claude Code small model (a full id)", async () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
     await user.selectOptions(
       screen.getByRole("combobox", { name: "Claude Code small model" }),
-      "haiku",
+      "claude-haiku-5-5",
     );
 
-    expect(useDashboardStore.getState().settings.claudeCode.smallModel).toBe("haiku");
-    await expectPatch({ claudeCode: { smallModel: "haiku" } });
+    expect(useDashboardStore.getState().settings.claudeCode.smallModel).toBe("claude-haiku-5-5");
+    await expectPatch({ claudeCode: { smallModel: "claude-haiku-5-5" } });
+  });
+
+  // Issue #2032 — the small model becomes ANTHROPIC_DEFAULT_HAIKU_MODEL, the
+  // variable the `haiku` alias resolves TO, so an alias there breaks every
+  // haiku-backed feature (e.g. /goal). The picker must not offer aliases.
+  it("does not offer model aliases as a small model", () => {
+    render(<ModelsSection />);
+    const select = screen.getByRole("combobox", { name: "Claude Code small model" });
+    const values = within(select)
+      .getAllByRole("option")
+      .map((o) => (o as HTMLOptionElement).value);
+    for (const alias of ["haiku", "sonnet", "opus", "fable", "opusplan"]) {
+      expect(values).not.toContain(alias);
+    }
+    expect(values).toContain("claude-haiku-5-5");
+  });
+
+  it("warns when an alias is already stored as the small model", () => {
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        claudeCode: { defaultModel: null, reviewerModel: null, smallModel: "haiku" },
+      },
+      settingsLoaded: true,
+    });
+    render(<ModelsSection />);
+    expect(screen.getByText(/is a model alias, not a full model id/)).toBeTruthy();
+  });
+
+  it("shows no alias warning for a full id or an unset small model", () => {
+    render(<ModelsSection />);
+    expect(screen.queryByText(/is a model alias/)).toBeNull();
   });
 
   it("PATCHes null when a CLI is set back to its default", async () => {

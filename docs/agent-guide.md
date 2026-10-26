@@ -316,10 +316,15 @@ opencode's own `provider/model` string, or the bare `--model` value for a
 Claude Code, Codex, or agy command — an invalid value is rejected rather
 than silently ignored. Omit it and set `parentSessionId` to inherit the
 parent session's own model instead, but that inheritance is opencode-only;
-it's ignored for any other command. `smallModel` is the same idea for
-opencode's lightweight title-generation model (v2's replacement for the
-1.x `small_model` key) specifically — meaningless, and ignored, for a
-non-opencode command either way.
+it's ignored for any other command. `smallModel` is
+the child's lightweight model, and its shape differs per CLI. For opencode
+it is the title-generation model (v2's replacement for the 1.x `small_model`
+key) as `provider/model`, and — like `model` — it is inherited from
+`parentSessionId` when omitted (opencode only). For Claude Code it is exported
+as `ANTHROPIC_DEFAULT_HAIKU_MODEL`, so it must be a **full model id** (e.g.
+`claude-haiku-5-5`): an alias such as `haiku`, `sonnet` or `opus` is rejected
+with a 400, because that variable is what the `haiku` alias itself resolves
+to. Codex and agy have no small-model setting, so it is ignored for them.
 
 **Do not bake prompt text into `command`.** Use `initialPrompt` (MCP) /
 `--initial-prompt` (CLI) instead — it's delivered via the target CLI's own

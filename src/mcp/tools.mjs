@@ -332,9 +332,12 @@ const spawnChildSession = {
       smallModel: {
         type: "string",
         description:
-          "Optional opencode small_model override for the child session. When omitted " +
-          "and parentSessionId is set, inherits the parent session's smallModel. Only " +
-          "honored when command resolves to an opencode adapter; ignored otherwise.",
+          "Optional small_model override for the child session. opencode: a provider/model " +
+          "string; when omitted and parentSessionId is set, inherits the parent session's " +
+          "smallModel. Claude Code: a FULL model id (e.g. claude-haiku-5-5) — an alias such " +
+          "as haiku, sonnet or opus is rejected with a 400, because it becomes " +
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL, which the haiku alias itself resolves to. " +
+          "Ignored for any other command.",
       },
       open: {
         type: "string",
