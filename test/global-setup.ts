@@ -18,6 +18,13 @@ import {
   type IndexSnapshot,
 } from "./helpers/checkout-config.js";
 import { createSuiteTmpDir } from "./helpers/suite-tmpdir.js";
+import {
+  describeScopeLeaks,
+  findLeakedScopes,
+  installSystemdRunShim,
+  readBlockedLaunches,
+  type ScopeGuard,
+} from "./helpers/scope-guard.js";
 
 const ROOT = path.resolve(__dirname, "..");
 
@@ -25,6 +32,8 @@ let configPath: string | null = null;
 let before = "";
 let indexBefore: IndexSnapshot | null = null;
 let suiteTmpDir: string | null = null;
+let scopeGuard: ScopeGuard | null = null;
+let origPath: string | undefined;
 let origTmpDir: string | undefined;
 let origTemp: string | undefined;
 let origTmp: string | undefined;
@@ -49,6 +58,12 @@ export function setup(): void {
   process.env.TMPDIR = suiteTmpDir;
   process.env.TEMP = suiteTmpDir;
   process.env.TMP = suiteTmpDir;
+
+  // Issue #2003 — no test may start a real systemd scope. Shadow systemd-run
+  // for every worker (they inherit this env) and check the run afterwards.
+  scopeGuard = installSystemdRunShim(suiteTmpDir);
+  origPath = process.env.PATH;
+  process.env.PATH = `${scopeGuard.binDir}${path.delimiter}${origPath ?? ""}`;
 }
 
 export function teardown(): void {
@@ -58,6 +73,14 @@ export function teardown(): void {
     for (const check of [
       () => configPath && assertConfigUnchanged(configPath, before),
       () => assertIndexIntact(ROOT, indexBefore),
+      () => {
+        if (!scopeGuard || !suiteTmpDir) return;
+        const msg = describeScopeLeaks(
+          readBlockedLaunches(scopeGuard),
+          findLeakedScopes(suiteTmpDir),
+        );
+        if (msg) throw new Error(msg);
+      },
     ]) {
       try {
         check();
@@ -67,6 +90,7 @@ export function teardown(): void {
     }
     if (errors.length > 0) throw new Error(errors.join("\n\n"));
   } finally {
+    if (origPath !== undefined) process.env.PATH = origPath;
     // Restore original temp environment variables
     if (origTmpDir !== undefined) process.env.TMPDIR = origTmpDir;
     else delete process.env.TMPDIR;

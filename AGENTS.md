@@ -167,7 +167,10 @@ How this repo applies the conventions above — facts and commands, not rules.
   scheme changed keep working unchanged. A test must never let a real
   `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not just
   `node-pty` — issue #1137), and a teardown must never call
-  `terminate()`/`stopScope()` on an id it didn't itself create.
+  `terminate()`/`stopScope()` on an id it didn't itself create. `test/global-setup.ts`
+  enforces the first half suite-wide (issue #2003): a `systemd-run` shim leads
+  `PATH`, and the run fails if the shim was hit or a `crs-session-*` scope is
+  left under the run's temp root.
 - **Scope operations go through the `ScopeBackend` seam
   (`src/services/scope/`), not through systemd directly.** The systemd scope
   above is one _implementation_ of a platform-neutral seam ("run a detached
