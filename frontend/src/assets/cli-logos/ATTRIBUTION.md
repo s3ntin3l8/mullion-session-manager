@@ -2,9 +2,9 @@
 
 The icons in this directory identify third-party CLI tools that this project can
 launch as sessions (Claude Code, Codex, opencode, Gemini CLI, Antigravity, Pi Coding
-Agent, MiniMax Code). They are used solely to identify those tools in the session launcher UI and
-are not modified beyond format conversion, except `pi-coding-agent-light.svg` (see
-below).
+Agent, MiniMax Code). They are used solely to identify those tools in the session
+launcher UI and are not modified beyond format conversion, except
+`pi-coding-agent-light.svg` (see below).
 
 ## homarr-labs/dashboard-icons — Apache License 2.0
 
