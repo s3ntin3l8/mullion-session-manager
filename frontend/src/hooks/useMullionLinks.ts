@@ -103,6 +103,9 @@ export interface MullionLinksInputs {
 }
 
 export interface BuildMullionLinksArgs extends MullionLinksInputs {
+  /** Per-session poll-derived git status; its branch beats the hook-reported
+   *  `liveBranch` for a worktree session (opencode reports the main checkout's). */
+  sessionGitStatuses?: Readonly<Record<number, { branch?: string | null } | null | undefined>>;
   project: Pick<Project, "id" | "devServerUrl"> | undefined;
   sessions: readonly Session[];
   tasks: readonly Task[];
@@ -270,7 +273,19 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
   }
 
   // Issue: the task that tracks it, its sessions, and the triage run.
-  const issueNumbers = new Set<number>();
+  // A session on `issue-<n>[-slug]` works issue n (the branch "Start session"
+  // cuts); keyed on the number, which — unlike the slug — survives a retitle.
+  const sessionsByIssue = new Map<number, Session[]>();
+  for (const s of sessions) {
+    for (const branch of [args.sessionGitStatuses?.[s.id]?.branch, sessionBranch(s)]) {
+      const m = branch ? /^issue-(\d+)(?:-|$)/.exec(branch) : null;
+      if (!m) continue;
+      const list = sessionsByIssue.get(Number(m[1])) ?? [];
+      if (!list.includes(s)) list.push(s);
+      sessionsByIssue.set(Number(m[1]), list);
+    }
+  }
+  const issueNumbers = new Set<number>(sessionsByIssue.keys());
   for (const t of projectTasks) if (t.issueNumber != null) issueNumbers.add(t.issueNumber);
   for (const i of args.issues ?? []) issueNumbers.add(i.number);
   for (const number of issueNumbers) {
@@ -279,12 +294,13 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
     entry.task = task;
     // For an issue, "owned" means a task tracks it (there is no branch).
     entry.taskOwned = !!task;
+    const issueSessions = new Set(sessionsByIssue.get(number));
     if (task) {
-      fill(
-        entry,
-        sessions.filter((s) => s.id === task.sessionId || s.id === task.reviewSessionId),
-      );
+      for (const s of sessions) {
+        if (s.id === task.sessionId || s.id === task.reviewSessionId) issueSessions.add(s);
+      }
     }
+    fill(entry, [...issueSessions]);
     const triage = args.issues?.find((i) => i.number === number)?.triage;
     if (triage) {
       entry.reviewRun = {
@@ -327,10 +343,21 @@ export function useMullionLinks(projectId: number, inputs: MullionLinksInputs = 
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === projectId));
   const sessions = useDashboardStore((s) => s.sessions);
   const tasks = useDashboardStore((s) => s.tasks);
+  const sessionGitStatuses = useDashboardStore((s) => s.sessionGitStatuses);
   const storePrs = useDashboardStore((s) => s.prsByProject[projectId]?.prs);
   const { prs = storePrs, issues, previews, reviewRuns } = inputs;
   return useMemo(
-    () => buildMullionLinks({ project, sessions, tasks, prs, issues, previews, reviewRuns }),
-    [project, sessions, tasks, prs, issues, previews, reviewRuns],
+    () =>
+      buildMullionLinks({
+        project,
+        sessions,
+        tasks,
+        prs,
+        issues,
+        previews,
+        reviewRuns,
+        sessionGitStatuses,
+      }),
+    [project, sessions, tasks, prs, issues, previews, reviewRuns, sessionGitStatuses],
   );
 }

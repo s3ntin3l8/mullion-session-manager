@@ -110,6 +110,15 @@ describe("LinkedActions", () => {
     expect(decideSessionAction(entryFor())).toEqual({ kind: "open-existing", sessionId: 1 });
   });
 
+  it("prefers a live session over an exited one that sorts first", () => {
+    const link = (id: number, alive: boolean) =>
+      ({ session: makeSession({ id, alive }), children: [] }) as never;
+    const entry = { ...entryFor(), sessions: [link(1, false), link(2, true)] };
+    expect(decideSessionAction(entry as never)).toEqual({ kind: "open-existing", sessionId: 2 });
+    const dead = { ...entryFor(), sessions: [link(3, false), link(4, false)] };
+    expect(decideSessionAction(dead as never)).toEqual({ kind: "open-existing", sessionId: 3 });
+  });
+
   it("Open existing session replaces the start action", () => {
     const spy = vi.fn();
     useDashboardStore.setState({ requestOpenSession: spy });

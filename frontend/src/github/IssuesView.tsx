@@ -1,14 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api/index.js";
 import { useIssue, useIssues } from "../hooks/useGitHubData.js";
+import { useMullionLinks, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
+import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
+import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
+import { Button, DetailHeader, IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
+import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
+import { SessionPills } from "../ui/sidebar/SessionPills.js";
+import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
 // assignee, sort, title search, paging) and a drill-in detail with the
@@ -26,18 +33,18 @@ const SORT_OPTIONS = (Object.keys(SORT_LABELS) as GitHubIssueSort[]).map((value)
 }));
 
 function LabelChip({ label, active, onClick }: LabelChipProps) {
-  const style = { borderColor: `#${label.color}` };
+  const style = { "--label-c": `#${label.color}` } as CSSProperties;
   if (!onClick) {
     return (
-      <span className="gh-label-chip" style={style}>
+      <StatusChip tone="neutral" className="sb-chip--label" style={style}>
         {label.name}
-      </span>
+      </StatusChip>
     );
   }
   return (
     <button
       type="button"
-      className={`gh-label-chip gh-label-chip-button${active ? " active" : ""}`}
+      className="sb-chip sb-chip--neutral sb-chip--label"
       style={style}
       aria-pressed={active}
       onClick={onClick}
@@ -124,6 +131,41 @@ export function IssuesSection({
       labels: selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name],
     });
 
+  const links = useMullionLinks(projectId, { issues: data?.issues });
+  const [starting, setStarting] = useState<ReadonlySet<number>>(new Set());
+  const startSessionFrom = useStartSessionFrom(projectId);
+  const [queued, setQueued] = useState<ReadonlySet<number>>(new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const startIssueSession = async (issue: GitHubIssueListItem) => {
+    if (starting.has(issue.number)) return;
+    setStarting((st) => new Set(st).add(issue.number));
+    setActionError(null);
+    try {
+      await startSessionFrom({
+        worktree: { branchName: issueBranchName(issue) },
+        seedPrompt: issueSeedPrompt(issue),
+      });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not start a session");
+    } finally {
+      setStarting((st) => {
+        const next = new Set(st);
+        next.delete(issue.number);
+        return next;
+      });
+    }
+  };
+  const queueIssue = async (issue: GitHubIssueListItem) => {
+    setActionError(null);
+    try {
+      await api.queueProjectIssue(projectId, issue.number);
+      setQueued((q) => new Set(q).add(issue.number));
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not queue the issue");
+    }
+  };
+
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
 
   return (
@@ -135,33 +177,31 @@ export function IssuesSection({
         </div>
       ) : (
         <>
-          <div className="gh-issue-filters">
+          <div className="gh-issue-bar">
             <input
               className="gh-issue-search"
               type="search"
-              placeholder="Search titles"
+              placeholder="Search issues…"
               aria-label="Search issues"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <Dropdown
-              small
-              ariaLabel="Sort issues"
-              value={sort}
-              onChange={setSort}
-              options={SORT_OPTIONS}
-            />
-            <label className="gh-issue-unassigned">
-              <input
-                type="checkbox"
-                checked={unassigned}
-                onChange={(e) => setUnassigned(e.target.checked)}
+            <div className="gh-issue-bar-row">
+              <Dropdown
+                small
+                ariaLabel="Sort issues"
+                value={sort}
+                onChange={setSort}
+                options={SORT_OPTIONS}
               />
-              Unassigned
-            </label>
-          </div>
-          {knownLabels.length > 0 && (
-            <div className="gh-label-row">
+              <button
+                type="button"
+                className="sb-chip sb-chip--neutral"
+                aria-pressed={unassigned}
+                onClick={() => setUnassigned(!unassigned)}
+              >
+                Unassigned
+              </button>
               {knownLabels.map((l) => (
                 <LabelChip
                   key={l.name}
@@ -171,8 +211,8 @@ export function IssuesSection({
                 />
               ))}
             </div>
-          )}
-          {error && <ErrorText>{error}</ErrorText>}
+          </div>
+          {(actionError ?? error) && <ErrorText>{actionError ?? error}</ErrorText>}
           {data && data.issues.length === 0 && !loading && (
             <div className="github-panel-empty-row">
               {data.hasMore
@@ -183,13 +223,22 @@ export function IssuesSection({
             </div>
           )}
           {data?.issues.map((issue) => (
-            <IssueRow key={issue.number} issue={issue} onOpen={() => onOpenIssue(issue.number)} />
+            <IssueRow
+              key={issue.number}
+              issue={issue}
+              link={links.byIssue.get(issue.number)}
+              canQueue={ui.taskMaster?.enabled ?? data.taskMasterEnabled}
+              queued={queued.has(issue.number)}
+              onOpen={() => onOpenIssue(issue.number)}
+              onStart={() => startIssueSession(issue)}
+              onQueue={() => queueIssue(issue)}
+            />
           ))}
           {loading && <div className="github-panel-empty-row">Loading…</div>}
           {data?.hasMore && !loading && (
             <button
               type="button"
-              className="gh-issue-more"
+              className="sb-btn sb-btn--secondary sb-btn--block gh-issue-more"
               onClick={() => patchUi(projectId, { pageState: { key: filterKey, page: page + 1 } })}
             >
               Load more
@@ -201,27 +250,96 @@ export function IssuesSection({
   );
 }
 
-function IssueRow({ issue, onOpen }: { issue: GitHubIssueListItem; onOpen: () => void }) {
+function IssueRow({
+  issue,
+  link,
+  canQueue,
+  queued,
+  onOpen,
+  onStart,
+  onQueue,
+}: {
+  issue: GitHubIssueListItem;
+  link: MullionLinkEntry | undefined;
+  canQueue: boolean;
+  queued: boolean;
+  onOpen: () => void;
+  onStart: () => void;
+  onQueue: () => void;
+}) {
+  const done = issue.taskStatus === "done";
+  const showQueue = canQueue && !issue.taskStatus && !queued;
+  const action = decideSessionAction(link);
+  const task = link?.task;
+  const hasChips =
+    issue.labels.length > 0 ||
+    issue.taskStatus ||
+    task ||
+    issue.triage ||
+    link?.sessions.length ||
+    queued;
   return (
-    <button type="button" className="github-panel-row gh-issue-row" onClick={onOpen}>
-      <span className="github-panel-row-number">#{issue.number}</span>
-      <span className="gh-issue-row-main">
-        <span className="github-panel-row-title">{issue.title}</span>
-        {(issue.labels.length > 0 || issue.taskStatus) && (
-          <span className="gh-label-row">
+    <SidebarRow
+      lead={<span className={`gh-issue-glyph${done ? " gh-issue-glyph--done" : ""}`} aria-hidden />}
+      title={issue.title}
+      meta={
+        <>
+          <span className="mono">#{issue.number}</span> · {issue.author ?? "unknown"} ·{" "}
+          {formatRelativeAge(Date.parse(issue.updatedAt))}
+        </>
+      }
+      trailing={
+        issue.commentCount > 0 ? (
+          <span className="gh-issue-count" title={`${issue.commentCount} comments`}>
+            <MessageIcon size={12} />
+            {issue.commentCount}
+          </span>
+        ) : undefined
+      }
+      extra={
+        hasChips ? (
+          <div className="sb-triad">
             {issue.labels.map((l) => (
               <LabelChip key={l.name} label={l} />
             ))}
-            {issue.taskStatus && <span className="gh-task-chip">Task: {issue.taskStatus}</span>}
-          </span>
-        )}
-      </span>
-      {issue.commentCount > 0 && (
-        <span className="github-panel-row-number" title={`${issue.commentCount} comments`}>
-          💬 {issue.commentCount}
-        </span>
-      )}
-    </button>
+            {task ? (
+              <TaskChip task={task} />
+            ) : (
+              issue.taskStatus && (
+                <StatusChip tone={taskTone(issue.taskStatus)}>Task: {issue.taskStatus}</StatusChip>
+              )
+            )}
+            {queued && !issue.taskStatus && !task && <StatusChip tone="info">Queued</StatusChip>}
+            {issue.triage && (
+              <StatusChip tone="info" title={`Triage run ${issue.triage.runId}`}>
+                Triage
+              </StatusChip>
+            )}
+            <SessionPills links={link?.sessions ?? []} />
+          </div>
+        ) : undefined
+      }
+      actions={
+        <>
+          {showQueue && (
+            <IconButton label="Queue for Task Master" onClick={onQueue}>
+              <BoltIcon size={14} />
+            </IconButton>
+          )}
+          <IconButton
+            label={action.kind === "open-existing" ? "Open session" : "Start session"}
+            onClick={
+              action.kind === "open-existing"
+                ? () => useDashboardStore.getState().requestOpenSession(action.sessionId)
+                : onStart
+            }
+          >
+            <PlayTriangleIcon size={14} />
+          </IconButton>
+        </>
+      }
+      onClick={onOpen}
+    />
   );
 }
 
@@ -239,32 +357,31 @@ export function IssueDetailView({
   const { data: issue, error: loadError } = useIssue(projectId, number);
   const [actionError, setActionError] = useState<string | null>(null);
   const error = actionError ?? loadError;
-  const setError = setActionError;
   const [busy, setBusy] = useState<"session" | "queue" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [queued, setQueued] = useState(false);
+  const startSessionFrom = useStartSessionFrom(projectId);
+  const link = useMullionLinks(projectId).byIssue.get(number);
+  const action = decideSessionAction(link);
+  // A linked task means it is already queued (survives a remount).
+  const isQueued = queued || !!link?.task;
 
   const startSession = async () => {
     if (!issue) return;
+    if (action.kind === "open-existing") {
+      useDashboardStore.getState().requestOpenSession(action.sessionId);
+      return;
+    }
     setBusy("session");
     setNotice(null);
     try {
-      const state = useDashboardStore.getState();
-      const launchers = await api.listProjectActions(projectId);
-      const launcher =
-        launchers.find((l) => l.id === `agent:${state.settings.launchers.defaultAgent}`) ??
-        launchers[0];
-      if (!launcher) throw new Error("No launcher is configured for this project.");
-      const branches = state.gitBranchesByProject[projectId];
-      const project = state.projects.find((p) => p.id === projectId);
-      const baseRef = branches?.defaultBranch ?? project?.currentBranch ?? "origin/main";
-      const session = await state.createSession(projectId, launcher.command, {
-        worktree: { baseRef, branchName: issueBranchName(issue) },
+      await startSessionFrom({
+        worktree: { branchName: issueBranchName(issue) },
         seedPrompt: issueSeedPrompt(issue),
       });
-      state.requestOpenSession(session.id);
       setNotice("Session started in a new worktree");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start a session");
+      setActionError(err instanceof Error ? err.message : "Could not start a session");
     } finally {
       setBusy(null);
     }
@@ -275,9 +392,10 @@ export function IssueDetailView({
     setNotice(null);
     try {
       const res = await api.queueProjectIssue(projectId, number);
+      setQueued(true);
       setNotice(`Queued — added the “${res.label}” label`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not queue the issue");
+      setActionError(err instanceof Error ? err.message : "Could not queue the issue");
     } finally {
       setBusy(null);
     }
@@ -285,42 +403,54 @@ export function IssueDetailView({
 
   return (
     <div className="gh-detail">
-      <button type="button" className="gh-detail-back" onClick={onBack}>
-        ← Back
-      </button>
+      <DetailHeader
+        onBack={onBack}
+        title={issue ? `#${issue.number} · ${issue.title}` : `#${number}`}
+        subtitle={
+          issue
+            ? `${issue.state === "closed" ? "Closed" : "Open"} · ${issue.author ?? "unknown"} · updated ${formatRelativeAge(Date.parse(issue.updatedAt))}`
+            : undefined
+        }
+        externalUrl={issue?.htmlUrl}
+        externalLabel={`Open issue #${number} on GitHub`}
+      />
       {error && <ErrorText>{error}</ErrorText>}
       {!issue && !error && <EmptyStateNote>Loading…</EmptyStateNote>}
       {issue && (
         <>
-          <div className="gh-detail-title">
-            <span className="github-panel-row-number">#{issue.number}</span> {issue.title}
-            {issue.state === "closed" && <span className="gh-task-chip">closed</span>}
-          </div>
           <div className="gh-detail-meta">
-            {issue.author ?? "unknown"} · updated {formatRelativeAge(Date.parse(issue.updatedAt))}
-            {issue.milestone ? ` · ${issue.milestone}` : ""}
-            {issue.assignees.length > 0 ? ` · assigned to ${issue.assignees.join(", ")}` : ""}
+            {issue.milestone ? `${issue.milestone}` : ""}
+            {issue.assignees.length > 0
+              ? `${issue.milestone ? " · " : ""}assigned to ${issue.assignees.join(", ")}`
+              : ""}
           </div>
           {issue.labels.length > 0 && (
-            <div className="gh-label-row">
+            <div className="gh-issue-card">
               {issue.labels.map((l) => (
                 <LabelChip key={l.name} label={l} />
               ))}
             </div>
           )}
           <div className="gh-detail-actions">
-            <button type="button" disabled={busy !== null} onClick={startSession}>
-              {busy === "session" ? "Starting…" : "Start session"}
-            </button>
+            <Button variant="primary" disabled={busy !== null} onClick={startSession}>
+              {busy === "session"
+                ? "Starting…"
+                : action.kind === "open-existing"
+                  ? "Open session"
+                  : "Start session"}
+            </Button>
             {taskMaster?.enabled && (
-              <button type="button" disabled={busy !== null} onClick={queue}>
-                {busy === "queue" ? "Queueing…" : "Queue for Task Master"}
-              </button>
+              <Button disabled={busy !== null || isQueued} onClick={queue}>
+                {busy === "queue" ? "Queueing…" : isQueued ? "Queued" : "Queue for Task Master"}
+              </Button>
             )}
-            <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
-              Open on GitHub
-            </a>
           </div>
+          {link && (link.sessions.length > 0 || link.task) && (
+            <div className="gh-issue-card">
+              {link.task && <TaskChip task={link.task} />}
+              <SessionPills links={link.sessions} />
+            </div>
+          )}
           {notice && <div className="gh-detail-notice">{notice}</div>}
           {issue.bodyHtml ? (
             <SafeHtml className="gh-html" html={issue.bodyHtml} />
@@ -335,11 +465,7 @@ export function IssueDetailView({
               </div>
               {issue.commentCount > issue.comments.length && (
                 <div className="github-panel-empty-row">
-                  Showing the first {issue.comments.length} —{" "}
-                  <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
-                    open on GitHub
-                  </a>{" "}
-                  for the rest
+                  Showing the first {issue.comments.length} — open on GitHub for the rest
                 </div>
               )}
               {issue.comments.map((c) => (

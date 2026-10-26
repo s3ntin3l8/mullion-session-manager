@@ -154,6 +154,28 @@ describe("buildMullionLinks", () => {
   });
 });
 
+describe("buildMullionLinks issue sessions", () => {
+  it("keys on the issue number, prefers git status, and ignores other projects", () => {
+    const sessions = [
+      makeSession({ id: 1, liveBranch: "main" }),
+      makeSession({ id: 2, liveBranch: "issue-7-old-title" }),
+      makeSession({ id: 3, projectId: 2, liveBranch: "issue-8-x" }),
+      makeSession({ id: 4, liveBranch: null }),
+      makeSession({ id: 5, liveBranch: "issue-70" }),
+    ];
+    const links = buildMullionLinks({
+      project,
+      sessions,
+      tasks: [],
+      sessionGitStatuses: { 1: { branch: "issue-9-slug" }, 4: null },
+    });
+    expect([...links.byIssue.keys()].sort((a, b) => a - b)).toEqual([7, 9, 70]);
+    expect(links.byIssue.get(9)?.sessions[0]?.session.id).toBe(1);
+    expect(links.byIssue.get(7)?.sessions[0]?.session.id).toBe(2);
+    expect(links.byIssue.has(8)).toBe(false);
+  });
+});
+
 describe("useMullionLinks", () => {
   it("builds from the store's sessions, tasks, projects and PR list", () => {
     useDashboardStore.setState({

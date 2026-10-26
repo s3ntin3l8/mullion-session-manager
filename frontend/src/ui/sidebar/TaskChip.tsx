@@ -1,22 +1,6 @@
 import type { Task } from "../../api/types.js";
-import type { Tone } from "../../lib/statusTone.js";
 import { StatusChip } from "./StatusChip.js";
-
-function taskTone(status: string): Tone {
-  switch (status) {
-    case "done":
-      return "success";
-    case "failed":
-      return "danger";
-    case "reviewing":
-      return "warn";
-    case "claimed":
-    case "in_progress":
-      return "info";
-    default:
-      return "neutral";
-  }
-}
+import { taskTone } from "./linkDecisions.js";
 
 export interface TaskChipProps {
   task: Pick<Task, "id" | "status">;

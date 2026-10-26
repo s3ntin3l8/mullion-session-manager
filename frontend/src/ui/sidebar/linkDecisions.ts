@@ -23,6 +23,25 @@ export function severityTone(severity: SessionSeverity): Tone {
 export type SessionAction = { kind: "open-existing"; sessionId: number } | { kind: "start" };
 /** One decision for "Open session" / "Hand off": reuse a live session, else start. */
 export function decideSessionAction(entry: MullionLinkEntry | undefined): SessionAction {
-  const first = entry?.sessions[0];
+  // An entry can hold several sessions (an issue-branch one plus its task's);
+  // a live process beats an exited pane that merely sorts first.
+  const first = entry?.sessions.find((l) => l.session.alive) ?? entry?.sessions[0];
   return first ? { kind: "open-existing", sessionId: first.session.id } : { kind: "start" };
+}
+
+/** Task status → the kit's tone; shared so every task chip agrees. */
+export function taskTone(status: string): Tone {
+  switch (status) {
+    case "done":
+      return "success";
+    case "failed":
+      return "danger";
+    case "reviewing":
+      return "warn";
+    case "claimed":
+    case "in_progress":
+      return "info";
+    default:
+      return "neutral";
+  }
 }
