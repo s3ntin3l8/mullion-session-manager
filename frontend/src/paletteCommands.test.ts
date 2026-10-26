@@ -154,7 +154,7 @@ describe("buildPaletteCommands", () => {
     const ids = buildPaletteCommands(ctx().context)
       .filter((c) => c.movesFocus)
       .map((c) => c.id);
-    expect(ids).toEqual(["external-file", "integrations-settings", "blank-browser"]);
+    expect(ids).toEqual(["integrations-settings", "blank-browser", "external-file"]);
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
