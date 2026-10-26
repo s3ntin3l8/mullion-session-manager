@@ -32,7 +32,7 @@
  *   6. A saved layout that still holds a retired dock `git-<projectId>`
  *      panel (#1976) restores without being wiped: the `git` kind stays
  *      registered as GitPanelRedirect, so fromJSON does not throw. The
- *      panel closes (and its group with it), the Source Control right
+ *      restore sweep closes the panel (and its group with it), the Source Control right
  *      sidebar view opens, the ordinary panel next to it survives, and the
  *      re-saved layout no longer names the git panel.
  *
@@ -343,8 +343,8 @@ async function run(browser, demo, signal) {
     // Same shape as step 5, but the stale panel is a per-project `git-1` of
     // the retired kind. Its kind must still be registered (GitPanelRedirect),
     // otherwise fromJSON reverts the WHOLE layout and the kept group below
-    // would vanish with it. It sits in its own group, so it is that group's
-    // active panel and actually mounts — which is what opens Source Control.
+    // would vanish with it. closeLegacyPanels sweeps it by component kind and
+    // opens Source Control for its project.
     const gitLayout = {
       ...legacyLayout,
       grid: {

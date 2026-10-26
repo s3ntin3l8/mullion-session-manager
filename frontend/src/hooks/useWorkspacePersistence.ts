@@ -332,7 +332,14 @@ export function useWorkspacePersistence({
       // and panelUtils.ts's own doc comments) — kept as its own flag rather
       // than folded into closedKilledPanels above since the two sweeps close
       // panels for unrelated reasons.
-      closedLegacyPanels = closeLegacyPanels(dockviewApi);
+      // A swept retired `git` panel opens its project's Source Control view
+      // (once — several stale panels would just fight over the drawer).
+      let openedSourceControl = false;
+      closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
+        if (kind !== "git" || openedSourceControl) return;
+        openedSourceControl = true;
+        useDashboardStore.getState().openRightSidebarView("git", projectId);
+      });
       // Same self-heal for the five per-project setup panels that are now
       // tabs of one `project-hub` panel (ProjectHubPanel.tsx): converts any
       // restored legacy panel in place and flags the layout for re-save.

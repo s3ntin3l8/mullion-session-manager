@@ -370,10 +370,12 @@ describe("GitPanelRedirectWrapper — the retired dock Git panel", () => {
     return containerApi;
   }
 
-  it("opens Source Control for the saved panel's project and closes itself, once", () => {
+  it("opens Source Control for the saved panel's project and closes itself on click", async () => {
     resetStore();
     const close = vi.fn();
     const containerApi = renderGitPanel(close, { projectId: 7 });
+    expect(close).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /open source control/i }));
     const s = useDashboardStore.getState();
     expect(s.rightSidebarView).toBe("git");
     expect(s.rightSidebarOpen).toBe(true);
@@ -382,15 +384,16 @@ describe("GitPanelRedirectWrapper — the retired dock Git panel", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  it("does not throw when the panel is already gone (swept by closeLegacyPanels)", () => {
+  it("does not throw when the panel is already gone or has no params", async () => {
     resetStore();
     const containerApi = { getPanel: vi.fn(() => undefined) };
     const props = {
-      params: {},
+      params: undefined,
       api: { id: "git-7" },
       containerApi,
     } as unknown as IDockviewPanelProps<{ projectId?: number }>;
     expect(() => render(<components.git {...props} />)).not.toThrow();
+    await userEvent.click(screen.getByRole("button", { name: /open source control/i }));
     expect(useDashboardStore.getState().rightSidebarView).toBe("git");
   });
 });

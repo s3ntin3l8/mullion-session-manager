@@ -1,4 +1,3 @@
-import { useEffect, useRef } from "react";
 import { GitBranchIcon } from "./ui/icons.js";
 
 // The dock Git panel (formerly GitPanel.tsx) is retired: everything it did
@@ -10,20 +9,11 @@ import { GitBranchIcon } from "./ui/icons.js";
 // as TasksPanelRedirect.tsx, whose header has the full dockview-core/ReactPart
 // walk-through). Never delete this key.
 //
-// A restored panel that actually mounts opens Source Control for its project
-// once and then closes itself (via the wrapper's `onOpen`); one that is never
-// mounted (a hidden tab) is swept by panelUtils.ts's closeLegacyPanels, which
-// matches by component kind because the ids are per project. The visible
-// stub is only a fallback for the instant before the panel closes.
+// On restore the panel is normally closed before it can mount:
+// panelUtils.ts's closeLegacyPanels sweeps `git` panels by component kind
+// (ids are per project) right after fromJSON and opens Source Control for
+// them. This stub is the registered fallback; its button does the same by hand.
 export function GitPanelRedirect({ onOpen }: { onOpen: () => void }) {
-  // The effect must fire once per mount even under StrictMode's double-invoke.
-  const fired = useRef(false);
-  useEffect(() => {
-    if (fired.current) return;
-    fired.current = true;
-    onOpen();
-  }, [onOpen]);
-
   return (
     <div className="tasks-panel-redirect">
       <GitBranchIcon size={20} />

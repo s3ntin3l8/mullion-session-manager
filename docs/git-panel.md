@@ -1,17 +1,17 @@
 # GitPanel — branch and worktree management (#442)
 
 > **Retired (#1976).** The dock Git panel no longer exists: every feature below
-> now lives in the Source Control right-sidebar view (`right-sidebar/
-GitSidebarView.tsx`, `git/`). The `git` dockview component is kept only as
-> `GitPanelRedirect` so a saved layout naming a `git-<projectId>` panel still
-> restores; it opens Source Control and closes itself. The rest of this page
-> describes the behaviour, now hosted by the sidebar view.
+> now lives in the Source Control right-sidebar view (`right-sidebar/GitSidebarView.tsx`,
+> `git/`). The `git` dockview component is kept only as `GitPanelRedirect` so a
+> saved layout naming a `git-<projectId>` panel still restores: the restore
+> sweep closes it and opens Source Control for its project. The rest of this
+> page describes the behaviour, now hosted by the sidebar view.
 
 GitPanel gives a project's branches and worktrees a management UI, layered
 on top of the existing read-only branch/worktree listing and the sidebar's
 git-status polling. Open it via the sidebar's Source Control section
 (`SourceControlSection.tsx`'s "Open Source Control" action, issue #433) or the
-command palette ("Source Control") — not the Dock, which is a separate,
+command palette ("Git") — not the Dock, which is a separate,
 shared rail of per-project monitors (see [`dock.md`](dock.md)). It works for
 local- and multi-host (remote-hosted) projects alike, proxying through the
 same `SessionBackend`/`/internal/*` pattern the rest of Mullion's

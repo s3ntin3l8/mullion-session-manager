@@ -1199,12 +1199,24 @@ export function migrateLegacyProjectPanels(
 // effect) knows to persist the cleaned layout — same shape as its existing
 // closedKilledPanels flag, kept separate from it since the two sweeps close
 // panels for unrelated reasons.
-export function closeLegacyPanels(api: DockviewApi): boolean {
+//
+// `onRetiredPanel` is told the `projectId` of each swept retired-kind panel
+// (the dock Git panel): fromJSON renders panel content on a later React pass,
+// so the sweep closes the panel before GitPanelRedirect could ever mount —
+// this callback is how the restore still lands the user in the Source Control
+// sidebar view the panel became.
+export function closeLegacyPanels(
+  api: DockviewApi,
+  onRetiredPanel?: (kind: string, projectId: number | undefined) => void,
+): boolean {
   let closed = false;
   for (const panel of [...api.panels]) {
-    if ((LEGACY_PANEL_KINDS as readonly string[]).includes(panel.api.component)) {
+    const kind = panel.api.component;
+    if ((LEGACY_PANEL_KINDS as readonly string[]).includes(kind)) {
+      const projectId = (panel.params as { projectId?: number } | undefined)?.projectId;
       panel.api.close();
       closed = true;
+      onRetiredPanel?.(kind, projectId);
     }
   }
   for (const id of LEGACY_PANEL_IDS) {

@@ -306,13 +306,14 @@ const GitHubPanelWrapper = makePanelWrapper<GitHubPanelParams>(GitHubPanel);
 // The dock Git panel is retired (Source Control is a right-sidebar view now);
 // this keeps the `git` kind registered so a saved workspace layout that still
 // names one doesn't throw on restore (an unregistered kind makes fromJSON wipe
-// the whole layout) — GitPanelRedirect opens Source Control for the panel's
-// project and the wrapper closes the panel; panelUtils.ts's closeLegacyPanels
-// sweeps the ones that never mount. Never delete this key.
+// the whole layout). On restore, panelUtils.ts's closeLegacyPanels sweeps the
+// panel (opening Source Control) before it can mount; if one is ever seen
+// anyway, GitPanelRedirect's button opens Source Control and closes it.
+// Never delete this key.
 function GitPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
   const [resetKey, resetPanel] = useResetKey();
   const openRightSidebarView = useDashboardStore((s) => s.openRightSidebarView);
-  const { projectId } = props.params;
+  const projectId = props.params?.projectId;
   const { api, containerApi } = props;
   const onOpen = useCallback(() => {
     openRightSidebarView("git", projectId);

@@ -1019,9 +1019,14 @@ describe("closeLegacyPanels", () => {
       ).component;
     }
 
-    const closed = closeLegacyPanels(api);
+    const swept: unknown[] = [];
+    const closed = closeLegacyPanels(api, (kind, projectId) => swept.push([kind, projectId]));
 
     expect(closed).toBe(true);
+    expect(swept).toEqual([
+      ["git", 3],
+      ["git", 9],
+    ]);
     expect(api.getPanel("git-3")!.api.close).toHaveBeenCalledTimes(1);
     expect(api.getPanel("git-9")!.api.close).toHaveBeenCalledTimes(1);
     expect(api.getPanel("github-3")!.api.close).not.toHaveBeenCalled();

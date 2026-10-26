@@ -9,6 +9,7 @@ import type { Workspace } from "../api/index.js";
 // serving both call forms this hook uses: `useDashboardStore.getState()`
 // directly, no selector).
 const saveWorkspaceLayout = vi.fn().mockResolvedValue(undefined);
+const openRightSidebarView = vi.fn();
 let sessions: Array<{
   id: number;
   status: string;
@@ -47,6 +48,7 @@ function storeState() {
     devices,
     devicesLoaded,
     saveWorkspaceLayout,
+    openRightSidebarView,
     settings: { layoutMode },
   };
 }
@@ -456,6 +458,34 @@ describe("useWorkspacePersistence", () => {
     // Done while restoringRef was true, so — like the stale-panel sweep — the
     // restore effect must persist the migrated layout itself.
     expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(0);
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+    expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("sweeps a restored retired git panel and opens Source Control for it, once", () => {
+    vi.useFakeTimers();
+    openRightSidebarView.mockClear();
+    const { api, addPanel } = makeMockApi();
+    const first = addPanel("git-3", { projectId: 3 });
+    const second = addPanel("git-4", { projectId: 4 });
+    (first.api as unknown as { component: string }).component = "git";
+    (second.api as unknown as { component: string }).component = "git";
+
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+
+    expect(first.api.close).toHaveBeenCalledTimes(1);
+    expect(second.api.close).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarView).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("git", 3);
     vi.advanceTimersByTime(0);
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
