@@ -14,6 +14,7 @@ import { usePolling } from "./hooks/usePolling.js";
 import { LIVE_REFRESH_INTERVAL_MS, useDashboardStore } from "./store/index.js";
 import { Toggle } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { Skeleton, SkeletonRegion } from "./ui/Skeleton.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { ProjectFileDiff } from "./SourceControlSection.js";
 import { GitHistorySection } from "./git/GitHistorySection.js";
@@ -617,7 +618,20 @@ export function GitPanel({
         </EmptyStateNote>
       );
     }
-    return <EmptyStateNote>Loading…</EmptyStateNote>;
+    // Branch line, the fetch/pull row, then file rows — the shape the loaded
+    // panel opens with, so status landing doesn't shove the layout down
+    // from a one-word placeholder.
+    return (
+      <SkeletonRegion className="github-panel cmux-scroll" label="Loading git status">
+        <div className="ui-skeleton-stack">
+          <Skeleton width={148} height={14} />
+          <Skeleton height={28} radius={8} />
+          <Skeleton height={18} />
+          <Skeleton height={18} width="90%" />
+          <Skeleton height={18} width="76%" />
+        </div>
+      </SkeletonRegion>
+    );
   }
 
   // Audit finding 28, second half — the STALENESS marker. A status WAS

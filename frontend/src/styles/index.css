@@ -38,3 +38,6 @@
 /* New section — appended last, so the overlay layer sits on top of
    everything above it without any existing rule being reordered. */
 @import "./toasts.css";
+/* New section — appended last so it cannot reorder any earlier rule.
+   Only defines the loading-bone classes (issue #1885). */
+@import "./skeleton.css";

@@ -102,6 +102,27 @@ describe("GitPanel", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows a skeleton instead of the word Loading… while the first git status fetch is in flight", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const { container } = render(<GitPanel params={{ projectId: 4 }} />);
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    const bones = container.querySelectorAll(".ui-skeleton");
+    expect(bones.length).toBeGreaterThan(0);
+    for (const bone of bones) {
+      expect(bone).toHaveAttribute("aria-hidden", "true");
+    }
+    const group = container.querySelector(".ui-skeleton-bones");
+    expect(group).toHaveAttribute("aria-hidden", "true");
+    expect(group).not.toHaveAttribute("aria-busy");
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("visually-hidden");
+    expect(status).toHaveTextContent("Loading git status");
+    expect(status.closest("[aria-busy='true']")).toBeNull();
+  });
+
   it("shows the branch, hash, and a clean-tree message once loaded", async () => {
     vi.stubGlobal("fetch", mockFetch({ status: () => jsonResponse(200, CLEAN_STATUS) }));
     render(<GitPanel params={{ projectId: 1 }} />);

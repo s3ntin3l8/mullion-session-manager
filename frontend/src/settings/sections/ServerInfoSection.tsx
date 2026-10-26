@@ -9,6 +9,7 @@ import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton } from "../../ui/primitives.js";
 import { LogLevelSetting } from "../RuntimeSettings.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { Skeleton } from "../../ui/Skeleton.js";
 import { claimPostUpdateReload } from "../../postUpdateReload.js";
 import { formatBytes } from "../../formatBytes.js";
 
@@ -107,7 +108,31 @@ export function ServerInfoSection() {
         </>
       );
     }
-    return <div className="settings-readonly-value">Loading…</div>;
+    // Banner, then the two-by-two stat cards, then the info lines — the
+    // shape this section has once the probe lands. The word "Loading…"
+    // gave none of that, so the cards jumped in. The status is clipped
+    // off screen. The bones are hidden, so they do not carry aria-busy:
+    // a busy state on an aria-hidden node is never exposed, and putting
+    // it on an ancestor of the status would defer the announcement.
+    return (
+      <div>
+        <span className="visually-hidden" role="status">
+          Loading server status
+        </span>
+        <div className="ui-skeleton-stack" aria-hidden="true">
+          <Skeleton height={40} radius={11} />
+          <div className="settings-stat-grid">
+            <Skeleton height={58} radius={10} />
+            <Skeleton height={58} radius={10} />
+            <Skeleton height={58} radius={10} />
+            <Skeleton height={58} radius={10} />
+          </div>
+          <Skeleton height={14} />
+          <Skeleton height={14} width="86%" />
+          <Skeleton height={14} width="72%" />
+        </div>
+      </div>
+    );
   }
 
   return (

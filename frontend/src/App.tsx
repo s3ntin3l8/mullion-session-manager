@@ -18,9 +18,9 @@ import { MobileKeyBar } from "./MobileKeyBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import type { SettingsSection } from "./Settings.js";
+import { SettingsLoadingFallback } from "./SettingsLoadingFallback.js";
 import { Dock } from "./Dock.js";
 import { GridIcon, RefreshIcon, ServerRackIcon, WarningTriangleIcon } from "./ui/icons.js";
-import { Spinner } from "./ui/Spinner.js";
 import { ToastHost } from "./ui/ToastHost.js";
 import {
   useDashboardStore,
@@ -84,29 +84,6 @@ import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
 // the full trace), leaving Settings' own "Reload pane" unable to ever
 // retry a chunk-load failure on a later reopen.
 const loadSettings = () => import("./Settings.js").then((m) => ({ default: m.Settings }));
-
-// Settings-specific Suspense fallback — the modal shell (backdrop + a
-// centered spinner in place of the panel body) so clicking the gear icon
-// shows immediate feedback while the chunk loads, rather than nothing
-// happening for a beat. Keeps the backdrop clickable (onClose), matching
-// Settings.tsx's own click-outside-to-close behavior, so a slow chunk load
-// doesn't strand the user unable to dismiss it.
-function SettingsLoadingFallback({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="settings-backdrop" onClick={onClose}>
-      <div
-        className="settings-modal"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
-      >
-        <Spinner variant="connecting" />
-      </div>
-    </div>
-  );
-}
 
 const DEFAULT_WORKSPACE_NAME = "Default";
 // Issue #1618 — bounded retry for the initial GET /api/workspaces: up to 5

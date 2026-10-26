@@ -681,7 +681,20 @@ export function UnifiedBoard({
         ref={mainRef}
         style={{ "--task-drawer-width": `${drawerWidth}px` } as CSSProperties}
       >
-        <div className="kanban-unified-tasks">
+        {!tasksLoaded && (
+          <span className="visually-hidden" role="status">
+            Loading tasks
+          </span>
+        )}
+        <div
+          className="kanban-unified-tasks"
+          // Busy marks the columns in flux, not the announcement. The
+          // status is a sibling of this element: aria-busy tells assistive
+          // technology to defer anything inside the subtree, so nesting the
+          // status here would silence it. A role="status" on the region
+          // itself would also read the toolbar out.
+          aria-busy={tasksLoaded ? undefined : true}
+        >
           <TasksToolbar
             creating={creating}
             onToggleCreate={() => setCreating((v) => !v)}
@@ -875,6 +888,7 @@ export function UnifiedBoard({
                   onDragBegin={setDraggingId}
                   onDragFinish={() => setDraggingId(null)}
                   collapsed={hideDone && (column.id === "done" || column.id === "failed")}
+                  loading={!tasksLoaded}
                 />
               );
             })}

@@ -1,0 +1,81 @@
+/* Issue #1885 — the loading bone. Fill and edge are theme tokens only
+   (--fg mixed onto transparency, --border) so a light theme and a dark
+   theme both read a quiet block without a hardcoded grey. The sweep is a
+   highlight passing over that fill: motion that exists only to say "still
+   working", not to convey information.
+
+   The shimmer is its own class, not the base rule, so Skeleton.tsx can
+   leave it off when prefers-reduced-motion is set and the bone stays a
+   static block. The media query below is the same decision in CSS, for a
+   first paint that happens before the media query has been read in JS.
+   tokens.css's universal reset only collapses duration to one 0.01ms
+   iteration — it does not remove the highlight — so `animation: none`
+   here is what actually stops the sweep. `!important` is required to beat
+   that reset's own !important longhands; the selector is more specific
+   than `*`, and this file is imported last.
+
+   The highlight is a ::after overlay translated across an overflow-hidden
+   bone, not a background-position animation on the bone itself.
+   background-position is a paint property, so it would repaint every bone
+   on every frame. translateX stays on the compositor. */
+.ui-skeleton {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border: 1px solid var(--border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.ui-skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+.ui-skeleton-shimmer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in srgb, var(--fg) 16%, transparent) 50%,
+    transparent 80%
+  );
+  transform: translateX(-100%);
+  animation: ui-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+@keyframes ui-skeleton-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui-skeleton-shimmer::after {
+    animation: none !important;
+    /* Static bone: no highlight left sitting on the fill. The initial
+       translate is already off the bone; dropping the pseudo removes it
+       outright when the media query matches before JS reads it. */
+    content: none;
+  }
+}
+
+/* The accessible-hidden group SkeletonRegion wraps bones in. Width is
+   explicit so a bone's percentage width resolves against the panel, not
+   against a shrink-to-fit anonymous box. */
+.ui-skeleton-bones {
+  width: 100%;
+  min-width: 0;
+}
+.ui-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
