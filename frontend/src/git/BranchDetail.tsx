@@ -58,6 +58,8 @@ export function BranchDetail({
     | { kind: "error"; message: string }
     | { kind: "ready"; detail: GitBranchDetail }
   >({ kind: "loading" });
+  // So a double click can't make two sessions.
+  const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState<{ message: string; reason?: string } | null>(null);
 
   useEffect(() => {
@@ -110,11 +112,15 @@ export function BranchDetail({
   };
 
   const openSession = async () => {
+    if (starting) return;
+    setStarting(true);
     try {
       await openSessionOn(projectId, { branch: name });
       setActionError(null);
     } catch (err) {
       setActionError({ message: describeError(err, "Could not start a session.") });
+    } finally {
+      setStarting(false);
     }
   };
 
@@ -327,7 +333,7 @@ export function BranchDetail({
         )}
       </div>
       <div className="sc-sticky">
-        <Button variant="primary" onClick={() => void openSession()}>
+        <Button variant="primary" onClick={() => void openSession()} disabled={starting}>
           <PlayTriangleIcon size={12} /> Open session
         </Button>
         {(entry?.preview || detail?.isCurrent) && (

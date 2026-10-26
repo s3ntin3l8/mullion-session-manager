@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
 import type { GitBranchPruneResult } from "../api/types.js";
 import { describeError } from "../lib/describeError.js";
+import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { TrashIcon } from "../ui/icons.js";
 import { Button, DetailHeader, StatusChip } from "../ui/sidebar/index.js";
 import { PRUNE_SKIP_LABEL, mergeChip } from "./branchGroups.js";
@@ -114,16 +115,17 @@ export function PruneView({ projectId, onBack, onDone }: PruneViewProps) {
       </div>
       {phase.kind === "preview" && (
         <div className="sc-sticky">
-          <Button
-            variant="danger"
-            onClick={() => void confirm()}
+          <ConfirmButton
+            title={`Delete ${selected.size} local branch${selected.size === 1 ? "" : "es"} (remotes are never touched)`}
+            onConfirm={() => void confirm()}
             disabled={busy || selected.size === 0}
+            armedLabel={`Delete ${selected.size}`}
           >
             <TrashIcon size={12} />{" "}
             {busy
               ? "Deleting…"
               : `Delete ${selected.size} branch${selected.size === 1 ? "" : "es"}`}
-          </Button>
+          </ConfirmButton>
           <Button variant="ghost" onClick={onBack} disabled={busy}>
             Cancel
           </Button>

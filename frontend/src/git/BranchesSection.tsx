@@ -69,6 +69,8 @@ export function BranchesSection({
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const pushToast = useDashboardStore((s) => s.pushToast);
   const [filter, setFilter] = useState("");
+  // So a double click can't make two sessions racing the worktree the first creates.
+  const [opening, setOpening] = useState<ReadonlySet<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
   const [prevProjectId, setPrevProjectId] = useState(projectId);
   if (projectId !== prevProjectId) {
@@ -84,16 +86,22 @@ export function BranchesSection({
     [branches, worktrees, defaultBranch, links, openPrBranches, filter],
   );
 
-  const setError = (name: string, error: RowError | null) =>
+  // Keyed by project: a request that settles after a project switch must not
+  // paint on the new project's same-named branch (its Force would carry the
+  // old project's id).
+  const errorKey = (pid: number, name: string) => `${pid}:branch:${name}`;
+  const setError = (name: string, error: RowError | null) => {
+    const key = errorKey(projectId, name);
     setRowErrors((prev) => {
       if (error === null) {
-        if (!(name in prev)) return prev;
+        if (!(key in prev)) return prev;
         const next = { ...prev };
-        delete next[name];
+        delete next[key];
         return next;
       }
-      return { ...prev, [name]: error };
+      return { ...prev, [key]: error };
     });
+  };
 
   const deleteBranch = async (name: string, force = false) => {
     try {
@@ -114,11 +122,20 @@ export function BranchesSection({
   };
 
   const openSession = async (name: string) => {
+    const flightKey = `${projectId}:${name}`;
+    if (opening.has(flightKey)) return;
+    setOpening((prev) => new Set(prev).add(flightKey));
     try {
       await openSessionOn(projectId, { branch: name });
       setError(name, null);
     } catch (err) {
       setError(name, { message: describeError(err, "Could not start a session.") });
+    } finally {
+      setOpening((prev) => {
+        const next = new Set(prev);
+        next.delete(flightKey);
+        return next;
+      });
     }
   };
 
@@ -176,7 +193,7 @@ export function BranchesSection({
             const worktree = worktrees.find((w) => w.branch === b.name && !w.isMain);
             const isDefault = isDefaultBranchName(b.name, defaultBranch);
             const merge = b.mergeState && !isDefault ? mergeChip(b.mergeState, b.pr) : null;
-            const error = rowErrors[b.name];
+            const error = rowErrors[errorKey(projectId, b.name)];
             const blocked = b.isCurrent
               ? "Cannot delete the current branch"
               : isDefault
@@ -275,6 +292,7 @@ export function BranchesSection({
                           : "Open session on branch"
                       }
                       onClick={() => void openSession(b.name)}
+                      disabled={opening.has(`${projectId}:${b.name}`)}
                     >
                       <PlayTriangleIcon size={13} />
                     </IconButton>

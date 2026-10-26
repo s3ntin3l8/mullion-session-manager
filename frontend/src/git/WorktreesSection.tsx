@@ -60,16 +60,21 @@ export function WorktreesSection({
   const prByBranch = useMemo(() => new Map((prs ?? []).map((p) => [p.headBranch, p])), [prs]);
   const branchByName = useMemo(() => new Map(branches.map((b) => [b.name, b])), [branches]);
 
-  const setError = (path: string, error: RowError | null) =>
+  // Keyed by project: a request settling after a project switch must not paint
+  // on the new project (and its Force would carry the old project's id).
+  const errorKey = (pid: number, path: string) => `${pid}:worktree:${path}`;
+  const setError = (path: string, error: RowError | null) => {
+    const key = errorKey(projectId, path);
     setRowErrors((prev) => {
       if (error === null) {
-        if (!(path in prev)) return prev;
+        if (!(key in prev)) return prev;
         const next = { ...prev };
-        delete next[path];
+        delete next[key];
         return next;
       }
-      return { ...prev, [path]: error };
+      return { ...prev, [key]: error };
     });
+  };
 
   const pruneStale = async () => {
     setPruning(true);
@@ -132,7 +137,7 @@ export function WorktreesSection({
         branch?.mergeState === "pr-merged" ||
         branch?.mergeState === "upstream-gone");
     const basename = w.path.split("/").filter(Boolean).pop() || w.path;
-    const error = rowErrors[w.path];
+    const error = rowErrors[errorKey(projectId, w.path)];
     const hasSessions = (entry?.sessions.length ?? 0) > 0;
     return (
       <SidebarRow

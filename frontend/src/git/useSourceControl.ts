@@ -60,6 +60,26 @@ export function refreshGitEverywhere(projectId: number): void {
   useDashboardStore.getState().bumpGitRefreshTrigger();
 }
 
+interface HealthFields {
+  checking: boolean;
+  health: CloneHealth | null;
+  healthError: string | null;
+  repairPlan: RepairPlan | null;
+  repairOutcome: RepairOutcome | null;
+  repairError: string | null;
+  repairing: boolean;
+}
+
+const EMPTY_HEALTH: HealthFields = {
+  checking: false,
+  health: null,
+  healthError: null,
+  repairPlan: null,
+  repairOutcome: null,
+  repairError: null,
+  repairing: false,
+};
+
 export interface CloneHealthState {
   checking: boolean;
   health: CloneHealth | null;
@@ -85,65 +105,58 @@ export function useCloneHealth(projectId: number, onRepaired: () => void): Clone
   const checkProjectGitHealth = useDashboardStore((s) => s.checkProjectGitHealth);
   const planProjectGitRepair = useDashboardStore((s) => s.planProjectGitRepair);
   const repairProjectGitRepair = useDashboardStore((s) => s.repairProjectGitRepair);
-  const [checking, setChecking] = useState(false);
-  const [health, setHealth] = useState<CloneHealth | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
-  const [repairPlan, setRepairPlan] = useState<RepairPlan | null>(null);
-  const [repairOutcome, setRepairOutcome] = useState<RepairOutcome | null>(null);
-  const [repairError, setRepairError] = useState<string | null>(null);
-  const [repairing, setRepairing] = useState(false);
+  // Tagged with the project it was produced for: a check or repair started on
+  // project A settles later, and must not paint A's verdict on project B.
+  const [state, setState] = useState<HealthFields & { projectId: number }>({
+    projectId,
+    ...EMPTY_HEALTH,
+  });
+  const { checking, health, healthError, repairPlan, repairOutcome, repairError, repairing } =
+    state.projectId === projectId ? state : EMPTY_HEALTH;
 
-  // A project switch drops the previous project's verdict.
-  const [prevProjectId, setPrevProjectId] = useState(projectId);
-  if (prevProjectId !== projectId) {
-    setPrevProjectId(projectId);
-    setHealth(null);
-    setHealthError(null);
-    setRepairPlan(null);
-    setRepairOutcome(null);
-    setRepairError(null);
-  }
+  const patch = useCallback(
+    (pid: number, fields: Partial<HealthFields>) =>
+      setState((prev) => ({
+        ...(prev.projectId === pid ? prev : { projectId: pid, ...EMPTY_HEALTH }),
+        ...fields,
+      })),
+    [],
+  );
 
   const check = useCallback(async () => {
-    setChecking(true);
-    setHealth(null);
-    setHealthError(null);
-    setRepairPlan(null);
-    setRepairOutcome(null);
-    setRepairError(null);
+    patch(projectId, { ...EMPTY_HEALTH, checking: true });
     try {
       const result = await checkProjectGitHealth(projectId);
-      setHealth(result);
+      patch(projectId, { health: result });
       if (!result.healthy && result.gitDir !== null && !result.timedOut) {
         try {
-          setRepairPlan(await planProjectGitRepair(projectId));
+          patch(projectId, { repairPlan: await planProjectGitRepair(projectId) });
         } catch (err) {
-          setRepairError(describeError(err, "the repair plan could not be computed"));
+          patch(projectId, {
+            repairError: describeError(err, "the repair plan could not be computed"),
+          });
         }
       }
     } catch (err) {
-      setHealthError(describeError(err, "the health check failed"));
+      patch(projectId, { healthError: describeError(err, "the health check failed") });
     } finally {
-      setChecking(false);
+      patch(projectId, { checking: false });
     }
-  }, [projectId, checkProjectGitHealth, planProjectGitRepair]);
+  }, [projectId, checkProjectGitHealth, planProjectGitRepair, patch]);
 
   const repair = useCallback(async () => {
-    setRepairing(true);
-    setRepairError(null);
+    patch(projectId, { repairing: true, repairError: null });
     try {
       const outcome = await repairProjectGitRepair(projectId);
-      setRepairOutcome(outcome);
-      setRepairPlan(null);
       // The outcome replaces the pre-repair banner.
-      setHealth(null);
+      patch(projectId, { repairOutcome: outcome, repairPlan: null, health: null });
       onRepaired();
     } catch (err) {
-      setRepairError(describeError(err, "the repair failed"));
+      patch(projectId, { repairError: describeError(err, "the repair failed") });
     } finally {
-      setRepairing(false);
+      patch(projectId, { repairing: false });
     }
-  }, [projectId, repairProjectGitRepair, onRepaired]);
+  }, [projectId, repairProjectGitRepair, onRepaired, patch]);
 
   const planText = useMemo(() => {
     if (!repairPlan) return "";

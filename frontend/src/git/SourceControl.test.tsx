@@ -592,6 +592,7 @@ describe("Prune preview", () => {
     await userEvent.click(screen.getByRole("button", { name: "Select all" }));
     await userEvent.click(screen.getByRole("checkbox", { name: /^anc/ }));
     await userEvent.click(screen.getByRole("button", { name: "Delete 2 branches" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 2" }));
     await waitFor(() =>
       expect(m.pruneProjectGitBranches).toHaveBeenLastCalledWith(1, {
         confirm: true,
@@ -634,6 +635,7 @@ describe("Prune preview", () => {
       .mockRejectedValueOnce(new Error("rate limited"));
     await openPrune();
     await userEvent.click(screen.getByRole("button", { name: "Delete 3 branches" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete 3" }));
     expect(await screen.findByText("rate limited")).toBeInTheDocument();
   });
 });
@@ -937,5 +939,63 @@ describe("Branch detail on a remote host", () => {
     renderView();
     await userEvent.click(await screen.findByRole("button", { name: "misc" }));
     expect(await screen.findByText("mac-mini")).toBeInTheDocument();
+  });
+});
+
+describe("per-project and per-click state", () => {
+  it("does not paint a late refusal on another project's same-named branch", async () => {
+    let settle!: (v: { deleted: boolean; reason: "unmerged" }) => void;
+    m.deleteProjectGitBranch.mockImplementation(() => new Promise((r) => (settle = r)));
+    seed({
+      projects: [makeProject({ id: 1, cwd: "/repo" }), makeProject({ id: 2, cwd: "/other" })],
+    });
+    const { rerender } = renderView();
+    await ready();
+    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Delete branch" }));
+    await userEvent.click(
+      within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
+    );
+    rerender(<GitSidebarView projectId={2} actions={actions} />);
+    await ready();
+    await act(async () => settle({ deleted: false, reason: "unmerged" }));
+    expect(screen.queryByText(/commits not merged/)).toBeNull();
+  });
+
+  it("does not paint a late health verdict on another project", async () => {
+    let settle!: (v: unknown) => void;
+    m.postProjectGitHealth.mockImplementation(() => new Promise((r) => (settle = r)) as never);
+    seed({
+      projects: [makeProject({ id: 1, cwd: "/repo" }), makeProject({ id: 2, cwd: "/other" })],
+    });
+    const { rerender } = renderView();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: /Check clone health/ }));
+    rerender(<GitSidebarView projectId={2} actions={actions} />);
+    await ready();
+    await act(async () => settle({ healthy: true, gitDir: "/x", timedOut: false }));
+    expect(screen.queryByText("This repository is healthy.")).toBeNull();
+  });
+
+  it("starts one session per click in flight, on a branch row and in detail", async () => {
+    let resolve!: () => void;
+    const createSession = vi.fn(
+      () => new Promise((r) => (resolve = () => r(makeSession({ id: 9 })))),
+    );
+    seed({ createSession });
+    m.listProjectActions.mockResolvedValue([{ id: "agent:claude", command: "claude" }] as never);
+    m.getProjectGitBranch.mockResolvedValue(detail({ name: "misc" }));
+    renderView();
+    await ready();
+    const btn = within(rowOf("misc")).getByRole("button", { name: "Open session on branch" });
+    await userEvent.click(btn);
+    await userEvent.click(btn);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+    await act(async () => resolve());
+    await userEvent.click(screen.getByRole("button", { name: "misc" }));
+    await screen.findByText("Commits only on this branch");
+    const open = screen.getByRole("button", { name: /Open session/ });
+    await userEvent.click(open);
+    await userEvent.click(open);
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
   });
 });
