@@ -963,7 +963,7 @@ interface ForcePushedHeadsData {
  * (s3ntin3l8/.github#136). A rebase or a recreated branch drops the reviewed
  * commit from the PR, but the ledger marker stays on it; REST's timeline only
  * names the commit AFTER a force-push, so this is GraphQL. A `beforeCommit`
- * GitHub has already collected comes back null and is skipped. `null` = the
+ * GitHub has already collected comes back null and is skipped. `{ reason }` = the
  * read was not possible (rate limit, a failed or partial answer, a token without
  * access): the caller degrades to the PR's current commits, which can make the
  * relay's base differ from the shared workflow's for that dispatch (a lost
@@ -981,7 +981,7 @@ async function listForcePushedHeads(
   owner: string,
   repo: string,
   prNumber: number,
-): Promise<string[] | null> {
+): Promise<{ heads: string[] } | { reason: string }> {
   validateGitHubRepoRef(owner, repo);
   let data: ForcePushedHeadsData;
   try {
@@ -990,14 +990,15 @@ async function listForcePushedHeads(
       repo,
       number: prNumber,
     });
-  } catch {
+  } catch (err) {
     // A rate limit (already recorded into the shared budget by githubApiFetch), a
-    // token without access, a GraphQL error: all the same to the caller.
-    return null;
+    // token without access, a GraphQL error: the caller degrades the same way for
+    // all of them, and reports why.
+    return { reason: (err as Error).message };
   }
   const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
-  if (!nodes) return null;
-  return nodes.flatMap((n) => (n?.beforeCommit?.oid ? [n.beforeCommit.oid] : []));
+  if (!nodes) return { reason: "the answer had no force-push timeline" };
+  return { heads: nodes.flatMap((n) => (n?.beforeCommit?.oid ? [n.beforeCommit.oid] : [])) };
 }
 
 /**
@@ -1053,11 +1054,18 @@ export async function listReviewMarkers(
     if (data.length < PR_COMMITS_PAGE_SIZE) break;
   }
   const forcePushed = await listForcePushedHeads(prToken, owner, repo, prNumber);
-  if (forcePushed === null) {
-    onError?.("force-push history unreadable, searching the PR's current commits only");
+  if ("reason" in forcePushed) {
+    onError?.(
+      `force-push history unreadable (${forcePushed.reason}), searching the PR's current commits only`,
+    );
   }
   // A head that is still in the PR (it was force-pushed to and then back) is read once.
-  const window = [...new Set([...commits.slice(-MARKER_COMMIT_WINDOW), ...(forcePushed ?? [])])];
+  const window = [
+    ...new Set([
+      ...commits.slice(-MARKER_COMMIT_WINDOW),
+      ...("heads" in forcePushed ? forcePushed.heads : []),
+    ]),
+  ];
   const out: ReviewMarker[] = [];
   const failed: string[] = [];
   for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {

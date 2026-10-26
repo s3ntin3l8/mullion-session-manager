@@ -485,7 +485,10 @@ describe("github-write service", () => {
         );
         expect(markers.map((m) => m.oid)).toEqual(["head"]);
         expect(onError).toHaveBeenCalledTimes(1);
-        expect(onError).toHaveBeenCalledWith(expect.stringContaining("force-push history"));
+        // The reason travels with the report, like the unreadable-commits one.
+        expect(onError).toHaveBeenCalledWith(
+          expect.stringMatching(/force-push history unreadable \(.*500/),
+        );
       });
     });
 
