@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
 import type { GitBranchDetail } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
@@ -48,6 +49,7 @@ export function BranchDetail({
     s.tasks.find((t) => t.projectId === projectId && t.branchName === name),
   );
   const hostId = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.hostId);
+  const hostName = useDashboardStore((s) => s.hosts.find((h) => h.id === hostId)?.name);
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const openRightSidebarHistory = useDashboardStore((s) => s.openRightSidebarHistory);
   const [state, setState] = useState<
@@ -203,10 +205,10 @@ export function BranchDetail({
                   </dd>
                 </>
               )}
-              {hostId && hostId !== "local" && (
+              {hostId && hostId !== LOCAL_HOST_ID && (
                 <>
                   <dt>Host</dt>
-                  <dd>{hostId}</dd>
+                  <dd>{hostName ?? hostId}</dd>
                 </>
               )}
             </dl>

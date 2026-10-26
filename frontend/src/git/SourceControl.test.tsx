@@ -926,3 +926,16 @@ describe("View in History handoff", () => {
     fireEvent.click(document.body);
   });
 });
+
+describe("Branch detail on a remote host", () => {
+  it("names the host", async () => {
+    seed({
+      projects: [makeProject({ id: 1, name: "proj", cwd: "/repo", hostId: "h-1" })],
+      hosts: [makeHost({ id: "h-1", name: "mac-mini" })],
+    });
+    m.getProjectGitBranch.mockResolvedValue(detail({ name: "misc" }));
+    renderView();
+    await userEvent.click(await screen.findByRole("button", { name: "misc" }));
+    expect(await screen.findByText("mac-mini")).toBeInTheDocument();
+  });
+});
