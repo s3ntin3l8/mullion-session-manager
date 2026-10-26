@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   findPullRequestByHead: vi.fn(),
   getPullRequestByNumber: vi.fn(),
   getGitStatus: vi.fn(),
-  isGitRepo: vi.fn(),
+  resolveRepoRoot: vi.fn(),
   listWorktrees: vi.fn(),
   requestHermesReview: vi.fn(),
   requestRelay: vi.fn(),
@@ -61,11 +61,11 @@ vi.mock("../../src/services/github-write.js", async (orig) => ({
 vi.mock("../../src/services/git-status.js", async (orig) => ({
   ...(await orig<typeof GitStatus>()),
   getGitStatus: mocks.getGitStatus,
-  isGitRepo: mocks.isGitRepo,
 }));
 vi.mock("../../src/services/git-refs.js", async (orig) => ({
   ...(await orig<typeof GitRefs>()),
   listWorktrees: mocks.listWorktrees,
+  resolveRepoRoot: mocks.resolveRepoRoot,
 }));
 vi.mock("../../src/services/hermes-review.js", async (orig) => ({
   ...(await orig<typeof HermesReview>()),
@@ -162,7 +162,8 @@ describe("review-request routes", () => {
       markerReadToken: "ghs_checks",
     });
     mocks.getGitStatus.mockResolvedValue({ branch: "feat/thing" });
-    mocks.isGitRepo.mockReturnValue(true);
+    // A live cwd resolves to itself unless a test says it sits inside a repo.
+    mocks.resolveRepoRoot.mockImplementation(async (dir: string) => dir);
     mocks.listWorktrees.mockResolvedValue([
       { path: "/tmp/review-local", branch: "main", isMain: true },
       { path: "/tmp/review-local/.wt/feat-x", branch: "feat/x", isMain: false },
@@ -1081,9 +1082,23 @@ describe("review-request routes", () => {
       expectLookup("live/branch");
     });
 
-    it("ignores a live cwd that is not itself a git repository", async () => {
-      mocks.isGitRepo.mockReturnValue(false);
-      const res = await withLive({ liveCwd: `${worktree}/src`, liveBranch: "live/branch" });
+    it("resolves a subdirectory of the worktree to the worktree's branch", async () => {
+      mocks.resolveRepoRoot.mockImplementation(async (dir: string) =>
+        dir.startsWith(worktree) ? worktree : dir,
+      );
+      mocks.getGitStatus.mockImplementation(async (dir: string) =>
+        dir === worktree ? { branch: "feat/x" } : { branch: "main" },
+      );
+      const res = await withLive({ liveCwd: `${worktree}/src` });
+      expect(res.statusCode).toBe(200);
+      // Status is read at the worktree root: a subdirectory has no .git of its own.
+      expect(mocks.getGitStatus).toHaveBeenCalledWith(worktree, { forceFresh: true });
+      expectLookup("feat/x");
+    });
+
+    it("ignores a live cwd that is not inside any git repository", async () => {
+      mocks.resolveRepoRoot.mockResolvedValue(null);
+      const res = await withLive({ liveCwd: "/tmp/not-a-repo", liveBranch: "live/branch" });
       expect(res.statusCode).toBe(200);
       expect(mocks.listWorktrees).not.toHaveBeenCalled();
       expectLookup("live/branch");

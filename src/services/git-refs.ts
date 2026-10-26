@@ -362,6 +362,19 @@ function parseWorktreePorcelain(output: string): GitWorktreeInfo[] {
 }
 
 /**
+ * The root of the git work tree that contains `cwd` (a worktree's own root
+ * for a linked worktree), or `null` when `cwd` is not inside one, is not a
+ * safe absolute path, or `git` fails. Unlike `isGitRepo` this also accepts a
+ * subdirectory (`.wt/feat-x/src`), which has no `.git` of its own. Never throws.
+ */
+export async function resolveRepoRoot(cwd: string): Promise<string | null> {
+  if (!isSafeAbsolutePath(cwd)) return null;
+  const out = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  const top = out?.trim();
+  return top ? top : null;
+}
+
+/**
  * Lists all worktrees for the repo at `cwd` (`git worktree list --porcelain`)
  * — the repo's main checkout plus any linked worktrees, whoever created them
  * (Mullion, a coding agent's own worktree management, or a manual `git

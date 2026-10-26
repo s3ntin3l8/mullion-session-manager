@@ -3,8 +3,8 @@ import { and, eq, inArray, or } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
-import { getGitStatus, isGitRepo } from "../services/git-status.js";
-import { isWithinAnyWorktree, listWorktrees } from "../services/git-refs.js";
+import { getGitStatus } from "../services/git-status.js";
+import { isWithinAnyWorktree, listWorktrees, resolveRepoRoot } from "../services/git-refs.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken, resolveMarkerTokens } from "../services/github-integration.js";
@@ -198,21 +198,23 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
 }
 
 /**
- * A session's self-reported `liveCwd` (OSC 7 on every `cd`) only when it is
- * inside this project's own repository: the main checkout or one of its
- * worktrees. An agent wanders into any repo it visits, and resolving THAT
- * repo's branch here would look up a PR in this project's repo. Same rule as
- * routes/projects.ts's resolveSessionCwdTargets.
+ * The repo root of a session's self-reported `liveCwd` (OSC 7 on every `cd`),
+ * only when that root is this project's own repository: the main checkout or
+ * one of its worktrees. A `cd` into a subdirectory (`.wt/feat-x/src`) resolves
+ * to its enclosing worktree. An agent also wanders into any repo it visits,
+ * and resolving THAT repo's branch here would look up a PR in this project's
+ * repo. Same membership rule as routes/projects.ts's resolveSessionCwdTargets.
  */
 async function trustedLiveCwd(projectCwd: string, liveCwd: string): Promise<string | null> {
-  if (!isGitRepo(liveCwd)) return null;
+  const root = await resolveRepoRoot(liveCwd);
+  if (!root) return null;
   const worktrees = await listWorktrees(projectCwd);
   if (!worktrees) return null;
   return isWithinAnyWorktree(
-    liveCwd,
+    root,
     worktrees.map((w) => w.path),
   )
-    ? liveCwd
+    ? root
     : null;
 }
 
