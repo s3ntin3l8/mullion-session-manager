@@ -819,13 +819,19 @@ export async function sessionsRoute(app: FastifyInstance) {
       // the project's host, as before.
       const srcHostId = resolveSessionHostId(app, row);
       const rootOnSrcHost = projectCwdOnHost(project, srcHostId, parseHostCwds(project.hostCwds));
-      if (rootOnSrcHost === null) {
+      // The project's path on that host is only needed to anchor a session that
+      // sits inside the project. A session whose own cwd is another repo keeps
+      // the cross-repo behaviour above (it is cut from its own cwd), whether or
+      // not the project has a path on that host; refusing is only right when
+      // there is no cwd to cut from either.
+      if (rootOnSrcHost === null && !row.cwd) {
         return reply.conflict(`The project has no path on host ${srcHostId}`);
       }
-      const projectRoot = path.resolve(rootOnSrcHost);
-      const sourceCwd = row.cwd ? path.resolve(row.cwd) : projectRoot;
+      const projectRoot = rootOnSrcHost === null ? null : path.resolve(rootOnSrcHost);
+      const sourceCwd = row.cwd ? path.resolve(row.cwd) : (projectRoot as string);
       const sourceWithinProject =
-        sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep);
+        projectRoot !== null &&
+        (sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep));
       const repoCwd = sourceWithinProject ? projectRoot : sourceCwd;
       const { baseRef, branchName, seedPrompt } = request.body;
       const resolvedWorktree = await resolveWorktreeCwd(
@@ -1052,23 +1058,20 @@ export async function sessionsRoute(app: FastifyInstance) {
       // said no (persistent), unlike an unreachable host (possibly
       // transient).
       try {
-        await resolveBackend(app, resolveSessionHostId(app, row)).resolvePendingPromote(
-          String(sessionId),
-          {
-            decision: "accepted",
-            worktreePath,
-            newSessionId: created.row.id,
-          },
-        );
+        await resolveBackend(app, srcHostId).resolvePendingPromote(String(sessionId), {
+          decision: "accepted",
+          worktreePath,
+          newSessionId: created.row.id,
+        });
       } catch (err) {
         if (err instanceof HostRequestError) {
           app.log.warn(
-            { hostId: resolveSessionHostId(app, row), sessionId, err },
+            { hostId: srcHostId, sessionId, err },
             "resolvePendingPromote: host rejected the request",
           );
         } else {
           app.log.warn(
-            { hostId: resolveSessionHostId(app, row), sessionId, err },
+            { hostId: srcHostId, sessionId, err },
             "resolvePendingPromote: host unreachable",
           );
         }

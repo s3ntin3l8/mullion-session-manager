@@ -211,9 +211,11 @@ the worker's worktree.
 
 **Promoting a session to a worktree** (`promote_to_worktree`) is not re-placed.
 The worktree is cut on the host the source session runs on, from the
-project's path on that host, and the replacement session is pinned there
+project's path on that host (or from the session's own directory when that is
+a different repository), and the replacement session is pinned there
 even on an `auto` project — its `cwd` only exists on that machine. If the
-project has no path on that host (`hostCwds`), the promote is refused (409).
+project has no path on that host (`hostCwds`) and the session has no directory
+of its own to cut from, the promote is refused (409).
 
 **How the choice is made.**
 
