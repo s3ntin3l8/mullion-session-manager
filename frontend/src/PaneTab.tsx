@@ -12,6 +12,7 @@ import { HostStatusLabel } from "./HostStatusLabel.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
+import { sameCwd } from "./lib/sameCwd.js";
 
 // Below this tab width the status badge ("Working"/"Idle"/"Attention") no
 // longer fits alongside the dot, name, and the two action buttons, and would
@@ -83,7 +84,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // the main checkout's branch, while git status correctly resolves against
   // the worktree cwd via resolveSessionCwdTargets + OSC 7 liveCwd tracking.
   const effectiveCwd = session?.liveCwd ?? session?.cwd ?? project?.cwd;
-  const inWorktree = effectiveCwd !== project?.cwd && project?.cwd !== undefined;
+  const inWorktree = !sameCwd(effectiveCwd, project?.cwd) && project?.cwd !== undefined;
   const displayBranch = inWorktree
     ? (sessionGitStatus?.branch ?? session?.liveBranch ?? project?.currentBranch ?? null)
     : (session?.liveBranch ?? sessionGitStatus?.branch ?? project?.currentBranch ?? null);
