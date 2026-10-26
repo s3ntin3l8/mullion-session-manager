@@ -678,7 +678,8 @@ performs its own HMAC verification and does not require app-level auth.
 
 The four sidebar write routes above (#1672) answer a 403 when GitHub refuses
 the write for lack of access (including GraphQL's permission errors, which
-GitHub returns as HTTP 200, for an App token or a PAT alike), a 422 when it
+GitHub returns as HTTP 200, for an App token or a PAT alike), a 404 when the
+issue or PR number is not in the repository, a 422 when it
 refuses the content (an unknown thread id, an out-of-range line), carrying
 GitHub's own reason, or Mullion's explanation for a self-approval, a 429 while
 the rate limit is in effect, and a 502 when no write token is available or

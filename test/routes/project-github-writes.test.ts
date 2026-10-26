@@ -410,23 +410,27 @@ describe("GitHub sidebar write routes (#1672)", () => {
       expect(bad.statusCode).toBe(400);
     });
 
-    it("maps a write 404 (no access) to 403 and a rate limit to 429", async () => {
-      let res429 = false;
+    it("maps a write 404 to 404, a 403 to 403 and a rate limit to 429", async () => {
+      let status = 404;
       mockGithub({
         rest: () =>
-          res429
+          status === 429
             ? new Response("{}", {
                 status: 429,
                 headers: { "retry-after": "60", "content-type": "application/json" },
               })
-            : jsonResponse(404, { message: "Not Found" }),
+            : jsonResponse(status, { message: "nope" }),
       });
       const app = await makeApp();
       const id = await connectedProject(app);
       const url = `/api/projects/${id}/github/issues/7/comments`;
+      const missing = await app.inject({ method: "POST", url, payload: { body: "hi" } });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json().message).toMatch(/not found in this repository/);
+      status = 403;
       const forbidden = await app.inject({ method: "POST", url, payload: { body: "hi" } });
       expect(forbidden.statusCode).toBe(403);
-      res429 = true;
+      status = 429;
       const limited = await app.inject({ method: "POST", url, payload: { body: "hi" } });
       expect(limited.statusCode).toBe(429);
     });

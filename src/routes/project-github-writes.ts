@@ -62,6 +62,14 @@ function replyWriteError(reply: FastifyReply, err: unknown, what: string): Fasti
   if (err instanceof GitHubRateLimitError || (graphqlError && /rate limit/i.test(err.message))) {
     return reply.code(429).send({ message: "GitHub rate limit is in effect", statusCode: 429 });
   }
+  // A REST 404 on a write is a number this repo does not have (a token
+  // without write access gets a 403 from a repo it can read).
+  if (err instanceof GitHubWriteScopeError && err.statusCode === 404) {
+    return reply.code(404).send({
+      message: `GitHub refused to ${what}: not found in this repository`,
+      statusCode: 404,
+    });
+  }
   // "Resource not accessible by integration" (App token) / "… by personal
   // access token" (fine-grained PAT) / "… not been granted the required
   // scopes" (classic PAT) are GraphQL's permission refusals.

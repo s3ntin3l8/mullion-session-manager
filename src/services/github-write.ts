@@ -699,6 +699,11 @@ export async function createPullRequestReview(
     event?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   },
 ): Promise<{ id: number; htmlUrl: string }> {
+  // Inline comments are anchored to `commitId`'s diff; without it GitHub
+  // would anchor them to whatever the head is when this lands.
+  if (params.comments?.length && !params.commitId) {
+    throw new Error("createPullRequestReview: inline comments need a commitId");
+  }
   const result = await githubRequest<{ id: number; html_url: string }>(
     token,
     owner,

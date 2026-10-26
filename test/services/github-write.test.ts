@@ -725,6 +725,16 @@ describe("github-write service", () => {
     );
   });
 
+  it("refuses inline comments without a commitId to anchor them to", async () => {
+    await expect(
+      createPullRequestReview("tok", "owner", "repo", 9, {
+        body: "x",
+        comments: [{ path: "a.go", line: 1, body: "y" }],
+      }),
+    ).rejects.toThrow(/need a commitId/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("posts undefined comments when none are given", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(201, {

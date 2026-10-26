@@ -6,8 +6,9 @@ import type { GitHubPrDetailComment, GitHubPrDetailThread } from "../api/types.j
  * Reply to / resolve a PR's review threads (#1672), with each write shown at
  * once from its own response. A refetch right after a write can still answer
  * from before it (GitHub's read-after-write is not immediate), so the posted
- * reply and the resolved flag are overlaid on whatever the server returns
- * until the server's own copy carries them.
+ * reply and the resolved flag are overlaid on whatever the server returns.
+ * Once the server's copy carries them the overlay adds nothing; the entries
+ * themselves live as long as the view.
  */
 export function usePrThreadWrites(projectId: number, number: number, refresh: () => void) {
   const [resolved, setResolved] = useState<ReadonlySet<string>>(new Set());
@@ -39,9 +40,18 @@ export function usePrThreadWrites(projectId: number, number: number, refresh: ()
   const patch = useCallback(
     (threads: GitHubPrDetailThread[]): GitHubPrDetailThread[] =>
       threads.map((t) => {
-        const own = (replies[t.id] ?? []).filter(
-          (c) => !t.comments.some((s) => s.createdAt === c.createdAt && s.author === c.author),
-        );
+        // A posted reply carries no id, so match it to a server comment by
+        // author and time, one for one: two replies in the same second
+        // still need two server comments before both stop being overlaid.
+        const unmatched = [...t.comments];
+        const own = (replies[t.id] ?? []).filter((c) => {
+          const i = unmatched.findIndex(
+            (s) => s.createdAt === c.createdAt && s.author === c.author,
+          );
+          if (i === -1) return true;
+          unmatched.splice(i, 1);
+          return false;
+        });
         if (own.length === 0 && !resolved.has(t.id)) return t;
         return {
           ...t,
