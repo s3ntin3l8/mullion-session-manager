@@ -795,8 +795,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     //   opencode    -> opencode/opencode-go
     //                            the OpenCode Go usage API. opencode is a
     //                            multi-provider CLI, so the target names the
-    //                            opencode provider: only tasks whose model is
-    //                            `opencode-go/…` are held. A provider's quota
+    //                            opencode provider: a task whose model is
+    //                            `opencode-go/…` is held when Go is out. A task
+    //                            with NO resolved model (the stock install)
+    //                            could run on any provider, so it is held when
+    //                            any mapped opencode provider is out. A
+    //                            provider's quota
     //                            that opencode spends too (xai, openrouter,
     //                            minimax-coding-plan, …) is added per install
     //                            as e.g. `xai: "opencode/xai"`, or a list
