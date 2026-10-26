@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
 import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
-import { Readable, Transform } from "node:stream";
+import { Readable, Transform, pipeline } from "node:stream";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { WebSocket as NodeWebSocket } from "ws";
 import {
@@ -194,6 +194,19 @@ const UPLOAD_REQUEST_TIMEOUT_MS = 60_000;
 // IDLE timeout instead: it re-arms on every chunk that moves, and only fires
 // when the link has gone quiet for this long.
 const TRANSFER_IDLE_TIMEOUT_MS = 30_000;
+let transferIdleTimeoutMs = TRANSFER_IDLE_TIMEOUT_MS;
+// Test escape hatch (same shape as overrideDefaultRequestTimeoutForTests): a
+// stalled-agent test shouldn't have to wait half a minute of real time.
+export function overrideTransferIdleTimeoutForTests(ms: number): () => void {
+  if (!Number.isFinite(ms) || ms <= 0 || ms > 2 ** 31 - 1) {
+    throw new RangeError(`idle timeout override must be in (0, 2^31-1] ms, got ${ms}`);
+  }
+  const previous = transferIdleTimeoutMs;
+  transferIdleTimeoutMs = ms;
+  return () => {
+    transferIdleTimeoutMs = previous;
+  };
+}
 
 // #484 — the four new task-git proxy calls each wrap an agent-side git
 // shell-out with its own timeout (git-push.ts/git-refs.ts/git-status.ts/
@@ -1311,7 +1324,7 @@ export class RemoteHostClient {
     const query = new URLSearchParams({ cwd, path: relPath });
     if (opts.mkdirs) query.set("mkdirs", "1");
     const requestTarget = `/internal/project-files/upload?${query.toString()}`;
-    const idle = this.idleAbort(TRANSFER_IDLE_TIMEOUT_MS);
+    const idle = this.idleAbort(transferIdleTimeoutMs);
     const metered = body.pipe(
       new Transform({
         transform(chunk, _enc, cb) {
@@ -1339,21 +1352,34 @@ export class RemoteHostClient {
         dispatcher: this.pinnedDispatcher(),
       } as RequestInit & { duplex: "half" });
     } catch (err) {
+      idle.clear();
       // fetch failed before a response existed; drop the unread body so the
       // caller's connection is not held open.
       body.unpipe(metered);
       metered.destroy();
       body.resume();
       throw new HostUnreachableError(this.hostId, err);
-    } finally {
-      idle.clear();
     }
+    // Headers are in, but the (small) result body is not: keep the idle clock
+    // running through it, freshly armed, so a stalled agent can't hang the
+    // upload request — and the browser's XHR behind it — forever.
+    idle.touch();
     try {
       // Read the JSON refusal (409/413 carry `code`) BEFORE discarding the
       // request body. Destroying a still-uploading body first makes undici
       // tear down the connection the response is arriving on.
       return await this.readJsonResponse<{ path: string; size: number }>(res);
+    } catch (err) {
+      // An abort from the idle timer surfaces as a fetch/body error: that is
+      // the agent going quiet, not a refusal.
+      if (err instanceof HostRequestError) throw err;
+      if (idle.signal.aborted) throw new HostUnreachableError(this.hostId, err);
+      throw err;
     } finally {
+      idle.clear();
+      // The agent may have answered (a 409, a 413) while the body was still
+      // arriving: discard the rest, so the primary can reply to its own client
+      // instead of resetting the connection under it.
       body.unpipe(metered);
       metered.destroy();
       body.resume();
@@ -1374,7 +1400,7 @@ export class RemoteHostClient {
     const open = async () => {
       const requestTarget = "/internal/project-files/download";
       const payload = JSON.stringify({ cwd, path: relPath });
-      const idle = this.idleAbort(TRANSFER_IDLE_TIMEOUT_MS);
+      const idle = this.idleAbort(transferIdleTimeoutMs);
       try {
         const res = await fetch(`${this.baseUrl}${requestTarget}`, {
           method: "POST",
@@ -1413,18 +1439,20 @@ export class RemoteHostClient {
     // empty file" and truncate the download the primary then serves.
     const rawLength = res.headers.get("content-length");
     const size = rawLength !== null && /^\d+$/.test(rawLength) ? Number(rawLength) : null;
-    const stream = Readable.fromWeb(res.body as WebReadableStream).pipe(
-      new Transform({
-        transform(chunk, _enc, cb) {
-          idle.touch();
-          cb(null, chunk);
-        },
-        flush(cb) {
-          idle.clear();
-          cb();
-        },
-      }),
-    );
+    const stream = new Transform({
+      transform(chunk, _enc, cb) {
+        idle.touch();
+        cb(null, chunk);
+      },
+      flush(cb) {
+        idle.clear();
+        cb();
+      },
+    });
+    // pipeline, not .pipe(): a body that errors (the idle abort, a dropped
+    // connection) must END `stream` with that error. Piping leaves the output
+    // open forever — the primary's reply to its client would hang.
+    pipeline(Readable.fromWeb(res.body as WebReadableStream), stream, () => idle.clear());
     // An aborted/stalled body must not leave the idle timer armed.
     stream.on("close", () => idle.clear());
     return {

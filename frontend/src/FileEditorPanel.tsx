@@ -3,9 +3,9 @@ import { api, ApiError } from "./api/index.js";
 import type { ProjectDirEntry, ProjectFileContent, ProjectSearchListing } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
 import { NonTextFileView, type NonTextReason } from "./components/NonTextFileView.js";
-import { useProjectUploads } from "./hooks/useProjectUploads.js";
+import { useTreeUploads } from "./hooks/useTreeUploads.js";
 import { useUploadDropTarget } from "./hooks/useUploadDropTarget.js";
-import { itemsFromInput, type UploadItem } from "./lib/dropped-files.js";
+import { TreeUploadInputs } from "./ui/TreeUploadInputs.js";
 import { UploadStatus } from "./ui/UploadStatus.js";
 import {
   DownloadIcon,
@@ -94,8 +94,6 @@ function FileEditorBody({
   // A file that exists but isn't editable as text: shown with a Download (and
   // an inline preview for an image) instead of an error.
   const [nonText, setNonText] = useState<{ path: string; reason: NonTextReason } | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const folderInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -400,40 +398,25 @@ function FileEditorBody({
     }
   }, [renaming, projectId, sessionId, file, nonText, forgetSubtree, loadDir, openFile]);
 
-  // Upload into a folder (the selected one, or the one a file/folder was
-  // dropped on) and re-list everything open: a folder upload creates subfolders.
-  const expandedRef = useRef(expanded);
-  useEffect(() => {
-    expandedRef.current = expanded;
-  });
-  const afterUpload = useCallback(
-    (targetDir: string) => {
-      setExpanded((prev) => new Set(prev).add(targetDir));
-      void Promise.all([...new Set([targetDir, ...expandedRef.current])].map((d) => loadDir(d)));
+  const expandDir = useCallback(
+    (dirPath: string) => {
+      setExpanded((prev) => new Set(prev).add(dirPath));
+      void loadDir(dirPath);
     },
     [loadDir],
   );
-  // Names already listed in a folder we have loaded: an upload onto one is
-  // refused without sending its body (the server still decides).
-  const dirsRef = useRef(dirs);
-  useEffect(() => {
-    dirsRef.current = dirs;
+  const tree = useTreeUploads({
+    projectId,
+    sessionId,
+    dirs,
+    expanded,
+    selectedDir,
+    expandDir,
+    loadDir,
+    onTruncated: () =>
+      setTreeError("That folder is too large to upload in one go — some files were left out"),
   });
-  const existsHint = useCallback((path: string) => {
-    const slash = path.lastIndexOf("/");
-    const entries = dirsRef.current[slash < 0 ? "" : path.slice(0, slash)]?.entries;
-    return entries?.some((e) => e.name === path.slice(slash + 1)) ?? false;
-  }, []);
-  const uploads = useProjectUploads({ projectId, sessionId, onUploaded: afterUpload, existsHint });
-  const startUpload = uploads.upload;
-  const { dropKey, dropProps } = useUploadDropTarget(
-    (items: UploadItem[], dir: string) => void startUpload(items, dir),
-    () => setTreeError("That folder is too large to upload in one go — some files were left out"),
-  );
-  const pickFiles = (files: FileList | null, input: HTMLInputElement) => {
-    if (files && files.length > 0) void startUpload(itemsFromInput(files), selectedDir);
-    input.value = ""; // the same selection can be picked again
-  };
+  const { dropKey, dropProps } = useUploadDropTarget(tree.onUpload, tree.onTruncated);
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
     const dir = dirs[dirPath];
@@ -604,21 +587,10 @@ function FileEditorBody({
           className={`agent-rules-panel-list file-editor-tree cmux-scroll${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
           {...dropProps(selectedDir, ROOT_DROP_KEY)}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            aria-label="Upload files"
-            onChange={(e) => pickFiles(e.target.files, e.target)}
-          />
-          <input
-            ref={folderInputRef}
-            type="file"
-            hidden
-            aria-label="Upload folder"
-            {...({ webkitdirectory: "" } as Record<string, string>)}
-            onChange={(e) => pickFiles(e.target.files, e.target)}
+          <TreeUploadInputs
+            fileRef={tree.fileInputRef}
+            folderRef={tree.folderInputRef}
+            onPick={tree.pickFiles}
           />
           <div className="file-editor-tree-actions">
             <button
@@ -646,24 +618,24 @@ function FileEditorBody({
             </button>
             <button
               className="git-panel-fetch-btn"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => tree.fileInputRef.current?.click()}
               title={`Upload files to ${selectedDir || "the project root"}`}
             >
               Upload
             </button>
             <button
               className="git-panel-fetch-btn"
-              onClick={() => folderInputRef.current?.click()}
+              onClick={() => tree.folderInputRef.current?.click()}
               title={`Upload a folder to ${selectedDir || "the project root"}`}
             >
               Upload folder
             </button>
           </div>
           <UploadStatus
-            progress={uploads.progress}
-            errors={uploads.errors}
-            onCancel={uploads.cancel}
-            onDismiss={uploads.dismissErrors}
+            progress={tree.uploads.progress}
+            errors={tree.uploads.errors}
+            onCancel={tree.uploads.cancel}
+            onDismiss={tree.uploads.dismissErrors}
           />
           <input
             ref={searchInputRef}
