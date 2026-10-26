@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sessionCheckoutRoot, sessionIdOfPanel } from "./sessionCheckout.js";
+import { sessionCheckoutRoot } from "./sessionCheckout.js";
 
 const project = { cwd: "/work/app" };
 
@@ -21,17 +21,4 @@ describe("sessionCheckoutRoot", () => {
     );
     expect(sessionCheckoutRoot({ cwd: "/work/app2" }, project)).toBe("/work/app2");
   });
-});
-
-describe("sessionIdOfPanel", () => {
-  it.each([
-    ["session-12", 12],
-    ["timeline-3", 3],
-    ["browserPane-7", 7],
-    ["file-4-@9-src%2Fa.ts", 9],
-  ])("%s -> %i", (id, n) => expect(sessionIdOfPanel(id)).toBe(n));
-  it.each([null, "git-4", "file-4-src%2Fa.ts", "file-4-s9-src%2Fa.ts", "settings", "session-x"])(
-    "%s -> null",
-    (id) => expect(sessionIdOfPanel(id)).toBeNull(),
-  );
 });

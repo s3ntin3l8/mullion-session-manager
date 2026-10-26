@@ -3016,6 +3016,14 @@ describe("sessionIdFromPanelId", () => {
     expect(sessionIdFromPanelId("browserPane-3")).toBe(3);
   });
 
+  it("extracts it from a file panel opened from a session-rooted tree, so its row stays active", () => {
+    expect(sessionIdFromPanelId(filePanelId(4, "src/a.ts", 9))).toBe(9);
+    // the project's own file panel belongs to no session, and neither can a file name fake it
+    expect(sessionIdFromPanelId(filePanelId(4, "src/a.ts"))).toBeNull();
+    expect(sessionIdFromPanelId(filePanelId(4, "@9-x"))).toBeNull();
+    expect(sessionIdFromPanelId(filePanelId(4, "s9-x"))).toBeNull();
+  });
+
   it("returns null for ids that don't carry a session id", () => {
     expect(sessionIdFromPanelId("device-1")).toBeNull();
     expect(sessionIdFromPanelId("taskDetail-4")).toBeNull();

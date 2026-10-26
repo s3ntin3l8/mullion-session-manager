@@ -487,7 +487,9 @@ export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): n
  * The session id encoded in a dockview panel id, or null.
  *
  * Panel ids are `<kind>-<sessionId>` for the kinds that belong to a
- * session — `session-12`, `timeline-12`, `browserPane-12`. Used to answer
+ * session — `session-12`, `timeline-12`, `browserPane-12` — and an editor-only
+ * file panel opened from a session-rooted file tree is
+ * `file-<projectId>-@<sessionId>-<path>` (see filePanelId). Used to answer
  * "is this session the one currently open?" without needing the panel
  * object, which the sidebar's rows do not have.
  *
@@ -496,8 +498,9 @@ export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): n
  */
 export function sessionIdFromPanelId(panelId: string | null | undefined): number | null {
   if (!panelId) return null;
-  const match = panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-  return match ? parseInt(match[1], 10) : null;
+  const match =
+    panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/) ?? panelId.match(/^file-\d+-@(\d+)-/);
+  return match ? parseInt(match[1]!, 10) : null;
 }
 
 // #98 item 4's auto-focus-on-attention effect (App.tsx) — which panel ids

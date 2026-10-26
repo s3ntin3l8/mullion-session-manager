@@ -1,5 +1,6 @@
 import { useDashboardStore } from "../store/index.js";
-import { sessionCheckoutRoot, sessionIdOfPanel } from "../lib/sessionCheckout.js";
+import { sessionCheckoutRoot } from "../lib/sessionCheckout.js";
+import { sessionIdFromPanelId } from "../panelUtils.js";
 
 // The session whose own checkout the focused dockview panel is in, when that
 // checkout is not the project's — a git worktree session. The sidebar's file
@@ -11,7 +12,7 @@ export function useFollowedCheckoutSession(projectId: number | null): number | n
   const activePanelId = useDashboardStore((s) => s.activePanelId);
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
-  const sessionId = sessionIdOfPanel(activePanelId);
+  const sessionId = sessionIdFromPanelId(activePanelId);
   if (sessionId === null || projectId === null) return null;
   const session = sessions.find((x) => x.id === sessionId);
   const project = projects.find((x) => x.id === projectId);

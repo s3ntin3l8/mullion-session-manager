@@ -20,14 +20,3 @@ export function sessionCheckoutRoot(
   if (!isWithin(root, cwd)) return cwd;
   return relativeAbs(root, cwd).startsWith(`${WORKTREE_DIR}/`) ? cwd : null;
 }
-
-/** The session a dockview panel belongs to, if it is one that is tied to a
- * session's checkout: its terminal / timeline / browser panes, and the
- * editor-only file panels opened from a session-rooted tree (`file-<project>-
- * @<session>-<path>`). */
-export function sessionIdOfPanel(panelId: string | null): number | null {
-  if (!panelId) return null;
-  const m =
-    panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/) ?? panelId.match(/^file-\d+-@(\d+)-/);
-  return m ? parseInt(m[1]!, 10) : null;
-}

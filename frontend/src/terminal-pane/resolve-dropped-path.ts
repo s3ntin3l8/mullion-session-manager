@@ -4,13 +4,14 @@ import { sessionCheckoutRoot } from "../lib/sessionCheckout.js";
 
 /** What to type into a terminal for a file dragged out of a file tree.
  *
- *  - Same project: the path relative to the terminal's own directory, and the
+ *  - Same project: the path relative to the session's directory, and the
  *    same file in ITS checkout — a worktree session gets its worktree's copy,
  *    not the main checkout's, whichever tree the file was dragged from.
  *  - Another project (or a session with no project): the absolute path.
  *
- * `target.cwd` is the session's directory (null = it inherits the project's);
- * `target.projectCwd` the project's. Falls back to the absolute path when no
+ * `target.cwd` is the session's configured directory (null = it inherits the
+ * project's) — where the session was started, not necessarily where its shell is
+ * now after a `cd`; `target.projectCwd` the project's. Falls back to the absolute path when no
  * sensible relative one exists (the terminal's directory is outside the
  * checkout the file is in). */
 export function resolveDroppedPath(
