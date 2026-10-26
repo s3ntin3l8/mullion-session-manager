@@ -48,7 +48,7 @@ import { useDashboardStore } from "../store/index.js";
  * Every map carries the same fields: byWorktree takes preview / review run from
  * the branch its worktree is on, byIssue from the task and triage run.
  * `taskOwned` means the branch (or worktree) IS the task's own, not merely that
- * a task's session is on it.
+ * a task's session is on it; on an issue entry it means a task tracks the issue.
  *
  * Joins: sessions by `liveBranch`/`previewBranch` and `liveCwd`/`cwd`; a PR's
  * sessions via `matchSessionPr` (a task's recorded PR number beats the branch);
@@ -227,7 +227,7 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
     entry.taskOwned =
       task?.worktreePath === path || list.some((s) => isTaskBranch(sessionBranch(s)));
     // Preview / review run come from the branch this worktree is on.
-    const branch = task?.branchName ?? list.map(sessionBranch).find(Boolean) ?? null;
+    const branch = list.map(sessionBranch).find(Boolean) ?? task?.branchName ?? null;
     const byBranch = branch ? out.byBranch.get(branch) : undefined;
     entry.preview = byBranch?.preview ?? null;
     entry.reviewRun = byBranch?.reviewRun ?? null;
@@ -277,6 +277,8 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
     const entry = emptyEntry(devServer);
     const task = projectTasks.find((t) => t.issueNumber === number) ?? null;
     entry.task = task;
+    // For an issue, "owned" means a task tracks it (there is no branch).
+    entry.taskOwned = !!task;
     if (task) {
       fill(
         entry,

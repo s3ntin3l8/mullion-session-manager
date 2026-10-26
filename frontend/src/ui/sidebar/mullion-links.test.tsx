@@ -151,6 +151,7 @@ describe("LinkedActions", () => {
     });
     render(<LinkedActions entry={e} />);
     expect(screen.queryByRole("button", { name: "Stop review" })).toBeNull();
+    expect(screen.getByText("Review status unverified")).toBeInTheDocument();
   });
 
   it("hides Stop review for a landed run", () => {

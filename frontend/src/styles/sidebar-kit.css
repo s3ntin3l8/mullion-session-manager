@@ -504,14 +504,15 @@ button.sb-chip:focus-visible,
   max-width: 100%;
   padding: 1px 7px;
   border-radius: 999px;
-  border: 1px solid var(--status-neutral-border);
-  background: var(--status-neutral-bg);
-  color: var(--status-neutral-fg);
+  /* Colours come from the .sb-chip--<tone> class on the same element. */
+  border-width: 1px;
+  border-style: solid;
   font-size: 0.6875rem;
   cursor: pointer;
 }
 .sb-pill:focus-visible {
   outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
 }
 .sb-pill-dot {
   width: 7px;
@@ -537,4 +538,8 @@ button.sb-chip:focus-visible,
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.sb-linked-note {
+  font-size: 0.6875rem;
+  color: var(--status-warn-fg);
 }

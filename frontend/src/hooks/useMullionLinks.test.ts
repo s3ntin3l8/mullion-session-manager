@@ -147,6 +147,7 @@ describe("buildMullionLinks", () => {
     expect(links.byBranch.get("feat/x")?.preview?.slug).toBe("p");
     expect(links.byBranch.has("zzz")).toBe(false);
     expect(links.byIssue.get(42)?.task).toBe(task);
+    expect(links.byIssue.get(42)?.taskOwned).toBe(true);
     expect(links.byIssue.get(42)?.sessions[0]?.session.id).toBe(8);
     expect(links.byIssue.get(42)?.reviewRun?.kind).toBe("issue");
     expect(links.byIssue.get(43)?.task).toBeNull();
@@ -201,6 +202,15 @@ describe("review/preview consistency across maps", () => {
     });
     expect(links.byWorktree.get("/wt/t7")?.reviewRun?.runId).toBe("r21");
     expect(links.byWorktree.get("/wt/t7")?.preview?.slug).toBe("p");
+    // A worker that switched branches: the worktree follows its session's branch.
+    const moved = buildMullionLinks({
+      project,
+      sessions: [{ ...s, liveBranch: "elsewhere" }],
+      tasks: [task],
+      prs,
+      previews: [preview],
+    });
+    expect(moved.byWorktree.get("/wt/t7")?.preview).toBeNull();
     // A task worktree with no session inherits via the task's branch too.
     const bare = buildMullionLinks({
       project,

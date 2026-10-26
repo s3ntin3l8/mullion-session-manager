@@ -53,6 +53,14 @@ export function LinkedActions({ entry, onStartSession, onPreview }: LinkedAction
           {entry?.preview ? "Open preview" : "Preview"}
         </Button>
       )}
+      {run?.state === "requested" && run.unverified && (
+        <span
+          className="sb-linked-note"
+          title="The landed-review lookup failed, so this run may already have posted."
+        >
+          Review status unverified
+        </span>
+      )}
       {inFlight && (
         <Button size="sm" variant="danger" onClick={stop} disabled={stopping}>
           Stop review
