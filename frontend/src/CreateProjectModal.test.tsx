@@ -811,6 +811,29 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     );
   });
 
+  it("typing 0 in the rounds field flips the Unlimited checkbox instead of leaving a 0 behind", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.type(screen.getByPlaceholderText("install default"), "0");
+
+    expect(screen.getByRole("checkbox", { name: "Unlimited" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ maxAutoReturnRounds: 0 }));
+  });
+
   it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {
     vi.mocked(api.listProjectActions).mockResolvedValue([]);
     render(

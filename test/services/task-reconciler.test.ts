@@ -380,6 +380,7 @@ const {
   resetRequiredStatusContextsForbiddenWarningsForTests,
 } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
+const { DEFAULT_SETTINGS } = await import("../../src/services/settings.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
 const { taskReviewFindingsPath, taskCommitTitlePath, taskRereviewRequestPath } =
   await import("../../src/services/task-prompt.js");
@@ -6947,6 +6948,18 @@ describe("reconcileTasks", () => {
     // setting, 0 = unlimited), and a loop that stops converging asks a human
     // before it ever reaches it.
     describe("round cap and stall guard", () => {
+      // A worker spell stamps claimedAt after the verdict that sent it back.
+      const WORKER_RETURNED_AFTER_VERDICT = {
+        lastReviewVerdictAt: new Date(Date.now() - 60 * 60 * 1000),
+        claimedAt: new Date(),
+      };
+
+      it("keeps the two sources of the default round cap in step", () => {
+        expect(DEFAULT_SETTINGS.taskMaster.maxAutoReturnRounds).toBe(
+          DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+        );
+      });
+
       const BLOCKER_JSON = JSON.stringify({
         verdict: "changes-requested",
         summary: "One blocker.",
@@ -7096,6 +7109,7 @@ describe("reconcileTasks", () => {
           {},
           {
             autoReturnRounds: 1,
+            ...WORKER_RETURNED_AFTER_VERDICT,
             lastAutoReturnReason: "review",
             lastReviewVerdict: "changes-requested",
             reviewFindings:
@@ -7120,6 +7134,41 @@ describe("reconcileTasks", () => {
         expect(row.autoReturnRounds).toBe(1);
         expect(row.needsHumanReason).toBe("finding-persisted");
         expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("does not park a repeated still-open ref when no worker ran since the last verdict (a human-push re-arm)", async () => {
+        const app = await buildApp();
+        const task = await seedReviewing(
+          app,
+          {},
+          {
+            autoReturnRounds: 1,
+            claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+            lastReviewVerdictAt: new Date(Date.now() - 60 * 60 * 1000),
+            lastAutoReturnReason: "review",
+            lastReviewVerdict: "changes-requested",
+            reviewFindings:
+              "## Round 2\n\n**Verdict:** changes requested — s\n\n### Earlier findings\n- **a.ts:1** — still-open: probe fails",
+          },
+        );
+        writeFindings(
+          app,
+          task.id,
+          1,
+          JSON.stringify({
+            verdict: "changes-requested",
+            summary: "Still broken after the human's push.",
+            previous: [{ ref: "a.ts:1", status: "still-open", evidence: "probe fails" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.status).toBe("in_progress");
+        expect(row.needsHumanReason).toBeNull();
 
         await app.close();
       });
@@ -7176,6 +7225,7 @@ describe("reconcileTasks", () => {
             {
               autoReturnRounds: 1,
               prNumber: 9,
+              ...WORKER_RETURNED_AFTER_VERDICT,
               lastAutoReturnReason: "review",
               lastReviewVerdict: "changes-requested",
               lastReviewedHeadSha: "sha-reviewed",
@@ -7209,6 +7259,28 @@ describe("reconcileTasks", () => {
           const row = await getTask(app, task.id);
           expect(row.status).toBe("in_progress");
           expect(row.autoReturnRounds).toBe(2);
+
+          await app.close();
+        });
+
+        it("does not read the first review after a human-push re-arm as no-progress — no worker ran", async () => {
+          const app = await buildApp();
+          const task = await seedNoProgress(app, "sha-reviewed");
+          // The re-arm leaves the last verdict NEWER than the last worker spell.
+          app.db
+            .update(tasks)
+            .set({
+              claimedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+              lastReviewVerdictAt: new Date(Date.now() - 60 * 60 * 1000),
+            })
+            .where(eq(tasks.id, task.id))
+            .run();
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, task.id);
+          expect(row.status).toBe("in_progress");
+          expect(row.needsHumanReason).toBeNull();
 
           await app.close();
         });

@@ -284,8 +284,9 @@ export const projects = sqliteTable("projects", {
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
   // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means
-  // "use the install default" (resolveMaxAutoReturnRounds,
-  // task-reconciler.ts, currently 2) — same nullable-override shape as
+  // "use the install-wide taskMaster.maxAutoReturnRounds setting"
+  // (resolveMaxAutoReturnRounds, task-reconciler.ts; default 10), and 0 means
+  // unlimited at either level — same nullable-override shape as
   // defaultAgent above, not the no-install-wide-tier posture
   // mergeOnApprove/autoApprove use: unlike merging, a round cap has a
   // sensible default that works for every project, so a global fallback is
@@ -898,9 +899,10 @@ export const tasks = sqliteTable(
     // "reviewing -> in_progress" round back to the worker — not just from a
     // changes-requested review verdict anymore (#772's roadmap follow-up):
     // see `lastAutoReturnReason` below for the full trigger vocabulary.
-    // Bounded by the resolved per-project cap
-    // (`resolveMaxAutoReturnRounds`/`projects.maxAutoReturnRounds`,
-    // task-reconciler.ts) — previously hardcoded to a single round
+    // Bounded by the resolved cap (`resolveMaxAutoReturnRounds`: the project's
+    // `maxAutoReturnRounds`, else the install-wide
+    // `taskMaster.maxAutoReturnRounds`; 0 = unlimited) — previously hardcoded
+    // to a single round
     // (`reviewRounds < 1`) — and, once incremented, NEVER reset — not by
     // Retry, not by a human Reject — so a task's auto-return budget is
     // spent once per lifecycle no matter how many times a human sends it

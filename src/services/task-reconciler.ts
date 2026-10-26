@@ -136,6 +136,18 @@ async function detectReviewStall(
 ): Promise<ReviewStallReason | null> {
   if (parsed.verdict !== "changes-requested") return null;
 
+  // Both signals are about a worker round that just came back, so they only
+  // mean anything if one was actually sent since the last verdict
+  // (`autoReturnTask`/Reject stamp `claimedAt` for the new spell). After a
+  // human-push re-arm no worker ran — `lastReviewedHeadSha` is then the
+  // human's own head and the next review's findings are about THAT, so
+  // neither a matching head nor a repeated ref is a stall.
+  const workerReturnedSinceVerdict =
+    task.claimedAt !== null &&
+    task.lastReviewVerdictAt !== null &&
+    task.claimedAt.getTime() > task.lastReviewVerdictAt.getTime();
+  if (!workerReturnedSinceVerdict) return null;
+
   const blocks = task.reviewFindings?.split(/\n\n(?=## Round )/);
   const previousOpen = openRefsOfRenderedRound(blocks?.[blocks.length - 1]);
   if (parsed.previous.some((d) => d.status !== "addressed" && previousOpen.has(d.ref))) {
@@ -2800,7 +2812,7 @@ async function attemptReturnRedCiToWorker(
     // longer in "reviewing" would be wrong either way, not merely stale.
     const announced = app.db
       .update(tasks)
-      .set({ autoReturnCapAnnouncedAt: new Date() })
+      .set({ autoReturnCapAnnouncedAt: new Date(), needsHumanReason: "cap" })
       .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
       .run();
     if (announced.changes === 0) return true;
@@ -2983,7 +2995,7 @@ async function attemptReturnPrCommentsToWorker(
     // should apply to a task that's no longer in "reviewing".
     const announced = app.db
       .update(tasks)
-      .set({ autoReturnCapAnnouncedAt: new Date() })
+      .set({ autoReturnCapAnnouncedAt: new Date(), needsHumanReason: "cap" })
       .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
       .run();
     if (announced.changes === 0) return true;

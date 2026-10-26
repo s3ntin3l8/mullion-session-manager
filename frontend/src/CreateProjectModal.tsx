@@ -839,7 +839,17 @@ export function CreateProjectModal({
             placeholder="install default"
             value={maxAutoReturnRounds}
             disabled={unlimitedRounds}
-            onChange={(e) => setMaxAutoReturnRounds(e.target.value)}
+            onChange={(e) => {
+              // 0 is valid but means unlimited, which the checkbox below
+              // owns — so typing it flips the checkbox instead of leaving a
+              // "0" in a field that reads as a cap.
+              if (e.target.value.trim() !== "" && Number(e.target.value) === 0) {
+                setUnlimitedRounds(true);
+                setMaxAutoReturnRounds("");
+                return;
+              }
+              setMaxAutoReturnRounds(e.target.value);
+            }}
           />
           <label className="create-modal-dir-confirm-checkbox">
             <input
@@ -853,7 +863,7 @@ export function CreateProjectModal({
             How many times a task may be sent back to its worker automatically — a review that
             requested changes, a red required CI check, or an unresolved PR comment. An approved
             review&apos;s suggestions never count. Blank uses the install default (Settings → Task
-            Master).
+            Master); tick Unlimited (or type 0) for no cap.
           </span>
         </label>
       )}

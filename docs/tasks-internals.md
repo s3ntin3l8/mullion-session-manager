@@ -781,7 +781,10 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   the previous round's rendered review (matched on the reviewer's `ref`), and
   `no-progress` when the last return was a review fix-up yet the PR's live head
   is still the commit that review covered (a GitHub read that fails open — an
-  unreadable head is never a stall). `cap` is the third reason. A human push
+  unreadable head is never a stall). `cap` is the third reason. Both checks only run when a worker
+  was actually sent back after the last verdict (`claimedAt` newer than
+  `lastReviewVerdictAt`) — after a human-push re-arm no worker ran, so the review
+  of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
 - An inconclusive verdict (or a review agent whose adapter can't receive a

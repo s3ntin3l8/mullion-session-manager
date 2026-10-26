@@ -218,9 +218,9 @@ interface UpdateProjectBody {
   mergeOnApprove?: boolean | null;
   autoApprove?: boolean | null;
   // #756 — per-project override of the resolved auto-return round cap.
-  // `null` clears it (falls back to the install default,
-  // resolveMaxAutoReturnRounds/DEFAULT_MAX_AUTO_RETURN_ROUNDS in
-  // task-reconciler.ts) — unlike mergeOnApprove/autoApprove above, this HAS
+  // `null` clears it (falls back to the install-wide
+  // taskMaster.maxAutoReturnRounds setting via resolveMaxAutoReturnRounds in
+  // task-reconciler.ts); `0` means unlimited — unlike mergeOnApprove/autoApprove above, this HAS
   // an install-wide default that works for every project, so a global
   // fallback tier is useful here where it wasn't for those two.
   maxAutoReturnRounds?: number | null;
