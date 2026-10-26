@@ -1040,7 +1040,7 @@
         white-space: nowrap;
       }
       .sheet .triad {
-        flex-wrap: wrap !important;
+        flex-wrap: wrap;
       }
       .sheet h4 {
         margin: 10px 0 4px;
@@ -1216,8 +1216,8 @@
       /* chip: o.short = compact-mode label ('' = icon only) */
       const chip = (tone, txt, o = {}) =>
         `<span class="chip ${tone}${o.mono ? " mono" : ""}"${o.title ? ` title="${o.title}"` : ""}>${o.icon ? I(o.icon, 11) : ""}${o.short !== undefined ? `<span class="full">${txt}</span><span class="short">${o.short}</span>` : txt}</span>`;
-      const ibtn = (n, label, extra = "") =>
-        `<span class="ibtn ${extra}" role="button" tabindex="0" title="${label}" aria-label="${label}">${I(n)}</span>`;
+      const ibtn = (n, label, extra = "", inner = "") =>
+        `<span class="ibtn ${extra}" role="button" tabindex="0" title="${label}" aria-label="${label}">${I(n)}${inner}</span>`;
       const ViewHeader = (title, sub, actions, ext) =>
         `<div class="vh"><div class="title">${title}${sub ? `<span class="sub">${sub}</span>` : ""}</div><div class="actions">${actions || ""}${actions ? '<span class="sep"></span>' : ""}${ibtn("gh", ext || "Open on GitHub", "ext")}</div></div>`;
       const DetailHeader = (title, sub, actions, ext) =>
@@ -1259,7 +1259,7 @@
 
       V.source = (
         w,
-      ) => `${ViewHeader("Source Control", `<span class="mono">main</span> · <span class="ahead">↑0</span> <span class="behind">↓3</span> · 2 changed`, ibtn("fetch", "Fetch") + ibtn("pull", "Pull (ff-only)") + ibtn("health", "Clone health: OK", "has-dot").replace("</span>", '<i class="dot"></i></span>'), "Open repository on GitHub")}
+      ) => `${ViewHeader("Source Control", `<span class="mono">main</span> · <span class="ahead">↑0</span> <span class="behind">↓3</span> · 2 changed`, ibtn("fetch", "Fetch") + ibtn("pull", "Pull (ff-only)") + ibtn("health", "Clone health: OK", "has-dot", '<i class="dot"></i>'), "Open repository on GitHub")}
   <div class="scroll">
   <div class="callout warn" style="margin-bottom:4px"><b>Promote requested</b> by <span class="mono">fix bundle sync</span> — move the session into a worktree.<div class="cta"><button class="btn sm primary">Review…</button><button class="btn sm">Decline</button></div></div>
   ${Sec(
@@ -1330,7 +1330,7 @@
         () => `${DetailHeader("Prune merged branches", "Local only · remotes are never touched", "", "Open repository on GitHub")}
   <div class="scroll">
   <div class="callout info">17 local branches are merged into <b class="mono">main</b>. Squash-merged ones are detected via merged PRs and <span class="mono">upstream gone</span> — no Force needed.</div>
-  <div class="group-h"><b>Will delete</b><span class="count">5 of 17 shown</span><span class="sp"></span><button class="link">Select none</button></div>
+  <div class="group-h"><b>Will delete</b><span class="count">5/17</span><span class="sp"></span><button class="link">Select none</button></div>
   ${[
     ["files-transfer", "PR #1941 merged (squash)", "merged"],
     ["fix-session-restore-race", "PR #1902 merged · upstream gone", "merged"],
