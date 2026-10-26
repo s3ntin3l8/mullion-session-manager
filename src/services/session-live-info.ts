@@ -343,23 +343,47 @@ export async function withLiveStatus(
   idleThresholdMs: number,
   hostId: string,
 ) {
-  let info: SessionInfo | null = null;
-  let hostReachable = true;
+  const { info, hostReachable } = await readSessionLiveInfo(app, row, idleThresholdMs, hostId);
+  return withLiveInfo(app, row, info, hostId, { hostReachable });
+}
+
+/**
+ * One session's `SessionInfo` from the host that owns it, plus whether that
+ * host ANSWERED — the read `withLiveStatus` builds the session view from, shared
+ * so the REST path and the control socket's remote wait (issue #1962) cannot
+ * drift apart.
+ *
+ * `fresh` (a remote host only) bypasses the host client's 1.5 s cache. On any
+ * failure `info` is null, `hostReachable` is false and `error` is what was
+ * thrown; callers that only want a view ignore it, a caller that must tell
+ * "the host is down" from "the host answered and refused" reads it.
+ */
+export async function readSessionLiveInfo(
+  app: FastifyInstance,
+  row: typeof sessions.$inferSelect,
+  idleThresholdMs: number,
+  hostId: string,
+  opts: { fresh?: boolean } = {},
+): Promise<{ info: SessionInfo | null; hostReachable: boolean; error?: unknown }> {
+  const id = String(row.id);
   try {
-    const map = await resolveBackend(app, hostId).liveStatus([String(row.id)], idleThresholdMs);
-    info = map[String(row.id)] ?? null;
+    const backend = resolveBackend(app, hostId);
+    const map =
+      opts.fresh === true
+        ? await backend.liveStatus([id], idleThresholdMs, undefined, { fresh: true })
+        : await backend.liveStatus([id], idleThresholdMs);
+    return { info: map[id] ?? null, hostReachable: true };
   } catch (err) {
     // Issue #1727 — the host did not answer. That is not "the session is
     // gone": it is "we cannot tell what is going on there". The session is
     // reported as SUSPENDED (host unreachable — may still be running) rather
     // than as the idle no-signal fallback a quiet session gets.
-    hostReachable = false;
     app.log.warn(
       { hostId, sessionId: row.id, err },
       "host unreachable, reporting default live status",
     );
+    return { info: null, hostReachable: false, error: err };
   }
-  return withLiveInfo(app, row, info, hostId, { hostReachable });
 }
 
 // One corrupt `env` column must not 500 GET /api/sessions for every session.

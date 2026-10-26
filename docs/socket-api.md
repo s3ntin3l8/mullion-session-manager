@@ -416,7 +416,11 @@ the prompt _was_ delivered either way).
   just before the prompt could still say the previous turn `finished`), and the
   wait is checked once per second rather than woken by events. An agent build
   that predates the counter reports none, and the wait then runs without the
-  guard. Other differences from a local child: the second, pre-Enter blocked
+  guard — the reply's `wait` then carries `guardDisabled: true`, so a caller
+  that needs certainty can cross-check with `sessions.wait_for_output`. A host
+  that is unreachable reads as `suspended`; one that answers with an error (its
+  rate limit, a stale token) ends the wait with that error after three failed
+  reads, instead of running to its timeout blaming a dead host. Other differences from a local child: the second, pre-Enter blocked
   check is skipped; and a timeout _after_ the body was typed leaves it sitting
   unsubmitted in the child's input box (the call is not idempotent — do not
   blindly retry it). An agent too old for the route answers `501`.

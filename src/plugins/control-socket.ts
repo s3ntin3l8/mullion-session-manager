@@ -37,9 +37,13 @@ import {
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
-import { resolveSessionHostId, withLiveInfo } from "../services/session-live-info.js";
+import {
+  readSessionLiveInfo,
+  resolveSessionHostId,
+  withLiveInfo,
+} from "../services/session-live-info.js";
+import { HostRequestError } from "../services/remote-host-client.js";
 import { getStoredSettings } from "../services/settings.js";
-import type { SessionInfo } from "../services/session-types.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
@@ -844,7 +848,8 @@ async function readDerivedStatus(app: FastifyInstance, id: string): Promise<Wait
  * turn is in flight. `fresh` bypasses the host client's 1.5 s cache, which
  * could otherwise hand back the PREVIOUS turn's `finished` right after a
  * prompt. A host that does not answer is reported as suspended (as the REST
- * path does), not thrown. `snapshot` is null for a session that has no row.
+ * path does); one that answers with an error is thrown. `snapshot` is null for
+ * a session that has no row.
  */
 async function readRemoteSession(
   app: FastifyInstance,
@@ -858,17 +863,19 @@ async function readRemoteSession(
     .get();
   if (!row) return { snapshot: null, turnInFlight: false };
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  let info: SessionInfo | null = null;
-  let hostReachable = true;
-  try {
-    const map = await resolveBackend(app, hostId).liveStatus([id], idleThresholdMs, undefined, {
-      fresh: true,
-    });
-    info = map[id] ?? null;
-  } catch (err) {
-    hostReachable = false;
-    app.log.warn({ hostId, sessionId: id, err }, "host unreachable, reporting default live status");
-  }
+  const { info, hostReachable, error } = await readSessionLiveInfo(
+    app,
+    row,
+    idleThresholdMs,
+    hostId,
+    { fresh: true },
+  );
+  // A host that ANSWERED and refused (a 429 from its rate limit, a stale
+  // token) is not a host that is down: reporting it as `suspended` would let a
+  // wait run to its timeout blaming a dead host. Throw it, so the wait's
+  // consecutive-failure limit ends it with the real reason (and a prompt's
+  // pre-check answers 500 with it). An unreachable host stays `suspended`.
+  if (error instanceof HostRequestError) throw error;
   const view = withLiveInfo(app, row, info, hostId, { hostReachable });
   return {
     snapshot: {
@@ -892,6 +899,11 @@ async function runWait(
   conn: ConnectionState,
   id: string,
   opts: WaitBodyOpts,
+  // `expectGuard`: the caller just delivered a prompt, so the "a new turn
+  // started" guard is part of what it asked for. A remote host that cannot arm
+  // it (an agent build that reports no event head) is then SAID so in the
+  // reply, rather than the wait quietly losing its protection.
+  extra: { expectGuard?: boolean } = {},
 ): Promise<ReplyPayload | null> {
   if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
     return bad(429, "too many pending waits on this connection");
@@ -950,10 +962,19 @@ async function runWait(
         : (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
     });
     if ("aborted" in result) return null;
+    // Without a head from the host (or an `afterSeq` from its prompt reply)
+    // the guard ran open: a wait that matched may have matched the PREVIOUS
+    // turn. Tell the caller, so it can cross-check with `wait_for_output`.
+    const guardDisabled =
+      extra.expectGuard === true && remote && (opts.afterSeq === undefined || !headSeen);
     return {
       ok: true,
       status: 200,
-      result: { ...result, eventSeq: resultSeq() },
+      result: {
+        ...result,
+        eventSeq: resultSeq(),
+        ...(guardDisabled ? { guardDisabled: true } : {}),
+      },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1329,7 +1350,7 @@ export const OPS: Record<string, OpSpec> = {
       // `afterSeq` is the HOST's event head right after the turn began; a
       // remote host that predates it sends none, which runs the wait without
       // the "a new turn started" guard (see runWait).
-      const waited = await runWait(app, conn, id, { ...waitOpts, afterSeq });
+      const waited = await runWait(app, conn, id, { ...waitOpts, afterSeq }, { expectGuard: true });
       if (waited === null) return;
       // The prompt WAS delivered; a failed wait is reported alongside, not
       // as a failure of the whole op.

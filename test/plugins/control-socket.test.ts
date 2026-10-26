@@ -2868,6 +2868,8 @@ describe("controlSocketPlugin (issue #185)", () => {
               wait: { timedOut: false, status: "finished", severity: "done", eventSeq: 10 },
             },
           });
+          // The guard was armed and held, so nothing is flagged.
+          expect(reply.result).not.toHaveProperty("wait.guardDisabled");
           // Every read the prompt/wait made went around the 1.5 s cache.
           expect(backend.liveStatus).toHaveBeenCalledTimes(4);
           for (const call of backend.liveStatus.mock.calls) {
@@ -2909,9 +2911,13 @@ describe("controlSocketPlugin (issue #185)", () => {
             text: "go",
             wait: { until: ["done"], timeoutMs: 5_000 },
           });
+          // ...and the reply says so, so the caller can cross-check.
           expect(reply).toMatchObject({
             ok: true,
-            result: { delivered: true, wait: { timedOut: false, status: "finished" } },
+            result: {
+              delivered: true,
+              wait: { timedOut: false, status: "finished", guardDisabled: true },
+            },
           });
           socket.destroy();
         });
@@ -2938,6 +2944,47 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           socket.destroy();
         }, 15_000);
+
+        it("answers 500 with the host's own error when it ANSWERS the pre-check with a refusal (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+          const prompt = vi.fn();
+          // A 429 from the agent's rate limit: reachable, and saying no.
+          const { childId, socket } = await remoteChild(prompt, [
+            new HostRequestError("mac", 429, "Too Many Requests"),
+          ]);
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: false, status: 500 });
+          expect(String(reply.error)).toMatch(/429/);
+          expect(prompt).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("ends a remote wait with the host's refusal rather than reporting it suspended until the timeout (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1, afterSeq: 7 });
+          const refusal = new HostRequestError("mac", 429, "Too Many Requests");
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1, eventSeqHead: 7 },
+            refusal,
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 60_000 },
+          });
+          // The prompt was delivered; the wait gave up on the third failed read
+          // with the real reason, in seconds - not after its 60 s timeout.
+          expect(reply).toMatchObject({
+            ok: true,
+            result: { delivered: true, wait: { status: 500 } },
+          });
+          expect(String((reply.result as { wait: { error: string } }).wait.error)).toMatch(/429/);
+          socket.destroy();
+        }, 20_000);
 
         it("treats an event head that moved BACKWARDS (the agent restarted) as a new turn (#1962)", async () => {
           app = await buildApp();
@@ -2991,7 +3038,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           });
           expect(reply).toMatchObject({
             ok: true,
-            result: { wait: { timedOut: false, status: "finished" } },
+            result: { wait: { timedOut: false, status: "finished", guardDisabled: true } },
           });
           socket.destroy();
         });
