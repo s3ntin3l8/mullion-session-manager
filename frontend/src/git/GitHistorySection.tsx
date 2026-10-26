@@ -1,31 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitCommitDetail, GitLogCommit } from "../api/types.js";
+import type { GitCommitDetail, GitHubPrPhase, GitLogCommit } from "../api/types.js";
 import { parseUnifiedDiff, type DiffLine } from "../diffUtils.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { Dropdown } from "../ui/primitives.js";
-import { PHASE_LABEL, phaseTone } from "../github/prPhase.js";
+import { StatusChip } from "../ui/sidebar/index.js";
+import { PHASE_LABEL } from "../github/prPhase.js";
+import { statusTone } from "../lib/statusTone.js";
 import { computeGraphLayout } from "./graphLayout.js";
 import { HistoryGraph } from "./HistoryGraph.js";
+import { buildRefChips, type RefChip } from "./historyRefs.js";
 
-const HISTORY_SCOPE_OPTIONS: Array<{ value: "all" | "head"; label: string }> = [
-  { value: "all", label: "All branches" },
-  { value: "head", label: "Current branch" },
-];
+/** `head` = current branch, `all` = every ref, `branch:<name>` = one branch. */
+export type HistoryScope = string;
 
 const PAGE = 100;
+/** Ref chips shown inline at normal density; the rest fold into "+N". */
+const MAX_INLINE_REFS = 2;
 
-function refKind(ref: string, remotes: ReadonlySet<string>): "head" | "tag" | "remote" | "branch" {
-  if (ref.startsWith("HEAD")) return "head";
-  if (ref.startsWith("tag: ")) return "tag";
-  if (remotes.has(ref) || ref.startsWith("origin/")) return "remote";
-  return "branch";
-}
+type PrInfo = { number: number; phase: GitHubPrPhase | null | undefined };
 
-function cleanRef(ref: string): string {
-  return ref.replace(/^HEAD -> /, "").replace(/^tag: /, "");
+function RefChipView({ chip, pr }: { chip: RefChip; pr: PrInfo | undefined }) {
+  const title = [chip.raw.join(", "), chip.synced ? "in sync with the remote" : ""]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <>
+      <StatusChip tone={chip.tone} mono title={title} className={`gh-ref gh-ref-${chip.kind}`}>
+        {chip.label}
+        {chip.synced && (
+          <span className="gh-ref-synced" aria-label="synced with remote">
+            {" "}
+            ✓
+          </span>
+        )}
+      </StatusChip>
+      {pr && (
+        <StatusChip
+          tone={pr.phase ? statusTone({ phase: pr.phase }) : "neutral"}
+          mono
+          title={pr.phase ? PHASE_LABEL[pr.phase] : undefined}
+          className="gh-ref-pr"
+        >
+          #{pr.number}
+        </StatusChip>
+      )}
+    </>
+  );
 }
 
 function CommitFiles({ projectId, sha, cwd }: { projectId: number; sha: string; cwd?: string }) {
@@ -109,25 +132,47 @@ function CommitFiles({ projectId, sha, cwd }: { projectId: number; sha: string; 
 export function GitHistorySection({
   projectId,
   cwd,
-  onClearCwd,
+  scope: scopeProp,
+  onScopeChange,
 }: {
   projectId: number;
   /** A worktree path to scope the history to; omitted = the project root. */
   cwd?: string;
-  onClearCwd?: () => void;
+  /** Controlled scope (the History rail view's "View in History" hand-off). */
+  scope?: HistoryScope;
+  onScopeChange?: (scope: HistoryScope) => void;
 }) {
-  const [scope, setScope] = useState<"all" | "head">("all");
+  const [scopeState, setScopeState] = useState<HistoryScope>("head");
+  const scope = scopeProp ?? scopeState;
+  const setScope = (next: HistoryScope) => {
+    setScopeState(next);
+    onScopeChange?.(next);
+  };
   const [commits, setCommits] = useState<GitLogCommit[] | null | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const prs = useDashboardStore((s) => s.prsByProject[projectId]);
+  const branches = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.branches);
   const remoteBranches = useDashboardStore(
     (s) => s.gitBranchesByProject[projectId]?.remoteBranches,
   );
   const gitRefreshTrigger = useDashboardStore((s) => s.gitRefreshTrigger);
   const remotes = useMemo(() => new Set(remoteBranches ?? []), [remoteBranches]);
+
+  const scopeOptions = useMemo(() => {
+    const opts: Array<{ value: HistoryScope; label: string }> = [
+      { value: "head", label: "Current branch" },
+      { value: "all", label: "All branches" },
+    ];
+    for (const b of branches ?? []) opts.push({ value: `branch:${b.name}`, label: b.name });
+    // A scope handed in for a branch the list does not (yet) know still shows.
+    if (!opts.some((o) => o.value === scope)) {
+      opts.push({ value: scope, label: scope.replace(/^branch:/, "") });
+    }
+    return opts;
+  }, [branches, scope]);
 
   const viewKey = `${projectId}|${scope}|${cwd ?? ""}`;
   const viewKeyRef = useRef(viewKey);
@@ -158,10 +203,7 @@ export function GitHistorySection({
 
   const layout = useMemo(() => computeGraphLayout(commits ?? []), [commits]);
   const prByBranch = useMemo(() => {
-    const map = new Map<
-      string,
-      { number: number; phase: NonNullable<typeof prs>["prs"][number]["prPhase"] }
-    >();
+    const map = new Map<string, PrInfo>();
     for (const pr of prs?.prs ?? [])
       map.set(pr.headBranch, { number: pr.number, phase: pr.prPhase });
     return map;
@@ -187,8 +229,6 @@ export function GitHistorySection({
       .finally(() => setLoadingMore(false));
   };
 
-  const worktreeBasename = cwd ? cwd.split("/").filter(Boolean).pop() || cwd : null;
-
   return (
     <div className="gh-history">
       <div className="gh-history-toolbar">
@@ -197,26 +237,8 @@ export function GitHistorySection({
           ariaLabel="History scope"
           value={scope}
           onChange={setScope}
-          options={HISTORY_SCOPE_OPTIONS}
+          options={scopeOptions}
         />
-        {worktreeBasename && (
-          <div className="gh-history-scope-banner">
-            <span>
-              Worktree: <strong>{worktreeBasename}</strong>
-            </span>
-            {onClearCwd && (
-              <button
-                type="button"
-                className="gh-history-clear-scope"
-                aria-label="Clear worktree filter"
-                onClick={onClearCwd}
-                title="Clear worktree filter (show project root history)"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-        )}
       </div>
 
       {error && <ErrorText>{error}</ErrorText>}
@@ -228,45 +250,64 @@ export function GitHistorySection({
       {commits?.map((commit, i) => {
         const row = layout.rows[i];
         const open = expanded === commit.sha;
+        const chips = buildRefChips(commit.refs, remotes);
+        const shown = chips.slice(0, MAX_INLINE_REFS);
+        const more = chips.length - shown.length;
+        const age = formatRelativeAge(commit.time * 1000);
         return (
           <div key={commit.sha} className="gh-commit">
             <button
               type="button"
               className="gh-commit-row"
               aria-expanded={open}
+              title={`${commit.sha.slice(0, 7)} · ${commit.author}`}
               onClick={() => setExpanded(open ? null : commit.sha)}
             >
-              <HistoryGraph row={row} columns={layout.width} />
-              <span className="gh-commit-main">
-                <span className="gh-commit-header">
-                  <span className="github-panel-row-title gh-commit-subject">{commit.subject}</span>
-                  <span className="github-panel-row-number gh-commit-meta" title={commit.author}>
-                    {commit.sha.slice(0, 7)} · {formatRelativeAge(commit.time * 1000)}
+              <HistoryGraph row={row} />
+              <span className="gh-commit-subject">{commit.subject}</span>
+              {chips.length > 0 && (
+                <>
+                  <span className="gh-commit-refs gh-commit-refs--inline">
+                    {shown.map((chip) => (
+                      <RefChipView
+                        key={chip.key}
+                        chip={chip}
+                        pr={chip.prBranch ? prByBranch.get(chip.prBranch) : undefined}
+                      />
+                    ))}
+                    {more > 0 && (
+                      <StatusChip
+                        tone="neutral"
+                        title={chips
+                          .slice(MAX_INLINE_REFS)
+                          .map((c) => c.label)
+                          .join(", ")}
+                      >
+                        +{more}
+                      </StatusChip>
+                    )}
                   </span>
-                </span>
-                {commit.refs.length > 0 && (
-                  <span className="gh-commit-refs">
-                    {commit.refs.map((ref) => {
-                      const pr = prByBranch.get(cleanRef(ref));
-                      return (
-                        <span key={ref} className={`gh-ref gh-ref-${refKind(ref, remotes)}`}>
-                          {cleanRef(ref)}
-                          {pr && (
-                            <span
-                              className={`gh-phase-pill ${pr.phase ? phaseTone(pr.phase) : "dim"}`}
-                              title={pr.phase ? PHASE_LABEL[pr.phase] : undefined}
-                            >
-                              #{pr.number}
-                            </span>
-                          )}
-                        </span>
-                      );
-                    })}
+                  <span className="gh-commit-refs gh-commit-refs--count">
+                    <StatusChip tone={chips[0].tone} title={chips.map((c) => c.label).join(", ")}>
+                      {chips.length}
+                    </StatusChip>
                   </span>
-                )}
-              </span>
+                </>
+              )}
+              <span className="gh-commit-when">{age}</span>
             </button>
-            {open && <CommitFiles projectId={projectId} sha={commit.sha} cwd={cwd} />}
+            {open && (
+              <>
+                <div className="gh-commit-expanded">
+                  <span className="gh-commit-sha">{commit.sha.slice(0, 7)}</span> · {commit.author}{" "}
+                  · {age}
+                  {chips.length > 0 && (
+                    <div className="gh-commit-expanded-refs">{commit.refs.join(", ")}</div>
+                  )}
+                </div>
+                <CommitFiles projectId={projectId} sha={commit.sha} cwd={cwd} />
+              </>
+            )}
           </div>
         );
       })}

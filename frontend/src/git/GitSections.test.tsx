@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { GitHistorySection } from "./GitHistorySection.js";
 import { GitBranchesSection } from "./GitBranchesSection.js";
 import { GitWorktreesSection } from "./GitWorktreesSection.js";
-import { HistoryGraph } from "./HistoryGraph.js";
+import { HistoryGraph, MAX_GRAPH_W } from "./HistoryGraph.js";
+import { HistorySidebarView } from "../right-sidebar/HistorySidebarView.js";
 import { computeGraphLayout } from "./graphLayout.js";
 import { GitSidebarView } from "../right-sidebar/GitSidebarView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
@@ -110,8 +111,10 @@ describe("GitHistorySection", () => {
     const { container } = render(<GitHistorySection projectId={1} />);
     expect(await screen.findByText("merge feat")).toBeInTheDocument();
     expect(container.querySelectorAll("svg.gh-graph")).toHaveLength(4);
+    // `HEAD -> main` + `origin/main` collapse into one synced chip.
     expect(screen.getByText("main")).toBeInTheDocument();
-    expect(screen.getByText("origin/main")).toBeInTheDocument();
+    expect(screen.queryByText("origin/main")).toBeNull();
+    expect(screen.getByLabelText("synced with remote")).toBeInTheDocument();
     expect(screen.getByText("v1")).toBeInTheDocument();
     expect(screen.getByText("#9")).toBeInTheDocument(); // PR chip on `feat`
   });
@@ -176,17 +179,17 @@ describe("GitHistorySection", () => {
             commits: [{ ...COMMITS[3], sha: "c".repeat(40), subject: "older" }],
             hasMore: false,
           })
-        : url.includes("/git-log") && !url.includes("scope=head")
+        : url.includes("/git-log") && !url.includes("scope=all")
           ? jsonResponse(200, { commits: COMMITS, hasMore: true })
           : null,
     );
     render(<GitHistorySection projectId={1} cwd="/wt/x" />);
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
     expect(await screen.findByText("older")).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "head");
+    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
     await waitFor(() => {
       const urls = fn.mock.calls.map((c) => String(c[0]));
-      expect(urls.some((u) => u.includes("scope=head") && u.includes("cwd=%2Fwt%2Fx"))).toBe(true);
+      expect(urls.some((u) => u.includes("scope=all") && u.includes("cwd=%2Fwt%2Fx"))).toBe(true);
     });
   });
 
@@ -197,7 +200,7 @@ describe("GitHistorySection", () => {
     render(<GitHistorySection projectId={1} cwd="/wt/x" />);
     const scope = await screen.findByLabelText("History scope");
     expect(scope.closest(".settings-dropdown.small")).not.toBeNull();
-    expect(scope).toHaveValue("all");
+    expect(scope).toHaveValue("head");
   });
 
   it("drops Load more when a reload (scope change) fails after a page had more", async () => {
@@ -205,7 +208,7 @@ describe("GitHistorySection", () => {
       "fetch",
       vi.fn((url: string) =>
         Promise.resolve(
-          url.includes("scope=head")
+          url.includes("scope=all")
             ? jsonResponse(500, { message: "boom" })
             : jsonResponse(200, { commits: COMMITS, hasMore: true }),
         ),
@@ -213,7 +216,7 @@ describe("GitHistorySection", () => {
     );
     render(<GitHistorySection projectId={1} />);
     expect(await screen.findByRole("button", { name: "Load more" })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "head");
+    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
   });
@@ -267,8 +270,10 @@ describe("GitHistorySection fixes", () => {
     );
     render(<GitHistorySection projectId={1} />);
     expect((await screen.findByText("feature/x")).className).toContain("gh-ref-branch");
-    expect(screen.getByText("origin/main").className).toContain("gh-ref-remote");
-    expect(screen.getByText("upstream/main").className).toContain("gh-ref-remote");
+    // Both remotes strip to `main`: one remote-only chip, not two.
+    const main = screen.getByText("main");
+    expect(main.className).toContain("gh-ref-remote");
+    expect(main.title).toBe("origin/main, upstream/main · in sync with the remote");
   });
 
   it("ignores a page that was in flight when the scope changed", async () => {
@@ -280,10 +285,10 @@ describe("GitHistorySection fixes", () => {
       "fetch",
       vi.fn((url: string) => {
         if (url.includes("skip=4")) return slow;
-        if (url.includes("scope=head")) {
+        if (url.includes("scope=all")) {
           return Promise.resolve(
             jsonResponse(200, {
-              commits: [{ ...COMMITS[3], subject: "head-only" }],
+              commits: [{ ...COMMITS[3], subject: "all-only" }],
               hasMore: false,
             }),
           );
@@ -293,15 +298,15 @@ describe("GitHistorySection fixes", () => {
     );
     render(<GitHistorySection projectId={1} />);
     await userEvent.click(await screen.findByRole("button", { name: "Load more" }));
-    await userEvent.selectOptions(screen.getByLabelText("History scope"), "head");
-    expect(await screen.findByText("head-only")).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("History scope"), "all");
+    expect(await screen.findByText("all-only")).toBeInTheDocument();
 
     release(
       jsonResponse(200, { commits: [{ ...COMMITS[3], subject: "stale page" }], hasMore: true }),
     );
     await waitFor(() => expect(screen.queryByText("Loading…")).toBeNull());
     expect(screen.queryByText("stale page")).toBeNull();
-    expect(screen.getByText("head-only")).toBeInTheDocument();
+    expect(screen.getByText("all-only")).toBeInTheDocument();
   });
 });
 
@@ -313,7 +318,7 @@ describe("HistoryGraph", () => {
       { sha: "x", parents: ["base"] },
       { sha: "base", parents: [] },
     ]);
-    const { container } = render(<HistoryGraph row={layout.rows[3]} columns={layout.width} />);
+    const { container } = render(<HistoryGraph row={layout.rows[3]} />);
     expect(container.querySelectorAll("circle")).toHaveLength(1);
     expect(container.querySelectorAll("line").length).toBeGreaterThanOrEqual(2);
   });
@@ -702,32 +707,48 @@ describe("GitBranchesSection / GitWorktreesSection", () => {
 });
 
 describe("GitSidebarView", () => {
-  it("shows Changes and History open by default, persists toggles", async () => {
+  it("no longer hosts History; Changes is open by default and toggles persist", async () => {
     stubFetch();
     render(<GitSidebarView projectId={1} actions={{ onOpenGit: vi.fn() } as never} />);
-    expect(await screen.findByText("merge feat")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /History/ })).toBeNull();
     expect(screen.getByRole("button", { name: /Branches/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
-
     await userEvent.click(screen.getByRole("button", { name: /Branches/ }));
-    expect(screen.getByRole("button", { name: /Branches/ })).toHaveAttribute(
+    expect(JSON.parse(localStorage.getItem("crs.gitSidebarSections")!).branches).toBe(true);
+  });
+
+  it("restores stored section state and survives corrupt storage", () => {
+    stubFetch();
+    localStorage.setItem("crs.gitSidebarSections", JSON.stringify({ worktrees: true }));
+    const { unmount } = render(
+      <GitSidebarView projectId={1} actions={{ onOpenGit: vi.fn() } as never} />,
+    );
+    expect(screen.getByRole("button", { name: /Worktrees/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
-    expect(JSON.parse(localStorage.getItem("crs.gitSidebarSections")!).branches).toBe(true);
-
-    await userEvent.click(screen.getByRole("button", { name: /History/ }));
-    expect(screen.queryByText("merge feat")).toBeNull();
+    unmount();
+    localStorage.setItem("crs.gitSidebarSections", "{not json");
+    render(<GitSidebarView projectId={1} actions={{ onOpenGit: vi.fn() } as never} />);
+    expect(screen.getByRole("button", { name: /Branches/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
+});
 
-  it("drops the selected worktree when the project changes", async () => {
-    stubFetch();
+describe("HistorySidebarView", () => {
+  const actions = { onOpenGit: vi.fn() } as never;
+  const withWorktrees = () =>
     useDashboardStore.setState({
       gitBranchesByProject: {
         1: {
-          branches: [],
+          branches: [
+            { name: "main", isCurrent: true },
+            { name: "feat", isCurrent: false },
+          ],
           remoteBranches: [],
           worktrees: [
             { path: "/repo", branch: "main", isMain: true },
@@ -736,14 +757,35 @@ describe("GitSidebarView", () => {
         },
       },
     } as never);
-    localStorage.setItem("crs.gitSidebarSections", JSON.stringify({ worktrees: true }));
-    const actions = { onOpenGit: vi.fn() } as never;
-    const { rerender } = render(<GitSidebarView projectId={1} actions={actions} />);
-    await screen.findByText("merge feat");
-    await userEvent.click(screen.getByRole("button", { name: "repo-wt" }));
-    const logUrls = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.map((c) => String(c[0]));
+  const logUrls = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.map((c) => String(c[0]));
+
+  it("defaults to the current branch and offers All and each branch", async () => {
+    withWorktrees();
     const fn = stubFetch();
-    rerender(<GitSidebarView projectId={2} actions={actions} />);
+    render(<HistorySidebarView projectId={1} actions={actions} />);
+    expect(await screen.findByText("merge feat")).toBeInTheDocument();
+    expect(logUrls(fn).some((u) => u.includes("scope=head"))).toBe(true);
+    const scope = screen.getByLabelText("History scope");
+    expect(Array.from(scope.querySelectorAll("option")).map((o) => o.value)).toEqual([
+      "head",
+      "all",
+      "branch:main",
+      "branch:feat",
+    ]);
+    await userEvent.selectOptions(scope, "branch:feat");
+    await waitFor(() =>
+      expect(logUrls(fn).some((u) => u.includes("scope=branch%3Afeat"))).toBe(true),
+    );
+  });
+
+  it("filters by worktree and drops it when the project changes", async () => {
+    withWorktrees();
+    stubFetch();
+    const { rerender } = render(<HistorySidebarView projectId={1} actions={actions} />);
+    await screen.findByText("merge feat");
+    await userEvent.selectOptions(screen.getByLabelText("Worktree filter"), "/repo-wt");
+    const fn = stubFetch();
+    rerender(<HistorySidebarView projectId={2} actions={actions} />);
     await waitFor(() =>
       expect(logUrls(fn).some((u) => u.includes("/projects/2/git-log"))).toBe(true),
     );
@@ -754,29 +796,42 @@ describe("GitSidebarView", () => {
     ).toBe(true);
   });
 
-  it("restores stored section state and survives corrupt storage", () => {
-    stubFetch();
-    localStorage.setItem(
-      "crs.gitSidebarSections",
-      JSON.stringify({ history: false, worktrees: true }),
+  it("keeps every row's subject on screen at a 260px sidebar, graph capped per row", async () => {
+    // A history 14 lanes wide: the old global column width starved the subject.
+    const wide = Array.from({ length: 14 }, (_, i) => ({
+      sha: `w${i}`.padEnd(40, "0"),
+      parents: [`p${i}`.padEnd(40, "0")],
+      author: "T",
+      time: 1_700_000_000 - i,
+      subject: `wide ${i}`,
+      refs: i === 0 ? ["a", "b", "c", "origin/a"] : [],
+    }));
+    const tail = wide.map((c, i) => ({
+      sha: c.parents[0],
+      parents: [] as string[],
+      author: "T",
+      time: 1_699_000_000 - i,
+      subject: `tail ${i}`,
+      refs: [],
+    }));
+    stubFetch((url) =>
+      url.includes("/git-log")
+        ? jsonResponse(200, { commits: [...wide, ...tail], hasMore: false })
+        : null,
     );
-    const { unmount } = render(
-      <GitSidebarView projectId={1} actions={{ onOpenGit: vi.fn() } as never} />,
+    const { container } = render(
+      <div style={{ width: 260 }}>
+        <HistorySidebarView projectId={1} actions={actions} />
+      </div>,
     );
-    expect(screen.getByRole("button", { name: /History/ })).toHaveAttribute(
-      "aria-expanded",
-      "false",
+    for (const c of wide) expect(await screen.findByText(c.subject)).toBeVisible();
+    const widths = Array.from(container.querySelectorAll("svg.gh-graph")).map((n) =>
+      Number(n.getAttribute("width")),
     );
-    expect(screen.getByRole("button", { name: /Worktrees/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
-    unmount();
-    localStorage.setItem("crs.gitSidebarSections", "{not json");
-    render(<GitSidebarView projectId={1} actions={{ onOpenGit: vi.fn() } as never} />);
-    expect(screen.getByRole("button", { name: /History/ })).toHaveAttribute(
-      "aria-expanded",
-      "true",
-    );
+    expect(Math.max(...widths)).toBeLessThanOrEqual(MAX_GRAPH_W);
+    expect(Math.min(...widths)).toBeLessThan(Math.max(...widths)); // per-row, not global
+    // 4 refs -> two inline chips + "+2", and a single count chip for compact density.
+    expect(screen.getByText("+2")).toBeInTheDocument();
+    expect(container.querySelectorAll(".gh-commit-refs--count .sb-chip")).toHaveLength(1);
   });
 });

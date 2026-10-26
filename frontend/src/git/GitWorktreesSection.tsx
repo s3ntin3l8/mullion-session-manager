@@ -12,8 +12,9 @@ export function GitWorktreesSection({
 }: {
   projectId: number;
   /** The worktree path History is scoped to (undefined = project root). */
-  selected: string | undefined;
-  onSelect: (path: string | undefined) => void;
+  selected?: string | undefined;
+  /** Omit when nothing consumes the selection (the History view owns its own filter). */
+  onSelect?: (path: string | undefined) => void;
 }) {
   const worktrees = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.worktrees);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -116,15 +117,21 @@ export function GitWorktreesSection({
         return (
           <div key={w.path} className="git-worktree-card">
             <div className="github-panel-row git-worktree-header-row">
-              <button
-                type="button"
-                className={`gh-link-button git-worktree-title-btn${isSelected ? " active" : ""}`}
-                title={`Scope commit history to ${w.path}`}
-                aria-pressed={isSelected}
-                onClick={() => onSelect(w.isMain ? undefined : w.path)}
-              >
-                {basename}
-              </button>
+              {onSelect ? (
+                <button
+                  type="button"
+                  className={`gh-link-button git-worktree-title-btn${isSelected ? " active" : ""}`}
+                  title={`Scope commit history to ${w.path}`}
+                  aria-pressed={isSelected}
+                  onClick={() => onSelect(w.isMain ? undefined : w.path)}
+                >
+                  {basename}
+                </button>
+              ) : (
+                <span className="git-worktree-title-btn" title={w.path}>
+                  {basename}
+                </span>
+              )}
               <span className="github-panel-row-title git-worktree-branch" title={w.path}>
                 {w.branch ?? "(detached)"}
               </span>

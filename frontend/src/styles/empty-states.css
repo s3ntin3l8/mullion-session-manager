@@ -2230,17 +2230,30 @@ button.github-panel-row.gh-issue-row {
   padding: 4px 6px 8px;
 }
 .gh-graph {
-  flex-shrink: 0;
-  stroke-width: 1.5;
-  align-self: stretch;
-  height: 100%;
+  flex: none;
+  /* Per-row width comes from the SVG itself (HistoryGraph), capped at
+     6 lanes + the overflow lane; never stretched by the widest row. */
+  max-width: 76px;
 }
+.gh-graph line {
+  stroke-linecap: round;
+}
+.gh-graph-dot {
+  stroke: var(--sidebar);
+  stroke-width: 1.5;
+}
+.gh-graph-more {
+  font-size: 8px;
+  fill: var(--muted);
+}
+/* One line per commit: graph · subject · refs · time. */
 .gh-commit-row {
   display: flex;
-  align-items: stretch;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
-  padding: 3px 6px;
+  height: 28px;
+  padding: 0 10px 0 6px;
   background: none;
   border: 0;
   color: var(--fg);
@@ -2248,65 +2261,72 @@ button.github-panel-row.gh-issue-row {
   cursor: pointer;
   font: inherit;
   font-size: 0.78125rem;
-  border-radius: 5px;
 }
 .gh-commit-row:hover {
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-}
-.gh-commit-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-  padding: 2px 0;
-}
-.gh-commit-header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  width: 100%;
+  background: var(--surface-hover);
 }
 .gh-commit-subject {
-  font-weight: 500;
-  color: var(--fg);
+  /* The text column keeps >=60% of the row: the subject claims that as its
+     basis and only gives it up (to ellipsis) when it must. */
+  flex: 1 1 60%;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
+  font-weight: 500;
 }
-.gh-commit-meta {
+.gh-commit-when {
+  flex: none;
   font-size: 0.6875rem;
-  color: var(--dim);
-  flex-shrink: 0;
+  color: var(--muted);
 }
 .gh-commit-refs {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  overflow: hidden;
 }
-.gh-ref {
-  font-size: 0.625rem;
-  padding: 1px 5px;
-  border-radius: 4px;
+.gh-commit-refs .sb-chip {
+  height: 16px;
+  font-size: 0.65625rem;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.gh-commit-refs--count {
+  display: none;
+}
+.gh-ref-synced {
+  opacity: 0.75;
+}
+.gh-commit-expanded {
+  margin: 0 10px 6px 28px;
+  padding: 6px 8px;
   border: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  border-radius: 6px;
+  background: var(--sidebar-2);
+  font-size: 0.71875rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.gh-commit-sha {
   font-family: "Geist Mono", monospace;
 }
-.gh-ref-head {
-  border-color: color-mix(in srgb, var(--g) 50%, transparent);
-  background: color-mix(in srgb, var(--g) 10%, transparent);
-  color: var(--g);
+.gh-commit-expanded-refs {
+  margin-top: 2px;
 }
-.gh-ref-tag {
-  border-color: color-mix(in srgb, var(--o) 50%, transparent);
-  background: color-mix(in srgb, var(--o) 10%, transparent);
-  color: var(--o);
-}
-.gh-ref-remote {
-  color: var(--dim);
-  border-color: var(--border-soft);
+/* Compact density: the ref chips fold into one count chip. */
+@container sidebar-frame (max-width: 300px) {
+  .gh-commit-refs--inline {
+    display: none;
+  }
+  .gh-commit-refs--count {
+    display: flex;
+  }
 }
 .gh-commit-detail {
   padding: 4px 6px 6px 24px;
@@ -2437,30 +2457,20 @@ button.github-panel-row.gh-issue-row {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-soft);
 }
-.gh-history-scope-banner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  background: color-mix(in srgb, var(--accent-solid) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-solid) 30%, transparent);
-  border-radius: 5px;
-  font-size: 0.6875rem;
-  color: var(--fg);
+.gh-history-toolbar .settings-dropdown,
+.history-worktree-filter .settings-dropdown {
+  width: 100%;
 }
-.gh-history-clear-scope {
-  background: none;
-  border: none;
-  color: var(--dim);
-  cursor: pointer;
-  padding: 0 4px;
-  font-size: 0.75rem;
-  line-height: 1;
+.gh-history-toolbar .settings-dropdown select,
+.history-worktree-filter .settings-dropdown select {
+  width: 100%;
+  text-overflow: ellipsis;
 }
-.gh-history-clear-scope:hover {
-  color: var(--fg);
+.history-worktree-filter {
+  padding: 8px 10px 0;
 }
 /* CI status dot (GitHubPanel.tsx's Actions section + Dock.tsx's widget,
    issue #27 phase 5) — same 3-color language as .dock-monitor's own

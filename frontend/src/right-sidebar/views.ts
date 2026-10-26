@@ -1,10 +1,11 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { ATTENTION_ORDER, PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
-import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon } from "../ui/icons.js";
+import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon, HistoryIcon } from "../ui/icons.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
+import { HistorySidebarView } from "./HistorySidebarView.js";
 import { ProjectSidebarView } from "./ProjectSidebarView.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
@@ -94,6 +95,13 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GitBranchIcon,
     Component: GitSidebarView,
     useBadge: useGitBadge,
+  },
+  {
+    id: "history",
+    label: "History",
+    icon: HistoryIcon,
+    Component: HistorySidebarView,
+    useBadge: useNoBadge,
   },
   {
     id: "github",

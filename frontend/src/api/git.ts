@@ -23,7 +23,7 @@ export const gitApi = {
   // isn't a local git repo. `cwd` scopes to one of the project's worktrees.
   getProjectGitLog: (
     projectId: number,
-    opts: { skip?: number; limit?: number; scope?: "all" | "head"; cwd?: string } = {},
+    opts: { skip?: number; limit?: number; scope?: string; cwd?: string } = {},
   ) => {
     const params = new URLSearchParams();
     if (opts.skip) params.set("skip", String(opts.skip));

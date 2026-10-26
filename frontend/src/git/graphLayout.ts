@@ -37,19 +37,45 @@ export interface GraphLayout {
   width: number;
 }
 
-export const LANE_COLOURS = [
-  "#58a6ff",
-  "#3fb950",
-  "#d29922",
-  "#f778ba",
-  "#a371f7",
-  "#ff7b72",
-  "#39c5cf",
-  "#ffa657",
-];
+/** Lanes drawn individually; every lane past this folds into one overflow lane. */
+export const MAX_LANES = 6;
 
+/** Stroke colour for a lane: the `--lane-*` tokens, dimmed past the cap. */
 export function laneColour(lane: number): string {
-  return LANE_COLOURS[lane % LANE_COLOURS.length];
+  return lane >= MAX_LANES ? "var(--lane-more)" : `var(--lane-${lane + 1})`;
+}
+
+/** A row's lanes clamped to {@link MAX_LANES} visible columns plus an overflow column. */
+export interface FoldedRow {
+  lane: number;
+  fromAbove: boolean;
+  passThrough: number[];
+  mergeFrom: number[];
+  parentLanes: number[];
+  /** Columns to draw: at most `MAX_LANES + 1`. */
+  width: number;
+  /** How many lanes were folded into the overflow lane (0 = none). */
+  hidden: number;
+}
+
+/**
+ * Folds every lane >= `cap` into column `cap` (the dimmed overflow lane) so a
+ * row's width is bounded however wide the history gets. Works per row: a row
+ * only pays for the lanes it actually draws, not the graph-wide maximum.
+ */
+export function foldRow(row: GraphRow, cap: number = MAX_LANES): FoldedRow {
+  const fold = (l: number) => Math.min(l, cap);
+  const uniq = (ls: number[]) => [...new Set(ls.map(fold))];
+  const width = Math.min(row.width, cap + 1);
+  return {
+    lane: fold(row.lane),
+    fromAbove: row.fromAbove,
+    passThrough: uniq(row.passThrough),
+    mergeFrom: uniq(row.mergeFrom),
+    parentLanes: uniq(row.parentLanes),
+    width,
+    hidden: Math.max(0, row.width - cap),
+  };
 }
 
 export function computeGraphLayout(commits: readonly GraphCommit[]): GraphLayout {
