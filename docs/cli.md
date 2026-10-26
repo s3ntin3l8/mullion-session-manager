@@ -475,7 +475,10 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   run; only a GitHub App with Checks: Read & write can write it. When it
   cannot, the review still runs, and the confirmation ends with
   `— marker not written: <reason>` (JSON: `marker.written: false` with a
-  `reason` and `message`); `review status` prints a `marker:` line.
+  `reason` and `message`); `review status` prints a `marker:` line. Mullion closes the marker itself
+  (a once-a-minute sweep, plus `review status`) when the run finishes — `success` for a completed
+  run, `failure` for a failed, cancelled or interrupted one, `neutral` after two hours — so nobody
+  has to poll for the pending check to clear.
 - `review status [--pr <n>] [--repo <owner/name>] [--branch <b>]` — checks a requested review: the run's
   Hermes status (`queued`, `running`, `completed`, `failed`, `cancelled`,
   `interrupted`, `stopping` while a stop is in flight, `unknown` when Hermes

@@ -155,7 +155,9 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   (the live SSH-agent bridge connection map `routes/agent-bridge.ts` and
   `ssh-agent-fanout.ts` both read) and `bridge-cleanup` periodically sweeps
   expired pairing codes off the `bridges` table — both primary-only, part of
-  the SSH-agent bridge (issue #820, see `docs/ssh-agent.md`). `ssh-agent`
+  the SSH-agent bridge (issue #820, see `docs/ssh-agent.md`). `review-marker-sweep`
+  (primary-only) closes the review relay's in-flight `Hermes review` check run
+  once its Hermes run has finished — see `docs/cli.md`. `ssh-agent`
   registers on **both** roles: on an `agent`-role host it materializes the
   local unix socket a launched session's `SSH_AUTH_SOCK` points at, wired to
   the primary's dial-in; on the primary it serves that same socket for the

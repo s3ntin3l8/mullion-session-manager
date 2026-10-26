@@ -22,6 +22,7 @@ import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
 import { requestNoncePlugin } from "./plugins/request-nonce.js";
 import { bridgeCleanupPlugin } from "./plugins/bridge-cleanup.js";
+import { reviewMarkerSweepPlugin } from "./plugins/review-marker-sweep.js";
 import { eventStorePlugin } from "./plugins/event-store.js";
 import { pushPlugin } from "./plugins/push.js";
 import { websocketPlugin } from "./plugins/websocket.js";
@@ -485,6 +486,7 @@ export async function buildApp() {
   // sweep). No ordering dependency — only needs app.db, which dbPlugin
   // above has already registered.
   await app.register(bridgeCleanupPlugin);
+  await app.register(reviewMarkerSweepPlugin);
   await app.register(websocketPlugin);
   // authPlugin must register before previewProxyPlugin: both install a
   // global onRequest hook, and onRequest hooks run in registration order —
