@@ -153,6 +153,24 @@ describe("KeptSessionWorktrees", () => {
     );
   });
 
+  it.each([
+    ["alive", "The session has ended but its process is still running in this worktree."],
+    ["unknown", "Mullion can't confirm the session's process has exited."],
+  ])("explains a still-running refusal (%s) and offers force", async (detail, text) => {
+    const user = userEvent.setup();
+    seed([kept({ worktreeKeptReason: "still-running" })]);
+    vi.spyOn(api, "removeProjectGitWorktree").mockResolvedValue({
+      removed: false,
+      reason: "still-running",
+      detail,
+    });
+    render(<KeptSessionWorktrees />);
+
+    await confirm(user, /Remove worktree/);
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Force remove/ })).toBeInTheDocument();
+  });
+
   it("does not offer force for a refusal force cannot fix, and reports a failed request", async () => {
     const user = userEvent.setup();
     seed([kept()]);

@@ -6951,8 +6951,8 @@ describe("projects route", () => {
         });
         expect(refused.json()).toEqual({
           removed: false,
-          reason: "sessions-active",
-          detail: String(ownerId),
+          reason: "still-running",
+          detail: "alive",
         });
         expect(fs.existsSync(worktreePath)).toBe(true);
         expect((await readOwner(app, ownerId)).worktreeReclaimedAt).toBeNull();
@@ -7063,8 +7063,8 @@ describe("projects route", () => {
         });
         expect(res.json()).toEqual({
           removed: false,
-          reason: "sessions-active",
-          detail: String(ownerId),
+          reason: "still-running",
+          detail: "unknown",
         });
         expect(fs.existsSync(worktreePath)).toBe(true);
 
@@ -7179,6 +7179,34 @@ describe("projects route", () => {
         expect((await post({ worktreePath: projectCwd, sessionId: ownerId })).statusCode).toBe(400);
         expect(fs.existsSync(worktreePath)).toBe(true);
 
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      });
+
+      it("marks a worktree git no longer lists as reclaimed, so its row drops off", async () => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const notAWorktree = path.join(projectCwd, "plain-dir");
+        fs.mkdirSync(notAWorktree);
+        const ownerId = await insertOwner(app, {
+          projectId,
+          cwd: notAWorktree,
+          repoCwd: projectCwd,
+        });
+        vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue({
+          [String(ownerId)]: "dead",
+        });
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath: notAWorktree, sessionId: ownerId },
+        });
+        expect(res.json()).toEqual({ removed: false, reason: "not-listed" });
+        expect((await readOwner(app, ownerId)).worktreeReclaimedAt).toBeInstanceOf(Date);
+        expect(fs.existsSync(worktreePath)).toBe(true);
+
+        vi.restoreAllMocks();
         fs.rmSync(projectCwd, { recursive: true, force: true });
         await app.close();
       });

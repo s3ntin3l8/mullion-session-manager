@@ -11,6 +11,7 @@ export const FORCEABLE_REASONS = new Set([
   "dirty",
   "conflicts",
   "sessions-active",
+  "still-running",
 ]);
 
 /**
@@ -54,6 +55,10 @@ export function reasonMessage(reason: string | undefined, detail: string | undef
       return "This worktree has uncommitted changes.";
     case "conflicts":
       return "This worktree has unresolved merge conflicts.";
+    case "still-running":
+      return detail === "alive"
+        ? "The session has ended but its process is still running in this worktree."
+        : "Mullion can't confirm the session's process has exited.";
     case "sessions-active":
       return `Active session${detail?.includes(",") ? "s" : ""}: ${detail ?? "?"}.`;
     case "directory-gone":

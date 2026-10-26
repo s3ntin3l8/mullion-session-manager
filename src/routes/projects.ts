@@ -4250,7 +4250,7 @@ export async function projectsRoute(app: FastifyInstance) {
           const liveness = (await backend.liveness([String(owner.id)]))[String(owner.id)];
           if (liveness !== "dead") {
             if (!force) {
-              return { removed: false, reason: "sessions-active", detail: String(owner.id) };
+              return { removed: false, reason: "still-running", detail: liveness };
             }
             app.log.warn(
               { projectId: project.id, worktreePath, sessionId: owner.id, liveness },
@@ -4259,7 +4259,17 @@ export async function projectsRoute(app: FastifyInstance) {
           }
         }
         const result = await backend.removeListedWorktree(target.cwd, worktreePath, { force });
-        if (owner && result.removed) recordReclaimed(app, owner);
+        // `not-listed` / `directory-gone`: git no longer has a worktree at
+        // this path, or its directory is already gone — nothing of the
+        // session's is left to remove, so the row must not linger. Not
+        // `not-a-repo`: listWorktrees also reports that for a git failure,
+        // and the sweep double-checks that case itself before stamping.
+        if (
+          owner &&
+          (result.removed || result.reason === "not-listed" || result.reason === "directory-gone")
+        ) {
+          recordReclaimed(app, owner);
+        }
         return result;
       } catch (err) {
         app.log.warn({ hostId: target.hostId, err }, "host unreachable, worktree remove failed");

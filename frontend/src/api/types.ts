@@ -1495,7 +1495,10 @@ export type RemoveWorktreeReason =
   | "not-a-repo"
   | "remove-failed"
   | "sessions-active"
-  | "directory-gone";
+  | "directory-gone"
+  // Issue #2026 — a session-owned removal whose ended session's process is
+  // not confirmed gone (`detail` is the liveness: "alive" or "unknown").
+  | "still-running";
 
 export interface RemoveWorktreeResult {
   removed: boolean;
