@@ -305,7 +305,7 @@ export function RunwaySection() {
         <div className="settings-row-desc" data-testid="runway-unmapped">
           {quota.unmappedProviders.length === 0
             ? "Every provider Runway reports is mapped."
-            : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped.`}
+            : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped to an agent Mullion can run.`}
         </div>
       )}
       {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
