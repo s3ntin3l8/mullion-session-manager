@@ -407,12 +407,17 @@ the prompt _was_ delivered either way).
 - **A child on another host (issue #1951)** is prompted **on that host**: the
   primary keeps the derived-status gate (`agent_blocked` / `agent_gone` →
   `409`), then proxies the delivery to the agent, which types it under the
-  same per-session lock. Differences from a local child: **`wait` is not
-  supported** (`400` — the "has a new turn started" guard reads the child's
-  event counter, which only its own host has; send the prompt without it, then
-  use `sessions.wait_for_output` with the reply's `outputOffset` as
-  `afterOffset`, which has no such race); the second, pre-Enter blocked check
-  is skipped; and a timeout _after_ the body was typed leaves it sitting
+  same per-session lock. **`wait` works** (issue #1962): the child's host
+  returns its own event counter with the delivery (`afterSeq`) and reports it,
+  with whether a prompted turn is in flight, on every status read, so the "has
+  a new turn started" guard and the `agent_busy` refusal use the child's own
+  state — not the primary's, which has no such session. Every status read a
+  remote wait makes bypasses the 1.5 s live-status cache (a cached read from
+  just before the prompt could still say the previous turn `finished`), and the
+  wait is checked once per second rather than woken by events. An agent build
+  that predates the counter reports none, and the wait then runs without the
+  guard. Other differences from a local child: the second, pre-Enter blocked
+  check is skipped; and a timeout _after_ the body was typed leaves it sitting
   unsubmitted in the child's input box (the call is not idempotent — do not
   blindly retry it). An agent too old for the route answers `501`.
 - **One prompt at a time per session.** Concurrent prompts to one child are

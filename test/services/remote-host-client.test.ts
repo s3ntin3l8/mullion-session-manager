@@ -1315,6 +1315,44 @@ describe("RemoteHostClient", () => {
     expect(r2).toEqual({ "1": null, "2": null });
   });
 
+  it("bypasses the cache for a fresh bulkLiveStatus, and leaves the cache alone (#1962)", async () => {
+    let n = 0;
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(jsonResponse(200, { "1": { n: (n += 1) } })),
+    );
+    const c = client();
+    const first = await c.bulkLiveStatus(["1"], 1000);
+    // Within the TTL a plain read is served from the cache...
+    expect(await c.bulkLiveStatus(["1"], 1000)).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // ...a fresh one always asks the host...
+    const fresh = await c.bulkLiveStatus(["1"], 1000, undefined, { fresh: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fresh).not.toBe(first);
+    // ...but does not displace what the dashboard's list poll cached.
+    expect(await c.bulkLiveStatus(["1"], 1000)).toBe(first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share an in-flight bulkLiveStatus with a fresh one (#1962)", async () => {
+    const resolvers: Array<(res: Response) => void> = [];
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const c = client();
+    const stale = c.bulkLiveStatus(["1"], 1000);
+    const fresh = c.bulkLiveStatus(["1"], 1000, undefined, { fresh: true });
+    // The fresh read is its own request: it could otherwise be handed an
+    // answer that was already on the wire before the prompt it follows.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvers[0](jsonResponse(200, { "1": null }));
+    resolvers[1](jsonResponse(200, { "1": null }));
+    await Promise.all([stale, fresh]);
+  });
+
   it("uploads a raw image body to /internal/uploads with cwd/mime as query params (issue #68)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { path: "/remote/cwd/.mullion-uploads/x.png" }));
     const buffer = Buffer.from("fake png bytes");

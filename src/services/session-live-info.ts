@@ -28,6 +28,9 @@ import { resolveBackend } from "./session-backend.js";
 // (issue #271 follow-up) is excluded the same way: it's read directly off
 // `app.pty.get(id)` by the (local-only) promote route's own transfer
 // decision, never surfaced to the frontend or consumed by deriveSessionStatus.
+// `eventSeqHead` / `agentTurnInFlight` (issue #1962) are excluded likewise:
+// the control socket's remote `sessions.wait` / `sessions.prompt` read them
+// straight off the host's SessionInfo, they are not part of the session view.
 type LiveInfoKey = Exclude<
   keyof SessionInfo,
   | "id"
@@ -43,6 +46,8 @@ type LiveInfoKey = Exclude<
   | "staleHooks"
   | "restoredVersion"
   | "hookEmits"
+  | "eventSeqHead"
+  | "agentTurnInFlight"
 >;
 
 // Live-only (in-memory PtyManager state on whichever host owns this session,

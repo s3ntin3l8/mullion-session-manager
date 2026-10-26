@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const clientMock = vi.hoisted(() => ({
   resolvePrompt: vi.fn(),
   resolveWaitOutput: vi.fn(),
+  bulkLiveStatus: vi.fn(),
 }));
 
 vi.mock("../../src/services/remote-host-client.js", async (importActual) => ({
@@ -42,6 +43,23 @@ describe("RemoteBackend.prompt", () => {
       outputOffset: 17,
     });
     expect(clientMock.resolvePrompt).toHaveBeenCalledWith("5", { text: "go", submit: true });
+  });
+
+  it("hands the agent's event head to the caller as afterSeq (#1962)", async () => {
+    clientMock.resolvePrompt.mockResolvedValue({ outputOffset: 17, afterSeq: 42 });
+    await expect(backend().prompt("5", { text: "go", submit: true })).resolves.toEqual({
+      ok: true,
+      outputOffset: 17,
+      afterSeq: 42,
+    });
+  });
+
+  it("passes the `fresh` live-status option through to the client (#1962)", async () => {
+    clientMock.bulkLiveStatus.mockResolvedValue({ "5": null });
+    await backend().liveStatus(["5"], 1000, undefined, { fresh: true });
+    expect(clientMock.bulkLiveStatus).toHaveBeenCalledWith(["5"], 1000, undefined, {
+      fresh: true,
+    });
   });
 
   it("passes through the status and message of an agent's 422 refusal", async () => {

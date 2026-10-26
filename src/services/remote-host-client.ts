@@ -1543,14 +1543,31 @@ export class RemoteHostClient {
     });
   }
 
+  /**
+   * `opts.fresh` (issue #1962) skips both the 1.5 s result cache and the
+   * in-flight sharing, so the answer cannot predate this call. A wait that
+   * follows a prompt needs that: a cached read from just before the prompt
+   * can still say the PREVIOUS turn `finished`, and would satisfy the wait
+   * before the prompted turn ran. A fresh read leaves the cache alone: it is
+   * keyed to one id, and writing it would evict the multi-id entry the
+   * dashboard's list poll shares every few seconds.
+   */
   async bulkLiveStatus(
     ids: string[],
     idleThresholdMs: number,
     sessionProjectIds?: Record<string, number>,
+    opts: { fresh?: boolean } = {},
   ): Promise<Record<string, SessionInfo | null>> {
     if (ids.length === 0) return Object.create(null);
     const key =
       [...ids].sort().join(",") + `|${idleThresholdMs}|${JSON.stringify(sessionProjectIds || {})}`;
+    if (opts.fresh === true) {
+      return this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
+      });
+    }
     if (
       this.liveStatusCache &&
       this.liveStatusCache.key === key &&
@@ -1648,7 +1665,7 @@ export class RemoteHostClient {
   resolvePrompt(
     id: string,
     body: { text: string; submit: boolean },
-  ): Promise<{ outputOffset: number }> {
+  ): Promise<{ outputOffset: number; afterSeq?: number }> {
     return this.request(
       `/internal/sessions/${encodeURIComponent(id)}/prompt`,
       {

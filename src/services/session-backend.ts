@@ -137,10 +137,14 @@ export interface SpawnOpts {
 // routes/terminal.ts branches on local-vs-remote directly instead.
 export interface SessionBackend {
   spawn(opts: SpawnOpts): Promise<SpawnResult>;
+  // `opts.fresh` (issue #1962): the answer must not come from a cache that
+  // predates the call. Only a remote host has such a cache (1.5 s); a local
+  // read is always current.
   liveStatus(
     ids: string[],
     idleThresholdMs: number,
     sessionProjectIds?: Record<string, number>,
+    opts?: { fresh?: boolean },
   ): Promise<Record<string, SessionInfo | null>>;
   // Issue #1265 — TOTAL tri-state map: every requested id is always present
   // in the result, so a caller can never mistake "this reachable host's
@@ -459,7 +463,9 @@ class LocalBackend implements SessionBackend {
       ...opts,
       notRunning: "the session is not running",
     });
-    return delivery.ok ? { ok: true, outputOffset: delivery.outputOffset } : delivery;
+    return delivery.ok
+      ? { ok: true, outputOffset: delivery.outputOffset, afterSeq: delivery.afterSeq }
+      : delivery;
   }
 
   async waitOutput(id: string, req: WaitOutputRequest): Promise<WaitOutputOutcome> {
@@ -627,8 +633,9 @@ class RemoteBackend implements SessionBackend {
     ids: string[],
     idleThresholdMs: number,
     sessionProjectIds?: Record<string, number>,
+    opts?: { fresh?: boolean },
   ): Promise<Record<string, SessionInfo | null>> {
-    return this.client.bulkLiveStatus(ids, idleThresholdMs, sessionProjectIds);
+    return this.client.bulkLiveStatus(ids, idleThresholdMs, sessionProjectIds, opts);
   }
 
   // Issue #1265 — derives the TOTAL tri-state map from the wire's existing
@@ -689,7 +696,7 @@ class RemoteBackend implements SessionBackend {
   async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
     try {
       const delivered = await this.client.resolvePrompt(id, opts);
-      return { ok: true, outputOffset: delivered.outputOffset };
+      return { ok: true, outputOffset: delivered.outputOffset, afterSeq: delivered.afterSeq };
     } catch (err) {
       return { ok: false, ...this.remoteRefusal(err, "prompts") };
     }

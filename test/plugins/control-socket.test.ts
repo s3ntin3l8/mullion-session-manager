@@ -2767,7 +2767,13 @@ describe("controlSocketPlugin (issue #185)", () => {
 
         // Issue #1951 — a child on ANOTHER host: its PTY is there, so the
         // delivery is proxied to that host through SessionBackend.prompt.
-        async function remoteChild(prompt: ReturnType<typeof vi.fn>) {
+        async function remoteChild(
+          prompt: ReturnType<typeof vi.fn>,
+          // What the child's host reports on its Nth live-status read (#1962).
+          // Reads past the end of the script repeat the last entry.
+          // An `Error` entry is a host that does not answer that read.
+          liveScript: Array<Record<string, unknown> | Error> = [{ alive: true }],
+        ) {
           const { childId, socket, pty } = await agentChild();
           const hostRes = await app!.inject({
             method: "POST",
@@ -2778,7 +2784,17 @@ describe("controlSocketPlugin (issue #185)", () => {
           const hostId = hostRes.json().id as string;
           if (!hostId) throw new Error(`host create: ${hostRes.statusCode} ${hostRes.body}`);
           app!.db.update(sessions).set({ hostId }).where(eq(sessions.id, childId)).run();
-          const backend = { prompt, waitOutput: vi.fn() };
+          let liveReads = 0;
+          const backend = {
+            prompt,
+            waitOutput: vi.fn(),
+            liveStatus: vi.fn(async (..._args: unknown[]) => {
+              const info = liveScript[Math.min(liveReads, liveScript.length - 1)];
+              liveReads += 1;
+              if (info instanceof Error) throw info;
+              return { [String(childId)]: info };
+            }),
+          };
           const realResolveBackend = sessionBackendModule.resolveBackend;
           vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(((
             appArg: Parameters<typeof realResolveBackend>[0],
@@ -2828,19 +2844,155 @@ describe("controlSocketPlugin (issue #185)", () => {
           socket.destroy();
         });
 
-        it("refuses `wait` for a remote child, pointing at wait_for_output (#1951)", async () => {
+        it("waits on a remote child's NEXT turn, not the previous turn's `finished` (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 5, afterSeq: 7 });
+          const previousTurn = { alive: true, lastTurnEndedAt: 1, eventSeqHead: 7 };
+          const { childId, socket, backend } = await remoteChild(prompt, [
+            previousTurn, // the pre-prompt gate
+            previousTurn, // first wait read: still the old turn's `finished` -> guard holds
+            { alive: true, activity: "working", eventSeqHead: 9, agentTurnInFlight: true },
+            { alive: true, lastTurnEndedAt: 2, eventSeqHead: 10 },
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 20_000 },
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            result: {
+              delivered: true,
+              outputOffset: 5,
+              wait: { timedOut: false, status: "finished", severity: "done", eventSeq: 10 },
+            },
+          });
+          // Every read the prompt/wait made went around the 1.5 s cache.
+          expect(backend.liveStatus).toHaveBeenCalledTimes(4);
+          for (const call of backend.liveStatus.mock.calls) {
+            expect(call[3]).toEqual({ fresh: true });
+          }
+          socket.destroy();
+        }, 30_000);
+
+        it("refuses a remote `wait` with agent_busy while the child's prompted turn is in flight (#1962)", async () => {
           app = await buildApp();
           await app.ready();
           const prompt = vi.fn();
-          const { childId, socket } = await remoteChild(prompt);
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, agentTurnInFlight: true, eventSeqHead: 3 },
+          ]);
           const reply = await ask(socket, "sessions.prompt", {
             sessionId: childId,
             text: "go",
             wait: true,
           });
-          expect(reply).toMatchObject({ ok: false, status: 400 });
-          expect(String(reply.error)).toMatch(/wait_for_output/);
+          expect(reply).toMatchObject({ ok: false, status: 409 });
+          expect(String(reply.error)).toMatch(/agent_busy/);
           expect(prompt).not.toHaveBeenCalled();
+          socket.destroy();
+        });
+
+        it("runs a remote wait without the new-turn guard when the agent reports no event head (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          // An agent build that predates the field: `afterSeq` is absent from
+          // the prompt reply AND `eventSeqHead` from its live info. The guard
+          // must be OFF, not stuck closed — this wait would otherwise hang.
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1 });
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1 },
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 5_000 },
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            result: { delivered: true, wait: { timedOut: false, status: "finished" } },
+          });
+          socket.destroy();
+        });
+
+        it("reports a wait on a host that stops answering as suspended, not as a failure (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1, afterSeq: 7 });
+          // Answers the pre-prompt gate, then goes dark.
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1, eventSeqHead: 7 },
+            new Error("ECONNREFUSED"),
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 1_500 },
+          });
+          // The prompt WAS delivered; the wait times out reporting the status
+          // the REST path would (host unreachable — may still be running).
+          expect(reply).toMatchObject({
+            ok: true,
+            result: { delivered: true, wait: { timedOut: true, status: "suspended" } },
+          });
+          socket.destroy();
+        }, 15_000);
+
+        it("treats an event head that moved BACKWARDS (the agent restarted) as a new turn (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1, afterSeq: 40 });
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1, eventSeqHead: 40 },
+            { alive: true, lastTurnEndedAt: 1, eventSeqHead: 40 },
+            // The counter is not persisted: a restarted agent starts over.
+            { alive: true, lastTurnEndedAt: 2, eventSeqHead: 3 },
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 20_000 },
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            result: { wait: { timedOut: false, status: "finished", eventSeq: 3 } },
+          });
+          socket.destroy();
+        }, 30_000);
+
+        it("reports eventSeq 0, not a stand-in, when the host never reports a head (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1, afterSeq: 4 });
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1 },
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 5_000 },
+          });
+          expect(reply).toMatchObject({ ok: true, result: { wait: { eventSeq: 0 } } });
+          socket.destroy();
+        });
+
+        it("keeps the guard off when the prompt reply carries an afterSeq but the live info no head (#1962)", async () => {
+          app = await buildApp();
+          await app.ready();
+          const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 1, afterSeq: 4 });
+          const { childId, socket } = await remoteChild(prompt, [
+            { alive: true, lastTurnEndedAt: 1 },
+          ]);
+          const reply = await ask(socket, "sessions.prompt", {
+            sessionId: childId,
+            text: "go",
+            wait: { until: ["done"], timeoutMs: 5_000 },
+          });
+          expect(reply).toMatchObject({
+            ok: true,
+            result: { wait: { timedOut: false, status: "finished" } },
+          });
           socket.destroy();
         });
 

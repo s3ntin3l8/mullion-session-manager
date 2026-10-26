@@ -2482,7 +2482,9 @@ export async function internalRoutes(app: FastifyInstance) {
         reply.code(422);
         return { status: delivery.status, error: delivery.error };
       }
-      return { outputOffset: delivery.outputOffset };
+      // `afterSeq` (issue #1962): the event head right after the turn began,
+      // which arms the primary's "a new turn started" guard for `wait`.
+      return { outputOffset: delivery.outputOffset, afterSeq: delivery.afterSeq };
     },
   );
 

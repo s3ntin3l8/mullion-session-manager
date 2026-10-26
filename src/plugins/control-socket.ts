@@ -37,7 +37,9 @@ import {
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
-import { resolveSessionHostId } from "../services/session-live-info.js";
+import { resolveSessionHostId, withLiveInfo } from "../services/session-live-info.js";
+import { getStoredSettings } from "../services/settings.js";
+import type { SessionInfo } from "../services/session-types.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
@@ -449,14 +451,6 @@ function ownAndChildSessionFilter(
  * host is routed to that host — see childHostId — it is not this case.) */
 const NOT_LOCAL_MESSAGE = "the session is not running (it has no live process on its host)";
 
-/** 400 for `sessions.prompt` + `wait` aimed at a child on another host: the
- * "has a new turn started" guard reads the child's event counter, which only
- * its own host has. `wait_for_output` with the reply's `outputOffset` has no
- * such race by design, so point at that instead (issue #1951). */
-const REMOTE_PROMPT_WAIT_MESSAGE =
-  "'wait' is not supported for a session on another host — send the prompt without it, " +
-  "then use sessions.wait_for_output with the reply's outputOffset as afterOffset";
-
 /** The host a session runs on: its own (`sessions.hostId`), else its project's.
  * "local" for an id with no row, so a stray id keeps today's local behaviour. */
 function childHostId(app: FastifyInstance, id: string): string {
@@ -843,6 +837,51 @@ async function readDerivedStatus(app: FastifyInstance, id: string): Promise<Wait
 }
 
 /**
+ * Issue #1962 — one FRESH read of a session that lives on another host: its
+ * derived status (the same derivation `GET /api/sessions/:id` applies, via
+ * `withLiveInfo`) plus the two fields of the host's own `SessionInfo` that the
+ * primary cannot get anywhere else — the event head and whether a prompted
+ * turn is in flight. `fresh` bypasses the host client's 1.5 s cache, which
+ * could otherwise hand back the PREVIOUS turn's `finished` right after a
+ * prompt. A host that does not answer is reported as suspended (as the REST
+ * path does), not thrown. `snapshot` is null for a session that has no row.
+ */
+async function readRemoteSession(
+  app: FastifyInstance,
+  id: string,
+  hostId: string,
+): Promise<{ snapshot: WaitSnapshot | null; eventSeqHead?: number; turnInFlight: boolean }> {
+  const row = app.db
+    .select()
+    .from(sessions)
+    .where(eq(sessions.id, Number(id)))
+    .get();
+  if (!row) return { snapshot: null, turnInFlight: false };
+  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+  let info: SessionInfo | null = null;
+  let hostReachable = true;
+  try {
+    const map = await resolveBackend(app, hostId).liveStatus([id], idleThresholdMs, undefined, {
+      fresh: true,
+    });
+    info = map[id] ?? null;
+  } catch (err) {
+    hostReachable = false;
+    app.log.warn({ hostId, sessionId: id, err }, "host unreachable, reporting default live status");
+  }
+  const view = withLiveInfo(app, row, info, hostId, { hostReachable });
+  return {
+    snapshot: {
+      status: view.sessionStatus,
+      severity: view.sessionStatusSeverity,
+      detail: view.sessionStatusDetail ?? null,
+    },
+    eventSeqHead: info?.eventSeqHead,
+    turnInFlight: info?.agentTurnInFlight === true,
+  };
+}
+
+/**
  * Runs one server-side wait on `id` for this connection and maps the outcome
  * to a reply. Enforces MAX_WAITS_PER_CONNECTION, aborts on socket close
  * (returns null — nobody left to reply to), and, for a session-scoped
@@ -861,25 +900,60 @@ async function runWait(
   const onClose = () => controller.abort();
   conn.socket.once("close", onClose);
   conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+  // Issue #1962 — a child on another host has no Session in THIS process's
+  // PtyManager, so its event head, its events and its status all come from
+  // that host: every read below is a fresh one over the wire, and the wait is
+  // woken by its 1 s tick (the host's events do not reach this process).
+  const remoteHostId = childHostId(app, id);
+  const remote = remoteHostId !== LOCAL_HOST_ID;
+  // The host's event head as of the last read. `headSeen` stays false when the
+  // host never reports one (an agent build that predates the field): the
+  // "a new turn started" guard is then disabled (today's behaviour), not
+  // stuck closed.
+  let remoteHead = 0;
+  let headSeen = false;
+  const eventSeqHead = (): number => {
+    if (!remote) return app.pty.get(id)?.eventSeqHead ?? 0;
+    if (headSeen) return remoteHead;
+    // Only the guard sees this stand-in (anything but `afterSeq` opens it);
+    // it is never reported as the child's counter — see `resultSeq`.
+    return opts.afterSeq === undefined ? 0 : opts.afterSeq + 1;
+  };
+  // The `eventSeq` in the reply: the host's real counter, or 0 ("none") for a
+  // host that never reported one — never the stand-in above, which is not a
+  // cursor the host produced.
+  const resultSeq = (): number =>
+    remote ? (headSeen ? remoteHead : 0) : (app.pty.get(id)?.eventSeqHead ?? 0);
   try {
     const result = await waitForSession(opts, {
       signal: controller.signal,
       // A session-scoped waiter must stay active for the whole wait (the
       // same rule resolveOwnedSessionId applies at the start).
       authorized: () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!),
-      readStatus: () => readDerivedStatus(app, id),
-      eventSeqHead: () => app.pty.get(id)?.eventSeqHead ?? 0,
+      readStatus: remote
+        ? async () => {
+            const read = await readRemoteSession(app, id, remoteHostId);
+            if (read.eventSeqHead !== undefined) {
+              remoteHead = read.eventSeqHead;
+              headSeen = true;
+            }
+            return read.snapshot;
+          }
+        : () => readDerivedStatus(app, id),
+      eventSeqHead,
       // Bound ONCE, at wait start. If the child's Session isn't in app.pty
       // yet (or is replaced mid-wait) this is a no-op and the wait is woken
       // only by the 1 s tick — added latency, not a correctness gap (a
       // `gone` child still matches via readStatus).
-      subscribe: (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
+      subscribe: remote
+        ? () => () => {}
+        : (listener) => app.pty.get(id)?.onEvent(() => listener()) ?? (() => {}),
     });
     if ("aborted" in result) return null;
     return {
       ok: true,
       status: 200,
-      result: { ...result, eventSeq: app.pty.get(id)?.eventSeqHead ?? 0 },
+      result: { ...result, eventSeq: resultSeq() },
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -903,8 +977,19 @@ async function refuseIfBlockedOrGone(
   opts: { note?: string; refuseBusy?: boolean } = {},
 ): Promise<ReplyPayload | null> {
   let snapshot: WaitSnapshot | null;
+  // Whether a prompted turn is in flight — read from the host that owns the
+  // session (issue #1962), as only that host's PtyManager knows.
+  let turnInFlight: boolean;
+  const hostId = childHostId(app, id);
   try {
-    snapshot = await readDerivedStatus(app, id);
+    if (hostId === LOCAL_HOST_ID) {
+      snapshot = await readDerivedStatus(app, id);
+      turnInFlight = app.pty.get(id)?.agentTurnInFlight === true;
+    } else {
+      const read = await readRemoteSession(app, id, hostId);
+      snapshot = read.snapshot;
+      turnInFlight = read.turnInFlight;
+    }
   } catch (err) {
     return bad(500, err instanceof Error ? err.message : String(err));
   }
@@ -923,7 +1008,6 @@ async function refuseIfBlockedOrGone(
   // satisfy the wait before the prompted turn ever ran.
   // Name the in-flight turn only when that is what fired: a child that is busy
   // on background tasks / subagents can be so AFTER its turn ended.
-  const turnInFlight = app.pty.get(id)?.agentTurnInFlight === true;
   if (opts.refuseBusy && (snapshot.severity === "busy" || turnInFlight)) {
     return bad(
       409,
@@ -1184,16 +1268,15 @@ export const OPS: Record<string, OpSpec> = {
 
       const id = target.id;
       const hostId = childHostId(app, id);
+      let outputOffset: number;
+      let afterSeq: number | undefined;
       if (hostId !== LOCAL_HOST_ID) {
         // Issue #1951 — a child on another host: its PTY is there, so the
         // delivery runs there (SessionBackend.prompt). What the primary can
-        // still decide itself is whether typing is wise at all — the derived
-        // status reaches remote hosts through GET /api/sessions/:id.
-        if (waitOpts !== null) {
-          reply(bad(400, REMOTE_PROMPT_WAIT_MESSAGE));
-          return;
-        }
-        const refusal = await refuseIfBlockedOrGone(app, id);
+        // still decide itself is whether typing is wise at all, from a fresh
+        // read of the child's status (issue #1962: also its in-flight turn,
+        // which only that host knows — the `agent_busy` refusal of a wait).
+        const refusal = await refuseIfBlockedOrGone(app, id, { refuseBusy: waitOpts !== null });
         if (refusal) {
           reply(refusal);
           return;
@@ -1202,56 +1285,50 @@ export const OPS: Record<string, OpSpec> = {
           text,
           submit: shouldSubmit,
         });
-        reply(
-          outcome.ok
-            ? {
-                ok: true,
-                status: 200,
-                result: {
-                  delivered: true,
-                  submitted: shouldSubmit,
-                  outputOffset: outcome.outputOffset,
-                },
-              }
-            : bad(outcome.status, outcome.error),
-        );
-        return;
+        if (!outcome.ok) {
+          reply(bad(outcome.status, outcome.error));
+          return;
+        }
+        ({ outputOffset, afterSeq } = outcome);
+      } else {
+        // One prompt at a time per session, and the typing itself, live in
+        // services/session-prompt.ts so a remote child's host runs the SAME
+        // code. The two checks are this op's derived-status gate: asked
+        // before anything is typed, and again before Enter.
+        const delivery = await deliverPrompt(app, id, {
+          text,
+          submit: shouldSubmit,
+          notRunning: NOT_LOCAL_MESSAGE,
+          check: async (stage) => {
+            const refusal = await refuseIfBlockedOrGone(
+              app,
+              id,
+              stage === "before"
+                ? { refuseBusy: waitOpts !== null }
+                : {
+                    note: " — the text was typed but NOT submitted and may still be in its input box",
+                  },
+            );
+            return refusal && !refusal.ok
+              ? { status: refusal.status ?? 500, error: refusal.error ?? "refused" }
+              : null;
+          },
+        });
+        if (!delivery.ok) {
+          reply(bad(delivery.status, delivery.error));
+          return;
+        }
+        ({ afterSeq, outputOffset } = delivery);
       }
-
-      // One prompt at a time per session, and the typing itself, live in
-      // services/session-prompt.ts so a remote child's host runs the SAME
-      // code. The two checks are this op's derived-status gate: asked before
-      // anything is typed, and again before Enter.
-      const delivery = await deliverPrompt(app, id, {
-        text,
-        submit: shouldSubmit,
-        notRunning: NOT_LOCAL_MESSAGE,
-        check: async (stage) => {
-          const refusal = await refuseIfBlockedOrGone(
-            app,
-            id,
-            stage === "before"
-              ? { refuseBusy: waitOpts !== null }
-              : {
-                  note: " — the text was typed but NOT submitted and may still be in its input box",
-                },
-          );
-          return refusal && !refusal.ok
-            ? { status: refusal.status ?? 500, error: refusal.error ?? "refused" }
-            : null;
-        },
-      });
-      if (!delivery.ok) {
-        reply(bad(delivery.status, delivery.error));
-        return;
-      }
-      const { afterSeq, outputOffset } = delivery;
 
       const delivered = { delivered: true, submitted: shouldSubmit, outputOffset };
       if (waitOpts === null) {
         reply({ ok: true, status: 200, result: delivered });
         return;
       }
+      // `afterSeq` is the HOST's event head right after the turn began; a
+      // remote host that predates it sends none, which runs the wait without
+      // the "a new turn started" guard (see runWait).
       const waited = await runWait(app, conn, id, { ...waitOpts, afterSeq });
       if (waited === null) return;
       // The prompt WAS delivered; a failed wait is reported alongside, not

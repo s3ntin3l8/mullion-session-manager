@@ -3734,6 +3734,11 @@ describe("internal routes (agent role, issue #26)", () => {
     expect(liveRes.statusCode).toBe(200);
     const live = liveRes.json();
     expect(live["501"]).toMatchObject({ alive: true, cwd: "/tmp", command: "bash" });
+    // #1962 — the two fields a primary waiting on this session cannot get anywhere else.
+    expect(live["501"]).toMatchObject({
+      eventSeqHead: expect.any(Number),
+      agentTurnInFlight: false,
+    });
     expect(live["never-spawned"]).toBeNull();
 
     const livenessRes = await app.inject({
@@ -4584,7 +4589,12 @@ describe("internal routes (agent role, issue #26)", () => {
         payload: { text: "run the build", submit: true },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ outputOffset: expect.any(Number) });
+      // `afterSeq` (#1962): the event head right after the turn began — what
+      // arms the primary's "a new turn started" guard for `prompt` + `wait`.
+      expect(res.json()).toEqual({
+        outputOffset: expect.any(Number),
+        afterSeq: expect.any(Number),
+      });
       const typed = pty.writeSpy.mock.calls.map((c) => String(c[0]));
       expect(typed.some((s) => s.includes("run the build"))).toBe(true);
       expect(typed[typed.length - 1]).toBe("\r");

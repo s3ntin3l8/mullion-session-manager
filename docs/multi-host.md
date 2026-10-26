@@ -275,10 +275,15 @@ branch is merged; automatic reclamation is tracked in #1964.
 
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),
-`session logs` and `session kill`. `session prompt` (without `--wait`) and
-`session wait-output` work too and run on the child's host: send the prompt,
-then wait on its output with the reply's `outputOffset` as `--after-offset`
-(`prompt --wait` is not supported for a remote child yet, #1962). See [Current
+`session logs` and `session kill`. `session prompt` and `session wait-output`
+work too and run on the child's host. `session prompt --wait` ("type it and
+tell me when the turn ends") works as it does for a local child (#1962): the
+child's host reports its own event counter and whether a prompted turn is in
+flight, so a `--wait` is refused with `agent_busy` while the child is
+mid-turn, and a stale "finished" from the previous turn cannot satisfy it.
+Each check of a remote wait is one request to the child's host per second.
+Alternatively send the prompt without `--wait` and wait on its output with the
+reply's `outputOffset` as `--after-offset`. See [Current
 limitations](#current-limitations) for what is still missing.
 
 ### Seeing it in the UI
@@ -876,9 +881,9 @@ alternative, and how the two compose.
   MCP tools fail immediately with an explanation instead of a connect error.
   From the primary, a local caller can drive a remote child: `wait`, `get`,
   scrollback, `kill`, and — since issue #1951 — `prompt` and `wait_for_output`
-  (both run on the child's own host).
-  `prompt` with `wait` is not supported for a remote child yet (use
-  `wait_for_output` with the prompt's `outputOffset`). The child calling _back_
+  (both run on the child's own host), including `prompt` with `wait` (#1962;
+  needs an agent build that reports its event counter — an older one runs the
+  wait without the "a new turn started" guard). The child calling _back_
   into the primary is the agent→primary relay, tracked separately (#1656).
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
