@@ -554,9 +554,6 @@ export async function projectFilesRoute(app: FastifyInstance) {
     },
   );
 
-  // Filename search is fired as the user types (debounced client-side), so it
-  // gets a higher ceiling than the other file routes.
-
   app.get<{ Params: { id: string }; Querystring: { q?: string; sessionId?: string } }>(
     "/api/projects/:id/files/search",
     {
