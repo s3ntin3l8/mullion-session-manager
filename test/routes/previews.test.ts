@@ -281,6 +281,45 @@ describe("previews route (issue #28)", () => {
 
     await app.close();
   });
+
+  it("carries the project checkout's branch, and null for external or remote (A6)", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "previews-branch-"));
+    fs.mkdirSync(path.join(cwd, ".git"));
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/feat/links\n");
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "branchy", cwd },
+    });
+    const projectId = created.json().id as number;
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    expect(preview.json().branch).toBe("feat/links");
+    const slug = preview.json().slug as string;
+
+    const one = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(one.json().branch).toBe("feat/links");
+
+    const external = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "external", url: "https://example.com/x" },
+    });
+    expect(external.json().branch).toBeNull();
+
+    const list = await app.inject({ method: "GET", url: "/api/previews" });
+    const rows = list.json() as Array<{ slug: string; branch: string | null }>;
+    expect(rows.find((r) => r.slug === slug)?.branch).toBe("feat/links");
+    expect(rows.find((r) => r.slug === external.json().slug)?.branch).toBeNull();
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
 });
 
 describe("GET /api/previews/:slug/open with PREVIEW_AUTH_REQUIRED=true (issue #1316)", () => {

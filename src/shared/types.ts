@@ -527,6 +527,20 @@ export type LayoutMode = "auto" | "phone" | "tablet" | "desktop";
 export type TabletPaneCap = 2 | 3;
 
 // ---------------------------------------------------------------------------
+// mullion-links.ts — IssueTriageState
+// ---------------------------------------------------------------------------
+
+/**
+ * The triage relay's state for one issue (epic #1965, A6). Absent (`null` on
+ * the issue) means no run is known — never requested, or the in-memory run
+ * index was lost to a restart; it is NOT "no triage pending".
+ */
+export interface IssueTriageState {
+  state: "requested";
+  runId: string;
+}
+
+// ---------------------------------------------------------------------------
 // review-relay.ts — RelayReviewState
 // ---------------------------------------------------------------------------
 

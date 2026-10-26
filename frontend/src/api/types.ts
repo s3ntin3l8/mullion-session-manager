@@ -34,6 +34,7 @@ import type {
   SoundName,
   LayoutMode,
   TabletPaneCap,
+  IssueTriageState,
   RelayReviewState,
 } from "../../../src/shared/types.js";
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
@@ -51,7 +52,7 @@ export type {
 };
 // The review relay's state for a pull request (issue #1630) — shared with the
 // backend so the two cannot drift.
-export type { RelayReviewState };
+export type { IssueTriageState, RelayReviewState };
 
 export interface AuthStatus {
   methods: { token: boolean; oidc: boolean };
@@ -1129,6 +1130,9 @@ export interface GitHubPROrWithChecks {
    * pending" (the relay's run index is in-memory, so a restart loses it).
    */
   relayReview?: RelayReviewState;
+  /** Task Master task that opened this PR (joined on prNumber/branchName). */
+  taskId?: number;
+  taskStatus?: string;
   // Review state (backend github-pr-reviews.ts). Optional: absent from a
   // server that predates it, and from the many hand-built test fixtures.
   isDraft?: boolean;
@@ -1229,6 +1233,8 @@ export interface GitHubIssueListItem {
   updatedAt: string;
   /** Task Master task status for this issue, when one exists. */
   taskStatus: string | null;
+  /** The triage run Mullion dispatched for this issue, or null when none is known. */
+  triage?: IssueTriageState | null;
 }
 
 export interface GitHubIssuesResponse {
@@ -1606,6 +1612,8 @@ export interface Preview {
   projectId: number | null;
   externalUrl: string | null;
   createdAt: string;
+  /** Branch the project's checkout is on; null for external or unreadable. */
+  branch?: string | null;
 }
 
 // Saved URLs per project — quick-access bookmarks in the built-in browser

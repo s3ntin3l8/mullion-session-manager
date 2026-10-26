@@ -18,6 +18,7 @@ import type { RelayReviewState } from "../../src/shared/types.js";
 import {
   assertReviewerConfigured,
   getReviewRunForPr,
+  getRunForTarget,
   requestHermesReview,
 } from "../../src/services/hermes-review.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
@@ -66,6 +67,8 @@ vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
   return {
     ...actual,
     getReviewRunForPr: vi.fn(actual.getReviewRunForPr),
+    // Epic #1965 A6 — the issue list/detail ask the same index for a triage run.
+    getRunForTarget: vi.fn(actual.getRunForTarget),
     // #1790 — the re-review route's dispatch, so a test can hand back a result
     // without a real Hermes.
     assertReviewerConfigured: vi.fn(actual.assertReviewerConfigured),
@@ -2084,6 +2087,60 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("carries the triage run Mullion dispatched for an issue (A6)", async () => {
+        const triageRun = {
+          runId: "run_triage_1",
+          kind: "issue" as const,
+          owner: "acme",
+          repo: "widgets",
+          prNumber: 1,
+          headSha: "",
+          dispatchedAt: Date.now(),
+        };
+        vi.mocked(getRunForTarget).mockImplementation((kind, _o, _r, n) =>
+          kind === "issue" && n === 1 ? triageRun : null,
+        );
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.includes("/repos/acme/widgets/issues?")) {
+            return Promise.resolve(jsonResponse(200, [rawIssue(1), rawIssue(3)]));
+          }
+          if (url.endsWith("/issues/1/comments?per_page=100")) {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          if (url.endsWith("/issues/1")) return Promise.resolve(jsonResponse(200, rawIssue(1)));
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        try {
+          const list = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues`,
+          });
+          const byNumber = new Map(
+            (list.json().issues as Array<{ number: number; triage: unknown }>).map((i) => [
+              i.number,
+              i.triage,
+            ]),
+          );
+          expect(byNumber.get(1)).toEqual({ state: "requested", runId: "run_triage_1" });
+          expect(byNumber.get(3)).toBeNull();
+
+          const detail = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues/1`,
+          });
+          expect(detail.json().triage).toEqual({ state: "requested", runId: "run_triage_1" });
+        } finally {
+          vi.mocked(getRunForTarget).mockReset();
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        }
+      });
+
       it("rejects a bad sort or page", async () => {
         fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
         const app = await makeApp();
@@ -2567,6 +2624,66 @@ describe("projects route", () => {
           expect(res.statusCode).toBe(200);
           const prs = res.json().prs[String(id)].prs as Array<{ relayReview?: unknown }>;
           expect(prs[0].relayReview).toMatchObject({ state: "requested" });
+        });
+
+        it("joins each PR to its Task Master task on prNumber, else branchName (A6)", async () => {
+          const { setRepoPRsStatus } = await import("../../src/services/github.js");
+          const { tasks } = await import("../../src/db/schema.js");
+          const listed = (number: number, headBranch: string) => ({
+            ...PR_REVIEW_DEFAULTS,
+            number,
+            title: `PR ${number}`,
+            htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
+            author: "me",
+            headSha: `sha${number}`,
+            headBranch,
+            baseBranch: "main",
+            ciStatus: null,
+            ciFetched: false,
+            actionsRuns: [],
+          });
+          setRepoPRsStatus("acme", "widgets", {
+            prs: [listed(41, "feat-a"), listed(42, "mullion/task-9-b"), listed(43, "other")],
+            prSummary: { total: 3, pass: 0, fail: 0, pending: 0, unknown: 3 },
+          });
+          mockGithub(gqlPr(41));
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const [byNumber] = app.db
+            .insert(tasks)
+            .values({ projectId: id, title: "t1", status: "reviewing", prNumber: 41 })
+            .returning()
+            .all();
+          const [byBranch] = app.db
+            .insert(tasks)
+            .values({
+              projectId: id,
+              title: "t2",
+              status: "in_progress",
+              branchName: "mullion/task-9-b",
+            })
+            .returning()
+            .all();
+          type Row = { number: number; taskId?: number; taskStatus?: string };
+          const check = (rows: Row[]) => {
+            expect(rows.find((r) => r.number === 41)).toMatchObject({
+              taskId: byNumber.id,
+              taskStatus: "reviewing",
+            });
+            expect(rows.find((r) => r.number === 42)).toMatchObject({
+              taskId: byBranch.id,
+              taskStatus: "in_progress",
+            });
+            expect(rows.find((r) => r.number === 43)?.taskId).toBeUndefined();
+          };
+          const list = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+          check(list.json().prs);
+          // The rail reads the batched route — the two must agree.
+          const batch = await app.inject({
+            method: "GET",
+            url: `/api/projects/git-refs?ids=${id}`,
+          });
+          check(batch.json().prs[String(id)].prs);
         });
 
         describe("the list routes never wait on GitHub for the relay's state (#1744)", () => {
