@@ -5,7 +5,9 @@ dashboard — into an autonomously-worked, reviewed, and promoted pull
 request: an agent claims the task into an isolated worktree, works it, an
 optional review agent looks at the diff, and a human decides whether to
 approve or send it back — the review agent itself can only trigger up to a
-bounded number of automatic rounds of rework before that human decision,
+bounded number of automatic rounds of rework (10 by default, unlimited if
+you set it to 0, per install or per project; a loop that stops converging
+stops sooner and asks you) before that human decision,
 and only a finding that must be fixed (critical or warning) earns another
 review: an approval that leaves just suggestions has them applied once and
 is not reviewed again (and even that human step can be removed — see "Auto-approve" in

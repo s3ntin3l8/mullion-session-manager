@@ -290,8 +290,8 @@ export interface Project {
   // produce a verdict at all. Mirrors projects.autoApprove.
   autoApprove: boolean | null;
   // #756 — per-project override of the auto-return round cap. Null means
-  // "use the install default" (currently 2). Mirrors
-  // projects.maxAutoReturnRounds.
+  // "use the install-wide taskMaster.maxAutoReturnRounds" (default 10); 0
+  // means unlimited. Mirrors projects.maxAutoReturnRounds.
   maxAutoReturnRounds: number | null;
   // #761 — off by default: the PR title is the raw task title. On, the
   // worker is asked to write a Conventional Commits title alongside its
@@ -1871,7 +1871,8 @@ export interface Task {
   // "reviewing -> in_progress" round back to the worker — not just from a
   // changes-requested review verdict anymore (a red required CI check and
   // an unresolved PR review comment are later triggers on the same model).
-  // Bounded by a resolved per-project cap (default 2) and never reset —
+  // Bounded by a resolved cap (the project's, else the install-wide setting;
+  // default 10, 0 = unlimited) and never reset —
   // see TaskDetail.tsx's review card. Renamed from `reviewRounds`.
   autoReturnRounds: number;
   // Which trigger most recently spent a round — "review" | "ci" |
@@ -1896,6 +1897,9 @@ export interface Task {
   // three states, not two: not capped / capped-but-not-announced (still
   // working) / capped-and-announced (needs a human).
   autoReturnCapAnnouncedAt: string | null;
+  // Why the automatic loop stopped; only meaningful while the announce stamp
+  // above is set. See needsHuman.ts.
+  needsHumanReason: "cap" | "no-progress" | "finding-persisted" | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
@@ -2390,6 +2394,9 @@ export interface AppSettings {
     // No sentinel, no env counterpart — settings.ts's own doc comment on
     // this field explains why.
     reviewCiWaitMinutes: number;
+    // Install-wide cap on automatic fix-up rounds; 0 = unlimited. A project's
+    // own maxAutoReturnRounds overrides it.
+    maxAutoReturnRounds: number;
   };
 }
 

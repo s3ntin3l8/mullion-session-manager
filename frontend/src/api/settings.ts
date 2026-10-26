@@ -284,6 +284,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,
+    maxAutoReturnRounds: 10,
     defaultAgent: "claude",
     defaultReviewAgent: "none",
   },

@@ -1168,7 +1168,7 @@ describe("projects route", () => {
       await app.close();
     });
 
-    it("rejects a maxAutoReturnRounds below 1", async () => {
+    it("accepts 0 as unlimited, and rejects a negative maxAutoReturnRounds", async () => {
       const app = await buildApp();
       const created = await app.inject({
         method: "POST",
@@ -1177,12 +1177,20 @@ describe("projects route", () => {
       });
       const { id } = created.json();
 
-      const res = await app.inject({
+      const unlimited = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
         payload: { maxAutoReturnRounds: 0 },
       });
-      expect(res.statusCode).toBe(400);
+      expect(unlimited.statusCode).toBe(200);
+      expect(unlimited.json().maxAutoReturnRounds).toBe(0);
+
+      const negative = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { maxAutoReturnRounds: -1 },
+      });
+      expect(negative.statusCode).toBe(400);
 
       await app.close();
     });

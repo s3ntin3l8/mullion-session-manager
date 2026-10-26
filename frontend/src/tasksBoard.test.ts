@@ -32,6 +32,7 @@ function makeTask(overrides: Partial<Task>): Task {
     lastAutoReturnReason: null,
     autoReturnCapped: false,
     autoReturnCapAnnouncedAt: null,
+    needsHumanReason: null,
     worktreePath: null,
     branchName: null,
     agent: null,

@@ -29,6 +29,7 @@ describe("resolveTaskMaster", () => {
       rateLimitGraceMinutes: 5,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
+      maxAutoReturnRounds: 10,
     });
   });
 
@@ -69,6 +70,16 @@ describe("resolveTaskMaster", () => {
       resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, autoClaimPaused: true }, ENV_DEFAULTS)
         .autoClaimPaused,
     ).toBe(true);
+  });
+
+  it("passes maxAutoReturnRounds through unconditionally — 0 (unlimited) included", () => {
+    expect(
+      resolveTaskMaster({ ...DEFAULT_SETTINGS.taskMaster, maxAutoReturnRounds: 0 }, ENV_DEFAULTS)
+        .maxAutoReturnRounds,
+    ).toBe(0);
+    expect(resolveTaskMaster(DEFAULT_SETTINGS.taskMaster, ENV_DEFAULTS).maxAutoReturnRounds).toBe(
+      10,
+    );
   });
 
   it("passes reviewCiWaitMinutes through unconditionally — no sentinel, no env counterpart", () => {

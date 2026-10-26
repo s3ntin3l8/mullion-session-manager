@@ -35,6 +35,7 @@ export function TaskMasterSection() {
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
   const [graceDraft, setGraceDraft] = useState<number | null>(null);
   const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
+  const [roundsDraft, setRoundsDraft] = useState<number | null>(null);
   const [trustedDraft, setTrustedDraft] = useState<string | null>(null);
 
   return (
@@ -170,6 +171,25 @@ export function TaskMasterSection() {
             setCiWaitDraft(null);
             updateSettings({
               taskMaster: { reviewCiWaitMinutes: clampNumberFieldOnCommit(v, 0, 240) },
+            });
+          }}
+        />
+      </Row>
+      <Row
+        label="Automatic fix-up rounds"
+        desc="How many times a task may be sent back to its worker automatically — a review that requested changes, a red required CI check, or an unresolved PR comment. An approved review's suggestions are applied once and never count. 0 means unlimited; a project can set its own."
+      >
+        <NumberField
+          value={roundsDraft ?? resolved.maxAutoReturnRounds}
+          min={0}
+          max={100}
+          width={54}
+          suffix={(roundsDraft ?? resolved.maxAutoReturnRounds) === 0 ? "unlimited" : "rounds"}
+          onChange={setRoundsDraft}
+          onCommit={(v) => {
+            setRoundsDraft(null);
+            updateSettings({
+              taskMaster: { maxAutoReturnRounds: clampNumberFieldOnCommit(v, 0, 100) },
             });
           }}
         />

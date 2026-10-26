@@ -412,6 +412,28 @@ describe("sanitizeSettings", () => {
       expect(result.taskMaster.progressCommentMinutes).toBe(0);
     });
 
+    it("defaults maxAutoReturnRounds to 10 and passes 0 through as a real 'unlimited' value", () => {
+      expect(DEFAULT_SETTINGS.taskMaster.maxAutoReturnRounds).toBe(10);
+      expect(
+        mergeSettings({ taskMaster: { maxAutoReturnRounds: 0 } }).taskMaster.maxAutoReturnRounds,
+      ).toBe(0);
+      expect(
+        mergeSettings({ taskMaster: { maxAutoReturnRounds: 4 } }).taskMaster.maxAutoReturnRounds,
+      ).toBe(4);
+    });
+
+    it("repairs an out-of-range or non-numeric maxAutoReturnRounds to the default", () => {
+      for (const bad of [9999, -3]) {
+        expect(
+          mergeSettings({ taskMaster: { maxAutoReturnRounds: bad } }).taskMaster
+            .maxAutoReturnRounds,
+        ).toBe(10);
+      }
+      const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
+      dirty.taskMaster.maxAutoReturnRounds = NaN;
+      expect(sanitizeSettings(dirty).taskMaster.maxAutoReturnRounds).toBe(10);
+    });
+
     it("repairs a non-numeric or NaN taskMaster field to the inherit sentinel", () => {
       const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
       dirty.taskMaster.maxConcurrent = NaN;

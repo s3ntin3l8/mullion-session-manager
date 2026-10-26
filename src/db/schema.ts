@@ -284,8 +284,9 @@ export const projects = sqliteTable("projects", {
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
   // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means
-  // "use the install default" (resolveMaxAutoReturnRounds,
-  // task-reconciler.ts, currently 2) — same nullable-override shape as
+  // "use the install-wide taskMaster.maxAutoReturnRounds setting"
+  // (resolveMaxAutoReturnRounds, task-reconciler.ts; default 10), and 0 means
+  // unlimited at either level — same nullable-override shape as
   // defaultAgent above, not the no-install-wide-tier posture
   // mergeOnApprove/autoApprove use: unlike merging, a round cap has a
   // sensible default that works for every project, so a global fallback is
@@ -898,9 +899,10 @@ export const tasks = sqliteTable(
     // "reviewing -> in_progress" round back to the worker — not just from a
     // changes-requested review verdict anymore (#772's roadmap follow-up):
     // see `lastAutoReturnReason` below for the full trigger vocabulary.
-    // Bounded by the resolved per-project cap
-    // (`resolveMaxAutoReturnRounds`/`projects.maxAutoReturnRounds`,
-    // task-reconciler.ts) — previously hardcoded to a single round
+    // Bounded by the resolved cap (`resolveMaxAutoReturnRounds`: the project's
+    // `maxAutoReturnRounds`, else the install-wide
+    // `taskMaster.maxAutoReturnRounds`; 0 = unlimited) — previously hardcoded
+    // to a single round
     // (`reviewRounds < 1`) — and, once incremented, NEVER reset — not by
     // Retry, not by a human Reject — so a task's auto-return budget is
     // spent once per lifecycle no matter how many times a human sends it
@@ -968,6 +970,17 @@ export const tasks = sqliteTable(
     // every site that puts the task back into motion (autoReturnTask, the
     // Reject route, the reviewing<->in_progress transitions, claim, retry).
     autoReturnCapAnnouncedAt: integer("auto_return_cap_announced_at", { mode: "timestamp" }),
+    // WHY the machine stopped, written in the same write as
+    // `autoReturnCapAnnouncedAt` above (which stays the "stopped" signal):
+    // `cap` — the round cap was reached; `no-progress` — the worker came back
+    // from a changes-requested round without pushing anything; `finding-persisted`
+    // — the reviewer marked the same earlier finding still open on two
+    // consecutive rounds. Only meaningful while the announce stamp is set (a
+    // stale value is harmless and the board ignores it), and cleared wherever
+    // that stamp is.
+    needsHumanReason: text("needs_human_reason", {
+      enum: ["cap", "no-progress", "finding-persisted"],
+    }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside
     // reviewFindingsIngestedSessionId above (task-reconciler.ts's

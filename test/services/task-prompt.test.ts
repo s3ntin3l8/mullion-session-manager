@@ -1447,6 +1447,12 @@ describe("buildReviewPrompt follow-up round", () => {
     expect(out).not.toContain("git diff");
   });
 
+  it("says nothing about rounds left for an unlimited project (Infinity)", () => {
+    const out = buildReviewPrompt({ ...base, roundsRemaining: Infinity });
+    expect(out).not.toContain("Infinity");
+    expect(out).not.toContain("fix-up round");
+  });
+
   it("is a first review when there is no prior round", () => {
     expect(buildReviewPrompt(base)).not.toContain("FOLLOW-UP");
   });

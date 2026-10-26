@@ -30,6 +30,8 @@ export interface ResolvedTaskMasterConfig {
   rateLimitGraceMinutes: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
+  /** Install-wide round cap; 0 = unlimited. See settings.ts. */
+  maxAutoReturnRounds: number;
 }
 
 // Pure — takes plain values rather than a FastifyInstance so the frontend
@@ -62,6 +64,7 @@ export function resolveTaskMaster(
     // No sentinel, no env counterpart — settings.ts's own doc comment on
     // this field explains why.
     reviewCiWaitMinutes: taskMaster.reviewCiWaitMinutes,
+    maxAutoReturnRounds: taskMaster.maxAutoReturnRounds,
   };
 }
 

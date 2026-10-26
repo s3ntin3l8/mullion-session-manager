@@ -756,9 +756,14 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   that's incremented but **never reset** — not by Retry, not by a human
   Reject, so a task's auto-return budget is spent once per lifecycle no
   matter how many times a human sends it back around by hand. It's bounded
-  by a resolved per-project cap (`resolveMaxAutoReturnRounds`/
-  `projects.maxAutoReturnRounds`, `DEFAULT_MAX_AUTO_RETURN_ROUNDS = 2`) —
-  before `#756` this was hardcoded to a single round for every project.
+  by a resolved cap (`resolveMaxAutoReturnRounds`): the project's own
+  `projects.maxAutoReturnRounds` if set, otherwise the install-wide
+  `taskMaster.maxAutoReturnRounds` setting (Settings → Task Master, default
+  10), where `0` at either level means **unlimited** and resolves to
+  `Infinity` — before `#756` this was hardcoded to a single round for every
+  project, and until the approve-with-suggestions change the default was 2.
+  The cap is a backstop, not the thing that ends the loop: an approval ends
+  it, and a **stall guard** stops it earlier when it isn't converging.
   `tasks.lastAutoReturnReason` records which trigger most recently spent a
   round. A task that wants another round but has none left gets one extra
   sentence folded into its posted review comment, naming the cap, so it's
@@ -766,6 +771,22 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   first place — and stays in `reviewing` for a human either way. Only a
   `changes-requested` review (and the CI / PR-comment triggers) spends a
   round; the `suggestions` return above never does.
+- **A loop that stops converging asks a human.** When a `changes-requested`
+  review would otherwise send the task back again, `detectReviewStall`
+  (`task-reconciler.ts`) checks two signals, and either one parks the task
+  exactly like reaching the cap — `autoReturnCapAnnouncedAt` is stamped, a note
+  is added to the review comment, and `tasks.needsHumanReason` records why
+  (the board card and drawer show it): `finding-persisted` when an earlier
+  finding this round marks `still-open`/`re-broken` was already still open in
+  the previous round's rendered review (matched on the reviewer's `ref`), and
+  `no-progress` when the last return was a review fix-up yet the PR's live head
+  is still the commit that review covered (a GitHub read that fails open — an
+  unreadable head is never a stall). `cap` is the third reason. Both checks only run when a worker
+  was actually sent back after the last verdict (`claimedAt` newer than
+  `lastReviewVerdictAt`) — after a human-push re-arm no worker ran, so the review
+  of the human's own commit is never read as a stall. A human push
+  re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
+  as before, which clears the reason with the stamp.
 - An inconclusive verdict (or a review agent whose adapter can't receive a
   seed at all — see [Seed delivery](#seed-delivery) below) simply stays in
   `reviewing`; the review still posts, so a finished review is never silently

@@ -21,6 +21,7 @@ import { matchSessionPr } from "./github/matchSessionPr.js";
 import { sessionPrDotClass } from "./lib/sidebarStatus.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
+import { needsHumanText } from "./needsHuman.js";
 
 const UNSET_AGENT = "";
 
@@ -559,7 +560,7 @@ export function TaskDetail({
               entire final worker run. */}
           <div className="task-detail-review-hint">
             {task.autoReturnRounds > 0 && capAnnounced
-              ? "It has already spent every automatic round this task is allowed — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
+              ? "The automatic loop has stopped — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
               : task.autoReturnRounds > 0 && task.autoReturnCapped
                 ? "It has spent its last automatic round and a final review is still confirming the outcome — it still cannot approve, reject, or otherwise transition this task; that's your call above, once it stops."
                 : task.autoReturnRounds > 0
@@ -575,7 +576,7 @@ export function TaskDetail({
               }
             >
               {capAnnounced
-                ? `Round ${task.autoReturnRounds} — round cap reached, needs a human to take it from here`
+                ? `Round ${task.autoReturnRounds} — ${needsHumanText(task.needsHumanReason)}, needs a human to take it from here`
                 : task.autoReturnCapped
                   ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
                   : `Round ${task.autoReturnRounds} sent back to the worker automatically`}

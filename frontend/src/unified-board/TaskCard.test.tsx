@@ -707,6 +707,26 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.queryByText(/review in flight/)).toBeNull();
   });
 
+  it.each([
+    ["no-progress", /Round 1 · worker returned without a change, needs a human/],
+    ["finding-persisted", /Round 1 · same finding still open after two rounds, needs a human/],
+    ["cap", /Round 1 · round cap reached, needs a human/],
+    [null, /Round 1 · round cap reached, needs a human/],
+  ] as const)("says why the loop stopped when the reason is %s", (reason, expected) => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        autoReturnRounds: 1,
+        autoReturnCapped: false,
+        autoReturnCapAnnouncedAt: "2026-09-04T09:34:44.000Z",
+        needsHumanReason: reason,
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
   // Issue #1038 — the round badge already covers "still working"/"needs a
   // human" once a round has been spent; the generic "Review in progress"
   // hint must not also render and repeat/contradict it.
