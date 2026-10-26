@@ -68,6 +68,12 @@ interface CreateProjectModalProps {
     // edit it is a plain patch field. `undefined` means "not applicable"
     // (the create path passes it through, the edit path patches it).
     placement?: PlacementMode;
+    // Issue #1951 follow-up — where this project's checkout lives on OTHER
+    // hosts (`projects.hostCwds`). Edit mode only, and only present when the
+    // map actually changed: the API's PATCH REPLACES the whole map, so
+    // `undefined` ("leave it alone") must stay distinguishable from `{}`
+    // ("it lives nowhere else").
+    hostCwds?: Record<string, string>;
   }) => Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
@@ -105,6 +111,29 @@ interface CreateProjectModalProps {
   // default), so a project opened without this prop behaves exactly as
   // before.
   initialPlacement?: PlacementMode;
+  // Issue #1951 follow-up — edit mode only. The project's own host (its path
+  // is `initialPath`, so it never gets a row of its own) and the per-host
+  // paths it already has on others.
+  projectHostId?: string;
+  initialHostCwds?: Record<string, string>;
+}
+
+/** Most entries the API accepts in `hostCwds` (src/routes/projects.ts). */
+const MAX_HOST_CWDS = 32;
+
+/** The non-empty, trimmed entries of an editable per-host path map. */
+function normalizeHostPaths(paths: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [hostKey, value] of Object.entries(paths)) {
+    const trimmed = value.trim();
+    if (trimmed !== "") out[hostKey] = trimmed;
+  }
+  return out;
+}
+
+function sameHostPaths(a: Record<string, string>, b: Record<string, string>): boolean {
+  const ak = Object.keys(a);
+  return ak.length === Object.keys(b).length && ak.every((k) => a[k] === b[k]);
 }
 
 // Ported 1:1 from the design's "Add project" modal (Cmux Redesign.dc.html):
@@ -136,6 +165,8 @@ export function CreateProjectModal({
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
   initialPlacement = "pinned",
+  projectHostId = LOCAL_HOST_ID,
+  initialHostCwds = {},
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -148,6 +179,8 @@ export function CreateProjectModal({
   const [placement, setPlacement] = useState<PlacementMode>(initialPlacement);
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // Issue #1951 follow-up — the per-host paths being edited, keyed by host id.
+  const [hostPaths, setHostPaths] = useState<Record<string, string>>(initialHostCwds);
   const [devServerUrl, setDevServerUrl] = useState(initialDevServerUrl ?? "");
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? UNSET_AGENT);
   const [defaultReviewAgent, setDefaultReviewAgent] = useState(
@@ -196,6 +229,9 @@ export function CreateProjectModal({
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
+  // Every registered host the project is NOT pinned to: those are the ones it
+  // may also live on. (A remote-hosted project can also live on this machine.)
+  const hostPathRows = hosts.filter((h) => h.id !== projectHostId);
   // The host's name for the preview line — the local host is "this machine"
   // in the UI (its API row is named "Local").
   const previewHostName = (id: string) =>
@@ -306,6 +342,38 @@ export function CreateProjectModal({
     }
     const finalName = name.trim() || trailingSegment(trimmedPath);
     const trimmedDevServerUrl = devServerUrl.trim();
+    // Issue #1951 follow-up — only hosts that still exist are sent (the API
+    // refuses the whole PATCH on an unknown host id), and only when the map
+    // really changed, because PATCH replaces it.
+    const knownHostIds = new Set(hostPathRows.map((h) => h.id));
+    const editedHostPaths = normalizeHostPaths(
+      Object.fromEntries(
+        Object.entries(hostPaths).filter(([hostKey]) => knownHostIds.has(hostKey)),
+      ),
+    );
+    if (isEdit) {
+      const relative = Object.entries(editedHostPaths).find(([, v]) => !v.startsWith("/"));
+      if (relative) {
+        setError({
+          message: `The path on ${previewHostName(relative[0])} must be absolute (start with "/").`,
+        });
+        return;
+      }
+      if (Object.keys(editedHostPaths).length > MAX_HOST_CWDS) {
+        setError({ message: `A project can list at most ${MAX_HOST_CWDS} other hosts.` });
+        return;
+      }
+    }
+    // `hosts` starts empty in the store and stays empty when the host list
+    // fails to load. Then NO entry is "known", every stored path would be
+    // dropped as belonging to a vanished host, and a plain rename would PATCH
+    // `hostCwds: {}` and silently wipe the map — with the rows hidden, so the
+    // user never sees it. Without a host list there is nothing to compare
+    // against: leave the map alone.
+    const hostCwdsChanged =
+      isEdit &&
+      hosts.length > 0 &&
+      !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds));
     setSubmitting(true);
     setError(null);
     try {
@@ -337,6 +405,7 @@ export function CreateProjectModal({
         // both modes: on create it goes in the same opts bag as
         // createDir/gitInit, on edit it is a plain patch field.
         placement,
+        ...(hostCwdsChanged ? { hostCwds: editedHostPaths } : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -488,6 +557,50 @@ export function CreateProjectModal({
           </span>
         )}
       </label>
+
+      {/* Issue #1951 follow-up — where the project's checkout lives on the
+              OTHER hosts. This is what makes a host a candidate at all, for
+              automatic placement and for an explicit "spawn on this host /
+              platform": a session runs in a directory, so a host with no
+              path here is never chosen. Edit mode only — a brand-new project
+              exists on exactly one host. */}
+      {isEdit && hostPathRows.length === 0 && hosts.length > 0 && (
+        <div className="create-modal-field">
+          <span className="create-modal-field-label">Also lives on</span>
+          <span className="create-modal-field-hint">
+            No other host is registered. Add one in Settings → Hosts to run this project elsewhere.
+          </span>
+        </div>
+      )}
+      {isEdit && hostPathRows.length > 0 && (
+        <div className="create-modal-field" role="group" aria-label="Paths on other hosts">
+          <span className="create-modal-field-label">Also lives on</span>
+          {hostPathRows.map((h) => (
+            <label key={h.id} className="create-modal-input-row">
+              <HostsIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
+              <span style={{ minWidth: 96, flexShrink: 0 }}>
+                {h.id === LOCAL_HOST_ID ? "This machine" : h.name}
+                {h.platform ? <span style={{ color: "var(--muted)" }}> · {h.platform}</span> : null}
+              </span>
+              <input
+                className="mono"
+                aria-label={`Path on ${h.id === LOCAL_HOST_ID ? "this machine" : h.name}`}
+                value={hostPaths[h.id] ?? ""}
+                onChange={(e) => {
+                  setError(null);
+                  setHostPaths((prev) => ({ ...prev, [h.id]: e.target.value }));
+                }}
+                placeholder="not on this host"
+              />
+            </label>
+          ))}
+          <span className="create-modal-field-hint">
+            Absolute path of this project's checkout on each host. A host with no path here is never
+            chosen to run its sessions — automatically or when a session asks for a host or
+            platform. The checkout must already exist there.
+          </span>
+        </div>
+      )}
 
       {!isEdit && remoteHosts.length > 0 && placement === "pinned" && (
         <label className="create-modal-field">

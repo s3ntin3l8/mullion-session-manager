@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
 import type { Launcher } from "./api/index.js";
+import { makeHost } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
@@ -239,6 +240,151 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
 // Focused on the issue #28 phase 7 "use detected port" suggestion — the
 // field's own pre-fill/edit/clear behavior predates this and isn't
 // re-tested here.
+// Issue #1951 follow-up — the per-host paths (`hostCwds`): where this
+// project's checkout lives on the OTHER hosts. A host with no path is never a
+// placement candidate, so this is what makes "spawn a child on the Mac" work.
+describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
+  const hosts = [
+    makeHost({ id: "local", name: "Local", isLocal: true }),
+    makeHost({ id: "mac-1", name: "macbook", platform: "darwin" }),
+    makeHost({ id: "box-2", name: "builder", platform: "linux" }),
+  ];
+
+  function renderEdit(
+    over: Partial<React.ComponentProps<typeof CreateProjectModal>> = {},
+    onCreate = vi.fn().mockResolvedValue(undefined),
+  ) {
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        hosts={hosts}
+        projectHostId="local"
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        {...over}
+      />,
+    );
+    return onCreate;
+  }
+
+  it("lists every host except the project's own, with its platform", () => {
+    renderEdit();
+    expect(screen.getByRole("textbox", { name: "Path on macbook" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Path on builder" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /Path on this machine/i })).toBeNull();
+    expect(screen.getByText(/darwin/)).toBeInTheDocument();
+  });
+
+  it("offers this machine to a project that lives on a remote host", () => {
+    renderEdit({ projectHostId: "mac-1" });
+    expect(screen.getByRole("textbox", { name: "Path on this machine" })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Path on macbook" })).toBeNull();
+  });
+
+  it("is not shown when creating a project", () => {
+    render(<CreateProjectModal mode="create" hosts={hosts} onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Paths on other hosts" })).toBeNull();
+  });
+
+  it("explains why there is nothing to set when no other host is registered", () => {
+    renderEdit({ hosts: [hosts[0]] });
+    expect(screen.queryByRole("group", { name: "Paths on other hosts" })).toBeNull();
+    expect(screen.getByText(/No other host is registered/)).toBeInTheDocument();
+  });
+
+  it("does not wipe the stored map when the host list has not loaded (a rename must not delete it)", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      hosts: [],
+      initialHostCwds: { "mac-1": "/Users/x/mullion" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty("hostCwds");
+  });
+
+  it("opens filled with the project's existing paths", () => {
+    renderEdit({ initialHostCwds: { "mac-1": "/Users/x/mullion" } });
+    expect(screen.getByRole("textbox", { name: "Path on macbook" })).toHaveValue(
+      "/Users/x/mullion",
+    );
+    expect(screen.getByRole("textbox", { name: "Path on builder" })).toHaveValue("");
+  });
+
+  it("sends the FULL map (the API replaces it) once a path is typed", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({ initialHostCwds: { "box-2": "/srv/mullion" } });
+    await user.type(
+      screen.getByRole("textbox", { name: "Path on macbook" }),
+      "  /Users/x/mullion  ",
+    );
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].hostCwds).toEqual({
+      "box-2": "/srv/mullion",
+      "mac-1": "/Users/x/mullion",
+    });
+  });
+
+  it("sends {} when the last path is cleared, so the map is emptied", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({ initialHostCwds: { "mac-1": "/Users/x/mullion" } });
+    await user.clear(screen.getByRole("textbox", { name: "Path on macbook" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].hostCwds).toEqual({});
+  });
+
+  it("leaves hostCwds out entirely when nothing changed", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({ initialHostCwds: { "mac-1": "/Users/x/mullion" } });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty("hostCwds");
+  });
+
+  it("drops an entry for a host that no longer exists instead of sending it", async () => {
+    // The API rejects the whole PATCH on an unknown host id.
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      initialHostCwds: { "mac-1": "/Users/x/mullion", "gone-9": "/old" },
+    });
+    await user.type(screen.getByRole("textbox", { name: "Path on builder" }), "/srv/mullion");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].hostCwds).toEqual({
+      "mac-1": "/Users/x/mullion",
+      "box-2": "/srv/mullion",
+    });
+  });
+
+  it("refuses a relative path without calling onCreate", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit();
+    await user.type(screen.getByRole("textbox", { name: "Path on macbook" }), "code/mullion");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(await screen.findByText(/must be absolute/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/macbook/, { selector: ".create-modal-field-hint.error" }),
+    ).toBeTruthy();
+  });
+
+  it("shows the server's rejection inline", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(new ApiError("hostCwds names an unknown host: mac-1", 400));
+    renderEdit({}, onCreate);
+    await user.type(screen.getByRole("textbox", { name: "Path on macbook" }), "/Users/x/m");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText(/names an unknown host/)).toBeInTheDocument();
+  });
+});
+
 describe("CreateProjectModal — detected dev-server port suggestion (issue #28 phase 7)", () => {
   it("shows a suggestion when a detected port differs from the current field value", () => {
     render(

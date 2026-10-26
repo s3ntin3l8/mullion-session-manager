@@ -1379,6 +1379,11 @@ function ProjectHeader({
               // Issue #1726 / roadmap 8.12 — the project's own placement
               // mode, so the control opens showing what it is today.
               initialPlacement={project.placement}
+              // Issue #1951 follow-up — the project's own host and where it
+              // lives on the others, so the "Also lives on" rows open filled.
+              hosts={hosts}
+              projectHostId={project.hostId}
+              initialHostCwds={project.hostCwds}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -1394,6 +1399,7 @@ function ProjectHeader({
                 createDir,
                 gitInit,
                 placement,
+                hostCwds,
               }) =>
                 useDashboardStore.getState().updateProject(project.id, {
                   name,
@@ -1412,6 +1418,7 @@ function ProjectHeader({
                   // plain patch field (updateProject's Pick union already
                   // accepts it).
                   placement,
+                  hostCwds,
                 })
               }
             />

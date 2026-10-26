@@ -119,6 +119,8 @@ export interface ProjectsSlice {
         | "suppressConventionsInjectionAfterScaffold"
         // Issue #1723 / roadmap 8.9 — the placement mode is writable too.
         | "placement"
+        // Issue #1951 follow-up — per-host paths of the project's checkout.
+        | "hostCwds"
       >
     > &
       CreateProjectDirOptions,

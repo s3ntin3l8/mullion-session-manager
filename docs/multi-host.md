@@ -193,7 +193,11 @@ each project records where it lives on the hosts it may be placed on:
 { "mgmt": "/srv/checkouts/my-project" }
 ```
 
-That map is `hostCwds` on the project (`POST`/`PATCH /api/projects`). The
+That map is `hostCwds` on the project. Set it in the **Edit project** dialog
+(the **Also lives on** rows, one per other host — leave a host's path empty if
+the project is not there) or over the API (`POST`/`PATCH /api/projects`; PATCH
+replaces the whole map). The checkout must already exist on that host — Mullion
+does not clone it. The
 project's **own** host is not in it — `projects.cwd` _is_ its path there, and
 `projects.hostId` is its host. A host with no entry in the map does not have
 the project, so it is never a candidate and the session stays where it
@@ -294,6 +298,14 @@ how much memory is free. Two rules the display keeps:
 - **A reading is a reading, not a fact.** Capacity is cached on the
   heartbeat sweep, so a host that stopped reporting keeps its last numbers
   — shown, but marked with their age (_"reading from 3 min ago"_).
+
+**Paths on other hosts — Edit project.** Under the placement control, **Also
+lives on** lists every other registered host with its platform and a path
+field: the project's checkout on that host, or empty for "not there". Only
+hosts with a path are ever candidates — for automatic placement and for a
+session that asks for a host or platform (see [Dispatching a child session to
+another host](#dispatching-a-child-session-to-another-host)). The dialog
+refuses a relative path and sends nothing when you did not touch the rows.
 
 **The placement control — Add/Edit project.** A project's mode is chosen in
 the same dialog as its name and path: _On a chosen host_ (today's
