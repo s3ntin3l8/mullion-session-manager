@@ -187,8 +187,10 @@ does is skip the _warning_, not the _action_.
     the comma-joined session ids): its effective cwd — the live one on a
     local host — is the project directory or below it, and not inside one of
     its linked worktrees (a `.wt/` or `.mullion-worktrees/` session has its
-    own HEAD and is unaffected). Moving HEAD under a running agent would
-    change the files it is editing;
+    own HEAD and is unaffected). Any project's session on the same host
+    counts, since two projects may share one clone; a project that is itself
+    rooted in a linked worktree guards that worktree. Moving HEAD under a
+    running agent would change the files it is editing;
   - another git operation already holds the clone (`busy`);
   - the target makes no sense: `already-current`, `checked-out` (held by
     another worktree, `detail` = its path), `no-such-branch`, `no-such-ref`,

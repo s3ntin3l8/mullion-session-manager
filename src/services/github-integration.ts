@@ -585,7 +585,12 @@ export async function resolveChecksReadToken(
       throw err;
     }
     app.log.debug(
-      { owner: repo.owner, repo: repo.repo, status: (err as { status?: number }).status },
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        status:
+          err instanceof GitHubApiError ? err.statusCode : (err as { status?: number }).status,
+      },
       "[github-integration] checks-read token unavailable — CI reads keep the read token",
     );
     return null;

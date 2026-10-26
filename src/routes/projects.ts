@@ -20,7 +20,11 @@ import {
   PLACEMENT_MODES,
   type PlacementMode,
 } from "../shared/constants.js";
-import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import {
+  getRemoteHostClient,
+  HostRequestError,
+  HostUnreachableError,
+} from "../services/remote-host-client.js";
 import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -708,10 +712,14 @@ function sessionsUnderWorktree(
  * at or below `project.cwd`, but not inside one of its linked worktrees
  * (`.mullion-worktrees/…`, `.wt/…` live below the checkout yet have their
  * own HEAD and index, which these operations never touch). A session with
- * no cwd of its own runs in `project.cwd`, so it counts.
+ * no cwd of its own runs in its project's cwd, so it counts.
+ *
+ * Matched by directory and host, not by `projectId`: two project rows may
+ * point at one clone (see git-clone-busy.ts), and a session of the other
+ * one is just as much in the way.
  *
  * Same remote-host gap as `sessionsUnderWorktree` above: only the DB cwd is
- * known for a remote project, not the live one.
+ * known for a remote session, not the live one.
  */
 function sessionsInProjectCheckout(
   app: FastifyInstance,
@@ -719,18 +727,28 @@ function sessionsInProjectCheckout(
   linkedWorktreePaths: string[],
 ): number[] {
   const rows = app.db
-    .select({ id: sessions.id, cwd: sessions.cwd })
+    .select({
+      id: sessions.id,
+      cwd: sessions.cwd,
+      hostId: sessions.hostId,
+      projectCwd: projects.cwd,
+      projectHostId: projects.hostId,
+    })
     .from(sessions)
-    .where(and(eq(sessions.projectId, project.id), eq(sessions.status, "active")))
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
     .all();
   const matched: number[] = [];
   for (const row of rows) {
-    let effectiveCwd = row.cwd ?? project.cwd;
-    if (project.hostId === LOCAL_HOST_ID) {
+    const hostId = row.hostId ?? row.projectHostId;
+    if (hostId !== project.hostId) continue;
+    let effectiveCwd = row.cwd ?? row.projectCwd;
+    if (hostId === LOCAL_HOST_ID) {
       const liveCwd = app.pty.get(String(row.id))?.liveCwd;
       if (liveCwd && isGitRepo(liveCwd)) effectiveCwd = liveCwd;
     }
     if (
+      effectiveCwd &&
       isWithinAnyWorktree(effectiveCwd, [project.cwd]) &&
       !isWithinAnyWorktree(effectiveCwd, linkedWorktreePaths)
     ) {
@@ -4128,7 +4146,11 @@ export async function projectsRoute(app: FastifyInstance) {
                   false,
                 )
               )?.worktrees ?? null);
-        const linked = (worktrees ?? []).filter((w) => !w.isMain).map((w) => w.path);
+        // A project may itself be rooted in a linked worktree: that one is
+        // the checkout being guarded, not a neighbour to exclude.
+        const linked = (worktrees ?? [])
+          .filter((w) => !w.isMain && !isWithinAnyWorktree(project.cwd, [w.path]))
+          .map((w) => w.path);
         const sessionIds = sessionsInProjectCheckout(app, project, linked);
         if (sessionIds.length > 0) {
           return { ok: false, reason: "sessions-active", detail: sessionIds.join(",") };
@@ -4136,8 +4158,10 @@ export async function projectsRoute(app: FastifyInstance) {
       }
       return await op(backend, project);
     } catch (err) {
-      app.log.warn({ hostId: project.hostId, err }, `host unreachable, git ${opts.label} failed`);
-      return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
+      return reply.serviceUnavailable(
+        remoteHostFailureMessage(app, project.hostId, err, `git ${opts.label}`),
+      );
     } finally {
       releaseClone(project.hostId, project.cwd);
     }

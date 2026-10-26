@@ -6847,6 +6847,68 @@ describe("projects route", () => {
       }
     });
 
+    it("counts a session of another project row on the same checkout", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId, run } = await makeProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      try {
+        const twin = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "branch-ops-twin", cwd: projectCwd },
+        });
+        const twinId = twin.json().id as number;
+        const inserted = app.db
+          .insert(sessions)
+          .values({ projectId: twinId, command: "bash", cwd: null })
+          .run();
+        expect(
+          (
+            await post(app, `/api/projects/${projectId}/git-checkout`, { branch: "feature" })
+          ).json(),
+        ).toEqual({
+          ok: false,
+          reason: "sessions-active",
+          detail: String(Number(inserted.lastInsertRowid)),
+        });
+        expect(String(run(["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("main");
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("guards a project rooted in a linked worktree like any other checkout", async () => {
+      const app = await buildApp();
+      const { projectCwd, run } = await makeProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      try {
+        const linked = path.join(projectCwd, "..", `${path.basename(projectCwd)}-wt`);
+        run(["worktree", "add", "-q", "-b", "wt-branch", linked]);
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "branch-ops-in-worktree", cwd: linked },
+        });
+        const id = project.json().id as number;
+        const inserted = app.db
+          .insert(sessions)
+          .values({ projectId: id, command: "bash", cwd: linked })
+          .run();
+        expect(
+          (await post(app, `/api/projects/${id}/git-checkout`, { branch: "feature" })).json(),
+        ).toEqual({
+          ok: false,
+          reason: "sessions-active",
+          detail: String(Number(inserted.lastInsertRowid)),
+        });
+        fs.rmSync(linked, { recursive: true, force: true });
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
     it("refuses while another git operation holds the clone", async () => {
       const app = await buildApp();
       const { projectCwd, projectId } = await makeProject(app);

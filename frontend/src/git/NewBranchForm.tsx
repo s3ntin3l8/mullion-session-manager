@@ -69,7 +69,12 @@ export function NewBranchForm({ projectId, defaultFrom, onDone, onCancel }: NewB
           />
           Switch to it
         </label>
-        <Button size="sm" variant="primary" type="submit" disabled={busy || !name.trim()}>
+        <Button
+          size="sm"
+          variant="primary"
+          type="submit"
+          disabled={busy || !name.trim() || !from.trim()}
+        >
           {busy ? "Creating…" : "Create"}
         </Button>
         <Button size="sm" variant="ghost" onClick={onCancel}>
