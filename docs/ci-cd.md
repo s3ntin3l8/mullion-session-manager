@@ -85,7 +85,7 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   `coverage-fail-under: 70`, `test-shards: 2`. Skips format-check in CI
   (root-level `make format-check` hook covers it).
 - **`test-e2e`**: Custom job — checkout, `npm ci`,
-  `npx playwright install --with-deps chromium`, then installs a **pinned,
+  `npx playwright install chromium` (cached; no `--with-deps`, so no apt), then installs a **pinned,
   integrity-checked `opencode` binary** (currently `2.0.29`) via a
   dedicated `test/e2e/opencode/` workspace with its own `package-lock.json`
   — `npm ci` there enforces the lockfile's integrity hash, so a registry
@@ -105,16 +105,15 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   Deliberately **not** a required status check yet — this is its first run
   anywhere outside a developer's own machine, and it needs a stretch of
   real, unattended CI runs before every merge is gated on it.
-  Its `timeout-minutes` is **25**, not 15: the `playwright install
---with-deps` step measured 11-32s in 8 of 10 runs but 632s and 509s in the
-  other two, and the slow runs are **apt**, not Playwright (the Chromium
-  cache hit normally; one run fetched 25.9 MB of OS packages at 43.1 kB/s —
-  "Fetched 25.9 MB in 10min 2s"). At 15 minutes that left only ~3.5m of
-  headroom for a 2-minute suite, so a slightly slower mirror timed the job
-  out — a red e2e that is easy to miss, since this job gates nothing. The
-  step also sets `Acquire::Retries "3"`, which covers a mirror that fails
-  outright — but not the slow-but-successful case above, where the timeout
-  bump is what actually helps.
+  Its `timeout-minutes` is **15**. It was 25 while the install step ran
+  `playwright install --with-deps`, whose apt transaction occasionally
+  stalled on a slow mirror (632s and 509s runs; one fetched 25.9 MB at
+  43.1 kB/s). That apt run only added fonts, xvfb and upgrades of libraries
+  `ubuntu-latest` already has (it ships Google Chrome), so `--with-deps` was
+  dropped; the install step now has its own 5-minute `timeout-minutes` as a
+  tripwire. A prebuilt Playwright container was considered and rejected:
+  `npm ci` compiles node-pty from source on Linux and that image has no
+  toolchain, so it would need apt again.
 - **Codecov**: Uploads coverage using `CODECOV_TOKEN`. Target patch coverage
   is 75% (configured via `codecov.yml` to prevent failures on minor,
   well-tested diffs). The `codecov/patch` status is **advisory**: it is
