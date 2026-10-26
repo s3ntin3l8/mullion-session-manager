@@ -721,6 +721,7 @@ export async function writeProjectFileFromStream(
   // would see a network error instead of the 409/404 it earned. So an early
   // refusal discards the rest of the body first (same as preview-proxy.ts).
   let entry: EntryRef;
+  let abs: string;
   let tmpAbs: string;
   let fd: number;
   try {
@@ -729,17 +730,27 @@ export async function writeProjectFileFromStream(
       ensureProjectDirs(root, dir === "." ? "" : dir);
     }
     entry = resolveEntry(root, relPath);
+    // resolveEntry already contains the path. The check is repeated on the
+    // local the sinks use: CodeQL's path-injection query does not carry a
+    // barrier out through a returned field.
+    abs = path.resolve(entry.abs);
+    if (abs !== entry.realRoot && !abs.startsWith(entry.realRoot + path.sep)) {
+      throw new ProjectFileError("escape", `Path "${entry.rel}" resolves outside the project`);
+    }
     // A free pre-check so a name that is already taken is refused before any
     // byte is written (link(2) below stays the authority — this only saves the
     // common case from writing a temp file first).
     try {
-      lstatSync(entry.abs);
+      lstatSync(abs);
       throw new ProjectFileError("conflict", `"${entry.rel}" already exists`);
     } catch (err) {
       if (err instanceof ProjectFileError) throw err;
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, entry.rel);
     }
-    tmpAbs = path.join(path.dirname(entry.abs), `.mullion-part-${randomUUID()}`);
+    tmpAbs = path.resolve(path.dirname(abs), `.mullion-part-${randomUUID()}`);
+    if (!tmpAbs.startsWith(entry.realRoot + path.sep)) {
+      throw new ProjectFileError("escape", `Path "${entry.rel}" resolves outside the project`);
+    }
     try {
       fd = openSync(
         tmpAbs,
@@ -791,7 +802,7 @@ export async function writeProjectFileFromStream(
     });
     // createWriteStream owns the fd from here and closes it when done.
     await pipeline(source, counter, createWriteStream("", { fd, autoClose: true }));
-    publishNewFile(tmpAbs, entry);
+    publishNewFile(tmpAbs, abs, entry.rel, entry.realRoot);
     return { path: entry.rel, size: received };
   } catch (err) {
     return mapFsError(err, entry.rel);
@@ -803,23 +814,33 @@ export async function writeProjectFileFromStream(
 /** link(2) the finished temp file to its final name (EEXIST -> `conflict`).
  * A filesystem that refuses hard links falls back to check-then-rename, with
  * the same small residual window renameProjectPath documents. */
-function publishNewFile(tmpAbs: string, entry: EntryRef): void {
+function publishNewFile(tmpAbs: string, destAbs: string, rel: string, realRoot: string): void {
+  // Same barrier as the caller, on the locals this function actually passes
+  // to link/rename. A parameter is a new taint source to the query.
+  const dest = path.resolve(destAbs);
+  const tmp = path.resolve(tmpAbs);
+  if (
+    (dest !== realRoot && !dest.startsWith(realRoot + path.sep)) ||
+    !tmp.startsWith(realRoot + path.sep)
+  ) {
+    throw new ProjectFileError("escape", `Path "${rel}" resolves outside the project`);
+  }
   try {
-    linkSync(tmpAbs, entry.abs);
+    linkSync(tmp, dest);
     return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EEXIST") {
-      throw new ProjectFileError("conflict", `"${entry.rel}" already exists`);
+      throw new ProjectFileError("conflict", `"${rel}" already exists`);
     }
     if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EMLINK" && code !== "EXDEV") throw err;
   }
   try {
-    lstatSync(entry.abs);
-    throw new ProjectFileError("conflict", `"${entry.rel}" already exists`);
+    lstatSync(dest);
+    throw new ProjectFileError("conflict", `"${rel}" already exists`);
   } catch (err) {
     if (err instanceof ProjectFileError) throw err;
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
-  renameSync(tmpAbs, entry.abs);
+  renameSync(tmp, dest);
 }
