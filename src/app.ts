@@ -331,8 +331,8 @@ export async function buildApp() {
   // dashboard for the Retry-After window — worse than the bug it fixes.
   // test/plugins/security.test.ts only pins this against the schema
   // DEFAULT (300); an operator who tunes RATE_LIMIT_MAX to any value a
-  // per-route limiter also uses (5/10/20/30/60/90/120/200/1000, per this
-  // repo's own routes/*.ts) needs the SAME guarantee at their own actual
+  // per-route limiter also uses (3/5/10/20/30/60/90/120/200/240/1000/6000, per
+  // this repo's own routes/*.ts) needs the SAME guarantee at their own actual
   // value, which only a runtime check can give. Collected via onRoute
   // (registered right after securityPlugin so it sees every route,
   // including internalRoutes' below on the agent-role branch) and asserted

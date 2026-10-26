@@ -56,8 +56,10 @@ function describeFailure(relativePath: string, err: unknown): string {
 export function useProjectUploads(opts: {
   projectId: number;
   sessionId?: number;
-  /** Fired once a batch has finished (even partly), with the folder it went to. */
-  onUploaded?: (targetDir: string) => void;
+  /** Fired once a batch has finished (even partly), with the folder it went to
+   * and the project/checkout it STARTED in — the host may have been pointed
+   * somewhere else since, and must not re-list that folder in the new place. */
+  onUploaded?: (targetDir: string, root: { projectId: number; sessionId?: number }) => void;
   /** A hint that `path` (project-relative) is already taken, from a listing the
    * caller already has: such a file is refused without sending its bytes. The
    * server stays the authority — a stale hint only costs a skipped upload. */
@@ -171,7 +173,7 @@ export function useProjectUploads(opts: {
           if (failures.length > 0) setErrors(failures);
           // Not after the host component is gone: re-listing then is wasted
           // (and, for a tree that was re-targeted, aimed at the wrong place).
-          onUploadedRef.current?.(targetDir);
+          onUploadedRef.current?.(targetDir, { projectId, sessionId });
         }
       }
     },
