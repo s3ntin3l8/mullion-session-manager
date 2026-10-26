@@ -1005,6 +1005,67 @@ describe("review-request routes", () => {
     );
   });
 
+  describe("a session that moved into a worktree", () => {
+    const worktree = "/srv/project/.wt/feat-x";
+    const withLive = async (live: object) => {
+      const spy = vi
+        .spyOn(app.pty, "get")
+        .mockReturnValue(live as unknown as ReturnType<typeof app.pty.get>);
+      try {
+        return await post(sessionId, {});
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    it("finds the PR for the live cwd's branch, not the launch cwd's", async () => {
+      mocks.getGitStatus.mockImplementation(async (dir: string) =>
+        dir === worktree ? { branch: "feat/x" } : { branch: "main" },
+      );
+      await withLive({ liveCwd: worktree });
+      expect(mocks.getGitStatus).toHaveBeenCalledWith(worktree);
+      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        "acme:feat/x",
+      );
+    });
+
+    it("prefers the live cwd over a stale reported branch", async () => {
+      mocks.getGitStatus.mockResolvedValue({ branch: "feat/x" });
+      await withLive({ liveCwd: worktree, liveBranch: "stale/branch" });
+      expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        "acme:feat/x",
+      );
+    });
+
+    it("falls back to the reported branch, then the launch cwd, when the live cwd has no status", async () => {
+      mocks.getGitStatus.mockResolvedValue(null);
+      await withLive({ liveCwd: worktree, liveBranch: "live/branch" });
+      expect(mocks.findPullRequestByHead).toHaveBeenLastCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        "acme:live/branch",
+      );
+
+      mocks.getGitStatus.mockImplementation(async (dir: string) =>
+        dir === worktree ? null : { branch: "feat/thing" },
+      );
+      await withLive({ liveCwd: worktree });
+      expect(mocks.findPullRequestByHead).toHaveBeenLastCalledWith(
+        "ghs_token",
+        "acme",
+        "widgets",
+        "acme:feat/thing",
+      );
+    });
+  });
+
   it("resolves a remote-host session's branch on its host and dispatches (#1628)", async () => {
     const resolveGitStatus = vi.fn(async () => ({
       isRepo: true,
