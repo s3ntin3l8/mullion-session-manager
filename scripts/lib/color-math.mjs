@@ -1,3 +1,4 @@
+// @ts-check
 // The colour maths behind `scripts/verify-ui-runtime.mjs`'s contrast check.
 //
 // This is a separate, dependency-free module on purpose: the contrast
@@ -8,6 +9,12 @@
 // `test/scripts/color-math.test.ts` does.
 //
 // Everything here is pure: no DOM, no browser, no I/O.
+//
+// `// @ts-check` (issue #1921) makes the compiler verify these bodies against
+// their JSDoc instead of trusting it — a `return null` slipped into a function
+// annotated as never-null is an error here, not a silent break in its callers.
+
+/** @typedef {{r:number,g:number,b:number,a:number}} Rgba */
 
 /**
  * Parse a computed colour into 8-bit channels plus an alpha.
@@ -21,7 +28,7 @@
  * the check exists to close.
  *
  * @param {unknown} value a computed colour string
- * @returns {{r:number,g:number,b:number,a:number}|null} null when the value
+ * @returns {Rgba|null} null when the value
  *   is not a colour this module understands, or is fully transparent (which
  *   paints nothing and must not be composited as if it did).
  */
@@ -35,11 +42,11 @@ export function parseColor(value) {
   if (m) {
     const parts = m[1].split(/[\s,/]+/).filter(Boolean);
     if (parts.length < 3) return null;
-    const channels = parts.slice(0, 3).map(parseChannel);
-    if (channels.some((c) => c === null)) return null;
+    const [r, g, b] = parts.slice(0, 3).map(parseChannel);
+    if (r === null || g === null || b === null) return null;
     const alpha = parts.length > 3 ? parseAlpha(parts[3]) : 1;
     if (alpha === null) return null;
-    return { r: channels[0], g: channels[1], b: channels[2], a: alpha };
+    return { r, g, b, a: alpha };
   }
 
   // color(srgb r g b / a) — the form Chromium uses for color-mix().
@@ -47,15 +54,15 @@ export function parseColor(value) {
   if (m) {
     const parts = m[1].split(/[\s/]+/).filter(Boolean);
     if (parts.length < 3) return null;
-    const channels = parts.slice(0, 3).map((p) => {
+    const [r, g, b] = parts.slice(0, 3).map((p) => {
       const n = Number(p);
       if (Number.isNaN(n)) return null;
       return Math.round(n * 255);
     });
-    if (channels.some((c) => c === null)) return null;
+    if (r === null || g === null || b === null) return null;
     const alpha = parts.length > 3 ? parseAlpha(parts[3]) : 1;
     if (alpha === null) return null;
-    return { r: channels[0], g: channels[1], b: channels[2], a: alpha };
+    return { r, g, b, a: alpha };
   }
 
   // #rgb, #rgba, #rrggbb, #rrggbbaa.
@@ -78,7 +85,12 @@ export function parseColor(value) {
   return null;
 }
 
-/** One 0-255 channel, from a number or a percentage. */
+/**
+ * One 0-255 channel, from a number or a percentage.
+ *
+ * @param {string} part
+ * @returns {number|null}
+ */
 function parseChannel(part) {
   if (part.endsWith("%")) {
     const pct = Number(part.slice(0, -1));
@@ -90,7 +102,12 @@ function parseChannel(part) {
   return Math.round(n);
 }
 
-/** One alpha, from a number or a percentage. */
+/**
+ * One alpha, from a number or a percentage.
+ *
+ * @param {string} part
+ * @returns {number|null}
+ */
 function parseAlpha(part) {
   if (part.endsWith("%")) {
     const pct = Number(part.slice(0, -1));
@@ -105,8 +122,9 @@ function parseAlpha(part) {
 /**
  * Composite `fg` over `bg` (source-over).
  *
- * @param {{r:number,g:number,b:number,a:number}} fg
- * @param {{r:number,g:number,b:number,a:number}} bg
+ * @param {Rgba} fg
+ * @param {Rgba} bg
+ * @returns {Rgba}
  */
 export function over(fg, bg) {
   const a = fg.a + bg.a * (1 - fg.a);
@@ -119,16 +137,27 @@ export function over(fg, bg) {
   };
 }
 
-/** WCAG relative luminance. */
+/**
+ * WCAG relative luminance.
+ *
+ * @param {{r:number,g:number,b:number,a?:number}} c
+ * @returns {number}
+ */
 export function luminance(c) {
-  const f = (v) => {
+  const f = (/** @type {number} */ v) => {
     const s = v / 255;
     return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
   };
   return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
 }
 
-/** WCAG contrast ratio between two colours. */
+/**
+ * WCAG contrast ratio between two colours.
+ *
+ * @param {{r:number,g:number,b:number,a?:number}} a
+ * @param {{r:number,g:number,b:number,a?:number}} b
+ * @returns {number}
+ */
 export function contrast(a, b) {
   const l1 = luminance(a);
   const l2 = luminance(b);
@@ -145,15 +174,18 @@ export function contrast(a, b) {
  * whatever it sits on, or the measured ratio is the ratio against a surface
  * nobody ever sees.
  *
- * @param {Array<{r:number,g:number,b:number,a:number}|null>} layers
- * @returns {{r:number,g:number,b:number,a:number}} the composited colour —
+ * @param {Array<Rgba|null>|null|undefined} layers
+ * @returns {Rgba} the composited colour —
  *   white when there is nothing painted. Never null: the filter drops the
  *   null layers, and `over` only ever returns an object. (Without this
  *   annotation the inferred type carries the layers' own `| null` through,
  *   and every caller has to null-check a value that cannot be null.)
  */
 export function compositeLayers(layers) {
-  const painted = (layers ?? []).filter((c) => c && c.a > 0);
+  const painted = (layers ?? []).filter(
+    /** @returns {c is Rgba} */
+    (/** @type {Rgba|null} */ c) => c !== null && c.a > 0,
+  );
   if (painted.length === 0) return { r: 255, g: 255, b: 255, a: 1 };
 
   // The outermost fully opaque layer is the base; everything inside it is
@@ -179,7 +211,7 @@ export function compositeLayers(layers) {
  * 40%-strength colour, and judging it as if it were fully opaque reports a
  * ratio the user never sees.
  *
- * @param {{color:unknown, layers:Array, opacity?:number}} sample
+ * @param {{color:unknown, layers:Array<Rgba|null>, opacity?:number}} sample
  * @returns {{resolved:boolean, ratio:number|null, foreground:object|null,
  *   background:object|null}} `resolved` is false when the foreground colour
  *   could not be parsed — a check that cannot resolve the colour is
@@ -228,6 +260,7 @@ export function renderSample({ color, layers, opacity = 1 }) {
  */
 export function judgeStates(states) {
   const usable = (states ?? []).filter(
+    /** @returns {s is {ratio:number, opacity:number}} */
     (s) => s && s.ratio !== null && typeof s.opacity === "number" && Number.isFinite(s.opacity),
   );
   if (usable.length === 0) {
