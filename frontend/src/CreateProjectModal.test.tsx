@@ -289,9 +289,21 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     expect(screen.queryByRole("group", { name: "Paths on other hosts" })).toBeNull();
   });
 
-  it("is not shown when there is no other host", () => {
+  it("explains why there is nothing to set when no other host is registered", () => {
     renderEdit({ hosts: [hosts[0]] });
     expect(screen.queryByRole("group", { name: "Paths on other hosts" })).toBeNull();
+    expect(screen.getByText(/No other host is registered/)).toBeInTheDocument();
+  });
+
+  it("does not wipe the stored map when the host list has not loaded (a rename must not delete it)", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      hosts: [],
+      initialHostCwds: { "mac-1": "/Users/x/mullion" },
+    });
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty("hostCwds");
   });
 
   it("opens filled with the project's existing paths", () => {

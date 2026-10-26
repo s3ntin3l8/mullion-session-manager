@@ -364,8 +364,16 @@ export function CreateProjectModal({
         return;
       }
     }
+    // `hosts` starts empty in the store and stays empty when the host list
+    // fails to load. Then NO entry is "known", every stored path would be
+    // dropped as belonging to a vanished host, and a plain rename would PATCH
+    // `hostCwds: {}` and silently wipe the map — with the rows hidden, so the
+    // user never sees it. Without a host list there is nothing to compare
+    // against: leave the map alone.
     const hostCwdsChanged =
-      isEdit && !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds));
+      isEdit &&
+      hosts.length > 0 &&
+      !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds));
     setSubmitting(true);
     setError(null);
     try {
@@ -556,6 +564,14 @@ export function CreateProjectModal({
               platform": a session runs in a directory, so a host with no
               path here is never chosen. Edit mode only — a brand-new project
               exists on exactly one host. */}
+      {isEdit && hostPathRows.length === 0 && hosts.length > 0 && (
+        <div className="create-modal-field">
+          <span className="create-modal-field-label">Also lives on</span>
+          <span className="create-modal-field-hint">
+            No other host is registered. Add one in Settings → Hosts to run this project elsewhere.
+          </span>
+        </div>
+      )}
       {isEdit && hostPathRows.length > 0 && (
         <div className="create-modal-field" role="group" aria-label="Paths on other hosts">
           <span className="create-modal-field-label">Also lives on</span>
