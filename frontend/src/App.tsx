@@ -320,6 +320,28 @@ export function App() {
     setDockviewApi(event.api);
   }, []);
 
+  // `floatingGroupBounds="boundedWithinViewport"` clamps a floating group's
+  // POSITION only; it never shrinks one. A group taller than the grid area
+  // (e.g. after the Dock expands) would sit at top:0 and overhang behind the
+  // opaque Dock, unreachable. So clamp the height whenever the container
+  // resizes.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const container = document.querySelector<HTMLElement>(".dockview-container");
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const clamp = () => {
+      const max = container.clientHeight;
+      if (max <= 0) return;
+      for (const group of dockviewApi.groups) {
+        if (group.api.location.type !== "floating") continue;
+        if (group.height > max) group.api.setSize({ height: max });
+      }
+    };
+    const observer = new ResizeObserver(clamp);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [dockviewApi]);
+
   // Issue #322: track which dockview panel is currently active so the
   // notification effect below can suppress desktop notifications for the
   // pane the user is currently looking at, even when the tab is visible.
@@ -1827,10 +1849,9 @@ export function App() {
                 tabComponents={tabComponents}
                 rightHeaderActionsComponent={PaneHeaderActions}
                 onReady={onReady}
-                // Keep floating panels fully inside the grid area. The
-                // default only keeps 100px in view, so expanding the Dock
-                // (which shrinks this container) left a 460px-tall floating
-                // panel hanging over the Dock's rows.
+                // Keep floating panels' position inside the grid area (the
+                // default only keeps 100px in view). Height is clamped by the
+                // ResizeObserver effect above — this option never resizes.
                 floatingGroupBounds="boundedWithinViewport"
                 // A lone tab is otherwise sized to its own content, leaving
                 // most of the tab strip empty and the title/status cramped

@@ -10,6 +10,12 @@ import { useDashboardStore } from "./store/index.js";
 // package.json scripts worth offering as monitors, in suggestion order.
 const SUGGESTED_SCRIPTS = ["dev", "start", "serve", "preview", "watch"];
 
+// `dev` and monorepo-style variants (`dev:web`, `start:prod`).
+function scriptRank(name: string): number {
+  return SUGGESTED_SCRIPTS.findIndex((s) => name === s || name.startsWith(`${s}:`));
+}
+const isSuggestedScript = (name: string) => scriptRank(name) >= 0;
+
 export interface DockConfigPanelParams {
   projectId: number;
 }
@@ -53,10 +59,10 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
   // needs to know whether the user kept editing during a (potentially
   // multi-second, for a remote-hosted project) round trip before deciding
   // whether to clear `dirty`.
+  const controlsRef = useRef(controls);
   // npm-script launchers for this project; only ever offered as one-click
   // additions, never written without the user saving.
   const [scriptCommands, setScriptCommands] = useState<{ name: string; command: string }[]>([]);
-  const controlsRef = useRef(controls);
   useEffect(() => {
     controlsRef.current = controls;
   }, [controls]);
@@ -98,8 +104,8 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
         if (cancelled) return;
         setScriptCommands(
           launchers
-            .filter((l) => l.kind === "npm-script" && SUGGESTED_SCRIPTS.includes(l.title))
-            .sort((a, b) => SUGGESTED_SCRIPTS.indexOf(a.title) - SUGGESTED_SCRIPTS.indexOf(b.title))
+            .filter((l) => l.kind === "npm-script" && isSuggestedScript(l.title))
+            .sort((a, b) => scriptRank(a.title) - scriptRank(b.title))
             .map((l) => ({ name: l.title, command: l.command })),
         );
       })
@@ -119,11 +125,15 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
 
   const addSuggestion = useCallback(
     (suggestion: { name: string; command: string }) => {
-      const existing = controls ?? [];
-      let id = suggestion.name;
-      for (let n = 2; existing.some((c) => c.id === id); n++) id = `${suggestion.name}-${n}`;
-      setControls([...existing, { id, title: suggestion.name, command: suggestion.command }]);
-      setSelectedIndex(existing.length);
+      setControls((prev) => {
+        const existing = prev ?? [];
+        let id = suggestion.name;
+        for (let n = 2; existing.some((c) => c.id === id); n++) id = `${suggestion.name}-${n}`;
+        return [...existing, { id, title: suggestion.name, command: suggestion.command }];
+      });
+      // Outside the updater (it can run twice under StrictMode); same
+      // stale-safe reasoning as addMonitor.
+      setSelectedIndex((controls ?? []).length);
       setDirty(true);
       setActionError(null);
     },

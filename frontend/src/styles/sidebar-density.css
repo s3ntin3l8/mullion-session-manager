@@ -264,6 +264,11 @@
   justify-content: center;
   margin-top: 6px;
 }
+.dock-config-panel-suggestions {
+  margin-top: 10px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
 .dock-config-panel-form {
   flex: 1;
   overflow-y: auto;

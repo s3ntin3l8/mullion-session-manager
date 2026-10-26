@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DockConfigPanel } from "./DockConfigPanel.js";
 import type { DockConfigResult, DockControlInput } from "./api/index.js";
@@ -324,17 +324,41 @@ describe("DockConfigPanel", () => {
       expect(screen.queryByRole("button", { name: /npm run dev/ })).not.toBeInTheDocument();
     });
 
-    it("does not suggest a script an existing monitor already runs", async () => {
+    it("suggests monorepo-style script names like dev:web", async () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
-          get: () =>
-            jsonResponse(200, makeResult([{ id: "web", title: "Web", command: "npm run dev" }])),
-          actions: () => jsonResponse(200, scripts),
+          get: () => jsonResponse(200, makeResult()),
+          actions: () =>
+            jsonResponse(200, [
+              {
+                id: "npm:dev:web",
+                title: "dev:web",
+                command: "npm run dev:web",
+                kind: "npm-script",
+              },
+            ]),
         }),
       );
       render(<DockConfigPanel params={{ projectId: 1 }} />);
+      expect(await screen.findByRole("button", { name: /npm run dev:web/ })).toBeInTheDocument();
+    });
+
+    it("does not suggest a script an existing monitor already runs", async () => {
+      const fetchMock = mockFetch({
+        get: () =>
+          jsonResponse(200, makeResult([{ id: "web", title: "Web", command: "npm run dev" }])),
+        actions: () => jsonResponse(200, scripts),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<DockConfigPanel params={{ projectId: 1 }} />);
       await screen.findByText("Web");
+      // Wait for the actions response to land, so absence isn't just "not
+      // loaded yet".
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/actions"))).toBe(true),
+      );
+      await new Promise((r) => setTimeout(r, 0));
       expect(screen.queryByText("Suggested from package.json")).not.toBeInTheDocument();
     });
 
