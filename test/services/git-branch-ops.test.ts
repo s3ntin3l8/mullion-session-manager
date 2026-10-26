@@ -227,6 +227,28 @@ describe("rebaseBranch", () => {
     git(repo, ["rebase", "--abort"]);
   });
 
+  it("refuses while a conflicted rebase of either backend, or a killed one, is stopped", async () => {
+    git(repo, ["checkout", "-q", "-b", "feature"]);
+    commit(repo, "a.txt", "feature side\n", "feature edits a");
+    git(repo, ["checkout", "-q", "main"]);
+    commit(repo, "a.txt", "main side\n", "main edits a");
+    git(repo, ["checkout", "-q", "feature"]);
+    for (const backend of ["--apply", "--merge"]) {
+      expect(() => git(repo, ["rebase", backend, "main"])).toThrow();
+      expect(await rebaseBranch(repo)).toEqual({ ok: false, reason: "operation-in-progress" });
+      git(repo, ["rebase", "--abort"]);
+    }
+    // Killed mid-way: the state directory survives, REBASE_HEAD does not.
+    expect(() => git(repo, ["rebase", "--merge", "main"])).toThrow();
+    fs.rmSync(path.join(repo, ".git", "REBASE_HEAD"));
+    expect(await checkoutBranch(repo, "main")).toEqual({
+      ok: false,
+      reason: "operation-in-progress",
+    });
+    git(repo, ["rebase", "--abort"]);
+    expect(await checkoutBranch(repo, "main")).toEqual({ ok: true });
+  });
+
   it("refuses when nothing to rebase onto exists", async () => {
     git(repo, ["checkout", "-q", "-b", "lonely"]);
     git(repo, ["remote", "remove", "origin"]);

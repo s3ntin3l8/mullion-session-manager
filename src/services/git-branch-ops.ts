@@ -1,5 +1,4 @@
 import { spawn as spawnChild } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isPlainBranchName, listWorktrees, resolveDefaultBaseRefNoFetch } from "./git-refs.js";
@@ -128,15 +127,15 @@ const DIRTY: GitBranchOpResult = {
   detail: "The checkout has uncommitted changes",
 };
 
-/** True while a rebase, merge, cherry-pick or revert is stopped mid-way. A
- * rebase is detected by its state directory, not REBASE_HEAD: one paused at
- * an `edit`/`break` step, or killed, has the directory and no REBASE_HEAD. */
+/** True while a rebase, merge, cherry-pick or revert is stopped mid-way.
+ * A rebase is asked of git itself, not REBASE_HEAD: one paused at an
+ * `edit`/`break` step, or killed, has no REBASE_HEAD. `rebase
+ * --show-current-patch` dies (128, "No rebase in progress?") only when no
+ * rebase of either backend is under way; it exits 0 with a stopped patch
+ * and 1 without one. */
 async function operationInProgress(cwd: string): Promise<boolean> {
-  for (const dir of ["rebase-merge", "rebase-apply"]) {
-    const res = await runGit(cwd, ["rev-parse", "--git-path", dir]);
-    const gitPath = res.stdout.trim();
-    if (res.code === 0 && gitPath && existsSync(path.resolve(cwd, gitPath))) return true;
-  }
+  const rebase = await runGit(cwd, ["rebase", "--show-current-patch"]);
+  if (rebase.code === 0 || rebase.code === 1) return true;
   for (const ref of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
     const res = await runGit(cwd, ["rev-parse", "--verify", "--quiet", ref]);
     if (res.code === 0) return true;
