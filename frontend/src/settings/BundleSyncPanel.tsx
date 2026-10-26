@@ -272,7 +272,7 @@ export function BundleSyncPanel() {
       <Row
         label="Bundle sync status"
         desc={
-          "What's installed on this host. Syncing happens automatically at" +
+          "What's installed on this machine. Syncing happens automatically at" +
           " startup; use Re-sync now if a file was changed or removed."
         }
       >
@@ -312,7 +312,7 @@ export function BundleSyncPanel() {
         <div className="bundle-sync-cli-list">
           {detectedClis.length === 0 && (
             <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
-              No supported CLI detected on this host yet.
+              No supported CLI detected on this machine yet.
             </div>
           )}
           {detectedClis.map((c) => {
@@ -339,12 +339,12 @@ export function BundleSyncPanel() {
       <div className="bundle-sync-remove-row">
         <div className="bundle-sync-remove-desc">
           {s.injectMullionBundle
-            ? "Remove every skill and agent Mullion installed on this host, and" +
+            ? "Remove every skill and agent Mullion installed on this machine, and" +
               " turn the tooling bundle off."
-            : "Remove any skills and agents Mullion left on this host."}
+            : "Remove any skills and agents Mullion left on this machine."}
         </div>
         <ConfirmButton
-          title="Remove all Mullion-synced content from this host"
+          title="Remove all Mullion-synced content from this machine"
           onConfirm={handleRemove}
           disabled={removing}
         >

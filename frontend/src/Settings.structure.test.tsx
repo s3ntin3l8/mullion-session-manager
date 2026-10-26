@@ -68,7 +68,7 @@ describe("Settings structure", () => {
     const headings = Array.from(document.querySelectorAll(".settings-nav-group")).map(
       (el) => el.textContent,
     );
-    expect(headings).toEqual(["Workspace"]);
+    expect(headings).toEqual(["Local"]);
   });
 
   it("labels the close button", () => {

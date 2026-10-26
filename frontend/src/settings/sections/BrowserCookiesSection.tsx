@@ -133,7 +133,7 @@ export function BrowserCookiesSection() {
     <>
       <GroupHeading
         title="Import browser cookies"
-        desc="Import cookies from a Chrome or Firefox profile on this host so a project's browser opens already signed in."
+        desc="Import cookies from a Chrome or Firefox profile on this machine so a project's browser opens already signed in."
       />
 
       <Row label="Project">
