@@ -512,6 +512,12 @@ describe("claimTask", () => {
       clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
     });
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+    // Not what this test is about — the base ref is resolved on the placement
+    // host (#1959), and there is no real remote host to ask here.
+    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+      ok: true,
+      value: { baseRef: "HEAD", sha: null },
+    });
     const warnSpy = vi.spyOn(app.log, "warn");
 
     const outcome = await claimAndDispatch(app, task.id, { auto: false });
@@ -555,7 +561,10 @@ describe("claimTask", () => {
     const row = getTask(app, task.id);
     expect(row.status).toBe("claimed");
     expect(row.sessionId).toBeNull();
-    expect(row.failureReason).toBe("worktree creation failed");
+    // git's own reason is kept (#1959), not collapsed to an opaque string.
+    expect(row.failureReason).toMatch(
+      /^worktree creation failed on host local: .*not a git repository/,
+    );
 
     fs.rmSync(notARepo, { recursive: true, force: true });
     await app.close();
@@ -973,65 +982,168 @@ describe("claimTask", () => {
     await app.close();
   });
 
-  it("#484 — falls back to the literal HEAD/null a pre-#484 remote claim always used, when the host is unreachable", async () => {
-    const app = await buildApp();
-    const [project] = app.db
-      .insert(projects)
-      .values({
-        name: "remote-claim-unreachable-p",
-        cwd: "/remote/project",
-        hostId: "remote-host-1",
-      })
-      .returning()
-      .all();
-    const task = insertReadyTask(app, project.id, 72);
+  // Issue #1959 — the base ref is resolved on the host that CUTS the
+  // worktree (the placement host), and a host that cannot answer is no longer
+  // papered over with a bare `HEAD` (a stale ref on that host's clone).
+  describe("base ref on the placement host (#1959)", () => {
+    const MAC_CWD = "/Users/me/proj";
 
-    const fakeBackend = fakeSessionBackend({
-      spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
-      liveStatus: vi.fn().mockResolvedValue({}),
-      liveness: vi.fn().mockResolvedValue({}),
-      terminate: vi.fn().mockResolvedValue(undefined),
-      getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
-      uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload" }),
-      resolveReviewGate: vi.fn().mockResolvedValue(false),
-      acknowledgeAttention: vi.fn().mockResolvedValue(true),
-      prompt: vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 }),
-      waitOutput: vi.fn().mockResolvedValue({ notRunning: true }),
-      createWorktree: vi.fn().mockResolvedValue({
-        created: true,
-        path: "/remote/project/.mullion-worktrees/mullion-task-x",
-        branch: "x",
-      }),
-      checkoutBranchWorktree: vi.fn().mockResolvedValue(null),
-      resumeTaskWorktree: vi.fn().mockResolvedValue(null),
-      listTaskWorktreeDirs: vi.fn().mockResolvedValue([]),
-      stashSeed: vi.fn().mockResolvedValue(undefined),
-      resolvePendingPromote: vi.fn().mockResolvedValue(false),
-      removeWorktreeIfClean: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
-      pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
-      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+    function remoteProject(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
+      const [project] = app.db
+        .insert(projects)
+        .values({
+          name,
+          cwd: "/remote/project",
+          hostId: "remote-host-1",
+          hostCwds: JSON.stringify({ "mac-1": MAC_CWD }),
+        })
+        .returning()
+        .all();
+      return project;
+    }
+
+    function placeOnMac() {
+      vi.spyOn(placementModule, "resolvePlacement").mockReturnValue({
+        hostId: "mac-1",
+        reason: "forced for the test",
+        considered: [],
+        fellBack: false,
+      });
+    }
+
+    it("resolves the base ref, and cuts the worktree, on the placement host — not the project's", async () => {
+      const app = await buildApp();
+      const project = remoteProject(app, "baseref-on-placement-p");
+      const task = insertReadyTask(app, project.id, 81);
+      const fakeBackend = fakeSessionBackend({
+        spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+        createWorktree: vi.fn().mockResolvedValue({
+          created: true,
+          path: `${MAC_CWD}/.mullion-worktrees/mullion-task-x`,
+          branch: "x",
+        }),
+      });
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      placeOnMac();
+      const baseRefSpy = vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect(baseRefSpy).toHaveBeenCalledTimes(1);
+      expect(baseRefSpy).toHaveBeenCalledWith(expect.anything(), "mac-1", MAC_CWD);
+      // The SHA pinned on the task is the one the cutting clone resolved.
+      expect(getTask(app, task.id).baseSha).toBe("deadbeefcafe");
+      expect(vi.mocked(fakeBackend.createWorktree).mock.calls[0]?.[0]).toBe(MAC_CWD);
+
+      await app.close();
     });
-    vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
-    vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
-      ok: false,
-      reason: "unreachable",
-      detail: "connection refused",
+
+    it("releases for retry, recording why, when the placement host cannot be reached — no silent HEAD", async () => {
+      const app = await buildApp();
+      const project = remoteProject(app, "baseref-unreachable-p");
+      const task = insertReadyTask(app, project.id, 82);
+      const fakeBackend = fakeSessionBackend({});
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      placeOnMac();
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "connection refused",
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.sessionId).toBeNull();
+      expect(row.failureReason).toBe(
+        "could not resolve the base ref on host mac-1: connection refused",
+      );
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      await app.close();
     });
 
-    const outcome = await claimAndDispatch(app, task.id, { auto: false });
+    it("fails the task, visibly, when the placement host's agent is too old to resolve a base ref", async () => {
+      const app = await buildApp();
+      const project = remoteProject(app, "baseref-unsupported-p");
+      const task = insertReadyTask(app, project.id, 83);
+      const fakeBackend = fakeSessionBackend({});
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      placeOnMac();
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: false,
+        reason: "unsupported",
+      });
+      const infoSpy = vi.spyOn(app.log, "info");
 
-    expect(outcome.ok).toBe(true);
-    const row = getTask(app, task.id);
-    expect(row.baseSha).toBeNull();
-    const branchName = deriveTaskBranchName(task);
-    expect(fakeBackend.createWorktree).toHaveBeenCalledWith(
-      "/remote/project",
-      "HEAD",
-      branchName,
-      branchName,
-    );
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-    await app.close();
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("host mac-1 is too old to resolve a base ref — upgrade it");
+      // A terminal failure: stamped complete, reservation fields cleared, and
+      // no predicted branch left behind for a Retry to try to resume.
+      expect(row.completedAt).not.toBeNull();
+      expect(row.claimedAt).toBeNull();
+      expect(row.baseSha).toBeNull();
+      expect(row.branchName).toBeNull();
+      expect(row.worktreePath).toBeNull();
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: task.id,
+          from: "in_progress",
+          to: "failed",
+          via: "dispatch-failure",
+        }),
+        "task transition",
+      );
+      expect(mockSyncTaskTransition).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ status: "failed" }),
+        expect.anything(),
+        "failed",
+      );
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+
+    it("keeps the reason a worktree could not be cut, instead of an opaque 'worktree creation failed'", async () => {
+      const app = await buildApp();
+      const project = remoteProject(app, "worktree-detail-p");
+      const task = insertReadyTask(app, project.id, 84);
+      const fakeBackend = fakeSessionBackend({
+        createWorktree: vi.fn().mockResolvedValue({
+          created: false,
+          reason: "create-failed",
+          detail: "fatal: invalid reference: deadbeefcafe",
+        }),
+      });
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      placeOnMac();
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.failureReason).toBe(
+        "worktree creation failed on host mac-1: fatal: invalid reference: deadbeefcafe",
+      );
+
+      await app.close();
+    });
   });
 
   it("Hermes review, PR #538 — does not trust seedDelivered:true for a remote host that never confirms the prompt was applied (version skew)", async () => {
@@ -1393,6 +1505,24 @@ describe("retryTask (#483)", () => {
   // #9 — same naming/locking as a fresh dispatch (dispatchClaimedTask's own
   // test above) — a retry spawns a genuinely new session, so it needs the
   // same treatment, not just the original claim.
+  it("records why the retry is on its worker's host (#1959)", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 73);
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected ok");
+    const { sessions } = await import("../../src/db/schema.js");
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, outcome.session.id)).all();
+    expect(row?.placementReason).toContain(`task #${task.id} retry joins its worker's host`);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("names and locks the resumed session (#9)", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();

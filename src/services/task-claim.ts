@@ -423,6 +423,50 @@ export async function dispatchClaimedTask(
     }
   }
 
+  // The terminal sibling of `release()`: for a failure that retrying cannot
+  // fix (the placement host's agent is too old to resolve a base ref), so
+  // looping it through the dispatch backoff would only hide the reason on a
+  // `claimed` row, where `failureReason` is never shown. Fails the task, so
+  // the reason reaches the board and the issue sync.
+  async function failDispatch(reason: string): Promise<void> {
+    const now = new Date();
+    const updated = app.db
+      .update(tasks)
+      .set({
+        status: "failed",
+        failureReason: reason,
+        completedAt: now,
+        claimedAt: null,
+        startedAt: null,
+        baseSha: null,
+        seedDelivered: null,
+        // The failure came BEFORE the worktree was cut, so the predicted
+        // branch/path on the row name nothing that exists. Clearing them makes
+        // a Retry refuse cleanly ("no worktree to resume") instead of trying
+        // to resume a worktree that was never created.
+        worktreePath: null,
+        branchName: null,
+      })
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)))
+      .run();
+    if (updated.changes > 0) {
+      recordTaskTransition(app, {
+        taskId,
+        projectId: project.id,
+        from: "in_progress",
+        to: "failed",
+        via: "dispatch-failure",
+        context: { reason, hostId: placement.hostId },
+      });
+      void syncTaskTransition(
+        app,
+        { ...task, status: "failed", failureReason: reason, completedAt: now },
+        project,
+        "failed",
+      );
+    }
+  }
+
   // Same throw/rollback posture as the old claimTask — see its own doc
   // comment (still on enqueueTask above) for why this try/catch exists and
   // what `committed` guards.
@@ -465,10 +509,30 @@ export async function dispatchClaimedTask(
     // #484/#491 — unchanged from the old claimTask; see git blame on this
     // function's prior revision (before the queue split) for the full
     // base-ref-pinning rationale.
-    const baseRefResult = await resolveHostBaseRef(app, project.hostId, project.cwd);
-    const { baseRef, baseSha } = baseRefResult.ok
-      ? { baseRef: baseRefResult.value.baseRef, baseSha: baseRefResult.value.sha }
-      : { baseRef: "HEAD", baseSha: null };
+    //
+    // Issue #1959 — resolved on the PLACEMENT host, the one that cuts the
+    // worktree, not the project's. The project host's clone may know a SHA
+    // the placement host never fetched, and `git worktree add` from it
+    // fails (or, with a bare ref, cuts from a stale one). Resolving there
+    // also fetches THAT clone first (`resolveDefaultBaseRef`), so the SHA
+    // is one the cutting clone has. The old fallback to a bare `HEAD` is
+    // gone: it is the stale ref this issue is about.
+    const baseRefResult = await resolveHostBaseRef(app, placement.hostId, placementCwd);
+    if (!baseRefResult.ok) {
+      if (baseRefResult.reason === "unsupported") {
+        const detail = `host ${placement.hostId} is too old to resolve a base ref — upgrade it`;
+        await failDispatch(detail);
+        return { ok: false, reason: "worktree-failed", detail };
+      }
+      // Unreachable is transient: record why and let the backoff retry.
+      const detail = `could not resolve the base ref on host ${placement.hostId}: ${baseRefResult.detail}`;
+      await release(detail);
+      return { ok: false, reason: "worktree-failed", detail };
+    }
+    const { baseRef, baseSha } = {
+      baseRef: baseRefResult.value.baseRef,
+      baseSha: baseRefResult.value.sha,
+    };
     // #939/#1016 — resolved once per spawn, fail-open (a GitHub hiccup here
     // degrades to today's plain title+body prompt, never blocks the claim).
     const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -561,8 +625,14 @@ export async function dispatchClaimedTask(
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
-        await release("worktree creation failed");
-        return { ok: false, reason: "worktree-failed" };
+        // Issue #1959 — keep git's own reason (the base ref the placement
+        // host lacks, a branch that already exists, ...) instead of an
+        // opaque "worktree creation failed".
+        const reason = result.detail
+          ? `worktree creation failed on host ${placement.hostId}: ${result.detail}`
+          : "worktree creation failed";
+        await release(reason);
+        return { ok: false, reason: "worktree-failed", detail: reason };
       }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
@@ -994,7 +1064,8 @@ export async function retryTask(
       // again: a session cannot run in a directory that is not on its
       // machine.
       unattended: true,
-      hostId: resolveTaskWorkerHost(app, task),
+      hostId: workerHostId,
+      placementReason: `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);

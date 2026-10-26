@@ -465,8 +465,10 @@ export const sessions = sqliteTable(
     // rather than only in the server log (the log is where it comes from;
     // this is where it can be read back).
     //
-    // NULLABLE: NULL means "nothing was decided here" — a pinned project, or
-    // a session created before placement existed. Those rows are unaffected.
+    // NULLABLE: NULL means "nothing was decided here" — a session created
+    // before placement existed. A pinned project now records its own reason
+    // ("pinned to the project's host ..."), so NULL no longer means pinned.
+    // Those older rows are unaffected.
     placementReason: text("placement_reason"),
     // Cosmetic label the user can rename; falls back to `command` when unset.
     name: text("name"),

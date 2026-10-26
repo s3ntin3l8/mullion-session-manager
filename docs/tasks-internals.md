@@ -919,11 +919,16 @@ The `→ reviewing` diff-stat (`#491`) is computed from `tasks.baseSha`, a
 commit SHA `task-claim.ts` resolves and pins **before** creating the
 worktree — the worktree is branched from that exact SHA, not a symbolic ref
 like `origin/main` that could move between resolution and branch creation.
-Works for a remote-hosted project too (#484: base-ref/SHA resolution and the
-diff-stat computation both proxy to the owning host); `baseSha` stays null
-only when that resolution itself failed (the host was unreachable at claim
-time, or an old agent build predating the proxy route), same as a local
-resolution failure. Preserved unchanged across Retry, since retry resumes
+Works for a remote-hosted project too (#484/#1959: base-ref/SHA resolution
+runs on the **placement host** — the one that cuts the worktree, which may not
+be the project's own — and the diff-stat computation proxies to the worker's
+host). If that resolution fails the claim does not fall back to a bare `HEAD`:
+an unreachable host releases the task back to `claimed` with the reason
+recorded (the dispatch backoff retries it), and an agent too old to resolve a
+base ref fails the task (`via: dispatch-failure`) with an upgrade message.
+`baseSha` can still be null for a local project whose commit could not be
+resolved, same as before. A worktree that cannot be cut records git's own
+reason on the task rather than a generic one. Preserved unchanged across Retry, since retry resumes
 the same branch from the same original base. When `baseSha` is null, or the
 diff itself can't be computed, the comment is posted with no number rather
 than a guessed one.
