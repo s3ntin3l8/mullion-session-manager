@@ -235,7 +235,13 @@ async function run(browser, demo) {
         [...globalThis.document.querySelectorAll(".pr-row .sb-triad")].map((t) => {
           const chips = [...t.querySelectorAll(".sb-chip")];
           const tops = new Set(chips.map((c) => Math.round(c.getBoundingClientRect().top)));
-          return { oneLine: tops.size === 1, chips: chips.length };
+          const right = t.getBoundingClientRect().right;
+          return {
+            oneLine: tops.size === 1,
+            chips: chips.length,
+            // Wrapping onto a second line is fine at 340; spilling out is not.
+            contained: chips.every((c) => c.getBoundingClientRect().right <= right + 1),
+          };
         }),
       );
       check(`${tag}: ${triads.length} PR rows with a triad`, triads.length === PRS.length);
@@ -243,12 +249,12 @@ async function run(browser, demo) {
         `${tag}: every triad has CI, Review and Merge`,
         triads.every((t) => t.chips === 3),
       );
-      if (compact) {
-        check(
-          `${tag}: every triad is on one line`,
-          triads.every((t) => t.oneLine),
-        );
-      }
+      // One line at 260 (compact short labels); at 340 the full labels may wrap
+      // but must stay inside the row.
+      check(
+        `${tag}: every triad ${compact ? "is on one line" : "stays inside its row"}`,
+        triads.every((t) => (compact ? t.oneLine : t.contained)),
+      );
       const ciText = await page
         .locator(
           '.pr-row[data-pr="1946"] .sb-chip[title^="CI:"] .' +
