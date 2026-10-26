@@ -21,7 +21,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   cursor: pointer;
   white-space: nowrap;
 }

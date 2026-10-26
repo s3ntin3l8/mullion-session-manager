@@ -938,12 +938,12 @@ export function CommandPalette({
                   checked={skipPermissionsEnabled}
                   onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
                 />
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>⚠</span>
+                <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>⚠</span>
                 <span>Skip permissions (all agents)</span>
               </label>
               <div
                 style={{
-                  fontSize: 10.5,
+                  fontSize: "0.65625rem",
                   color: "var(--dim)",
                   marginLeft: 22,
                   marginTop: 1,
@@ -962,7 +962,9 @@ export function CommandPalette({
               style={{ visibility: showModelPicker ? "visible" : "hidden" }}
               aria-hidden={!showModelPicker}
             >
-              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Model</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 4 }}>
+                Model
+              </div>
               <ModelSelect
                 small
                 ariaLabel="Model for this session"
@@ -1157,7 +1159,7 @@ export function CommandPalette({
             )}
             <div className="cmd-palette-group-label">Matching commands</div>
             {filtered.length === 0 && matchingCommands.length === 0 && (
-              <div style={{ padding: "12px 11px", fontSize: 12.5, color: "var(--muted)" }}>
+              <div style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}>
                 No matching launchers.
               </div>
             )}

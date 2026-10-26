@@ -182,7 +182,7 @@ export function NotificationsSection() {
             display: "grid",
             gap: "6px 8px",
             alignItems: "center",
-            fontSize: 11,
+            fontSize: "0.6875rem",
           }}
         >
           <div /> {/* empty label column */}
@@ -197,7 +197,7 @@ export function NotificationsSection() {
                 <div
                   style={{
                     gridColumn: "1 / -1",
-                    fontSize: 10,
+                    fontSize: "0.625rem",
                     color: "var(--muted)",
                     paddingTop: 8,
                     paddingBottom: 2,

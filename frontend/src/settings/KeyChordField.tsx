@@ -157,12 +157,14 @@ export function KeyChordField({
         )}
       </div>
       {capturing && !error && (
-        <span style={{ fontSize: 11.5, color: "var(--muted)", textAlign: "right" }}>
+        <span style={{ fontSize: "0.71875rem", color: "var(--muted)", textAlign: "right" }}>
           Nothing captured? Another app may have claimed this combo globally — 1Password's Quick
           Access defaults to Ctrl+Shift+Space on Windows and Linux. Escape to cancel.
         </span>
       )}
-      {error && <ErrorText style={{ fontSize: 11.5, textAlign: "right" }}>{error}</ErrorText>}
+      {error && (
+        <ErrorText style={{ fontSize: "0.71875rem", textAlign: "right" }}>{error}</ErrorText>
+      )}
     </div>
   );
 }

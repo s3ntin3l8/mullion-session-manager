@@ -167,7 +167,7 @@
     background: transparent;
     color: var(--fg);
     font-family: inherit;
-    font-size: 13px;
+    font-size: 0.8125rem;
     font-weight: 500;
     cursor: pointer;
     white-space: nowrap;

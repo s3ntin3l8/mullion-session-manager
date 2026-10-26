@@ -201,7 +201,7 @@ export function Toolbar({
             disabled={viewMode === "kanban"}
           >
             <SearchIcon size={14} strokeWidth={1.9} />
-            <span className="run-cmd-label" style={{ fontSize: 12 }}>
+            <span className="run-cmd-label" style={{ fontSize: "0.75rem" }}>
               Run command…
             </span>
             <span className="kbd">⌘K</span>

@@ -34,7 +34,7 @@
   flex-shrink: 0;
 }
 .settings-modal-title {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   /* This is an <h2> (it is the modal's own heading — the app's <h1> lives
      in App.tsx), and nothing in this codebase resets the UA's heading
@@ -124,7 +124,7 @@
   border: 1px solid var(--border-soft);
   border-radius: 6px;
   font-family: var(--font-mono, monospace);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.5;
   color: var(--muted);
   white-space: pre-wrap;

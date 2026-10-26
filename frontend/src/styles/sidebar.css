@@ -208,7 +208,7 @@
   flex-shrink: 0;
 }
 .new-session-trigger-label {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   flex: 1;
   text-align: left;
@@ -221,7 +221,7 @@
   padding: 6px 15px 6px 16px;
 }
 .sidebar-section-title {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   text-transform: uppercase;
   letter-spacing: 0.09em;
   color: var(--dim);
@@ -252,7 +252,7 @@
   flex-shrink: 0;
 }
 .sidebar-section-count-unit {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
 }
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
@@ -299,7 +299,7 @@
 .sidebar-filter-search input {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
   background: transparent;
   border: none;
@@ -347,7 +347,7 @@
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 500;
   cursor: pointer;
 }
@@ -412,7 +412,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--fg) 20%, transparent);
 }
 .ws-group-name {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
   flex: 1;
@@ -421,7 +421,7 @@
   text-overflow: ellipsis;
 }
 .ws-group-count {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -488,7 +488,7 @@
   opacity: 0.9;
 }
 .workspace-item-name {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -596,7 +596,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -659,7 +659,7 @@
   background: color-mix(in srgb, var(--accent-solid) 8%, transparent);
 }
 .ws-group-drop-label {
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--accent-solid);
   font-family: "Geist Mono", monospace;
   font-weight: 600;
@@ -668,7 +668,7 @@
 .workspace-rename-input {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   color: var(--fg);
   background: var(--term);
@@ -722,7 +722,7 @@
    Sidebar.tsx), rendered as a second line under the header, same slot
    .session-now-line/.session-end-error occupy for a session row. */
 .project-row-error {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--r);
   padding: 0 8px 4px;
   white-space: nowrap;
@@ -730,7 +730,7 @@
   text-overflow: ellipsis;
 }
 .project-row-name {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
   flex: 1;
@@ -774,7 +774,7 @@
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
@@ -792,7 +792,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--muted);
   border: 1px solid var(--border-soft);
   padding: 1px 5px;
@@ -811,7 +811,7 @@
   background: var(--accent-fill);
   color: #fff;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 700;
   display: flex;
   align-items: center;
@@ -826,7 +826,7 @@
    one of them should not silently change the other. */
 .project-session-count,
 .sidebar-section-count-value {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
@@ -997,7 +997,7 @@
   box-sizing: border-box;
 }
 .session-name {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--fg);
   flex: 1;
   white-space: nowrap;
@@ -1011,7 +1011,7 @@
   flex: 1;
   min-width: 0;
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 500;
   color: var(--fg);
   background: var(--term);
@@ -1027,12 +1027,12 @@
   height: 14px;
 }
 .session-agent-text {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--dim);
   flex-shrink: 0;
 }
 .session-status-label {
-  font-size: 10px;
+  font-size: 0.625rem;
   font-family: "Geist Mono", monospace;
   /* A long sessionStatusDetail (e.g. an untruncated tool-call summary from
      an older backend) must ellipsis in place rather than refuse to shrink
@@ -1081,7 +1081,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--dim);
   opacity: 0.75;
   min-width: 0;
@@ -1172,7 +1172,7 @@
   display: flex;
   align-items: baseline;
   gap: 0;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-style: italic;
   color: var(--dim);
   padding-left: 22px;
@@ -1197,7 +1197,7 @@
    .session-now-line just above but tinted like .task-detail-error/
    .project-row-error (var(--r)) rather than --dim/--ring. */
 .session-end-error {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--r);
   padding-left: 22px;
   white-space: nowrap;
@@ -1242,7 +1242,7 @@
 .session-detail-label {
   flex-shrink: 0;
   width: 34px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--dim);
@@ -1256,7 +1256,7 @@
    worth reading in full; the row-4/5/6-style single-line ellipsis would cut
    it off mid-sentence. */
 .session-said {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-style: italic;
   display: -webkit-box;
@@ -1273,7 +1273,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   white-space: nowrap;
   overflow: hidden;
@@ -1290,7 +1290,7 @@
   padding: 1px 5px;
   border: 1px solid var(--border-soft);
   border-radius: 999px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1348,7 +1348,7 @@
   padding: 0;
   cursor: pointer;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 .session-file-change-chip:hover {
   color: var(--fg);
@@ -1361,7 +1361,7 @@
 .session-file-change-more {
   flex-shrink: 0;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-family: "Geist Mono", monospace;
 }
 .session-file-change-letter {
@@ -1381,7 +1381,7 @@
   align-items: center;
   gap: 6px;
   padding: 2px 8px 2px 0;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
   overflow: hidden;
 }
@@ -1408,7 +1408,7 @@
   border-radius: 6px;
   background: var(--sidebar);
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   line-height: 1.45;
 }
 .session-diff-line {
@@ -1441,7 +1441,7 @@
   display: block;
   padding: 6px 8px;
   color: var(--dim, #888);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 
 /* Row 5 (Phase 5 Track A, #195/5.5a) — subagent chips, same flex-row/chip
@@ -1468,7 +1468,7 @@
   padding: 0;
   cursor: pointer;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 .session-subagent-history-toggle:hover {
   color: var(--fg);
@@ -1494,7 +1494,7 @@
   padding: 0;
   cursor: pointer;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 .session-subagent-chip:hover {
   color: var(--fg);
@@ -1520,7 +1520,7 @@
   flex-direction: column;
   gap: 2px;
   padding: 2px 8px 4px 0;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
 }
 .session-subagent-summary {
@@ -1551,7 +1551,7 @@
   gap: 4px;
   max-width: 100%;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
 }
 .session-background-task-letter {
   flex-shrink: 0;
@@ -1577,7 +1577,7 @@
   gap: 4px;
   max-width: 100%;
   color: var(--dim);
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-family: "Geist Mono", monospace;
   white-space: nowrap;
 }
@@ -1636,12 +1636,12 @@ button.discover-header:hover {
   color: var(--fg);
 }
 .discover-title {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   flex: 1;
 }
 .discover-count {
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
 }
@@ -1662,7 +1662,7 @@ button.discover-header:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
 .discover-item-name {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--fg);
   flex: 1;
   white-space: nowrap;
@@ -1673,7 +1673,7 @@ button.discover-header:hover {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--o);
   border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
   padding: 1px 5px;
@@ -1687,7 +1687,7 @@ button.discover-header:hover {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   color: var(--o);
   border: 1px solid color-mix(in srgb, var(--o) 40%, transparent);
   padding: 1px 5px;
@@ -1696,7 +1696,7 @@ button.discover-header:hover {
   white-space: nowrap;
 }
 .discover-add {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   color: var(--accent-solid);
   background: transparent;
@@ -1826,7 +1826,7 @@ button.discover-header:hover {
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   color: var(--fg);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
@@ -1862,7 +1862,7 @@ button.discover-header:hover {
 .mobile-session-count {
   flex-shrink: 0;
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
 }
 .mobile-session-unread {
@@ -1874,7 +1874,7 @@ button.discover-header:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   font-weight: 600;
   line-height: 1;
   color: #fff;
@@ -1923,7 +1923,7 @@ button.discover-header:hover {
   align-items: center;
   justify-content: space-between;
   padding: 4px 4px 4px 16px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
@@ -1969,7 +1969,7 @@ button.discover-header:hover {
   justify-content: space-between;
   margin: 0;
   padding: 6px 16px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1998,7 +1998,7 @@ button.discover-header:hover {
   padding: 0 12px;
   font-family: inherit;
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-  font-size: 16px;
+  font-size: 1rem;
   color: var(--fg);
   background: var(--term);
   border: 1px solid var(--border);
@@ -2011,7 +2011,7 @@ button.discover-header:hover {
 .mobile-session-empty {
   margin: 0;
   padding: 16px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--muted);
   text-align: center;
 }
@@ -2036,7 +2036,7 @@ button.discover-header:hover {
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
@@ -2058,7 +2058,7 @@ button.discover-header:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.4;
   color: var(--dim);
 }
@@ -2091,7 +2091,7 @@ button.discover-header:hover {
   margin: 4px 0;
   font-family: inherit;
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-  font-size: 16px;
+  font-size: 1rem;
   color: var(--fg);
   background: var(--term);
   border: 1px solid var(--accent-solid);
@@ -2112,7 +2112,7 @@ button.discover-header:hover {
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   touch-action: manipulation;
@@ -2142,7 +2142,7 @@ button.discover-header:hover {
   background: var(--term);
   color: var(--fg);
   font-family: "Geist Mono", monospace;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.45;
   white-space: pre;
   overflow: auto;
@@ -2168,7 +2168,7 @@ button.discover-header:hover {
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
   touch-action: manipulation;
@@ -2264,13 +2264,13 @@ button.discover-header:hover {
   border-bottom: 1px solid color-mix(in srgb, var(--r) 25%, transparent);
 }
 .backend-down-title {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
 }
 .backend-down-subtext {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .backend-down-reconnect {
@@ -2280,7 +2280,7 @@ button.discover-header:hover {
   color: var(--r);
   border-radius: 7px;
   padding: 5px 12px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -2308,7 +2308,7 @@ button.discover-header:hover {
   color: var(--o);
   border-radius: 7px;
   padding: 5px 12px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   cursor: pointer;
   font-family: inherit;
@@ -2332,13 +2332,13 @@ button.discover-header:hover {
   user-select: none;
 }
 .update-banner-title {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
 }
 .update-banner-subtext {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 .update-banner-dismiss {
@@ -2353,7 +2353,7 @@ button.discover-header:hover {
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
 }
 .update-banner-dismiss:hover {
@@ -2374,7 +2374,7 @@ button.discover-header:hover {
   border-bottom: 1px solid color-mix(in srgb, var(--o) 25%, transparent);
 }
 .pane-cap-notice-title {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
 }
@@ -2390,7 +2390,7 @@ button.discover-header:hover {
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
   font-family: inherit;
 }
@@ -2419,7 +2419,7 @@ button.discover-header:hover {
   gap: 8px;
 }
 .scaffold-offer-banner-title {
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   font-weight: 600;
   color: var(--fg);
   flex: 1;
@@ -2436,7 +2436,7 @@ button.discover-header:hover {
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1;
 }
 .scaffold-offer-banner-dismiss:hover {
@@ -2445,7 +2445,7 @@ button.discover-header:hover {
 }
 .scaffold-offer-banner-preview {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--muted);
   white-space: pre-wrap;
   overflow: hidden;
@@ -2457,7 +2457,7 @@ button.discover-header:hover {
   display: flex;
 }
 .scaffold-offer-banner-accept {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 600;
   color: var(--b);
   background: transparent;
@@ -2492,7 +2492,7 @@ button.discover-header:hover {
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 0.8125rem;
   cursor: pointer;
 }
 .mobile-notif-filters {
@@ -2509,7 +2509,7 @@ button.discover-header:hover {
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 .mobile-notif-filter.active {
@@ -2551,19 +2551,19 @@ button.discover-header:hover {
 .mobile-notif-sheet .notif-gate-btn {
   flex: 1;
   min-height: 44px;
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 .mobile-notif-sheet .notif-gate-deny-reason {
   min-height: 44px;
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-  font-size: 16px;
+  font-size: 1rem;
 }
 /* Issue #1429 — overrides terminal.css's own desktop-compact default
    (.notif-timeline-btn) with a real touch target, now that the Timeline
    button is no longer phone-only. */
 .mobile-notif-sheet .notif-timeline-btn {
   min-height: 44px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 /* ============================================================ */

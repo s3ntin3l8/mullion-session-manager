@@ -240,7 +240,7 @@
      zoom, not a regression. */
   .tasks-panel-new-project,
   .tasks-panel-new-title {
-    font-size: 16px;
+    font-size: 1rem;
   }
 
   /* Mobile UI/UX overhaul, item D — Settings as a full-bleed sheet instead
@@ -393,7 +393,7 @@
      is deliberate on desktop (command-palette.css), so this stays scoped
      to the mobile breakpoint rather than changing the shared rule. */
   .cmd-palette-search input {
-    font-size: 16px;
+    font-size: 1rem;
   }
   .cmd-palette-change-target {
     display: none !important;
@@ -456,7 +456,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 4px 4px 0 16px;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--muted);
 }
@@ -475,7 +475,7 @@
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
   touch-action: manipulation;
 }
@@ -512,7 +512,7 @@
   color: var(--fg);
   font-family: inherit;
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
-  font-size: 16px;
+  font-size: 1rem;
   outline: none;
   /* `type="search"` gives the field the UA's own search chrome on WebKit
      (an inset, rounded field and a clear button). The app styles its
@@ -527,12 +527,12 @@
 }
 .phone-nav-settings-empty {
   padding: 16px;
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   color: var(--dim);
 }
 .phone-nav-settings-group {
   padding: 12px 16px 4px;
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -549,7 +549,7 @@
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 0.9375rem;
   text-align: left;
   cursor: pointer;
 }
@@ -585,7 +585,7 @@
   .task-card-sync-error-text {
     display: block;
     width: 100%;
-    font-size: 11px;
+    font-size: 0.6875rem;
     color: var(--r);
     overflow-wrap: anywhere;
   }
@@ -608,7 +608,7 @@
   background: transparent;
   color: var(--fg);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
 }
 .tasks-panel-toolbar--phone .tasks-panel-new-form {
@@ -633,7 +633,7 @@
   background: transparent;
   color: var(--muted);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 0.875rem;
   cursor: pointer;
   touch-action: manipulation;
 }
@@ -644,7 +644,7 @@
 }
 .tasks-phone-strip-count {
   font-variant-numeric: tabular-nums;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--dim);
 }
 .tasks-phone-filter-sheet {
@@ -673,7 +673,7 @@
 }
 .tasks-phone-filter-sheet .tasks-panel-parent-filter {
   min-height: 44px;
-  font-size: 16px;
+  font-size: 1rem;
 }
 .tasks-phone-filter-danger {
   padding-top: 8px;
@@ -710,6 +710,6 @@
   }
   /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
   .settings-nav-search input {
-    font-size: 16px;
+    font-size: 1rem;
   }
 }

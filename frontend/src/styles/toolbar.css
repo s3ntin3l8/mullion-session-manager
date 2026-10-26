@@ -69,7 +69,7 @@
   width: auto;
   gap: 6px;
   padding: 0 10px 0 6px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 500;
   font-family: inherit;
 }
@@ -110,7 +110,7 @@
   background: var(--accent-fill);
   color: #fff;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 0.625rem;
   font-weight: 600;
   display: flex;
   align-items: center;
@@ -132,7 +132,7 @@
 }
 
 .toolbar-center-name {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
@@ -140,7 +140,7 @@
 }
 
 .toolbar-center-count {
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   flex-shrink: 0;
@@ -183,7 +183,7 @@
 
 .kbd {
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   padding: 2px 5px;
   border-radius: 5px;
   background: color-mix(in srgb, var(--fg) 9%, transparent);
@@ -203,7 +203,7 @@
    hover/active feedback every other interactive .kbd-style element has. */
 .kbd-btn {
   font-family: "Geist Mono", monospace;
-  font-size: 10.5px;
+  font-size: 0.65625rem;
   padding: 2px 5px;
   border: 1px solid color-mix(in srgb, var(--fg) 12%, transparent);
   border-radius: 5px;
@@ -232,7 +232,7 @@
 
 .toolbar-version-label {
   font-family: "Geist Mono", monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--dim);
   background: transparent;
   border: none;

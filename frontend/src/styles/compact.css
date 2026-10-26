@@ -43,7 +43,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--dim);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 .mobile-session-context::after {
   content: "\00b7";

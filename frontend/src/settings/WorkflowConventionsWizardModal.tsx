@@ -254,7 +254,7 @@ export function WorkflowConventionsWizardModal({
               }}
             >
               <span className="agent-rules-panel-row-name">{question.question}</span>
-              <span style={{ color: "var(--muted)", fontSize: 12 }}>
+              <span style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
                 {questionLabel(question.id, answers[question.id])}
               </span>
             </button>
@@ -279,7 +279,7 @@ export function WorkflowConventionsWizardModal({
         <div className="agent-rules-panel-notice">
           Question {stepIndex + 1} of {questions.length}
         </div>
-        <div style={{ fontSize: 13.5, fontWeight: 500, marginBottom: 10 }}>
+        <div style={{ fontSize: "0.84375rem", fontWeight: 500, marginBottom: 10 }}>
           {currentQuestion.question}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>

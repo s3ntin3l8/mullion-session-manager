@@ -118,7 +118,13 @@ export function PairBridgeModal({
               {copied ? "Copied" : "Copy payload"}
             </SecondaryButton>
           </div>
-          <div style={{ fontSize: 11.5, color: paired ? "var(--g)" : "var(--dim)", marginTop: 12 }}>
+          <div
+            style={{
+              fontSize: "0.71875rem",
+              color: paired ? "var(--g)" : "var(--dim)",
+              marginTop: 12,
+            }}
+          >
             {paired
               ? "Pairing accepted — waiting for Mullion Helper to connect…"
               : "Waiting for Mullion Helper…"}
@@ -126,7 +132,7 @@ export function PairBridgeModal({
         </>
       )}
       {!error && connected && (
-        <div style={{ fontSize: 12.5, color: "var(--g)" }}>
+        <div style={{ fontSize: "0.78125rem", color: "var(--g)" }}>
           Connected — this bridge is ready to forward SSH-agent requests.
         </div>
       )}

@@ -39,7 +39,7 @@
   border-radius: 8px;
   box-shadow: 0 6px 20px rgb(0 0 0 / 35%);
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 0.78125rem;
   line-height: 1.45;
   pointer-events: auto;
 }

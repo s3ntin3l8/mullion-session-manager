@@ -26,7 +26,7 @@ const theme = EditorView.theme({
     height: "100%",
     color: "var(--fg)",
     backgroundColor: "color-mix(in srgb, var(--fg) 4%, transparent)",
-    fontSize: "12.5px",
+    fontSize: "0.78125rem",
   },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": {

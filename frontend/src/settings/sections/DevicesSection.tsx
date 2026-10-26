@@ -718,7 +718,7 @@ export function DevicesSection() {
                 unavailable={device.status === "killed"}
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 10.5, color: "var(--dim)" }}>
+                    <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>
                       {describeDevice(device)}
                     </span>
                     {/* Physical-only, but NO longer active-only: a stopped
@@ -850,7 +850,7 @@ export function DevicesSection() {
         <ErrorText style={{ marginTop: 10 }}>Couldn't load devices.</ErrorText>
       )}
       {loaded && devices.length === 0 && !loadError && !createOpen && (
-        <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 10 }}>
+        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
           No Android devices yet. Pair a phone or create an emulator to open its screen from the
           sidebar.
         </div>
@@ -873,7 +873,7 @@ export function DevicesSection() {
             </Row>
           )}
           {avdsLoaded && !avdsError && avds.length === 0 && !newAvdOpen && (
-            <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+            <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
               No virtual devices on this host yet. Create one below.
             </div>
           )}
@@ -930,7 +930,7 @@ export function DevicesSection() {
                 </Row>
               )}
               {provisioningLoaded && !createAvdError && systemImages.length === 0 && (
-                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
                   No system images installed. Install one under "SDK system images" below.
                 </div>
               )}
@@ -944,7 +944,7 @@ export function DevicesSection() {
                 </Row>
               )}
               {provisioningLoaded && !createAvdError && deviceProfiles.length === 0 && (
-                <div style={{ fontSize: 11.5, color: "var(--dim)", marginTop: 4 }}>
+                <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
                   No device profiles found. Check the Android SDK command-line tools installation.
                 </div>
               )}
@@ -1107,7 +1107,7 @@ export function DevicesSection() {
 
             {/* Images list */}
             {filteredAvailable.length === 0 && (
-              <div style={{ fontSize: 11.5, color: "var(--dim)" }}>
+              <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
                 {anyNarrowFilter
                   ? "No images match the current filters."
                   : availableFilter === "installable"
@@ -1164,7 +1164,7 @@ export function DevicesSection() {
               </div>
             )}
             {installOp.status === "done" && (
-              <div style={{ fontSize: 11, color: "var(--dim)", marginTop: 8 }}>
+              <div style={{ fontSize: "0.6875rem", color: "var(--dim)", marginTop: 8 }}>
                 Operation complete.
               </div>
             )}
@@ -1178,7 +1178,7 @@ export function DevicesSection() {
       {/* License acceptance modal */}
       {showLicenseModal && (
         <Modal onClose={() => setShowLicenseModal(false)} title="Accept SDK licenses">
-          <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 12 }}>
+          <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 12 }}>
             Some Android SDK packages require accepting Google's license agreements before they can
             be installed. This accepts all pending SDK licenses on the host.
           </div>
