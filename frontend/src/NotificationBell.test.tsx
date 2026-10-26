@@ -62,8 +62,11 @@ const dismissEvents = vi.fn((sessionId: number, seqs: number[]) => {
 // own fire-and-forget-to-the-server posture.
 const ackAttention = vi.fn();
 
+const openRightSidebarPr = vi.fn();
+
 function storeState() {
   return {
+    openRightSidebarPr,
     theme: "dark",
     sessions,
     projects,
@@ -627,6 +630,21 @@ describe("NotificationBell", () => {
     expect(onOpenTimeline).toHaveBeenCalledWith(sessions[0]);
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+  });
+
+  it("opens a pr_* event's PR in the right sidebar; the Session button still opens the terminal", async () => {
+    events = {
+      1: [makeEvent({ seq: 1, kind: "pr_ci_failed", payload: { number: 42, title: "Fix" } })],
+    };
+    const onOpenSession = await openPanel();
+    await userEvent.click(screen.getByText("#42: CI failed"));
+    expect(openRightSidebarPr).toHaveBeenCalledWith(sessions[0].projectId, 42);
+    expect(markSessionRead).toHaveBeenCalledWith(1);
+    expect(onOpenSession).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Session" }));
+    expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
   });
 
   it("does not render a Timeline button when onOpenTimeline isn't provided", async () => {

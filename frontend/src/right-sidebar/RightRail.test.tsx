@@ -29,3 +29,36 @@ describe("RightRail prefetch (#1970)", () => {
     expect(prefetch).not.toHaveBeenCalled();
   });
 });
+
+describe("RightRail attention routing (B8)", () => {
+  const pr = (number: number, prPhase: string) => ({ number, prPhase }) as never;
+  const seed = (prs: unknown[]) =>
+    useDashboardStore.setState({
+      rightSidebarOpen: false,
+      rightSidebarView: "git",
+      prsByProject: { 4: { prs, prSummary: {} } } as never,
+    });
+
+  it("opens the most urgent attention PR when the GitHub icon is clicked", async () => {
+    seed([pr(1, "ready"), pr(2, "conflicts"), pr(3, "ci_failing")]);
+    render(<RightRail projectId={4} />);
+    await userEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.githubOpenPrByProject[4]).toBe(3);
+  });
+
+  it("just toggles the view when no PR needs attention, and closes it when already showing", async () => {
+    seed([pr(1, "ready_to_merge")]);
+    useDashboardStore.setState({ githubOpenPrByProject: {} });
+    render(<RightRail projectId={4} />);
+    await userEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(useDashboardStore.getState().githubOpenPrByProject[4]).toBeUndefined();
+
+    seed([pr(2, "conflicts")]);
+    useDashboardStore.setState({ rightSidebarOpen: true, rightSidebarView: "github" });
+    await userEvent.click(screen.getByRole("button", { name: "GitHub" }));
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+  });
+});

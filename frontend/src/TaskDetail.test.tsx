@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
 import type * as ApiModule from "./api/index.js";
@@ -28,8 +28,11 @@ const refreshTasks = vi.fn(async () => {});
 const deleteTask = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 
+const openRightSidebarPr = vi.fn();
+
 function storeState() {
   return {
+    openRightSidebarPr,
     tasks,
     sessions,
     events,
@@ -245,6 +248,28 @@ describe("TaskDetail", () => {
       "href",
       "https://github.com/o/r/pull/7",
     );
+  });
+
+  it("opens the PR in the right sidebar on a plain click, but keeps the GitHub link for a modified click", async () => {
+    openRightSidebarPr.mockClear();
+    tasks = [
+      makeTask({
+        id: 1,
+        projectId: 3,
+        status: "done",
+        prUrl: "https://github.com/o/r/pull/7",
+        prNumber: 7,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const link = screen.getByRole("link", { name: /Pull request/ });
+
+    await userEvent.click(link);
+    expect(openRightSidebarPr).toHaveBeenCalledWith(3, 7);
+
+    openRightSidebarPr.mockClear();
+    fireEvent.click(link, { ctrlKey: true });
+    expect(openRightSidebarPr).not.toHaveBeenCalled();
   });
 
   it("shows a CI status dot on the PR link when the branch matches an open PR", () => {

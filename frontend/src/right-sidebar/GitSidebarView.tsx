@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
 import { BranchDetail } from "../git/BranchDetail.js";
@@ -31,6 +31,30 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
   });
   const page: Page = pageState.projectId === projectId ? pageState.page : { kind: "list" };
   const go = useCallback((next: Page) => setPage({ projectId, page: next }), [projectId]);
+
+  // One-shot deep links ("Reveal in Git" on a session row, the palette's
+  // Prune command): applied in render keyed on the request's nonce, then
+  // cleared — the same shape as the History view's scope request.
+  const branchRequest = useDashboardStore((s) => s.rightSidebarBranchRequest);
+  const pruneRequest = useDashboardStore((s) => s.rightSidebarPruneRequest);
+  const [handledNonce, setHandledNonce] = useState(0);
+  const fresh = (r: { projectId: number; nonce: number } | null) =>
+    r != null && r.projectId === projectId && r.nonce !== handledNonce;
+  const pendingBranch = fresh(branchRequest) ? branchRequest : null;
+  const pendingPrune = fresh(pruneRequest) ? pruneRequest : null;
+  if (pendingBranch || pendingPrune) {
+    const branchWins = pendingBranch != null && pendingBranch.nonce > (pendingPrune?.nonce ?? 0);
+    setHandledNonce(Math.max(pendingBranch?.nonce ?? 0, pendingPrune?.nonce ?? 0));
+    setPage({
+      projectId,
+      page: branchWins ? { kind: "branch", name: pendingBranch.branch } : { kind: "prune" },
+    });
+  }
+  useEffect(() => {
+    const st = useDashboardStore.getState();
+    if (branchRequest) st.clearRightSidebarBranchRequest();
+    if (pruneRequest) st.clearRightSidebarPruneRequest();
+  }, [branchRequest, pruneRequest]);
 
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === projectId));
   const hosts = useDashboardStore((s) => s.hosts);

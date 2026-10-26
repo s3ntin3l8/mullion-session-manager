@@ -160,6 +160,14 @@ export function GitHistorySection({
   const isLocalHost = useDashboardStore(
     (s) => s.projects.find((p) => p.id === projectId)?.hostId === LOCAL_HOST_ID,
   );
+  // Epic #1965 B8 — a remote project's history comes from its host; when the
+  // heartbeat says the host is offline, say so instead of "No history".
+  const offlineHostName = useDashboardStore((s) => {
+    const project = s.projects.find((p) => p.id === projectId);
+    if (!project || project.hostId === LOCAL_HOST_ID) return null;
+    const host = s.hosts.find((h) => h.id === project.hostId);
+    return host?.health === "offline" ? host.name : null;
+  });
   const remoteBranches = useDashboardStore(
     (s) => s.gitBranchesByProject[projectId]?.remoteBranches,
   );
@@ -248,9 +256,15 @@ export function GitHistorySection({
         />
       </div>
 
-      {error && <ErrorText>{error}</ErrorText>}
+      {offlineHostName && (
+        <div className="sc-unreachable" role="alert">
+          <b>Host {offlineHostName} is unreachable</b>
+          <span>History can’t be loaded right now.</span>
+        </div>
+      )}
+      {error && !offlineHostName && <ErrorText>{error}</ErrorText>}
       {commits === undefined && <div className="github-panel-empty-row">Loading…</div>}
-      {commits === null && !error && (
+      {commits === null && !error && !offlineHostName && (
         <div className="github-panel-empty-row">No history available</div>
       )}
       {commits?.length === 0 && <div className="github-panel-empty-row">No commits yet</div>}

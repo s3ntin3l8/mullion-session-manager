@@ -2688,6 +2688,15 @@ button.github-panel-row.gh-issue-row {
   color: var(--dim);
   font-style: italic;
 }
+.session-timeline-row-pr {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
 .session-timeline-load-older {
   flex-shrink: 0;
   margin: 8px 14px 12px;

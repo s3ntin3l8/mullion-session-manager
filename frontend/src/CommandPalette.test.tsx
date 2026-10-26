@@ -5,7 +5,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store/index.js";
-import { DEFAULT_SETTINGS } from "./api/index.js";
+import { DEFAULT_SETTINGS, api } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeSession, makeWorkspace } from "./test/fixtures.js";
@@ -2941,6 +2941,45 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     await user.type(await screen.findByPlaceholderText(/Launch a session/), "drawer");
     await user.keyboard("{Enter}");
     expect(again).toHaveBeenCalledTimes(1);
+  });
+
+  it("Prune merged branches and Go to PR deep-link into the right sidebar", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      prsByProject: {
+        [PROJECT.id]: { prs: [{ number: 42, title: "Fix the thing" }], prSummary: {} },
+      } as never,
+    });
+    const { unmount } = renderPalette(openers(), { onToggleRightSidebar: vi.fn() });
+    await user.click(await screen.findByText("Prune merged branches"));
+    expect(useDashboardStore.getState().rightSidebarPruneRequest?.projectId).toBe(PROJECT.id);
+    unmount();
+
+    renderPalette(openers(), { onToggleRightSidebar: vi.fn() });
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "pr 42");
+    await user.keyboard("{Enter}");
+    expect(useDashboardStore.getState().githubOpenPrByProject[PROJECT.id]).toBe(42);
+    expect(useDashboardStore.getState().rightSidebarView).toBe("github");
+  });
+
+  it("queues a typed issue number from search and reports a failure", async () => {
+    const user = userEvent.setup();
+    const queue = vi
+      .spyOn(api, "queueProjectIssue")
+      .mockResolvedValue({ queued: true, label: "x" });
+    const { unmount } = renderPalette(openers());
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "queue #7");
+    await user.keyboard("{Enter}");
+    expect(queue).toHaveBeenCalledWith(PROJECT.id, 7);
+    unmount();
+
+    queue.mockRejectedValueOnce(new Error("nope"));
+    const reportError = vi.fn();
+    useDashboardStore.setState({ reportError } as never);
+    renderPalette(openers());
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "queue 8");
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(reportError).toHaveBeenCalled());
   });
 
   it("omits Toggle right sidebar when the host provides no opener (phone)", async () => {

@@ -76,6 +76,7 @@ let pendingSettingsPatchDiscarder: (() => void) | null = null;
  * synchronously), so the assertion needs no wait at all.
  */
 let historyRequestSeq = 0;
+let gitRequestSeq = 0;
 
 export function __flushPendingSettingsPatchForTests(): void {
   pendingSettingsPatchFlusher?.();
@@ -177,6 +178,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
     rightSidebarProjectRequest: null,
     rightSidebarHistoryRequest: null,
+    rightSidebarBranchRequest: null,
+    rightSidebarPruneRequest: null,
     githubOpenPrByProject: {},
     rightSidebarPinned,
     // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
@@ -342,6 +345,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     clearRightSidebarHistoryRequest: () => set({ rightSidebarHistoryRequest: null }),
+
+    openRightSidebarBranch: (projectId, branch) => {
+      gitRequestSeq += 1;
+      set({ rightSidebarBranchRequest: { projectId, branch, nonce: gitRequestSeq } });
+      get().openRightSidebarView("git", projectId);
+    },
+
+    clearRightSidebarBranchRequest: () => set({ rightSidebarBranchRequest: null }),
+
+    openRightSidebarPrune: (projectId) => {
+      gitRequestSeq += 1;
+      set({ rightSidebarPruneRequest: { projectId, nonce: gitRequestSeq } });
+      get().openRightSidebarView("git", projectId);
+    },
+
+    clearRightSidebarPruneRequest: () => set({ rightSidebarPruneRequest: null }),
 
     openRightSidebarPr: (projectId, number) => {
       get().setGithubOpenPr(projectId, number);

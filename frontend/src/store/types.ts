@@ -634,6 +634,11 @@ export interface UiSlice {
   /** A one-shot "show History scoped to this" request (Source Control's View
    *  in History); the History view applies it, then clears it. */
   rightSidebarHistoryRequest: { projectId: number; scope: string; nonce: number } | null;
+  /** A one-shot "show this branch's detail" request ("Reveal in Git" from a
+   *  session row); the Source Control view applies it, then clears it. */
+  rightSidebarBranchRequest: { projectId: number; branch: string; nonce: number } | null;
+  /** Same one-shot shape, for the Source Control view's prune preview (palette). */
+  rightSidebarPruneRequest: { projectId: number; nonce: number } | null;
   /** The PR open in each project's GitHub view drill-in (absent/null = the
    *  list). In the store, not the panel, so it survives switching sidebar
    *  views and so a session row can open it before the panel is mounted. */
@@ -748,6 +753,12 @@ export interface UiSlice {
   /** Opens the History rail view scoped to `scope` (`branch:<name>`, `all`, `head`). */
   openRightSidebarHistory: (projectId: number, scope: string) => void;
   clearRightSidebarHistoryRequest: () => void;
+  /** Opens the Source Control view on `branch`'s detail page. */
+  openRightSidebarBranch: (projectId: number, branch: string) => void;
+  clearRightSidebarBranchRequest: () => void;
+  /** Opens the Source Control view on its prune preview. */
+  openRightSidebarPrune: (projectId: number) => void;
+  clearRightSidebarPruneRequest: () => void;
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;

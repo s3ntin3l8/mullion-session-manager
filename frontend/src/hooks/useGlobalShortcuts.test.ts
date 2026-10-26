@@ -11,10 +11,11 @@ import { APP_SHORTCUTS, matchShortcut } from "../lib/shortcutCatalog.js";
 // handler's `openGlobalLauncher` reads `viewMode` via getState()).
 const clearSplitRequest = vi.fn();
 const toggleRightSidebar = vi.fn();
+const toggleRightSidebarView = vi.fn();
 let viewMode: string = "list";
 
 function storeState() {
-  return { clearSplitRequest, toggleRightSidebar, viewMode };
+  return { clearSplitRequest, toggleRightSidebar, toggleRightSidebarView, viewMode };
 }
 
 vi.mock("../store/index.js", () => {
@@ -299,6 +300,8 @@ describe("useGlobalShortcuts", () => {
       "command-palette": { key: "k", ctrlKey: true },
       settings: { key: ",", metaKey: true },
       "right-sidebar": { key: "∫", code: "KeyB", metaKey: true, altKey: true },
+      "git-view": { key: "©", code: "KeyG", metaKey: true, altKey: true },
+      "github-view": { key: "˙", code: "KeyH", ctrlKey: true, altKey: true },
       dismiss: { key: "Escape" },
     };
     expect(APP_SHORTCUTS.map((shortcut) => shortcut.id).sort()).toEqual(
@@ -313,7 +316,34 @@ describe("useGlobalShortcuts", () => {
     expect(openGlobalLauncher).toHaveBeenCalledTimes(1);
     expect(openSettings).toHaveBeenCalledTimes(1);
     expect(toggleRightSidebar).toHaveBeenCalledTimes(1);
+    expect(toggleRightSidebarView.mock.calls).toEqual([["git"], ["github"]]);
     expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl/Cmd+Alt+G and +H open the Git and GitHub sidebar views, matched on the physical key", () => {
+    renderShortcuts();
+
+    const g = dispatchKeyDown({ key: "g", code: "KeyG", ctrlKey: true, altKey: true });
+    const h = dispatchKeyDown({ key: "˙", code: "KeyH", metaKey: true, altKey: true });
+
+    expect(toggleRightSidebarView.mock.calls).toEqual([["git"], ["github"]]);
+    expect(g.defaultPrevented).toBe(true);
+    expect(h.defaultPrevented).toBe(true);
+  });
+
+  it("leaves bare Alt+G/H (readline, macOS dead keys) and the disabled-sidebar case alone", () => {
+    renderShortcuts();
+    dispatchKeyDown({ key: "g", code: "KeyG", altKey: true });
+    dispatchKeyDown({ key: "h", code: "KeyH", ctrlKey: true });
+    expect(toggleRightSidebarView).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+Alt+G/H do nothing when the right sidebar is disabled (phone)", () => {
+    renderShortcuts({ rightSidebarEnabled: false });
+    const event = dispatchKeyDown({ key: "g", code: "KeyG", ctrlKey: true, altKey: true });
+    dispatchKeyDown({ key: "h", code: "KeyH", ctrlKey: true, altKey: true });
+    expect(toggleRightSidebarView).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("does not tighten Ctrl+K or Ctrl+, against Shift or Alt (issue #1887)", () => {

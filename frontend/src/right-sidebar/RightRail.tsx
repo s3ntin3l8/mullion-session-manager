@@ -1,4 +1,5 @@
 import { useDashboardStore } from "../store/index.js";
+import { firstAttentionPr } from "../github/prPhase.js";
 import { RIGHT_SIDEBAR_VIEWS, type RightSidebarView } from "./views.js";
 
 interface RailButtonProps {
@@ -47,6 +48,10 @@ export interface RightRailProps {
 export function RightRail({ projectId }: RightRailProps) {
   const openView = useDashboardStore((s) => (s.rightSidebarOpen ? s.rightSidebarView : null));
   const toggleView = useDashboardStore((s) => s.toggleRightSidebarView);
+  const openPr = useDashboardStore((s) => s.openRightSidebarPr);
+  const prs = useDashboardStore((s) =>
+    projectId != null ? s.prsByProject[projectId]?.prs : undefined,
+  );
   return (
     <nav className="right-rail" aria-label="Right sidebar">
       {RIGHT_SIDEBAR_VIEWS.map((view) => (
@@ -55,7 +60,17 @@ export function RightRail({ projectId }: RightRailProps) {
           view={view}
           projectId={projectId}
           active={openView === view.id}
-          onClick={() => toggleView(view.id)}
+          onClick={() => {
+            // The GitHub icon carries an attention badge; opening the view
+            // from it lands on the PR that needs the user, not the list.
+            // While the view is already showing, a click still closes it.
+            const target =
+              view.id === "github" && openView !== "github" && projectId != null
+                ? firstAttentionPr(prs ?? [])
+                : null;
+            if (target && projectId != null) openPr(projectId, target.number);
+            else toggleView(view.id);
+          }}
         />
       ))}
     </nav>

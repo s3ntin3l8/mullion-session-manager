@@ -13,6 +13,9 @@ import { RIGHT_SIDEBAR_VIEWS, type RightSidebarActions } from "./views.js";
 export interface RightSidebarProps {
   tier: LayoutTier;
   actions: RightSidebarActions;
+  // Issue #1877 — the workspace's project ids (App's scopedWorkspaceProjectIds);
+  // the project picker offers only these. null/absent = every project.
+  workspaceProjectIds?: number[] | null;
 }
 
 // Pinnable right sidebar: an icon rail plus a view drawer. Pinned (desktop
@@ -20,7 +23,7 @@ export interface RightSidebarProps {
 // on tablet — it floats over the grid with a click-away scrim. Rendered as
 // siblings of `.grid-area` inside `.app-body`. Not rendered on phone, where
 // the navigator panel already carries Source Control.
-export function RightSidebar({ tier, actions }: RightSidebarProps) {
+export function RightSidebar({ tier, actions, workspaceProjectIds }: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
   const pinned = useDashboardStore((s) => s.rightSidebarPinned);
@@ -28,7 +31,7 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   const setPinned = useDashboardStore((s) => s.setRightSidebarPinned);
   const setStoredWidth = useDashboardStore((s) => s.setRightSidebarWidth);
   const close = useDashboardStore((s) => s.closeRightSidebar);
-  const followed = useFollowedProject();
+  const followed = useFollowedProject(workspaceProjectIds ?? null);
   // Project select and app start: warm the GitHub data for the project the
   // sidebar follows, so the panel's first paint is already cached (#1970).
   const prefetchGithubProject = useDashboardStore((s) => s.prefetchGithubProject);
