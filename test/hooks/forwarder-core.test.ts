@@ -18,7 +18,10 @@ import {
   formatClaudeCodeGateDecision,
   formatClaudeCodeSessionStartOutput,
   formatGateDecision,
+  formatPostToolUseOutput,
   formatSessionStartOutput,
+  isUnderDotWt,
+  worktreeNudge,
   mapAgyEvent as mapAgyEventInferred,
   mapClaudeCodeCwdChanged,
   mapClaudeCodeElicitation,
@@ -554,6 +557,68 @@ describe("mapClaudeCodeCwdChanged (issue: sidebar worktree detection)", () => {
 
   it("returns null for an empty payload", () => {
     expect(mapClaudeCodeCwdChanged({})).toBeNull();
+  });
+});
+
+describe("worktreeNudge (issue #1979)", () => {
+  const bash = (command: string, cwd = "/repo") => ({
+    tool_name: "Bash",
+    cwd,
+    tool_input: { command },
+  });
+
+  it("nudges a sibling-directory worktree in a .wt session", () => {
+    const nudge = worktreeNudge(
+      "claude-code",
+      "PostToolUse",
+      bash("git worktree add ../repo-wt-x -b feat/x"),
+      true,
+    );
+    expect(nudge).toContain("`/repo-wt-x`");
+    expect(nudge).toContain(".wt/<branch>");
+    expect(nudge).toContain("promote_to_worktree");
+  });
+
+  it("nudges Codex the same way", () => {
+    expect(
+      worktreeNudge("codex", "PostToolUse", bash("git worktree add .worktrees/x"), true),
+    ).toContain("`/repo/.worktrees/x`");
+  });
+
+  it("stays quiet for a worktree under .wt/, relative or absolute", () => {
+    expect(
+      worktreeNudge("claude-code", "PostToolUse", bash("git worktree add .wt/x -b x"), true),
+    ).toBeNull();
+    expect(
+      worktreeNudge(
+        "claude-code",
+        "PostToolUse",
+        bash("cd /elsewhere && git worktree add ../repo/.wt/feat/y"),
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it("stays quiet without the .wt convention, for other agents, kinds and commands", () => {
+    const off = bash("git worktree add ../x");
+    expect(worktreeNudge("claude-code", "PostToolUse", off, false)).toBeNull();
+    expect(worktreeNudge("agy", "PostToolUse", off, true)).toBeNull();
+    expect(worktreeNudge("claude-code", "PreToolUse", off, true)).toBeNull();
+    expect(worktreeNudge("claude-code", "PostToolUse", bash("git status"), true)).toBeNull();
+  });
+
+  it("isUnderDotWt needs a .wt segment with something after it", () => {
+    expect(isUnderDotWt("/repo/.wt/x")).toBe(true);
+    expect(isUnderDotWt(".wt/feat/x/")).toBe(true);
+    expect(isUnderDotWt("/repo/.wt")).toBe(false);
+    expect(isUnderDotWt("/repo/foo.wt/x")).toBe(false);
+  });
+
+  it("formatPostToolUseOutput has a reply shape only for Claude Code and Codex", () => {
+    expect(formatPostToolUseOutput("codex", "hi")).toEqual({
+      hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "hi" },
+    });
+    expect(formatPostToolUseOutput("agy", "hi")).toBeNull();
   });
 });
 

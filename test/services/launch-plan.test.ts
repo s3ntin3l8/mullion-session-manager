@@ -206,6 +206,20 @@ describe("buildLaunchPlan — the MULLION_* injections", () => {
     expect(plan.env.MULLION_FORWARDER_NODE).toBe(process.execPath);
   });
 
+  // Issue #1979 — the forwarder's off-convention `git worktree add` nudge
+  // keys off this, so it must follow the conventions text exactly.
+  it("sets MULLION_WORKTREES_IN_DOT_WT only when the conventions put worktrees under .wt/", () => {
+    const withWt = buildLaunchPlan(
+      baseSession({ workflowConventionsText: "Work in `.wt/<branch>` off origin/main." }),
+    );
+    expect(withWt.env.MULLION_WORKTREES_IN_DOT_WT).toBe("1");
+    const ctxArg = mockApplyHookAdapters.mock.calls.at(-1)?.[1] as HookAdapterContext;
+    expect(ctxArg.worktreesInDotWt).toBe(true);
+
+    const without = buildLaunchPlan(baseSession({ workflowConventionsText: "Always branch." }));
+    expect(without.env.MULLION_WORKTREES_IN_DOT_WT).toBeUndefined();
+  });
+
   it("reuses the same resolveForwarderPath() call for the env injection and the hook-adapter context — never able to diverge", () => {
     buildLaunchPlan(baseSession({}));
     expect(mockResolveForwarderPath).toHaveBeenCalledTimes(1);

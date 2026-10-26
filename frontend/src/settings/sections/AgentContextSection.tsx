@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { api } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
+import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { GroupHeading, Row, Toggle } from "../../ui/primitives.js";
 import { BundleSyncPanel } from "../BundleSyncPanel.js";
 import { WorkflowConventionsWizardModal } from "../WorkflowConventionsWizardModal.js";
@@ -14,6 +16,39 @@ export function AgentContextSection() {
   // its modal is open. Applying its result just calls updateSettings the
   // same way typing in the textarea below does.
   const [wizardOpen, setWizardOpen] = useState(false);
+
+  // Issue #1979 — text the wizard saved before the server kept a snapshot of
+  // it (`workflowConventionsAppliedText`) is never regenerated when the rules
+  // change, and from here it can't be told apart from a hand edit. When the
+  // saved answers now generate something else, say so and offer the wizard's
+  // own apply. Only the answers decide the generated text, so typing in the
+  // textarea doesn't refetch it.
+  const answers = s.workflowConventionAnswers;
+  const answersKey = JSON.stringify(answers);
+  const unsnapshotted =
+    !s.workflowConventionsAppliedText &&
+    s.workflowConventionsText !== "" &&
+    Object.values(answers).some((answer) => answer !== "");
+  // Keyed by the answers it was generated from, so a stale result is ignored
+  // rather than reset from inside the effect.
+  const [preview, setPreview] = useState<{ key: string; text: string } | null>(null);
+  useEffect(() => {
+    if (!unsnapshotted) return;
+    let cancelled = false;
+    api
+      .previewWorkflowConventionsText(JSON.parse(answersKey) as Record<string, string>)
+      .then(({ text }) => {
+        if (!cancelled) setPreview({ key: answersKey, text });
+      })
+      // No notice when the preview can't be had: it is advice, not state.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [unsnapshotted, answersKey]);
+  const generated = unsnapshotted && preview?.key === answersKey ? preview.text : null;
+  const staleConventions =
+    generated !== null && generated !== "" && generated !== s.workflowConventionsText;
 
   return (
     <>
@@ -58,6 +93,31 @@ export function AgentContextSection() {
             updateSettings({ sessions: { workflowConventionsText: e.target.value } })
           }
         />
+        {staleConventions && generated !== null && (
+          <div className="settings-footer-note" role="status">
+            This text differs from what your saved wizard answers generate now. Text saved before
+            Mullion tracked the wizard's output isn't refreshed when the wizard's rules change, so
+            if you didn't edit it by hand, re-apply to pick up the current rules. Re-applying
+            replaces the text above, hand edits included.{" "}
+            <ConfirmButton
+              variant="neutral"
+              title="Replace the conventions with what your saved answers generate now"
+              armedLabel="Replace text"
+              onConfirm={() =>
+                // The wizard's own apply (see onApply below): text and answers
+                // in one PATCH, which also records the snapshot server-side.
+                updateSettings({
+                  sessions: {
+                    workflowConventionsText: generated,
+                    workflowConventionAnswers: answers,
+                  },
+                })
+              }
+            >
+              Re-apply
+            </ConfirmButton>
+          </div>
+        )}
         <div style={{ marginTop: 8 }}>
           <button className="git-panel-fetch-btn" onClick={() => setWizardOpen(true)}>
             Generate with wizard

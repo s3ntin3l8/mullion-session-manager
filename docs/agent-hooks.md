@@ -1298,6 +1298,33 @@ skill. Every skill-vs-skill ambiguity/collision check
 basename with an unrelated skill can never make that skill spuriously
 non-toggleable.
 
+## Worktree placement (issue #1979)
+
+When a session's workflow conventions put worktrees under `.wt/<branch>`
+(`conventionsUseWtDirectory` in `mullion-scaffold.ts`), Mullion steers each
+CLI there as far as that CLI's hooks allow. Only Claude Code can be steered
+_before_ a worktree is created; the rest can only be observed after the fact.
+
+| CLI         | Creation hook                                                                                                                                                                                                                                  | After-the-fact nudge on an off-convention `git worktree add`                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Claude Code | `WorktreeCreate`/`WorktreeRemove` (`hook-adapters/claude-code.ts`, `src/hooks/worktree-hook.mjs`): its own sub-agent worktrees land in `.wt/<name>`                                                                                            | yes, PostToolUse `hookSpecificOutput.additionalContext`                                                            |
+| Codex       | none. Codex's hook events are `SessionStart`, `PreToolUse`, `PostToolUse`, `PermissionRequest`, `Pre`/`PostCompact`, `Subagent*`, `Stop` and the like; its experimental `--worktree` flag makes a managed worktree with no hook to redirect it | yes: codex-cli 0.164.0's embedded `post-tool-use.command.output` schema carries the same `additionalContext` field |
+| opencode    | none. Its plugin bus reports `worktree.ready`/`worktree.failed` after its own worktree API has made one; nothing chooses the path                                                                                                              | no: opencode runs Mullion's plugin, not this forwarder, and the plugin has no nudge                                |
+| agy         | none. Its hook protocol (`hooks_pb`) has pre/post tool, pre/post invocation, session-start, prompt and stop hooks only                                                                                                                         | no: agy's post-tool hook has no result message to carry context back                                               |
+
+The nudge: `launch-plan.ts` sets `MULLION_WORKTREES_IN_DOT_WT=1` in the
+session's env when the conventions say `.wt/` (it is in `session-env.ts`'s
+scrub list, so a nested Mullion doesn't inherit it). On a Bash PostToolUse,
+`forwarder-core.mjs`'s `worktreeNudge` runs the same `git worktree add`
+detection the sidebar uses, and when the worktree path has no `.wt` segment,
+the forwarder prints a PostToolUse reply whose `additionalContext` names
+`.wt/<branch>` and the `promote_to_worktree` tool. It never blocks: the
+worktree already exists by then, and the PreToolUse gate that once could
+have blocked it was removed in #178 because it fired on every Bash call. The
+decision is made from the payload and that env var alone, with no round trip
+to the server, so the forwarder stays fire-and-forget. A `cd` earlier in the
+same command leaves the path relative, and it is judged as written.
+
 ## The review gate (issue #178, rescoped by #264)
 
 **Originally a `PreToolUse`/`Bash` gate, replaced entirely.** The first

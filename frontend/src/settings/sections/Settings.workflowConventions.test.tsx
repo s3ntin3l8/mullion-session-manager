@@ -467,3 +467,140 @@ describe("Settings -> Sessions -> workflow-conventions wizard (pre-fill and revi
     expect(screen.queryByText(/edited by hand/)).not.toBeInTheDocument();
   });
 });
+
+// Issue #1979 — text saved before the server kept a snapshot of the wizard's
+// output is never auto-refreshed, so the section says so and offers a re-apply.
+describe("Settings -> Agent context -> conventions with no wizard snapshot", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let previewText: string;
+
+  const withConventions = (sessions: Partial<typeof DEFAULT_SETTINGS.sessions>) =>
+    useDashboardStore.setState({
+      settings: { ...DEFAULT_SETTINGS, sessions: { ...DEFAULT_SETTINGS.sessions, ...sessions } },
+      settingsLoaded: true,
+    });
+
+  beforeEach(() => {
+    previewText = "Always branch and open a PR. Work in `.wt/<branch>`.";
+    fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/settings" && method === "PATCH") {
+        return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
+      }
+      if (url === "/api/workflow-conventions/preview" && method === "POST") {
+        return Promise.resolve(jsonResponse(200, { text: previewText }));
+      }
+      if (url === "/api/bundle-sync/status" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, { enabled: true, bundleHash: "h", manifestPath: "/m", clis: [] }),
+        );
+      }
+      return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the notice and re-applies the generated text with its answers in one PATCH", async () => {
+    const user = userEvent.setup();
+    withConventions({
+      workflowConventionsText: "Always branch and open a PR.",
+      workflowConventionAnswers: { branching: "branch-pr" },
+      workflowConventionsAppliedText: "",
+    });
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+
+    expect(await screen.findByText(/differs from what your saved wizard answers/)).toBeVisible();
+    const reapply = screen.getByRole("button", { name: /Re-apply/ });
+    await user.click(reapply);
+    await user.click(screen.getByRole("button", { name: /Replace text/ }));
+
+    expect(useDashboardStore.getState().settings.sessions.workflowConventionsText).toBe(
+      previewText,
+    );
+    __flushPendingSettingsPatchForTests();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/settings",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          sessions: {
+            workflowConventionsText: previewText,
+            workflowConventionAnswers: { branching: "branch-pr" },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("stays hidden when a snapshot exists, the text already matches, or there are no answers", async () => {
+    withConventions({
+      workflowConventionsText: "old text",
+      workflowConventionAnswers: { branching: "branch-pr" },
+      workflowConventionsAppliedText: "old text",
+    });
+    const { unmount } = render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await screen.findByPlaceholderText(/No workflow conventions configured yet/);
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflow-conventions/preview",
+      expect.anything(),
+    );
+    unmount();
+
+    withConventions({
+      workflowConventionsText: previewText,
+      workflowConventionAnswers: { branching: "branch-pr" },
+      workflowConventionsAppliedText: "",
+    });
+    const second = render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflow-conventions/preview",
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryByText(/differs from what your saved wizard answers/)).toBeNull();
+    second.unmount();
+
+    fetchMock.mockClear();
+    withConventions({
+      workflowConventionsText: "hand typed",
+      workflowConventionAnswers: { branching: "" },
+      workflowConventionsAppliedText: "",
+    });
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await screen.findByPlaceholderText(/No workflow conventions configured yet/);
+    expect(screen.queryByText(/differs from what your saved wizard answers/)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/api/workflow-conventions/preview",
+      expect.anything(),
+    );
+  });
+
+  it("stays hidden when the preview request fails", async () => {
+    fetchMock.mockImplementation((input: RequestInfo | URL) =>
+      String(input) === "/api/workflow-conventions/preview"
+        ? Promise.reject(new Error("offline"))
+        : Promise.resolve(
+            jsonResponse(200, { enabled: true, bundleHash: "h", manifestPath: "/m", clis: [] }),
+          ),
+    );
+    withConventions({
+      workflowConventionsText: "x",
+      workflowConventionAnswers: { branching: "branch-pr" },
+      workflowConventionsAppliedText: "",
+    });
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflow-conventions/preview",
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryByText(/differs from what your saved wizard answers/)).toBeNull();
+  });
+});

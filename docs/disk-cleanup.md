@@ -234,9 +234,21 @@ never holds up the rest of the page. Aggressive cleanup asks the server to
 clean up whenever it can, even when the preview is empty, because the first
 thing it does is fetch each project that has developer worktrees.
 
+**Orphaned directories** (issue #1979). A directory under one of those roots
+that `git worktree list` doesn't know is listed too, as **`orphaned`**, with its
+size: a worktree whose registration was pruned (`git worktree prune` after its
+`gitdir` went missing), or a directory that was never a worktree. A directory
+that only holds registered worktrees deeper down (`.wt/feat/` around a
+registered `.wt/feat/x`) is walked into, not reported. Orphans are
+**report-only**: nothing can tell whether one holds work, so cleanup never
+removes them and they are not counted in what it frees. Settings → Storage lists
+them under their own heading; delete one by hand once you've checked it.
+
 Known limits: a worktree outside `.wt/`, `.worktrees/` and `.claude/worktrees/` is never
-considered, and a repo whose default branch can't be determined (no `origin`)
-gets neither `merged` nor `detached-merged`.
+considered, orphaned or not (a sibling directory such as `../repo-wt-x` stays
+invisible here; agents are nudged away from making those, see "Worktree
+placement" in `docs/agent-hooks.md`), and a repo whose default branch can't be
+determined (no `origin`) gets neither `merged` nor `detached-merged`.
 
 ## Isolated session worktrees
 

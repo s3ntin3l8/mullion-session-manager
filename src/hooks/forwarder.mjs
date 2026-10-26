@@ -44,9 +44,11 @@ import { randomUUID } from "node:crypto";
 import {
   buildForwarderMessage,
   formatGateDecision,
+  formatPostToolUseOutput,
   formatSessionStartOutput,
   parseHookStdin,
   siblingsFor,
+  worktreeNudge,
 } from "./forwarder-core.mjs";
 
 // Bounded below claude-code.ts's own PermissionRequest hook `timeout`
@@ -105,6 +107,13 @@ async function main() {
       console.log(
         JSON.stringify(formatSessionStartOutput(process.argv[2], result.additionalContext)),
       );
+    } else if (result?.type === "postToolUse") {
+      // Issue #1979 — the off-convention `git worktree add` nudge (see
+      // forwarder-core.mjs's worktreeNudge). Only ever returned for an agent
+      // formatPostToolUseOutput has a reply shape for.
+      console.log(
+        JSON.stringify(formatPostToolUseOutput(process.argv[2], result.additionalContext)),
+      );
     } else if (process.argv[2] === "agy" && process.argv[3] === "PreToolUse") {
       // agy's PreToolUse is purely observational now (issue #264 removed the
       // review_gate it used to sometimes emit), but agy's own hook runner
@@ -129,8 +138,9 @@ async function main() {
 /** Returns `null` for the ordinary fire-and-forget path (main() prints
  * `{}` for most agents, or `{decision: "allow"}` for agy PreToolUse), or a
  * `{decision, reason}` object once a gate has resolved (main() prints that
- * agent's own decision JSON instead) — see main()'s comment for why exactly
- * one of those ever reaches stdout. */
+ * agent's own decision JSON instead), or a `{type: "postToolUse",
+ * additionalContext}` nudge after the fire-and-forget send (issue #1979) —
+ * see main()'s comment for why exactly one of those ever reaches stdout. */
 async function forward() {
   const agent = process.argv[2];
   const kind = process.argv[3];
@@ -154,6 +164,14 @@ async function forward() {
   if (messages.length === 0) {
     return null;
   }
+  // Issue #1979 — decided here, from the payload alone (no server round
+  // trip), and printed by main() once the fire-and-forget send below is done.
+  const nudge = worktreeNudge(
+    agent,
+    kind,
+    payload,
+    process.env.MULLION_WORKTREES_IN_DOT_WT === "1",
+  );
 
   // Issue #462 — a message array can carry a piggybacked sibling (most
   // commonly cwd_changed — see forwarder-core.mjs's mapClaudeCodeEvent)
@@ -246,7 +264,7 @@ async function forward() {
     socket.once("close", finish);
     socket.once("error", finish);
   });
-  return null;
+  return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
 }
 
 /** Writes the handshake, then every message in `messages` in order — shared

@@ -775,6 +775,37 @@ describe("Settings -> Storage", () => {
       expect(screen.getByText(/free 3.0 GiB/)).toBeInTheDocument();
     });
 
+    // Issue #1979 — listed apart, and never part of what cleanup frees.
+    it("lists orphaned directories separately, without a tier figure of their own", async () => {
+      setup({
+        worktrees: {
+          available: true,
+          totalBytes: 0,
+          candidates: [
+            {
+              projectId: 1,
+              projectName: "mullion",
+              path: "/p/.wt/feat",
+              slug: "feat",
+              branch: null,
+              kind: "wt",
+              reason: "orphaned",
+              bytes: 2 * GIB,
+            },
+          ],
+        },
+      });
+      render(<StorageSection />);
+      expect(await screen.findByText("mullion / feat")).toBeInTheDocument();
+      expect(screen.getByText("mullion / feat").nextElementSibling).toHaveTextContent("2.0 GiB");
+      expect(screen.getByText(/git doesn't know \(not removed\)/)).toBeInTheDocument();
+      expect(screen.getByText(/cleanup leaves them alone/)).toBeInTheDocument();
+      expect(
+        screen.queryByText("Developer worktrees aggressive cleanup would remove"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByText("Developer worktrees")).not.toBeInTheDocument();
+    });
+
     it("doesn't wait for the worktree preview before showing the rest", async () => {
       setup();
       vi.spyOn(api, "getDevWorktrees").mockReturnValue(new Promise(() => {}));

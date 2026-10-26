@@ -201,7 +201,8 @@ export interface DevWorktreeCandidate {
   branch: string | null;
   /** `wt` is a `.wt/` (or `.worktrees/`) developer worktree; `claude-agent` one under `.claude/worktrees/`. */
   kind: "wt" | "claude-agent";
-  reason: "gone" | "merged" | "detached-merged" | "in-default";
+  /** `orphaned` (issue #1979): a directory git doesn't know as a worktree; listed, never removed. */
+  reason: "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
   /** e.g. `#1234` for `merged`. */
   detail?: string;
   bytes: number;
@@ -210,6 +211,7 @@ export interface DevWorktreeCandidate {
 export interface DevWorktreeStatus {
   available: boolean;
   candidates: DevWorktreeCandidate[];
+  /** Excludes the `orphaned` candidates, which cleanup never removes. */
   totalBytes: number;
   error?: string;
 }
