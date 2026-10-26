@@ -283,9 +283,12 @@ describe("GitHubPanel", () => {
     useDashboardStore.getState().patchGithubIssueUi(1, { unassigned: true });
     render(<GitHubPanel params={{ projectId: 1 }} />);
     // Back on the issue detail, not the list.
-    expect(await screen.findByRole("button", { name: "← Back" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "← Back" }));
-    expect(await screen.findByLabelText("Unassigned")).toBeChecked();
+    expect(await screen.findByRole("button", { name: "Back" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByRole("button", { name: "Unassigned" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("shows cached CI jobs again on re-expand without refetching them (#1970)", async () => {

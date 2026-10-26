@@ -6,6 +6,7 @@ import { IssueDetailView, IssuesSection } from "./IssuesView.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
+import { useState } from "react";
 
 const LIST = {
   issues: [
@@ -73,7 +74,7 @@ describe("IssuesSection", () => {
 
     expect(await screen.findByText("Crash on start")).toBeInTheDocument();
     expect(screen.getByText("Task: in_progress")).toBeInTheDocument();
-    expect(screen.getByText("💬 3")).toBeInTheDocument();
+    expect(screen.getByTitle("3 comments")).toHaveTextContent("3");
 
     await userEvent.click(screen.getByRole("button", { name: "docs" }));
     await waitFor(() => {
@@ -192,15 +193,15 @@ describe("IssueDetailView", () => {
     expect(await screen.findByText("crashes")).toBeInTheDocument();
     expect(container.querySelector("[onerror]")).toBeNull();
     expect(screen.getByText("same here")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open on GitHub" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open issue #7 on GitHub" })).toHaveAttribute(
       "href",
       "https://github.com/a/b/issues/7",
     );
 
     await userEvent.click(await screen.findByRole("button", { name: "Queue for Task Master" }));
-    expect(await screen.findByText(/Queued/)).toBeInTheDocument();
+    expect(await screen.findByText(/Queued — added/)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "← Back" }));
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
   });
 
@@ -265,9 +266,125 @@ describe("IssueDetailView", () => {
     expect(screen.getByText(/Showing the first 1/)).toBeInTheDocument();
   });
 
+  it("offers Open session instead of Start when the issue's worktree session exists, and shows Queued", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith("/queue") && init?.method === "POST") {
+          return Promise.resolve(jsonResponse(200, { queued: true, label: "mullion-task" }));
+        }
+        if (url.includes("/github/issues/7")) return Promise.resolve(jsonResponse(200, DETAIL));
+        return Promise.resolve(jsonResponse(200, LIST));
+      }),
+    );
+    const requestOpenSession = vi.fn();
+    useDashboardStore.setState({
+      requestOpenSession,
+      sessions: [
+        { id: 31, projectId: 1, name: "issue 7", liveBranch: "issue-7-crash-on-start" },
+      ] as never,
+    });
+    render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={vi.fn()}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Queue for Task Master" }));
+    expect(await screen.findByRole("button", { name: "Queued" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Open session" }));
+    expect(requestOpenSession).toHaveBeenCalledWith(31);
+    useDashboardStore.setState({ sessions: [] });
+  });
+
   it("shows an error when the issue cannot be loaded", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(404, { message: "gone" })));
     render(<IssueDetailView projectId={1} number={9} onBack={vi.fn()} />);
     expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+});
+
+describe("Issues list ↔ detail round trip", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useDashboardStore.setState({ sessions: [] });
+  });
+
+  function Harness() {
+    const [open, setOpen] = useState<number | null>(null);
+    return open === null ? (
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={setOpen} />
+    ) : (
+      <IssueDetailView projectId={1} number={open} onBack={() => setOpen(null)} />
+    );
+  }
+
+  it("keeps the search, sort and label filters across drill-in and back", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(jsonResponse(200, url.includes("/github/issues/7") ? DETAIL : LIST)),
+      ),
+    );
+    render(<Harness />);
+    await userEvent.type(await screen.findByLabelText("Search issues"), "crash");
+    await userEvent.click(screen.getByRole("button", { name: "docs" }));
+    await userEvent.selectOptions(screen.getByLabelText("Sort issues"), "comments");
+    await userEvent.click(await screen.findByRole("button", { name: /Crash on start/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Back" }));
+
+    expect(await screen.findByLabelText("Search issues")).toHaveValue("crash");
+    expect(screen.getByRole("button", { name: "docs" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Sort issues")).toHaveValue("comments");
+  });
+
+  it("starts or queues from the row's hover actions without opening the issue", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/queue") && init?.method === "POST") {
+        return Promise.resolve(jsonResponse(200, { queued: true, label: "mullion-task" }));
+      }
+      if (url.endsWith("/actions")) {
+        return Promise.resolve(jsonResponse(200, [{ id: "agent:claude", command: "claude" }]));
+      }
+      return Promise.resolve(
+        jsonResponse(200, {
+          ...LIST,
+          issues: [{ ...LIST.issues[0], taskStatus: null }],
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const createSession = vi.fn().mockResolvedValue({ id: 56 });
+    const requestOpenSession = vi.fn();
+    useDashboardStore.setState({ createSession, requestOpenSession });
+    const onOpen = vi.fn();
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={onOpen} />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Queue for Task Master" }));
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Queue for Task Master" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await waitFor(() => expect(requestOpenSession).toHaveBeenCalledWith(56));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("shows the existing session on the row and opens it instead of starting another", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    const requestOpenSession = vi.fn();
+    useDashboardStore.setState({
+      requestOpenSession,
+      sessions: [
+        { id: 31, projectId: 1, name: "issue 7", liveBranch: "issue-7-crash-on-start" },
+      ] as never,
+    });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText("Session: issue 7")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Open session" }));
+    expect(requestOpenSession).toHaveBeenCalledWith(31);
   });
 });

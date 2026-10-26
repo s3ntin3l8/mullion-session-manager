@@ -16,3 +16,14 @@ export function issueSeedPrompt(issue: { number: number; title: string; htmlUrl:
     `then implement it on this branch.`
   );
 }
+
+/** The live session already working this issue: one whose worktree branch is
+ *  the `issue-<n>-<slug>` branch "Start session" creates. */
+export function findIssueSession<S extends { projectId: number; liveBranch: string | null }>(
+  sessions: readonly S[],
+  projectId: number,
+  issue: { number: number; title: string },
+): S | undefined {
+  const branch = issueBranchName(issue);
+  return sessions.find((s) => s.projectId === projectId && s.liveBranch === branch);
+}

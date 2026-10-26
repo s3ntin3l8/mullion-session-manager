@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { Tone } from "../../lib/statusTone.js";
 
 export interface StatusChipProps {
@@ -13,6 +13,8 @@ export interface StatusChipProps {
   pressed?: boolean;
   title?: string;
   className?: string;
+  /** For an accent the tones lack (a GitHub label colour). */
+  style?: CSSProperties;
 }
 
 export function StatusChip({
@@ -24,6 +26,7 @@ export function StatusChip({
   pressed,
   title,
   className,
+  style,
 }: StatusChipProps) {
   const cls = ["sb-chip", `sb-chip--${tone}`, mono ? "sb-chip--mono" : "", className ?? ""]
     .filter(Boolean)
@@ -39,13 +42,20 @@ export function StatusChip({
     );
   if (onClick) {
     return (
-      <button type="button" className={cls} onClick={onClick} aria-expanded={pressed} title={title}>
+      <button
+        type="button"
+        className={cls}
+        onClick={onClick}
+        aria-expanded={pressed}
+        title={title}
+        style={style}
+      >
         {body}
       </button>
     );
   }
   return (
-    <span className={cls} title={title}>
+    <span className={cls} title={title} style={style}>
       {body}
     </span>
   );

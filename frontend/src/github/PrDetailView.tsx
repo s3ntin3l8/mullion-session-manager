@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
+import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type { GitHubPrDetail, GitHubPrDetailThread, ReviewSummaryEntry } from "../api/types.js";
 import { describeEvent } from "../eventDescriptions.js";
 import { formatRelativeAge } from "../relativeTime.js";
@@ -244,6 +245,8 @@ export function PrDetailView({
     return () => clearInterval(t);
   }, [refresh]);
 
+  const startSessionFrom = useStartSessionFrom(projectId);
+
   const run = async (
     kind: "merge" | "review" | "handoff" | "stop" | "task",
     fn: () => Promise<string | void>,
@@ -287,17 +290,7 @@ export function PrDetailView({
     run("handoff", async () => {
       if (!pr) return;
       const { prompt, branch } = await api.getProjectPrHandoff(projectId, number);
-      const state = useDashboardStore.getState();
-      const launchers = await api.listProjectActions(projectId);
-      const launcher =
-        launchers.find((l) => l.id === `agent:${state.settings.launchers.defaultAgent}`) ??
-        launchers[0];
-      if (!launcher) throw new Error("No launcher is configured for this project.");
-      const session = await state.createSession(projectId, launcher.command, {
-        worktree: { branch },
-        seedPrompt: prompt,
-      });
-      state.requestOpenSession(session.id);
+      await startSessionFrom({ worktree: { branch }, seedPrompt: prompt });
       return "Session started on the PR branch";
     });
 

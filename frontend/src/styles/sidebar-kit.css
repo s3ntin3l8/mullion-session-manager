@@ -548,6 +548,52 @@ button.sb-chip:focus-visible,
 .sb-linked-note {
   font-size: 0.6875rem;
   color: var(--status-warn-fg);
+
+/* ───────── Issues (B5): glyph, filter bar, label chips ───────── */
+.gh-issue-glyph {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid var(--status-success-fg);
+}
+.gh-issue-glyph--done {
+  border-color: var(--status-merged-fg);
+  background: var(--status-merged-fg);
+}
+.gh-issue-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 8px 6px;
+}
+.gh-issue-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.gh-issue-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+.sb-chip--label {
+  background: color-mix(in srgb, var(--label-c) 13%, var(--sidebar));
+  border-color: color-mix(in srgb, var(--label-c) 40%, var(--sidebar));
+  color: var(--label-c);
+}
+button.sb-chip--label[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--label-c) 30%, var(--sidebar));
+}
+.gh-issue-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
 }
 
 /* Source Control view (B2): scroll body, groups, cards, prune checklist. */
