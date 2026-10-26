@@ -1499,9 +1499,8 @@ export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): voi
 // left as a known gap rather than chased here.
 const ROW_HEIGHT_TOLERANCE_PX = 2;
 
-// Used by restoreTiledGroupWidths — a single definition of "is there a single row of tiled groups worth
-// redistributing right now," so the menu item can't disagree with what the
-// action it triggers is actually willing to do.
+// Used by restoreTiledGroupWidths: "is there a single row of tiled groups
+// worth redistributing right now" — multi-row grids are rejected.
 function eligibleTiledRowGroups(api: DockviewApi): DockviewGroupPanel[] | null {
   const groups = api.groups.filter(isTiledGroup);
   if (groups.length < 2) return null;
