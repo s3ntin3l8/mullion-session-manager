@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { EXIT_ENDPOINT_IN_USE } from "../../pty-host/master.mjs";
 import { TOKEN_ENV } from "../../pty-host/protocol.mjs";
 import type { CgroupProcess } from "../cgroup-inventory.js";
 import {
@@ -96,6 +97,12 @@ export function isPtyHostMasterFor(commandLine: string, endpoint: string): boole
   if (at === -1) return false;
   const after = commandLine.charAt(at + needle.length);
   return after === "" || after === " ";
+}
+
+/** What the launch reported, for the failure handling in start(). */
+interface LaunchOutcome {
+  /** The launcher's exit code, when it exited non-zero. */
+  exitCode: number | null;
 }
 
 export interface WindowsScopeBackendOptions {
@@ -196,39 +203,56 @@ export class WindowsScopeBackend implements ScopeBackend {
       ? { ...spec.env, [TOKEN_ENV]: createPtyHostToken(this.opts.sessionsDir, spec.id) }
       : spec.env;
     const endpoint = this.endpointFor(spec.id);
+    const outcome: LaunchOutcome = { exitCode: null };
     try {
-      await this.launch(spec, command, argv, env, endpoint);
+      await this.launch(spec, command, argv, env, endpoint, outcome);
     } catch (err) {
-      if (isSessionMaster)
-        await this.settleTokenAfterFailedLaunch(spec.id, endpoint, previousToken);
+      if (isSessionMaster) {
+        // Best-effort: a token-file error must never replace the launch
+        // error the caller needs.
+        await this.settleTokenAfterFailedLaunch(
+          spec.id,
+          endpoint,
+          previousToken,
+          outcome.exitCode,
+        ).catch(() => {});
+      }
       throw err;
     }
   }
 
   /**
-   * A launch failed, so the token just written was never handed to a master
-   * that is now serving. If nothing answers on the endpoint, nothing needs
-   * a token — remove it. If something might (a master already serving it,
-   * `-n`'s "already in use" refusal, or a probe that could not tell), that
-   * master holds the PREVIOUS token: put it back, so the session stays
-   * attachable instead of being refused by its own master.
+   * A launch failed, so the token file must be brought back in line with
+   * whatever master (if any) now serves the endpoint:
+   *
+   *   - `-n` refused because ANOTHER master already serves it
+   *     (EXIT_ENDPOINT_IN_USE): that master holds the PREVIOUS token — put
+   *     it back, so the session stays attachable instead of being refused
+   *     by its own master.
+   *   - any other failure (an early death, `-n`'s readiness timeout, the
+   *     launch timeout): if the endpoint is provably dead nothing needs a
+   *     token — remove it. Otherwise the master on it may well be the one
+   *     THIS launch started, still binding when `-n` gave up, and it holds
+   *     the NEW token — so the new token stays.
    */
   private async settleTokenAfterFailedLaunch(
     id: string,
     endpoint: string,
     previousToken: string,
+    exitCode: number | null,
   ): Promise<void> {
+    if (exitCode === EXIT_ENDPOINT_IN_USE) {
+      if (previousToken === "") removePtyHostToken(this.opts.sessionsDir, id);
+      else writePtyHostToken(this.opts.sessionsDir, id, previousToken);
+      return;
+    }
     let probe: Awaited<ReturnType<typeof probeSocket>> = "unknown";
     try {
       probe = await probeSocket(endpoint);
     } catch {
       // Could not tell — treated as "something may be there".
     }
-    if (probe === "dead" || previousToken === "") {
-      removePtyHostToken(this.opts.sessionsDir, id);
-    } else {
-      writePtyHostToken(this.opts.sessionsDir, id, previousToken);
-    }
+    if (probe === "dead") removePtyHostToken(this.opts.sessionsDir, id);
   }
 
   private async launch(
@@ -237,6 +261,7 @@ export class WindowsScopeBackend implements ScopeBackend {
     argv: string[],
     env: NodeJS.ProcessEnv,
     endpoint: string,
+    outcome: LaunchOutcome,
   ): Promise<void> {
     await spawnScopeProcess({
       command,
@@ -247,14 +272,11 @@ export class WindowsScopeBackend implements ScopeBackend {
       label: spec.label,
       scopeName: endpoint,
       scopeKind: "pipe",
-      describeFailure: async () => {
-        let probe: Awaited<ReturnType<typeof probeSocket>> = "unknown";
-        try {
-          probe = await probeSocket(endpoint);
-        } catch {
-          // Nothing to add.
-        }
-        return probe === "live"
+      // Called with the launcher's exit code on a non-zero exit — recorded
+      // so the token handling above can tell "already in use" from the rest.
+      describeFailure: async (code) => {
+        outcome.exitCode = code;
+        return code === EXIT_ENDPOINT_IN_USE
           ? `the pipe ${endpoint} is already in use — a master for this session may still be running`
           : null;
       },

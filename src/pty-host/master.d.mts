@@ -21,3 +21,4 @@ export function serve(
 ): { stop: () => void };
 export const MAX_CLIENT_BACKLOG_BYTES: number;
 export const AUTH_TIMEOUT_MS: number;
+export const EXIT_ENDPOINT_IN_USE: number;

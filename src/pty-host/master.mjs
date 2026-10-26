@@ -40,6 +40,14 @@ export const MAX_CLIENT_BACKLOG_BYTES = 8 * 1024 * 1024;
 /** How long a new client has to present the session token before it is dropped. */
 export const AUTH_TIMEOUT_MS = 5_000;
 
+/**
+ * `-n`'s exit status when the endpoint is ALREADY served by another master —
+ * distinct from 1 (every other failure), because the caller has to tell the
+ * two apart: only in this case is the master on the endpoint someone else's
+ * (see scope/windows.ts's token handling after a failed launch).
+ */
+export const EXIT_ENDPOINT_IN_USE = 3;
+
 /** How long one endpoint probe may take before it answers "unknown". */
 export const PROBE_TIMEOUT_MS = 2_000;
 
@@ -75,7 +83,8 @@ export async function isServing(endpoint) {
 /**
  * `-n`: launches a detached master (`node <entry> --serve <endpoint> ...`)
  * and resolves with the exit status `-n` should report — 0 once the master
- * serves `endpoint`, 1 if the endpoint is already served, the master died
+ * serves `endpoint`, EXIT_ENDPOINT_IN_USE if another master already serves
+ * it, 1 if the master died
  * first, or it did not serve in time. Diagnostics go to `log`.
  */
 export async function createSession(endpoint, program, args, opts) {
@@ -85,7 +94,7 @@ export async function createSession(endpoint, program, args, opts) {
   if (before === "live") {
     // dtach refuses an in-use socket the same way.
     log(`pty-host: ${endpoint} is already in use`);
-    return 1;
+    return EXIT_ENDPOINT_IN_USE;
   }
   // PROVABLY not served: a unix socket file still at this path is stale (a
   // master killed outright never closed it) and would make the new master's

@@ -86,6 +86,7 @@ const { sessionSocketPath } = await import("../../src/services/scope/dtach.js");
 const { createPtyHostToken, ptyHostTokenPath, readPtyHostToken } =
   await import("../../src/services/pty-host-token.js");
 const { TOKEN_ENV } = await import("../../src/pty-host/protocol.mjs");
+const { EXIT_ENDPOINT_IN_USE } = await import("../../src/pty-host/master.mjs");
 
 const SESSIONS_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "scope-windows-"));
 afterAll(() => fs.rmSync(SESSIONS_DIR, { recursive: true, force: true }));
@@ -253,9 +254,8 @@ describe("WindowsScopeBackend.start", () => {
     ).rejects.toThrow(/no program to launch/);
   });
 
-  it("explains a failed launch whose pipe is already served", async () => {
-    spawnExitCode = 1;
-    probeResults.set(endpoint("5"), "live");
+  it("explains a launch refused because another master already serves the pipe", async () => {
+    spawnExitCode = EXIT_ENDPOINT_IN_USE;
     await expect(
       backend().start({
         id: "5",
@@ -365,43 +365,63 @@ describe("WindowsScopeBackend.start — the token after a failed launch", () => 
       label: "master bootstrap",
     });
 
-  it("puts the previous token back while a master still serves the pipe", async () => {
+  it("puts the previous token back when another master already serves the pipe", async () => {
     const previous = createPtyHostToken(SESSIONS_DIR, "21");
-    spawnExitCode = 1;
-    probeResults.set(endpoint("21"), "live");
+    spawnExitCode = EXIT_ENDPOINT_IN_USE;
     await expect(failLaunch("21")).rejects.toThrow(/already in use/);
-    // The live master holds the previous token — the session stays attachable.
+    // That master holds the previous token — the session stays attachable.
     expect(readPtyHostToken(SESSIONS_DIR, "21")).toBe(previous);
   });
 
-  it("keeps the previous token when the probe cannot tell", async () => {
-    const previous = createPtyHostToken(SESSIONS_DIR, "22");
-    spawnExitCode = 1;
+  it("removes the unused token when the pipe is in use but there was no previous one", async () => {
+    spawnExitCode = EXIT_ENDPOINT_IN_USE;
     await expect(failLaunch("22")).rejects.toThrow();
-    expect(readPtyHostToken(SESSIONS_DIR, "22")).toBe(previous);
+    expect(readPtyHostToken(SESSIONS_DIR, "22")).toBe("");
+  });
+
+  it("keeps the NEW token when the launch failed but its own master answers", async () => {
+    // e.g. -n's readiness timeout fired while the master it started was still
+    // binding: the master now serving holds the token this launch wrote.
+    createPtyHostToken(SESSIONS_DIR, "23");
+    spawnExitCode = 1;
+    probeResults.set(endpoint("23"), "live");
+    await expect(failLaunch("23")).rejects.toThrow(/exited with code 1/);
+    const fresh = spawnCalls[0].env?.[TOKEN_ENV];
+    expect(readPtyHostToken(SESSIONS_DIR, "23")).toBe(fresh);
+  });
+
+  it("keeps the new token when the probe cannot tell", async () => {
+    createPtyHostToken(SESSIONS_DIR, "24");
+    spawnExitCode = 1;
+    await expect(failLaunch("24")).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "24")).toBe(spawnCalls[0].env?.[TOKEN_ENV]);
   });
 
   it("removes the unused token when nothing serves the pipe", async () => {
-    createPtyHostToken(SESSIONS_DIR, "23");
+    createPtyHostToken(SESSIONS_DIR, "25");
     spawnExitCode = 1;
-    probeResults.set(endpoint("23"), "dead");
-    await expect(failLaunch("23")).rejects.toThrow();
-    expect(readPtyHostToken(SESSIONS_DIR, "23")).toBe("");
+    probeResults.set(endpoint("25"), "dead");
+    await expect(failLaunch("25")).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "25")).toBe("");
   });
 
-  it("removes the unused token when there was no previous one to restore", async () => {
-    spawnExitCode = 1;
-    probeResults.set(endpoint("24"), "live");
-    await expect(failLaunch("24")).rejects.toThrow();
-    expect(readPtyHostToken(SESSIONS_DIR, "24")).toBe("");
+  it("reports the launch error even when settling the token fails", async () => {
+    spawnExitCode = EXIT_ENDPOINT_IN_USE;
+    // Restoring the previous token will fail: its "file" is now a directory.
+    createPtyHostToken(SESSIONS_DIR, "26");
+    const launching = failLaunch("26");
+    fs.rmSync(ptyHostTokenPath(SESSIONS_DIR, "26"), { force: true });
+    fs.mkdirSync(ptyHostTokenPath(SESSIONS_DIR, "26"));
+    await expect(launching).rejects.toThrow(/already in use/);
+    fs.rmSync(ptyHostTokenPath(SESSIONS_DIR, "26"), { recursive: true, force: true });
   });
 
   it("does not touch tokens for a program that is not a session master", async () => {
-    const previous = createPtyHostToken(SESSIONS_DIR, "25");
+    const previous = createPtyHostToken(SESSIONS_DIR, "27");
     spawnExitCode = 1;
     await expect(
       backend().start({
-        id: "25",
+        id: "27",
         argv: ["emulator.exe"],
         cwd: process.cwd(),
         env: {},
@@ -409,6 +429,6 @@ describe("WindowsScopeBackend.start — the token after a failed launch", () => 
         label: "device bootstrap",
       }),
     ).rejects.toThrow();
-    expect(readPtyHostToken(SESSIONS_DIR, "25")).toBe(previous);
+    expect(readPtyHostToken(SESSIONS_DIR, "27")).toBe(previous);
   });
 });

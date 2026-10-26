@@ -19,7 +19,13 @@ import path from "node:path";
 import { attachPtyHost, type AttachClient } from "../../src/services/pty-host-client.js";
 import { probeSocket } from "../../src/services/unix-socket.js";
 import { ipcPath } from "../../src/cli/ipc-path.mjs";
-import { createSession, isServing, probeEndpoint, serve } from "../../src/pty-host/master.mjs";
+import {
+  EXIT_ENDPOINT_IN_USE,
+  createSession,
+  isServing,
+  probeEndpoint,
+  serve,
+} from "../../src/pty-host/master.mjs";
 import { TOKEN_ENV, encodeFrame, encodeHello, FRAME_DATA } from "../../src/pty-host/protocol.mjs";
 
 const PTY_HOST = path.resolve(import.meta.dirname, "..", "..", "src", "pty-host", "pty-host.mjs");
@@ -78,7 +84,16 @@ async function waitServing(endpoint: string, ms = 10_000) {
   }
 }
 
-/** Attaches once the master serves and collects output; waits for the program's "ready". */
+/**
+ * Attaches once the master serves, collects output, and returns once the
+ * program is answering input on this connection.
+ *
+ * Not by waiting for the program's "ready" line: the master keeps no
+ * scrollback, so a line printed before this client connected is gone for
+ * good — and under load the attach can easily land after it. Instead it
+ * keeps sending "ping" until the echo comes back, which can only happen
+ * once both the client and the program are live.
+ */
 async function attachReady(endpoint: string) {
   await waitServing(endpoint);
   const client: AttachClient = attachPtyHost(endpoint, { cols: 80, rows: 24 }, TOKEN);
@@ -86,7 +101,11 @@ async function attachReady(endpoint: string) {
   client.onData((d) => (seen.output += d));
   client.onExit((e) => seen.exits.push(e));
   cleanups.push(() => client.kill());
-  await until(() => seen.output.includes("ready"));
+  for (let attempt = 0; !seen.output.includes("got:ping"); attempt++) {
+    if (attempt > 100) throw new Error("the program never answered on this connection");
+    client.write("ping\r");
+    await sleep(100);
+  }
   return { client, seen };
 }
 
@@ -303,7 +322,7 @@ describe("createSession (-n)", () => {
     30_000,
   );
 
-  it("refuses an endpoint that is already served, like dtach", async () => {
+  it("refuses an endpoint that is already served, like dtach, with its own exit code", async () => {
     const endpoint = tmpEndpoint();
     const holder = net.createServer();
     await new Promise<void>((r) => holder.listen(endpoint, r));
@@ -313,7 +332,7 @@ describe("createSession (-n)", () => {
       entry: PTY_HOST,
       log: (line) => logs.push(line),
     });
-    expect(code).toBe(1);
+    expect(code).toBe(EXIT_ENDPOINT_IN_USE);
     expect(logs.join("\n")).toMatch(/already in use/);
   });
 
