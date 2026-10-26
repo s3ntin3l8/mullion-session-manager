@@ -187,6 +187,25 @@ export interface GitBranchInfo {
    * into whatever branch you're standing on" is a misleading thing to label
    * a bare `merged`. */
   isMerged?: boolean;
+  /** Tip commit (`%(objectname)`). Lets a caller pin a PR's head SHA to this
+   * branch so a reused branch name isn't mistaken for the merged one. */
+  sha?: string;
+  /** Why this branch counts as done, cheapest signal first. Detail only.
+   * `ancestor` / `upstream-gone` come from git alone; `pr-merged` /
+   * `pr-closed` are layered on by the route from the shared closed-PR lookup
+   * (a squash merge leaves the branch un-merged as far as git can tell).
+   * Absent = no signal that it is done. */
+  mergeState?: GitBranchMergeState;
+  /** The pull request for this branch's head, when one is known. */
+  pr?: GitBranchPr;
+}
+
+export type GitBranchMergeState = "ancestor" | "upstream-gone" | "pr-merged" | "pr-closed";
+
+export interface GitBranchPr {
+  number: number;
+  state: "open" | "merged" | "closed";
+  url: string;
 }
 
 export interface GitWorktreeInfo {

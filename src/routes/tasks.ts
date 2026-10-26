@@ -25,7 +25,8 @@ import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
-import { getPullRequestByNumber, removeLabel } from "../services/github-write.js";
+import { removeLabel } from "../services/github-write.js";
+import { isPullRequestMerged } from "../services/github-merged-prs.js";
 import { isGitHubRateLimited } from "../services/github-fetch.js";
 import { killSession } from "../services/session-lifecycle.js";
 
@@ -936,8 +937,7 @@ export async function tasksRoute(app: FastifyInstance) {
     }
     let merged: boolean;
     try {
-      const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-      merged = pr.merged;
+      ({ merged } = await isPullRequestMerged(token, repoRef.owner, repoRef.repo, task.prNumber));
     } catch (err) {
       app.log.warn(
         { err, taskId: task.id, prNumber: task.prNumber },
@@ -1166,12 +1166,7 @@ export async function tasksRoute(app: FastifyInstance) {
         }
         let mergedAt: string | null;
         try {
-          const pr = await getPullRequestByNumber(
-            token,
-            repoRef.owner,
-            repoRef.repo,
-            task.prNumber!,
-          );
+          const pr = await isPullRequestMerged(token, repoRef.owner, repoRef.repo, task.prNumber!);
           if (!pr.merged) {
             failed.push({ id: task.id, error: "PR is not merged" });
             continue;

@@ -1565,6 +1565,58 @@ export async function findMergedPullRequestByHead(
     : null;
 }
 
+/** One closed pull request, as the merged-PR lookup needs it. */
+export interface ClosedPullRequest {
+  number: number;
+  htmlUrl: string;
+  headRef: string;
+  headSha: string;
+  /** `owner/repo` of the head, `null` when the fork was deleted. */
+  headRepo: string | null;
+  baseRef: string;
+  mergedAt: string | null;
+  updatedAt: string;
+}
+
+/**
+ * One page (100) of closed pull requests, most recently updated first —
+ * merged and abandoned alike (`mergedAt` tells them apart). Read-only. The
+ * paginated caller lives in github-merged-prs.ts; this is just the REST shape.
+ */
+export async function listClosedPullRequests(
+  token: string,
+  owner: string,
+  repo: string,
+  page: number,
+): Promise<ClosedPullRequest[]> {
+  const results = await githubRequest<
+    Array<{
+      number: number;
+      html_url: string;
+      merged_at: string | null;
+      updated_at: string;
+      head: { ref: string; sha: string; repo: { full_name: string } | null };
+      base: { ref: string };
+    }>
+  >(
+    token,
+    owner,
+    repo,
+    "GET",
+    `/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${page}`,
+  );
+  return results.map((pr) => ({
+    number: pr.number,
+    htmlUrl: pr.html_url,
+    headRef: pr.head.ref,
+    headSha: pr.head.sha,
+    headRepo: pr.head.repo?.full_name ?? null,
+    baseRef: pr.base.ref,
+    mergedAt: pr.merged_at,
+    updatedAt: pr.updated_at,
+  }));
+}
+
 // #744 — release-please detection/trigger/merge. `release-please--branches--`
 // is release-please-action's own fixed branch-name prefix (verified against
 // PR #803/#801/#807 in this repo — head `release-please--branches--main--
