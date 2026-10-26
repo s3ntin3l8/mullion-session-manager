@@ -1274,6 +1274,11 @@ export interface PrReviewThreadComment {
   path: string | null;
   line: number | null;
   body: string;
+  /** State of the review this comment was posted as part of (APPROVED,
+   * CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING), or null when GitHub
+   * reports none — a reply in a thread belongs to its own review, so a human
+   * answering under an approval reads COMMENTED, not APPROVED. */
+  reviewState: string | null;
 }
 
 export interface PrReviewThread {
@@ -1356,6 +1361,7 @@ export async function fetchPullRequestReviewThreads(
                 path: string | null;
                 line: number | null;
                 body: string;
+                pullRequestReview: { state: string } | null;
               }>;
             };
           }>;
@@ -1381,6 +1387,7 @@ export async function fetchPullRequestReviewThreads(
                   path
                   line
                   body
+                  pullRequestReview { state }
                 }
               }
             }
@@ -1420,6 +1427,7 @@ export async function fetchPullRequestReviewThreads(
         path: c.path,
         line: c.line,
         body: c.body,
+        reviewState: c.pullRequestReview?.state ?? null,
       })),
     })),
     truncated,

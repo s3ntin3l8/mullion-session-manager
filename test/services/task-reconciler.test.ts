@@ -4252,6 +4252,48 @@ describe("reconcileTasks", () => {
         return [{ name, conclusion }];
       }
 
+      it("carries an approving verdict through a red-CI fix: the round is spent, the re-review is not", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, { lastReviewVerdict: "approved" });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("ci");
+        expect(row.approvalCarriedAt).not.toBeNull();
+
+        await app.close();
+      });
+
+      it("does not carry a verdict that isn't an approval through a red-CI fix", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app, {
+          lastReviewVerdict: "changes-requested",
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
+        mockFetchCheckRunsForHead.mockResolvedValue(
+          checkRun("test-node / lint-and-test", "failure"),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.approvalCarriedAt).toBeNull();
+
+        await app.close();
+      });
+
       it("returns the task when a REQUIRED check fails", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app);
@@ -4707,10 +4749,11 @@ describe("reconcileTasks", () => {
         createdAt: string,
         path: string | null = "src/foo.ts",
         line: number | null = 42,
+        reviewState: string | null = null,
       ) {
         return {
           isResolved,
-          comments: [{ author, createdAt, path, line, body }],
+          comments: [{ author, createdAt, path, line, body, reviewState }],
         };
       }
 
@@ -4735,6 +4778,105 @@ describe("reconcileTasks", () => {
         expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
 
         await app.close();
+      });
+
+      describe("comments posted inside an approving review", () => {
+        function mockThreads(...threads: ReturnType<typeof thread>[]) {
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+          mockFetchPullRequestReviewThreads.mockResolvedValue({
+            viewerLogin: "mullion-bot[bot]",
+            threads,
+            truncated: false,
+          });
+        }
+        const approvedThread = () =>
+          thread(
+            false,
+            "reviewer[bot]",
+            "Consider renaming x.",
+            "2026-08-20T10:00:00Z",
+            "src/foo.ts",
+            42,
+            "APPROVED",
+          );
+
+        it("applies them as a suggestions round: no round spent, the approval carried", async () => {
+          const app = await buildApp();
+          const { taskId } = await createPrCommentCandidate(app, { lastReviewVerdict: "approved" });
+          mockThreads(approvedThread());
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("in_progress");
+          expect(row.autoReturnRounds).toBe(0);
+          expect(row.lastAutoReturnReason).toBe("suggestions");
+          expect(row.approvalCarriedAt).not.toBeNull();
+          expect(row.lastPrReviewCommentAt?.toISOString()).toBe("2026-08-20T10:00:00.000Z");
+
+          await app.close();
+        });
+
+        it("still applies them on a task that has used every round it had", async () => {
+          const app = await buildApp();
+          const { taskId } = await createPrCommentCandidate(app, {
+            lastReviewVerdict: "approved",
+            autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+          });
+          mockThreads(approvedThread());
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("in_progress");
+          expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
+          expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+
+          await app.close();
+        });
+
+        it("treats a batch that also holds an ordinary comment as a normal round", async () => {
+          const app = await buildApp();
+          const { taskId } = await createPrCommentCandidate(app, { lastReviewVerdict: "approved" });
+          mockThreads(
+            approvedThread(),
+            thread(false, "octocat", "Please fix this.", "2026-08-20T10:05:00Z"),
+          );
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.autoReturnRounds).toBe(1);
+          expect(row.lastAutoReturnReason).toBe("pr-comment");
+          expect(row.approvalCarriedAt).toBeNull();
+
+          await app.close();
+        });
+
+        it("treats a reply under an approval (its own COMMENTED review) as a normal round", async () => {
+          const app = await buildApp();
+          const { taskId } = await createPrCommentCandidate(app, { lastReviewVerdict: "approved" });
+          mockThreads(
+            thread(
+              false,
+              "octocat",
+              "I disagree.",
+              "2026-08-20T10:00:00Z",
+              "src/foo.ts",
+              42,
+              "COMMENTED",
+            ),
+          );
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.autoReturnRounds).toBe(1);
+          expect(row.lastAutoReturnReason).toBe("pr-comment");
+
+          await app.close();
+        });
       });
 
       it("does NOT return the task when the thread is resolved", async () => {
