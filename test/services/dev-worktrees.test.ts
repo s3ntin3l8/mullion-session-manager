@@ -179,6 +179,17 @@ describe("dev-worktrees", () => {
       expect(found[0]).toMatchObject({ reason: "merged", detail: "#9" });
     });
 
+    it("also finds .worktrees/, and a hook-made worktree-* branch with nothing on it", async () => {
+      addWorktree("hooked", { branch: "worktree-hooked" });
+      addWorktree("elsewhere", { root: ".worktrees", pushed: true });
+      deleteRemoteBranch("elsewhere");
+      const found = (await inspectDevWorktrees(opts())).candidates;
+      expect(found.map((c) => [c.slug, c.reason]).sort()).toEqual([
+        ["elsewhere", "gone"],
+        ["hooked", "in-default"],
+      ]);
+    });
+
     it("offers a detached HEAD that is already in the default branch", async () => {
       const dir = path.join(repo, ".wt", "detached");
       git(repo, ["worktree", "add", "--detach", dir, "origin/main"]);

@@ -40,6 +40,12 @@ export function resolveForwarderPath(): string {
   return path.join(resolveHooksDir(), "forwarder.mjs");
 }
 
+/** Same dev/prod resolution as resolveForwarderPath() above, for Claude
+ * Code's WorktreeCreate/WorktreeRemove hook script (src/hooks/worktree-hook.mjs). */
+export function resolveWorktreeHookPath(): string {
+  return path.join(resolveHooksDir(), "worktree-hook.mjs");
+}
+
 /** Same dev/prod resolution as resolveForwarderPath() above, for the
  * PACKAGED forwarder shim script (issue: host-global agy/Codex hook
  * configs pinning a checkout-specific forwarder path — see

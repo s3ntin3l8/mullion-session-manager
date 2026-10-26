@@ -4,8 +4,12 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { DEFAULT_SETTINGS } from "../../src/services/settings.js";
-import { WORKFLOW_CONVENTION_QUESTIONS } from "../../src/services/workflow-conventions.js";
+import { DEFAULT_SETTINGS, getStoredSettings } from "../../src/services/settings.js";
+import { settings as settingsTable } from "../../src/db/schema.js";
+import {
+  buildWorkflowConventionsText,
+  WORKFLOW_CONVENTION_QUESTIONS,
+} from "../../src/services/workflow-conventions.js";
 
 const tmpDb = path.join(os.tmpdir(), `settings-test-${process.pid}.db`);
 
@@ -28,6 +32,53 @@ describe("settings route", () => {
     expect(res.headers["content-type"]).toMatch(/^application\/json/);
     expect(res.json()).toEqual(DEFAULT_SETTINGS);
     await app.close();
+  });
+
+  describe("generated workflow conventions", () => {
+    const answers = Object.fromEntries(
+      WORKFLOW_CONVENTION_QUESTIONS.map((q) => [q.id, q.options[0].id]),
+    );
+    const generated = buildWorkflowConventionsText(answers);
+    const patch = (app: Awaited<ReturnType<typeof buildApp>>, sessions: object) =>
+      app.inject({ method: "PATCH", url: "/api/settings", payload: { sessions } });
+
+    it("snapshots wizard output, follows the generator, and leaves hand edits alone", async () => {
+      const app = await buildApp();
+      await patch(app, { workflowConventionAnswers: answers, workflowConventionsText: generated });
+      expect(getStoredSettings(app.db).sessions.workflowConventionsAppliedText).toBe(generated);
+
+      // The rules change after the text was saved: simulate by an older snapshot.
+      const stale = "old rules";
+      app.db
+        .update(settingsTable)
+        .set({
+          data: JSON.stringify({
+            ...getStoredSettings(app.db),
+            sessions: {
+              ...getStoredSettings(app.db).sessions,
+              workflowConventionsText: stale,
+              workflowConventionsAppliedText: stale,
+            },
+          }),
+        })
+        .run();
+      expect(getStoredSettings(app.db).sessions.workflowConventionsText).toBe(generated);
+
+      // Hand-typed text clears the snapshot, so it is never regenerated.
+      await patch(app, { workflowConventionsText: "my own rules" });
+      const edited = getStoredSettings(app.db).sessions;
+      expect(edited.workflowConventionsText).toBe("my own rules");
+      expect(edited.workflowConventionsAppliedText).toBe("");
+      // A client cannot forge the snapshot for hand-edited text.
+      await patch(app, { workflowConventionsAppliedText: "my own rules" });
+      expect(getStoredSettings(app.db).sessions.workflowConventionsAppliedText).toBe("");
+      // Later tests share this DB and expect the untouched defaults.
+      await patch(app, {
+        workflowConventionsText: "",
+        workflowConventionAnswers: Object.fromEntries(Object.keys(answers).map((k) => [k, ""])),
+      });
+      await app.close();
+    });
   });
 
   it("deep-merges a partial nested PATCH onto defaults, leaving siblings untouched", async () => {

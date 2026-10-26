@@ -49,6 +49,12 @@ export interface HookAdapterContext {
    * (which has no settings DB of its own to read at all). Every consumer of
    * this setting is now spawn-time-snapshotted, not just opencode's. */
   injectAgentGuide: boolean;
+  /** True when this session's resolved workflow conventions put worktrees
+   * under `.wt/` (mullion-scaffold.ts's conventionsUseWtDirectory). Claude
+   * Code's adapter then redirects the agent's own built-in worktrees there
+   * too, instead of `.claude/worktrees/`. Spawn-time snapshot, like the
+   * inject* flags. */
+  worktreesInDotWt?: boolean;
   /** Same spawn-time-snapshot posture and issue #884 history as
    * `injectAgentGuide` immediately above, for the independent
    * `sessions.injectProjectBriefing` setting. Mirrors that setting, not

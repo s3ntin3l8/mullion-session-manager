@@ -19,7 +19,10 @@ import type {
   LayoutMode,
   TabletPaneCap,
 } from "../shared/types.js";
-import { WORKFLOW_CONVENTION_QUESTIONS } from "./workflow-conventions.js";
+import {
+  buildWorkflowConventionsText,
+  WORKFLOW_CONVENTION_QUESTIONS,
+} from "./workflow-conventions.js";
 import {
   resolveGitHubPoll,
   resolveHeartbeatSeconds,
@@ -380,6 +383,15 @@ export interface AppSettings {
     // — no false positive) to warn before an explicit re-apply would
     // silently overwrite a hand-edit.
     workflowConventionAnswers: Record<string, string>;
+    // The exact text the wizard last generated and saved, written by the
+    // server in applySettingsPatch (never sent by a client): `""` when the
+    // text was hand-typed or has never come from the wizard. It is what lets
+    // getStoredSettings tell "still the wizard's output, so regenerate it
+    // when the rules change" from "someone edited it, leave it alone". Before
+    // this, a rule change (#1759's `.wt/<branch>`) never reached an install
+    // whose text was generated earlier, and agents picked their own worktree
+    // directory.
+    workflowConventionsAppliedText: string;
     // Phase 5 (Track B, issue #193 5.3b) — hard cap on how many LIVE
     // (status "active") children a single session may have spawned via the
     // sessions.spawn_child control-socket op. Enforced in
@@ -866,6 +878,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     workflowConventionAnswers: Object.fromEntries(
       WORKFLOW_CONVENTION_QUESTIONS.map((q) => [q.id, ""]),
     ),
+    workflowConventionsAppliedText: "",
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
   },
@@ -1464,10 +1477,40 @@ export function getStoredSettings(db: ReturnType<typeof getDb>): AppSettings {
   const [row] = db.select().from(settingsTable).where(eq(settingsTable.id, SETTINGS_ROW_ID)).all();
   if (!row) return DEFAULT_SETTINGS;
   try {
-    return mergeSettings(JSON.parse(row.data));
+    return refreshGeneratedConventions(mergeSettings(JSON.parse(row.data)));
   } catch {
     return DEFAULT_SETTINGS;
   }
+}
+
+function withoutAppliedSnapshot(patch: Record<string, unknown>): Record<string, unknown> {
+  const sessions = patch.sessions;
+  if (typeof sessions !== "object" || sessions === null) return patch;
+  const { workflowConventionsAppliedText: _ignored, ...rest } = sessions as Record<string, unknown>;
+  return { ...patch, sessions: rest };
+}
+
+/**
+ * Conventions text that is still exactly what the wizard generated (it equals
+ * `workflowConventionsAppliedText`) follows the generator: when the rules in
+ * `WORKFLOW_CONVENTION_QUESTIONS` have changed since, it is re-derived from
+ * the saved answers on read. Hand-edited text, and text that predates the
+ * snapshot, is returned as stored.
+ */
+function refreshGeneratedConventions(settings: AppSettings): AppSettings {
+  const { workflowConventionsText: text, workflowConventionsAppliedText: applied } =
+    settings.sessions;
+  if (applied === "" || text !== applied) return settings;
+  const regenerated = buildWorkflowConventionsText(settings.sessions.workflowConventionAnswers);
+  if (regenerated === "" || regenerated === text) return settings;
+  return {
+    ...settings,
+    sessions: {
+      ...settings.sessions,
+      workflowConventionsText: regenerated,
+      workflowConventionsAppliedText: regenerated,
+    },
+  };
 }
 
 /**
@@ -1489,10 +1532,21 @@ export function getStoredSettings(db: ReturnType<typeof getDb>): AppSettings {
  */
 export function applySettingsPatch(
   app: FastifyInstance,
-  patch: Record<string, unknown>,
+  rawPatch: Record<string, unknown>,
 ): AppSettings {
+  // The snapshot is the server's to write (below); a client cannot mark
+  // hand-edited text as wizard output.
+  const patch = withoutAppliedSnapshot(rawPatch);
   const previous = getStoredSettings(app.db);
   const next: AppSettings = sanitizeSettings(deepMerge(previous, patch, DEFAULT_SETTINGS));
+  // A patched conventions text is "applied" only when it is exactly what the
+  // answers generate (the wizard's single PATCH); anything else is a hand edit.
+  const patchedSessions = patch.sessions as Record<string, unknown> | undefined;
+  if (typeof patchedSessions?.workflowConventionsText === "string") {
+    const generated = buildWorkflowConventionsText(next.sessions.workflowConventionAnswers);
+    next.sessions.workflowConventionsAppliedText =
+      generated !== "" && next.sessions.workflowConventionsText === generated ? generated : "";
+  }
   const data = JSON.stringify(next);
 
   // Upsert the singleton row — SQLite's ON CONFLICT DO UPDATE, matching how

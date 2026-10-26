@@ -34,6 +34,9 @@ const DEFAULT_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 
 const ROOTS = [
   { dir: ".wt", kind: "wt" },
+  // Not ours, but other projects' agents pick it when nothing tells them where
+  // to put a worktree; treated like `.wt/`.
+  { dir: ".worktrees", kind: "wt" },
   { dir: path.join(".claude", "worktrees"), kind: "claude-agent" },
 ] as const;
 
@@ -47,8 +50,10 @@ export type DevWorktreeKind = (typeof ROOTS)[number]["kind"];
  *   repos that don't delete branches on merge. Commits added since don't count.
  * - `detached-merged`: a detached HEAD whose commit is already in the default
  *   branch.
+ * - `in-default`: a hook-created `worktree-*` branch whose tip is already in the
+ *   default branch, i.e. nothing was committed on it.
  */
-export type DevWorktreeReason = "gone" | "merged" | "detached-merged";
+export type DevWorktreeReason = "gone" | "merged" | "detached-merged" | "in-default";
 
 export interface DevWorktreeProject {
   id: number;
@@ -227,6 +232,15 @@ async function evaluate(
       .mergedPr(project, worktree.branch, headSha, defaultBranch)
       .catch(() => null);
     if (pr !== null) return { ...base, reason: "merged", detail: `#${String(pr)}` };
+  }
+  // Only for the branches worktree-hook.mjs names itself: an ordinary local
+  // branch with no commits yet may be work someone is about to start.
+  if (
+    worktree.branch.startsWith("worktree-") &&
+    ctx.base !== "HEAD" &&
+    (await isAncestorOf(worktree.path, headSha, ctx.base))
+  ) {
+    return { ...base, reason: "in-default" };
   }
   return null;
 }

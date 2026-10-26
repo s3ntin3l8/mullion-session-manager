@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import path from "node:path";
 import {
   resolveForwarderPath,
+  resolveWorktreeHookPath,
   resolveOpenCodePluginPath,
   escapeTomlBasicString,
   tomlString,
@@ -13,6 +14,14 @@ import {
 // the versioned-release install's stable `current` symlink instead (when
 // MULLION_HOME is set) keeps the command — and the hash — identical across
 // upgrades.
+describe("resolveWorktreeHookPath", () => {
+  it("sits next to the forwarder", () => {
+    expect(resolveWorktreeHookPath()).toBe(
+      path.join(path.dirname(resolveForwarderPath()), "worktree-hook.mjs"),
+    );
+  });
+});
+
 describe("resolveForwarderPath / resolveOpenCodePluginPath (issue #259 stable path)", () => {
   const originalMullionHome = process.env.MULLION_HOME;
 
