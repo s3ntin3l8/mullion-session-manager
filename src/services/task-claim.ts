@@ -465,10 +465,34 @@ export async function dispatchClaimedTask(
     // #484/#491 — unchanged from the old claimTask; see git blame on this
     // function's prior revision (before the queue split) for the full
     // base-ref-pinning rationale.
-    const baseRefResult = await resolveHostBaseRef(app, project.hostId, project.cwd);
-    const { baseRef, baseSha } = baseRefResult.ok
-      ? { baseRef: baseRefResult.value.baseRef, baseSha: baseRefResult.value.sha }
-      : { baseRef: "HEAD", baseSha: null };
+    //
+    // Issue #1959 — resolved on the PLACEMENT host, the one that cuts the
+    // worktree, not the project's. The project host's clone may know a SHA
+    // the placement host never fetched, and `git worktree add` from it
+    // fails (or, with a bare ref, cuts from a stale one). Resolving there
+    // also fetches THAT clone first (`resolveDefaultBaseRef`), so the SHA
+    // is one the cutting clone has.
+    //
+    // A host that cannot ANSWER (unreachable, or an agent too old to have the
+    // route) no longer falls back to a bare `HEAD` on a clone nobody asked:
+    // the task is released with the reason recorded and the dispatch backoff
+    // retries it, so it recovers by itself once the host is back or upgraded.
+    // (A clone that answers but has no resolvable origin default still
+    // resolves to its own `HEAD` — `resolveDefaultBaseRef`'s documented
+    // worst case, the same for a local project.)
+    const baseRefResult = await resolveHostBaseRef(app, placement.hostId, placementCwd);
+    if (!baseRefResult.ok) {
+      const detail =
+        baseRefResult.reason === "unsupported"
+          ? `host ${placement.hostId} is too old to resolve a base ref — upgrade it`
+          : `could not resolve the base ref on host ${placement.hostId}: ${baseRefResult.detail}`;
+      await release(detail);
+      return { ok: false, reason: "worktree-failed", detail };
+    }
+    const { baseRef, baseSha } = {
+      baseRef: baseRefResult.value.baseRef,
+      baseSha: baseRefResult.value.sha,
+    };
     // #939/#1016 — resolved once per spawn, fail-open (a GitHub hiccup here
     // degrades to today's plain title+body prompt, never blocks the claim).
     const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -561,8 +585,14 @@ export async function dispatchClaimedTask(
     });
     if (!result.ok) {
       if (result.reason === "worktree-failed") {
-        await release("worktree creation failed");
-        return { ok: false, reason: "worktree-failed" };
+        // Issue #1959 — keep git's own reason (the base ref the placement
+        // host lacks, a branch that already exists, ...) instead of an
+        // opaque "worktree creation failed".
+        const reason = result.detail
+          ? `worktree creation failed on host ${placement.hostId}: ${result.detail}`
+          : "worktree creation failed";
+        await release(reason);
+        return { ok: false, reason: "worktree-failed", detail: reason };
       }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
@@ -994,7 +1024,8 @@ export async function retryTask(
       // again: a session cannot run in a directory that is not on its
       // machine.
       unattended: true,
-      hostId: resolveTaskWorkerHost(app, task),
+      hostId: workerHostId,
+      placementReason: `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
     });
     if (!result.ok) {
       await release("session spawn failed", worktree);
