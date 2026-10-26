@@ -1,5 +1,6 @@
 import type { DockControl, DockerServiceInfo, Session } from "../api/index.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "../lib/persistedState.js";
+import { legacyDotClass, statusTone } from "../lib/statusTone.js";
 
 // Pure helpers for Dock.tsx's monitor rendering — split out (Wave 5 / PR 28
 // of .claude/plans/can-we-do-a-warm-cocke.md) for the same
@@ -88,9 +89,7 @@ export function clamp(n: number, min: number, max: number) {
 export function ciDotClass(
   status: "success" | "failure" | "in_progress",
 ): "good" | "bad" | "pending" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  return "pending";
+  return legacyDotClass(statusTone({ ci: status })) as "good" | "bad" | "pending";
 }
 
 // Mirrors src/services/git-worktree.ts's isDockPreviewWorktree/

@@ -92,6 +92,11 @@
   min-height: 0;
   background: var(--sidebar);
   border-left: 1px solid var(--border);
+  /* The sidebar kit's compact density (sidebar-kit.css, <=300px) follows this
+     panel's own width, not the viewport's. Width is set inline by
+     RightSidebar, so inline-size containment cannot collapse it. */
+  container-type: inline-size;
+  container-name: sidebar-frame;
 }
 .right-sidebar-panel.overlay {
   position: fixed;

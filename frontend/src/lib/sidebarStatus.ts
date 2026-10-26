@@ -17,6 +17,7 @@ import type {
   RunwayAgentQuota,
   SubagentInfo,
 } from "../api/index.js";
+import { legacyDotClass, statusTone } from "./statusTone.js";
 
 // Same clean/dirty/conflict/none taxonomy as ProjectHeader's own inline
 // gitStatus handling in Sidebar.tsx — that call site stays inline rather
@@ -28,14 +29,10 @@ export function sessionGitDotClass(status: GitStatus): "clean" | "dirty" | "conf
   return status.isClean ? "clean" : "dirty";
 }
 
-// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
-// as GitHubPanel.tsx's own ciDotClass — duplicated rather than imported for
-// the same "small guard, not worth a cross-module dependency" reasoning.
+// "success/failure/in_progress/null -> good/bad/pending/none", decided by the
+// shared statusTone() (lib/statusTone.ts) and only spelled the legacy way here.
 export function sessionPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  if (status === "in_progress") return "pending";
-  return "none";
+  return legacyDotClass(statusTone({ ci: status }));
 }
 
 // Live (still running) vs finished — the only two states a SubagentInfo can

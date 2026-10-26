@@ -1,4 +1,6 @@
 import { checkDotClass } from "./github/checkDot.js";
+import { runStatusText } from "./lib/statusTone.js";
+import { ciDotClass } from "./dock/dockHelpers.js";
 import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./github/prPhase.js";
 import { PrDetailView } from "./github/PrDetailView.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
@@ -44,20 +46,10 @@ function checkGlyph(status: string, conclusion: string | null): string {
   }
 }
 
-function checkTitle(status: string, conclusion: string | null): string {
-  return status === "completed" ? (conclusion ?? "unknown") : status;
-}
-
 // Failures first, then in-progress, then everything that passed.
 function jobRank(job: GitHubJob): number {
   const dot = checkDotClass(job.status, job.conclusion);
   return dot === "bad" ? 0 : dot === "pending" ? 1 : 2;
-}
-
-function ciDotClass(status: "success" | "failure" | "in_progress"): "good" | "bad" | "pending" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  return "pending";
 }
 
 function CollapsibleSection({
@@ -104,7 +96,7 @@ function JobRow({ projectId, runId, job }: { projectId: number; runId: number; j
       >
         <span className={`github-panel-ci-dot ${checkDotClass(job.status, job.conclusion)}`} />
         <span className="github-panel-run-name">{job.name}</span>
-        <span className="github-panel-run-status" title={checkTitle(job.status, job.conclusion)}>
+        <span className="github-panel-run-status" title={runStatusText(job.status, job.conclusion)}>
           {checkGlyph(job.status, job.conclusion)}
         </span>
       </button>
@@ -777,7 +769,7 @@ export function GitHubPanel({
               />
               <span className="github-panel-row-title">{run.name}</span>
               <span className="github-panel-row-number">
-                {run.status === "completed" ? (run.conclusion ?? "unknown") : run.status}
+                {runStatusText(run.status, run.conclusion)}
               </span>
             </a>
           ))}

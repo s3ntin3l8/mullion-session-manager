@@ -3,6 +3,7 @@ import { api } from "../api/index.js";
 import { usePrDetail } from "../hooks/useGitHubData.js";
 import type { GitHubPrDetail, GitHubPrDetailThread, RelayReviewState } from "../api/types.js";
 import { checkDotClass } from "./checkDot.js";
+import { runStatusText } from "../lib/statusTone.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
@@ -490,7 +491,7 @@ export function PrDetailView({
                   />
                   <span className="github-panel-row-title">{r.name}</span>
                   <span className="github-panel-row-number">
-                    {r.status === "completed" ? (r.conclusion ?? "unknown") : r.status}
+                    {runStatusText(r.status, r.conclusion)}
                   </span>
                 </a>
               ))

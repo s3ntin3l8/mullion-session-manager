@@ -2,25 +2,15 @@ import { useRef, useState } from "react";
 import type { DragEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
 import type { Theme } from "../store/index.js";
-import type { GitHubCiStatus, Session, Task } from "../api/index.js";
+import type { Session, Task } from "../api/index.js";
 import type { TaskBlocker } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
+import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
-
-// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
-// as lib/sidebarStatus.ts's sessionPrDotClass/GitHubPanel.tsx's ciDotClass —
-// duplicated rather than imported, this codebase's own established
-// precedent for this exact small guard (see that module's own comment).
-function taskCardPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  if (status === "in_progress") return "pending";
-  return "none";
-}
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -308,7 +298,7 @@ export function TaskCard({
               if (suppressClickRef.current) e.preventDefault();
             }}
           >
-            <span className={`github-panel-ci-dot ${taskCardPrDotClass(matchedPr.ciStatus)}`} />#
+            <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />#
             {matchedPr.number}
           </a>
         )}

@@ -13,10 +13,11 @@
 // fails the lint step (and therefore the pre-push flow) when a token stops
 // clearing its threshold.
 //
-// It lives here rather than in a vitest file for one concrete reason:
-// Vitest stubs CSS imports (`css: false` in frontend/vitest.config.ts), so
-// a test cannot read the stylesheet's text — the `?raw` import resolves to
-// an empty string. This repo's own precedent for "assert something about a
+// It lives here rather than in a vitest file because Vitest stubs CSS imports
+// by default, so a test cannot read the stylesheet's text unless
+// frontend/vitest.config.ts opts that file in (its `test.css.include` does
+// that for tokens.css, for styles/tokens.contrast.test.ts, which checks the
+// sidebar-kit status tokens). This repo's own precedent for "assert something about a
 // source file's contents" is a `scripts/check-*.mjs` node script wired
 // into `npm run lint` (see check-case-collision.mjs, check-env-docs.mjs),
 // and this is exactly that shape.

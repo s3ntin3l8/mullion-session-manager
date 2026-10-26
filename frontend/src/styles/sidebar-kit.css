@@ -1,0 +1,484 @@
+/* Sidebar kit (B1, #1971, epic #1965) — styles for frontend/src/ui/sidebar/*.
+   Values come from the design approved on the epic (mockup PR #1990).
+   Colours are ONLY semantic tokens (tokens.css): --status-<tone>-{fg,bg,border},
+   --surface*, --border*, --accent. Panels migrate onto these in B2-B5; the
+   legacy .github-panel-* / .gh-* rules in empty-states.css are deleted as
+   their last consumer goes. */
+
+/* ───────── IconButton ───────── */
+.sb-ibtn {
+  position: relative;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+.sb-ibtn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.sb-ibtn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.sb-ibtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* open-on-GitHub: always the right-most icon, at full strength */
+.sb-ibtn--ext {
+  color: var(--fg);
+}
+.sb-ibtn-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid var(--pane-hd);
+}
+.sb-ibtn-dot--success {
+  background: var(--status-success-fg);
+}
+.sb-ibtn-dot--warn {
+  background: var(--status-warn-fg);
+}
+.sb-ibtn-dot--danger {
+  background: var(--status-danger-fg);
+}
+
+/* ───────── Button ───────── */
+.sb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sb-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+.sb-btn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.sb-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sb-btn--primary {
+  background: var(--accent-fill);
+  border-color: var(--ring);
+  color: #fff;
+}
+.sb-btn--primary:hover:not(:disabled) {
+  background: var(--accent-fill);
+  filter: brightness(1.12);
+}
+.sb-btn--danger {
+  color: var(--status-danger-fg);
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+}
+.sb-btn--danger:hover:not(:disabled) {
+  background: var(--status-danger-bg);
+  filter: brightness(1.1);
+}
+.sb-btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.sb-btn--sm {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 0.6875rem;
+}
+.sb-btn--block {
+  width: 100%;
+  justify-content: center;
+}
+
+/* ───────── ViewHeader / DetailHeader ───────── */
+.sb-vh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 42px;
+  padding: 9px 10px;
+  background: var(--pane-hd);
+  border-bottom: 1px solid var(--border);
+}
+.sb-vh-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sb-vh-name {
+  font-weight: 650;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sb-vh-sub {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sb-vh-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.sb-vh-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+/* ───────── SidebarSection ───────── */
+.sb-sec {
+  border-bottom: 1px solid var(--border-soft);
+}
+.sb-sec-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  white-space: nowrap;
+}
+.sb-sec-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.sb-sec-toggle:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+.sb-chev {
+  color: var(--muted);
+  transition: transform 0.12s;
+}
+.sb-chev--closed {
+  transform: rotate(-90deg);
+}
+.sb-sec-name {
+  font-size: 0.6875rem;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sb-count {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--status-neutral-bg);
+  border: 1px solid var(--status-neutral-border);
+  color: var(--fg);
+}
+.sb-sec-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* ───────── SidebarRow (wide: glyph column + body) ───────── */
+.sb-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: default;
+}
+.sb-row--clickable {
+  cursor: pointer;
+}
+.sb-row:hover,
+.sb-row--sel {
+  background: var(--surface-hover);
+}
+.sb-row-title--btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-row-title--btn:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+}
+.sb-row--sel::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.sb-row-lead {
+  flex: none;
+  width: 16px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+}
+.sb-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.sb-row-title {
+  min-width: 0;
+  font-weight: 560;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sb-row-meta {
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 0.71875rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sb-row-extra {
+  min-width: 0;
+}
+.sb-row-trail {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sb-row-actions {
+  display: none;
+  gap: 2px;
+}
+.sb-row:hover .sb-row-actions,
+.sb-row:focus-within .sb-row-actions {
+  display: flex;
+}
+@media (hover: none) {
+  .sb-row-actions {
+    display: flex;
+  }
+}
+
+/* Status dot / glyph for SidebarRow `lead` */
+.sb-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: none;
+}
+.sb-dot--success {
+  background: var(--status-success-fg);
+}
+.sb-dot--danger {
+  background: var(--status-danger-fg);
+}
+.sb-dot--warn {
+  background: var(--status-warn-fg);
+}
+.sb-dot--info {
+  background: var(--status-info-fg);
+}
+.sb-dot--merged {
+  background: var(--status-merged-fg);
+}
+.sb-dot--neutral {
+  background: var(--status-neutral-fg);
+}
+
+/* ───────── StatusChip ───────── */
+.sb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid;
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 560;
+  line-height: 1;
+  white-space: nowrap;
+}
+.sb-chip--success {
+  color: var(--status-success-fg);
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border);
+}
+.sb-chip--danger {
+  color: var(--status-danger-fg);
+  background: var(--status-danger-bg);
+  border-color: var(--status-danger-border);
+}
+.sb-chip--warn {
+  color: var(--status-warn-fg);
+  background: var(--status-warn-bg);
+  border-color: var(--status-warn-border);
+}
+.sb-chip--info {
+  color: var(--status-info-fg);
+  background: var(--status-info-bg);
+  border-color: var(--status-info-border);
+}
+.sb-chip--merged {
+  color: var(--status-merged-fg);
+  background: var(--status-merged-bg);
+  border-color: var(--status-merged-border);
+}
+.sb-chip--neutral {
+  color: var(--status-neutral-fg);
+  background: var(--status-neutral-bg);
+  border-color: var(--status-neutral-border);
+}
+.sb-chip--mono {
+  font-family: ui-monospace, Menlo, monospace;
+  font-weight: 500;
+}
+button.sb-chip {
+  cursor: pointer;
+}
+button.sb-chip:focus-visible,
+.sb-chip--open {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.sb-chip-short {
+  display: none;
+}
+
+/* ───────── StatusTriad + inline drilldown ───────── */
+.sb-triad {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+.sb-triad .sb-chip {
+  height: 20px;
+}
+.sb-drill {
+  margin: 6px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  overflow: hidden;
+}
+
+/* ═════════ Compact density ═════════
+   Container query on the right-sidebar frame (right-sidebar.css sets
+   container-type), so this follows the sidebar's real width, not the
+   viewport's. */
+@container sidebar-frame (max-width: 300px) {
+  .sb-row {
+    display: grid;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
+    column-gap: 6px;
+    row-gap: 1px;
+    padding: 6px 8px;
+  }
+  /* Glyph moves into the title line; meta/extra start flush-left. */
+  .sb-row-body {
+    display: contents;
+  }
+  .sb-row-lead {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .sb-row-title {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .sb-row--nolead .sb-row-title {
+    grid-column: 1 / 3;
+  }
+  .sb-row-trail {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .sb-row-meta,
+  .sb-row-extra {
+    grid-column: 1 / -1;
+  }
+  /* Drilldown goes full-bleed: hairlines + accent bar, no box. */
+  .sb-drill {
+    margin: 6px -8px 2px;
+    border-radius: 0;
+    border-width: 1px 0;
+    border-left: 2px solid var(--accent);
+  }
+  /* Triad stays on one line with short labels. */
+  .sb-triad {
+    flex-wrap: nowrap;
+    gap: 3px;
+  }
+  .sb-triad .sb-chip {
+    padding: 0 5px;
+  }
+  .sb-chip-full {
+    display: none;
+  }
+  .sb-chip-short {
+    display: inline;
+  }
+  .sb-chip-short:empty {
+    display: none;
+  }
+  .sb-vh {
+    padding: 8px;
+  }
+  .sb-sec-h {
+    padding: 7px 8px;
+  }
+}

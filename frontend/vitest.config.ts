@@ -52,6 +52,10 @@ export default defineConfig({
     // backend's own vitest.config.ts, which this object was byte-identical
     // to before being extracted.)
     coverage: coverageConfig,
+    // Vitest replaces every imported .css with an empty module by default,
+    // `?raw` included. styles/tokens.contrast.test.ts reads tokens.css as
+    // text, so that one file opts back in.
+    css: { include: [/styles\/tokens\.css/] },
     maxWorkers,
   },
 });

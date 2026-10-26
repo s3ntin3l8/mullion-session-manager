@@ -25,6 +25,8 @@
 // Keys as they exist in browsers TODAY. Do not change any value here —
 // that would silently reset every user's persisted UI state on next load.
 export const STORAGE_KEYS = {
+  // Sidebar kit SidebarSection open/closed state: Record<persistKey, boolean>.
+  sidebarKitSections: "crs.sidebarKitSections",
   lastLaunchProjectId: "crs.lastLaunchProjectId",
   activeWorkspaceId: "crs.activeWorkspaceId",
   sidebarCollapsed: "crs.sidebarCollapsed",
