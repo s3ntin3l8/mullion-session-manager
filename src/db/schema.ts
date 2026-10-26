@@ -1007,6 +1007,13 @@ export const tasks = sqliteTable(
     // Issue #958 — same shape as `model` above, for opencode's `small_model`
     // config key. Recorded at claim time alongside `model`.
     smallModel: text("small_model"),
+    // Issue #1954 — where the task REQUIRES its worker to run: the `Platform:`
+    // / `Host:` directives of the issue body, resolved at dispatch and stored
+    // as JSON (`{"platform":"darwin"}`, `{"hostId":"…"}` or both). Recorded
+    // beside `agentCommand` so the requirement a past placement honoured (or
+    // was refused for) can be read back, even after the issue body changes.
+    // `null` = the task asked for nothing: placement is the usual policy.
+    placementRequirement: text("placement_requirement"),
     // 6.7 — the durable "linked PR" field from the roadmap's Tier-1
     // (durable/shareable) list. Set once Task -> PR promotion succeeds.
     prUrl: text("pr_url"),

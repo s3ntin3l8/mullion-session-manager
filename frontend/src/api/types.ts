@@ -1909,6 +1909,11 @@ export interface Task {
   // issue `Agent:` line -> projects.defaultAgent -> settings.taskMaster.defaultAgent),
   // recorded once at claim time.
   agentCommand: string | null;
+  // #1954 — where the task requires its worker to run, as JSON
+  // (`{"platform":"darwin"}`, `{"hostId":"…"}` or both): the issue body's
+  // `Platform:` / `Host:` lines, resolved at dispatch. `null` = no requirement.
+  // Not rendered in the UI yet.
+  placementRequirement: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
   // approve creates directly as a fallback for a task that reached

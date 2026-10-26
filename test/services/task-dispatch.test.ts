@@ -249,6 +249,44 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     delete process.env.MULLION_TASK_MAX_CONCURRENT;
   });
 
+  // Issue #1954 — a claim refused for a placement requirement leaves the task
+  // `failed`, with nothing pending to retry, so it must not be backed off: an
+  // author who fixes the host and moves the task back to `ready` would
+  // otherwise wait out a window (5 minutes, escalating) that protects against
+  // nothing.
+  it("does not back off a task whose claim was refused outright", async () => {
+    process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-dispatch-test-refused-"));
+    const projectId = await createProject(app, cwd);
+    // Requires a Mac; no host is registered, so no host can qualify.
+    const task = insertReadyTask(app, projectId, 21);
+    app.db.update(tasks).set({ body: "Platform: darwin" }).where(eq(tasks.id, task.id)).run();
+    const dispatchSpy = vi.spyOn(
+      await import("../../src/services/task-claim.js"),
+      "dispatchClaimedTask",
+    );
+
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+    await dispatchQueuedTasks(app);
+    expect(getTask(app, task.id).status).toBe("failed");
+    expect(getTask(app, task.id).failureReason).toContain("requires platform darwin");
+
+    // The author fixes the host and moves the task back to ready; it is
+    // claimed again at once, well inside the window a backoff would impose.
+    app.db.update(tasks).set({ status: "ready" }).where(eq(tasks.id, task.id)).run();
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+    const callsBefore = dispatchSpy.mock.calls.length;
+    await dispatchQueuedTasks(app);
+
+    expect(dispatchSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+
+    dispatchSpy.mockRestore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+    delete process.env.MULLION_TASK_MAX_CONCURRENT;
+  });
+
   it("clears backoff on a later successful dispatch, so a task isn't stuck backed off forever", async () => {
     process.env.MULLION_TASK_MAX_CONCURRENT = "5";
     const app = await buildApp();

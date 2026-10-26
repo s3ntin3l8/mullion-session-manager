@@ -37,6 +37,7 @@ function makeTask(overrides: Partial<Task>): Task {
     agent: null,
     reviewAgent: null,
     agentCommand: null,
+    placementRequirement: null,
     prUrl: null,
     prNumber: null,
     prTitle: null,

@@ -1,6 +1,6 @@
 ---
 name: taskmaster-issues
-description: "How to write a GitHub issue that Mullion's Task Master will autonomously pick up and implement correctly: the mullion-task label, the six body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree. Read this before filing an issue meant for autonomous pickup in a Mullion project that has Task Master enabled — irrelevant to a project that doesn't use it."
+description: "How to write a GitHub issue that Mullion's Task Master will autonomously pick up and implement correctly: the mullion-task label, the eight body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree. Read this before filing an issue meant for autonomous pickup in a Mullion project that has Task Master enabled — irrelevant to a project that doesn't use it."
 ---
 
 # Writing a Task Master issue
@@ -106,7 +106,7 @@ and implements on its own.
 
 ## Body directives
 
-Six directives, each matched **case-insensitively on its own line** — a
+Eight directives, each matched **case-insensitively on its own line** — a
 directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
@@ -119,8 +119,10 @@ claude`") is deliberately not picked up, only a line matching exactly
 | `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.           |
 | `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                   |
 | `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.     |
+| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).       |
+| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.        |
 
-Matching rules, all six:
+Matching rules, all eight:
 
 - **The key is always case-insensitive. For `Agent:`/`ReviewAgent:`/the
   `Model:` family, the value is not.** `Agent: Claude` matches the line,
@@ -146,6 +148,21 @@ Matching rules, all six:
   bare `--model` value with no slash required (e.g. `sonnet`, `gpt-5`).
   A value in the wrong shape for the claiming agent is logged and falls
   through, same as any other malformed value.
+- **`Platform:` / `Host:` are hard requirements, unlike every other
+  directive.** A task that needs Xcode or the iOS Simulator should say
+  `Platform: darwin`: it then runs only on an online, un-parked host of that
+  platform that has the project (the project's "Also lives on" path), and works
+  for a `pinned` project too. If no host qualifies the task is **failed with
+  the reason on it** — it never falls back to a host where it would just
+  break; fix the host (or the path), then move the task back to `ready`. The
+  platform is matched case-insensitively; a value no host reports (`mac`
+  instead of `darwin`) matches nothing and is refused naming it. Leave both
+  out and placement is the usual load-based choice. **Beware `Host:`** — it is
+  an everyday word: a `Host: localhost` line in a pasted HTTP request or config
+  snippet is parsed as the directive (fenced blocks do not hide it) and fails
+  the task. Put such a line behind a `- ` or `> ` prefix, or reword it
+  (indentation does not help — leading whitespace is ignored); the refusal
+  names the line it came from.
 - An unrecognized or malformed value at any tier is logged and falls
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.

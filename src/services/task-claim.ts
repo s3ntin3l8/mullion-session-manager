@@ -12,7 +12,19 @@ import {
   resolveTaskWorkerHost,
   withLiveStatus,
 } from "./session-live-info.js";
-import { parseHostCwds, projectCwdOnHost, resolvePlacement } from "./placement.js";
+import {
+  describeTarget,
+  parseHostCwds,
+  projectCwdOnHost,
+  resolvePlacement,
+  resolveTargetHost,
+  type PlacementDecision,
+} from "./placement.js";
+import {
+  describeRequirementSource,
+  parsePlacementRequirement,
+  serializePlacementRequirement,
+} from "./task-placement-resolve.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -63,7 +75,7 @@ export type DispatchTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
   | {
       ok: false;
-      reason: "not-queued" | "cap" | "worktree-failed" | "spawn-failed";
+      reason: "not-queued" | "cap" | "worktree-failed" | "spawn-failed" | "placement-refused";
       detail?: string;
       /** Only set for "cap" — the concurrency limit that was hit. */
       limit?: number;
@@ -281,34 +293,47 @@ export async function dispatchClaimedTask(
   // Deciding it here and passing the host down also means the decision is
   // made once, not twice (the fleet's readings could change between two
   // calls, and the worktree and the session must agree on the host).
-  const placement = resolvePlacement(app, {
-    project: {
-      hostId: project.hostId,
-      placement: project.placement,
-      cwd: project.cwd,
-      hostCwds: project.hostCwds,
-    },
-    unattended: true,
-  });
-  // The project root ON THE PLACEMENT HOST. Null would mean the placement
-  // chose a host this project is not on — unreachable in practice (the
-  // policy only ever chooses a host the project is mapped on), but the
-  // session would have no directory to run in, so refuse rather than
-  // guess: the project's own root is a path that host does not have.
-  const placementCwd = projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds));
-  if (placementCwd === null) {
-    // Refusing without RECORDING anything leaves the task exactly where it
-    // was, so the sweep picks it up again on the next tick and the only
-    // trace is a log line. The failure reason goes on the task, where the
-    // user and the board can see it.
-    const detail = `the placement host ${placement.hostId} has no path for this project`;
-    app.log.warn(
-      { taskId, hostId: placement.hostId },
-      `task dispatch: ${detail} — refusing to claim`,
-    );
+  //
+  // Issue #1954 — a task can REQUIRE a platform or host (`Platform:` / `Host:`
+  // in the issue body). That is the one case where "placement never blocks a
+  // spawn" does not hold: a task that needs Xcode, started on the Linux
+  // fallback, would just fail later. So a requirement goes through
+  // `resolveTargetHost` (online, not parked, has capacity, has this project's
+  // path in `hostCwds` — the same eligibility as automatic placement, then the
+  // usual load scoring among the matches), works for a `pinned` project too,
+  // and is REFUSED, with a recorded reason, when nothing matches. A task with
+  // no requirement is decided exactly as before.
+  const requirement = parsePlacementRequirement(task.body);
+  const requirementJson = serializePlacementRequirement(requirement);
+  const placementProject = {
+    hostId: project.hostId,
+    placement: project.placement,
+    cwd: project.cwd,
+    hostCwds: project.hostCwds,
+  };
+
+  // Fails a still-`claimed` task, with the reason on the row where the user
+  // and the board can see it. Refusing without RECORDING anything would leave
+  // the task exactly where it was, so the sweep would pick it up again on the
+  // next tick and the only trace would be a log line.
+  // `extra` is written with the failure AND shown to the issue sync, so what
+  // it syncs is the row as it now is.
+  function refuseClaim(
+    detail: string,
+    hostId: string | null,
+    extra: Partial<typeof tasks.$inferInsert> = {},
+  ): DispatchTaskOutcome {
+    app.log.warn({ taskId, hostId, requirement }, `task dispatch: ${detail} — refusing to claim`);
     const updated = app.db
       .update(tasks)
-      .set({ status: "failed", failureReason: detail })
+      // The requirement of THIS attempt goes on the row whichever way it
+      // fails, so a stale one from an earlier attempt cannot outlive it.
+      .set({
+        status: "failed",
+        failureReason: detail,
+        placementRequirement: requirementJson,
+        ...extra,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
     // The transition record is what the activity feed and the issue sync
@@ -322,19 +347,67 @@ export async function dispatchClaimedTask(
         from: "claimed",
         to: "failed",
         via: "placement-refusal",
-        context: { reason: detail, hostId: placement.hostId },
+        context: { reason: detail, hostId, requirement },
       });
       // Fire-and-forget, same posture as every other sync on this path —
       // the transition is already committed, and a GitHub-side problem
       // must not unwind it.
       void syncTaskTransition(
         app,
-        { ...task, status: "failed", failureReason: detail },
+        {
+          ...task,
+          status: "failed",
+          failureReason: detail,
+          placementRequirement: requirementJson,
+          ...extra,
+        },
         project,
         "failed",
       );
     }
-    return { ok: false, reason: "worktree-failed", detail };
+    // Its own reason, not "worktree-failed": the task is already `failed`, so
+    // the dispatch sweep must not back it off as if a retry were pending — an
+    // author who fixes `hostCwds` and moves it back to `ready` would otherwise
+    // wait out a window that protects against nothing.
+    return { ok: false, reason: "placement-refused", detail };
+  }
+
+  let placement: PlacementDecision;
+  if (requirement !== null) {
+    const targeted = resolveTargetHost(app, {
+      project: placementProject,
+      target: requirement,
+      unattended: true,
+      requestedBy: "the task's requirement",
+    });
+    if (!targeted.ok) {
+      return refuseClaim(
+        `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)}), ` +
+          "but no eligible host matches: a host " +
+          "has to be online, not parked, report its capacity, and have a path for this project " +
+          "(Edit project → Also lives on). Fix that, then move the task back to ready.",
+        null,
+        // The failure came before any worktree was cut, so the branch and
+        // path stamped at claim time name nothing that exists; clearing them
+        // makes Retry refuse cleanly rather than try to resume them.
+        { placementRequirement: requirementJson, worktreePath: null, branchName: null },
+      );
+    }
+    placement = targeted.decision;
+  } else {
+    placement = resolvePlacement(app, { project: placementProject, unattended: true });
+  }
+  // The project root ON THE PLACEMENT HOST. Null would mean the placement
+  // chose a host this project is not on — unreachable in practice (the
+  // policy only ever chooses a host the project is mapped on), but the
+  // session would have no directory to run in, so refuse rather than
+  // guess: the project's own root is a path that host does not have.
+  const placementCwd = projectCwdOnHost(project, placement.hostId, parseHostCwds(project.hostCwds));
+  if (placementCwd === null) {
+    return refuseClaim(
+      `the placement host ${placement.hostId} has no path for this project`,
+      placement.hostId,
+    );
   }
   // The predicted path is derived from the PLACEMENT root — the path the
   // worktree is about to be created at. NOT the task row's stamped
@@ -406,6 +479,7 @@ export async function dispatchClaimedTask(
         claimedAt: null,
         startedAt: null,
         failureReason: reason,
+        placementRequirement: requirementJson,
         baseSha: null,
         seedDelivered: null,
       })
@@ -621,6 +695,7 @@ export async function dispatchClaimedTask(
         agentCommand: command,
         model,
         smallModel,
+        placementRequirement: requirementJson,
         baseSha,
         seedDelivered,
       })
