@@ -10,6 +10,7 @@ import {
   resolveDefaultBaseRef,
   resolveDefaultBaseRefForPicker,
   resolveCommitSha,
+  resolveRepoRoot,
 } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
@@ -438,6 +439,50 @@ describe("resolveCommitSha (issue #491)", () => {
   it("returns null for a repo with no commits yet", async () => {
     initRepo(tmpDir);
     expect(await resolveCommitSha(tmpDir, "HEAD")).toBeNull();
+  });
+});
+
+describe("resolveRepoRoot", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-root-test-")));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resolves the root from the root itself, a subdirectory, and a linked worktree's subdirectory", async () => {
+    initRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, "src"));
+    fs.writeFileSync(path.join(tmpDir, "src", "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const linked = path.join(tmpDir, ".wt", "feat-x");
+    git(tmpDir, ["worktree", "add", linked, "-b", "feat-x"]);
+
+    expect(await resolveRepoRoot(tmpDir)).toBe(tmpDir);
+    expect(await resolveRepoRoot(path.join(tmpDir, "src"))).toBe(tmpDir);
+    expect(await resolveRepoRoot(path.join(linked, "src"))).toBe(linked);
+  });
+
+  it("resolves a repository nested inside another (a submodule's shape) to its own root", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    const nested = path.join(tmpDir, "vendor", "lib");
+    initRepo(nested);
+
+    // Its root is not the enclosing repo's, so a worktree-membership check on
+    // the root rejects it.
+    expect(await resolveRepoRoot(nested)).toBe(nested);
+    expect(await resolveRepoRoot(nested)).not.toBe(tmpDir);
+  });
+
+  it("is null outside a repo, for a relative path, and for a path with ..", async () => {
+    expect(await resolveRepoRoot(tmpDir)).toBeNull();
+    expect(await resolveRepoRoot("relative/path")).toBeNull();
+    expect(await resolveRepoRoot(`${tmpDir}/../x`)).toBeNull();
   });
 });
 

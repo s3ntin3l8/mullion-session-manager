@@ -362,6 +362,19 @@ function parseWorktreePorcelain(output: string): GitWorktreeInfo[] {
 }
 
 /**
+ * The root of the git work tree that contains `cwd` (a worktree's own root
+ * for a linked worktree), or `null` when `cwd` is not inside one, is not a
+ * safe absolute path, or `git` fails. Unlike `isGitRepo` this also accepts a
+ * subdirectory (`.wt/feat-x/src`), which has no `.git` of its own. Never throws.
+ */
+export async function resolveRepoRoot(cwd: string): Promise<string | null> {
+  if (!isSafeAbsolutePath(cwd)) return null;
+  const out = await runGit(cwd, ["rev-parse", "--show-toplevel"]);
+  const top = out?.trim();
+  return top ? top : null;
+}
+
+/**
  * Lists all worktrees for the repo at `cwd` (`git worktree list --porcelain`)
  * — the repo's main checkout plus any linked worktrees, whoever created them
  * (Mullion, a coding agent's own worktree management, or a manual `git
@@ -375,4 +388,31 @@ export async function listWorktrees(cwd: string): Promise<GitWorktreeInfo[] | nu
   if (output === null) return null;
 
   return parseWorktreePorcelain(output);
+}
+
+/** True when `candidate` IS one of `worktreePaths`, or is nested below one
+ * of them — never a bare string-prefix compare (`/repo-2` must not match a
+ * `worktreePaths` entry of `/repo`). Both sides are `path.resolve`d first so
+ * a `..`-free but non-canonical path (e.g. a trailing slash) still matches
+ * correctly.
+ *
+ * Known, accepted tradeoff (flagged in review — see PR #335): a `candidate`
+ * inside a git SUBMODULE of one of these worktrees has its own separate
+ * repository root (callers pass the candidate's repo root, or a path that
+ * passed `isGitRepo`) but that root is never itself one of `git worktree
+ * list`'s own entries, so it's rejected here and falls
+ * back to the session's static cwd rather than showing the submodule's own
+ * branch. Treating a submodule as "this project's own repo" for
+ * branch-tracking purposes would be the wrong call anyway — it's a distinct
+ * repository with its own independent branch/HEAD — so this is the correct
+ * side to fail on, not just an unhandled gap. */
+export function isWithinAnyWorktree(candidate: string, worktreePaths: string[]): boolean {
+  const resolvedCandidate = path.resolve(candidate);
+  return worktreePaths.some((worktreePath) => {
+    const resolvedWorktree = path.resolve(worktreePath);
+    return (
+      resolvedCandidate === resolvedWorktree ||
+      resolvedCandidate.startsWith(resolvedWorktree + path.sep)
+    );
+  });
 }

@@ -4,6 +4,7 @@ import { projects, sessions, tasks } from "../db/schema.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { getGitStatus } from "../services/git-status.js";
+import { isWithinAnyWorktree, listWorktrees, resolveRepoRoot } from "../services/git-refs.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { resolveGitHubToken, resolveMarkerTokens } from "../services/github-integration.js";
@@ -197,12 +198,35 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
 }
 
 /**
+ * The repo root of a session's self-reported `liveCwd` (OSC 7 on every `cd`),
+ * only when that root is this project's own repository: the main checkout or
+ * one of its worktrees. A `cd` into a subdirectory (`.wt/feat-x/src`) resolves
+ * to its enclosing worktree. An agent also wanders into any repo it visits,
+ * and resolving THAT repo's branch here would look up a PR in this project's
+ * repo. Same membership rule as routes/projects.ts's resolveSessionCwdTargets.
+ */
+async function trustedLiveCwd(projectCwd: string, liveCwd: string): Promise<string | null> {
+  const root = await resolveRepoRoot(liveCwd);
+  if (!root) return null;
+  const worktrees = await listWorktrees(projectCwd);
+  if (!worktrees) return null;
+  return isWithinAnyWorktree(
+    root,
+    worktrees.map((w) => w.path),
+  )
+    ? root
+    : null;
+}
+
+/**
  * The branch a session is working on, resolved on the host that owns it
  * (issue #1628).
  *
- * A local session's branch comes from the live PTY first (the hook adapter
- * reports it, so it survives a commit the agent made between polls) and from
- * `git status` as the fallback. A remote-hosted session has **no local PTY** —
+ * A local session's branch comes from `git status` in the directory the agent
+ * is actually in (the PTY's live cwd, which a `cd` into a worktree moves and
+ * which `make wt` leaves invisible to the branch hooks), then from the live
+ * branch a hook reported, then from `git status` in the launch cwd. A
+ * remote-hosted session has **no local PTY** —
  * the PTY lives on the agent host — so its branch is resolved through
  * `RemoteHostClient.resolveGitStatus`, the same call the project list makes
  * for a remote **session**'s cwd (routes/projects.ts).
@@ -244,7 +268,17 @@ async function resolveSessionBranch(
       return null;
     }
   }
-  return app.pty.get(String(session.id))?.liveBranch ?? (await getGitStatus(cwd))?.branch ?? null;
+  const live = app.pty.get(String(session.id));
+  // The live cwd wins over a reported branch: a worktree the agent moved into
+  // is what the PR is on, and the launch cwd is still the main checkout. A
+  // status read that finds nothing falls through to the older sources.
+  // forceFresh: this decides which PR gets reviewed, so a 5s-old cached
+  // answer for a directory the agent just switched branches in won't do.
+  const trusted = live?.liveCwd ? await trustedLiveCwd(project.cwd, live.liveCwd) : null;
+  const liveCwdBranch = trusted
+    ? (await getGitStatus(trusted, { forceFresh: true }))?.branch
+    : null;
+  return liveCwdBranch ?? live?.liveBranch ?? (await getGitStatus(cwd))?.branch ?? null;
 }
 
 /**
