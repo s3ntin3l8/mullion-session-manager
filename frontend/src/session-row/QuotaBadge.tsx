@@ -40,20 +40,21 @@ function agentKeys(
 ): string[] {
   const keys: string[] = [];
   const cli = commandModelCli(command);
-  if (cli === "opencode") {
-    const provider = model ? model.split("/")[0] : "";
-    if (provider !== "") keys.push(`opencode/${provider}`);
-    else {
-      for (const entry of reported) {
-        if (entry.agent.startsWith("opencode/") && !keys.includes(entry.agent)) {
-          keys.push(entry.agent);
-        }
-      }
-    }
-  }
+  const withModel = cli === "opencode" && model ? model.split("/")[0] : "";
+  // The session's own provider is what it spends, so it leads; a session with
+  // no model has no provider of its own, so the bare agent leads and the
+  // providers Runway reports follow (they only matter when one is out).
+  if (withModel !== "") keys.push(`opencode/${withModel}`);
   if (cli !== null) keys.push(cli);
   const binary = commandToBinary(command);
   if (binary !== "" && !keys.includes(binary)) keys.push(binary);
+  if (cli === "opencode" && withModel === "") {
+    for (const entry of reported) {
+      if (entry.agent.startsWith("opencode/") && !keys.includes(entry.agent)) {
+        keys.push(entry.agent);
+      }
+    }
+  }
   return keys;
 }
 
