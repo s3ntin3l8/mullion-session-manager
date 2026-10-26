@@ -12,6 +12,7 @@ import {
 } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
+import { mergeClaudeTrustedPath } from "./claude-trust.js";
 
 // Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
 // locating `Akl()`/`fn()` and their callers in the installed binary) resolves
@@ -512,11 +513,37 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // scoped to Claude Code's own two roots only (removeBundleContentForCli's
     // own doc comment — never the whole-host removeBundleContent()). A
     // no-op call when nothing was ever synced for this CLI.
-    managedInstall: ctx.injectMullionBundle
-      ? undefined
-      : async () => {
-          await removeBundleContentForCli("claude-code");
-        },
+    //
+    // Issue #2091 — the same fire-and-forget channel also pre-trusts the
+    // session's folder (see claude-trust.ts) when the caller asked to skip
+    // permissions, the same gate agy's and codex's trust writes use. It
+    // goes FIRST and is fully synchronous: this runs as a microtask right
+    // after the spawn, so nothing may be awaited before it. Each step is
+    // logged per-step and the first error rethrown, as agy's managedInstall
+    // does, so a failed trust write never skips the bundle removal.
+    managedInstall:
+      ctx.injectMullionBundle && !(ctx.skipPermissions && ctx.cwd)
+        ? undefined
+        : async () => {
+            let firstError: unknown;
+            if (ctx.skipPermissions && ctx.cwd) {
+              try {
+                mergeClaudeTrustedPath(ctx.cwd);
+              } catch (err) {
+                console.error('[claude-code] managedInstall step "trustWorkspace" failed:', err);
+                firstError ??= err;
+              }
+            }
+            if (!ctx.injectMullionBundle) {
+              try {
+                await removeBundleContentForCli("claude-code");
+              } catch (err) {
+                console.error('[claude-code] managedInstall step "removeBundle" failed:', err);
+                firstError ??= err;
+              }
+            }
+            if (firstError !== undefined) throw firstError;
+          },
   };
 }
 
