@@ -9,6 +9,9 @@
   padding: 6px;
   gap: 6px;
   border-top: 1px solid var(--border-soft);
+  /* Opaque: a floating panel taller than the grid area the Dock leaves must
+     be hidden behind it, not bleed through its rows. */
+  background: var(--bg);
   /* Height comes from Dock.tsx's inline style (localStorage-backed) while
      expanded; collapsed falls back to intrinsic (header-only) height. */
   max-height: 100%;

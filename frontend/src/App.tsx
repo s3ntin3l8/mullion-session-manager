@@ -1827,6 +1827,11 @@ export function App() {
                 tabComponents={tabComponents}
                 rightHeaderActionsComponent={PaneHeaderActions}
                 onReady={onReady}
+                // Keep floating panels fully inside the grid area. The
+                // default only keeps 100px in view, so expanding the Dock
+                // (which shrinks this container) left a 460px-tall floating
+                // panel hanging over the Dock's rows.
+                floatingGroupBounds="boundedWithinViewport"
                 // A lone tab is otherwise sized to its own content, leaving
                 // most of the tab strip empty and the title/status cramped
                 // — full-width mode stretches a single tab to fill the

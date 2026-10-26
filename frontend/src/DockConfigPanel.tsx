@@ -7,6 +7,9 @@ import { Row } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store/index.js";
 
+// package.json scripts worth offering as monitors, in suggestion order.
+const SUGGESTED_SCRIPTS = ["dev", "start", "serve", "preview", "watch"];
+
 export interface DockConfigPanelParams {
   projectId: number;
 }
@@ -50,6 +53,9 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
   // needs to know whether the user kept editing during a (potentially
   // multi-second, for a remote-hosted project) round trip before deciding
   // whether to clear `dirty`.
+  // npm-script launchers for this project; only ever offered as one-click
+  // additions, never written without the user saving.
+  const [scriptCommands, setScriptCommands] = useState<{ name: string; command: string }[]>([]);
   const controlsRef = useRef(controls);
   useEffect(() => {
     controlsRef.current = controls;
@@ -83,6 +89,46 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
       cancelledRef.current = true;
     };
   }, [fetchConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listProjectActions(params.projectId)
+      .then((launchers) => {
+        if (cancelled) return;
+        setScriptCommands(
+          launchers
+            .filter((l) => l.kind === "npm-script" && SUGGESTED_SCRIPTS.includes(l.title))
+            .sort((a, b) => SUGGESTED_SCRIPTS.indexOf(a.title) - SUGGESTED_SCRIPTS.indexOf(b.title))
+            .map((l) => ({ name: l.title, command: l.command })),
+        );
+      })
+      .catch((err) => {
+        // Suggestions are a convenience; failing to load them isn't an error.
+        console.debug("[DockConfigPanel] listProjectActions failed", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [params.projectId]);
+
+  const suggestions = useMemo(
+    () => scriptCommands.filter((s) => !(controls ?? []).some((c) => c.command === s.command)),
+    [scriptCommands, controls],
+  );
+
+  const addSuggestion = useCallback(
+    (suggestion: { name: string; command: string }) => {
+      const existing = controls ?? [];
+      let id = suggestion.name;
+      for (let n = 2; existing.some((c) => c.id === id); n++) id = `${suggestion.name}-${n}`;
+      setControls([...existing, { id, title: suggestion.name, command: suggestion.command }]);
+      setSelectedIndex(existing.length);
+      setDirty(true);
+      setActionError(null);
+    },
+    [controls],
+  );
 
   const updateControl = useCallback((index: number, patch: Partial<DockControlInput>) => {
     setControls((prev) => {
@@ -272,6 +318,21 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
           <button className="git-panel-fetch-btn dock-config-panel-add" onClick={addMonitor}>
             <PlusIcon size={12} /> Add monitor
           </button>
+          {suggestions.length > 0 && (
+            <div className="dock-config-panel-suggestions">
+              <div className="dock-config-panel-empty-hint">Suggested from package.json</div>
+              {suggestions.map((suggestion) => (
+                <button
+                  key={suggestion.name}
+                  className="git-panel-fetch-btn dock-config-panel-add"
+                  title={suggestion.command}
+                  onClick={() => addSuggestion(suggestion)}
+                >
+                  <PlusIcon size={12} /> {suggestion.command}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="agent-rules-panel-editor">
