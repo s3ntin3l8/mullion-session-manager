@@ -3,7 +3,12 @@ import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
-import type { GitHubPrDetail, GitHubPrDetailThread, ReviewSummaryEntry } from "../api/types.js";
+import type {
+  GitHubPrDetail,
+  GitHubPrDetailThread,
+  GitHubPrReviewEvent,
+  ReviewSummaryEntry,
+} from "../api/types.js";
 import { describeEvent } from "../eventDescriptions.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -24,9 +29,11 @@ import {
   gatedSessions,
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
+import { CommentComposer, ReviewComposer, ThreadActions } from "./Composer.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
 import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
 import { ReviewGateActions } from "./ReviewGateActions.js";
+import { usePrThreadWrites } from "./usePrThreadWrites.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -177,7 +184,15 @@ function PinnedReview({
   );
 }
 
-function Thread({ thread }: { thread: GitHubPrDetailThread }) {
+function Thread({
+  thread,
+  onReply,
+  onResolve,
+}: {
+  thread: GitHubPrDetailThread;
+  onReply: (body: string) => Promise<void>;
+  onResolve: () => Promise<void>;
+}) {
   return (
     <div className="gh-thread">
       <div className="gh-detail-meta">
@@ -193,6 +208,7 @@ function Thread({ thread }: { thread: GitHubPrDetailThread }) {
           <SafeHtml className="gh-html" html={c.bodyHtml} />
         </div>
       ))}
+      <ThreadActions resolved={thread.isResolved} onReply={onReply} onResolve={onResolve} />
     </div>
   );
 }
@@ -230,6 +246,7 @@ export function PrDetailView({
     setActionError(null);
     void refresh();
   };
+  const threadWrites = usePrThreadWrites(projectId, number, reload);
 
   // The CI rows load their jobs once the Checks row is open (cached per run).
   const runIds = (pr?.actionsRuns ?? []).flatMap((r) => {
@@ -342,8 +359,25 @@ export function PrDetailView({
       await useDashboardStore.getState().retryTask(taskId);
       return `Task #${taskId} retried`;
     });
-  const openThreads = pr.threads.filter((t) => !t.isResolved);
-  const resolvedThreads = pr.threads.filter((t) => t.isResolved);
+  const threads = threadWrites.patch(pr.threads);
+  const openThreads = threads.filter((t) => !t.isResolved);
+  const resolvedThreads = threads.filter((t) => t.isResolved);
+  const threadProps = (t: GitHubPrDetailThread) => ({
+    thread: t,
+    onReply: (body: string) => threadWrites.reply(t.id, body),
+    onResolve: () => threadWrites.resolve(t.id),
+  });
+  // A conversation comment or a review; the refetch shows it in the timeline.
+  const postComment = async (body: string) => {
+    await api.commentOnProjectIssue(projectId, number, body);
+    reload();
+    setNotice("Comment posted");
+  };
+  const postReview = async (event: GitHubPrReviewEvent, body: string) => {
+    await api.reviewProjectPr(projectId, number, { event, body, headSha: pr.headSha });
+    reload();
+    setNotice("Review submitted");
+  };
   const unresolved = pr.reviewSummary?.unresolvedThreads ?? openThreads.length;
 
   // The pinned reviews (A2's `latest`, max 2); a relay review the summary does
@@ -633,16 +667,16 @@ export function PrDetailView({
                 <div className="gh-detail-meta">
                   <ThreadIcon size={12} /> Unresolved threads ({openThreads.length})
                 </div>
-                {openThreads.map((t, i) => (
-                  <Thread key={`open-${i}`} thread={t} />
+                {openThreads.map((t) => (
+                  <Thread key={t.id} {...threadProps(t)} />
                 ))}
               </>
             )}
             {resolvedThreads.length > 0 && (
               <details>
                 <summary>Resolved threads ({resolvedThreads.length})</summary>
-                {resolvedThreads.map((t, i) => (
-                  <Thread key={`resolved-${i}`} thread={t} />
+                {resolvedThreads.map((t) => (
+                  <Thread key={t.id} {...threadProps(t)} />
                 ))}
               </details>
             )}
@@ -667,6 +701,8 @@ export function PrDetailView({
             {openThreads.length === 0 && resolvedThreads.length === 0 && timeline.length === 0 && (
               <div className="github-panel-empty-row">No conversation yet</div>
             )}
+            <CommentComposer label="Comment on this pull request" onSubmit={postComment} />
+            {pr.state === "OPEN" && <ReviewComposer onSubmit={postReview} />}
           </div>
         </SidebarSection>
       </div>

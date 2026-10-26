@@ -7,6 +7,7 @@ import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
+import { CommentComposer } from "./Composer.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
@@ -354,11 +355,14 @@ export function IssueDetailView({
   onBack: () => void;
   taskMaster?: TaskMasterInfo | null;
 }) {
-  const { data: issue, error: loadError } = useIssue(projectId, number);
+  const { data: issue, error: loadError, refresh } = useIssue(projectId, number);
   const [actionError, setActionError] = useState<string | null>(null);
   const error = actionError ?? loadError;
   const [busy, setBusy] = useState<"session" | "queue" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // The comment just posted: the list shows only the first comments, so a
+  // new one on a long issue is linked rather than assumed visible.
+  const [postedUrl, setPostedUrl] = useState<string | null>(null);
   const [queued, setQueued] = useState(false);
   const startSessionFrom = useStartSessionFrom(projectId);
   const link = useMullionLinks(projectId).byIssue.get(number);
@@ -375,6 +379,7 @@ export function IssueDetailView({
     }
     setBusy("session");
     setNotice(null);
+    setPostedUrl(null);
     try {
       await startSessionFrom({
         worktree: { branchName: issueBranchName(issue) },
@@ -391,6 +396,7 @@ export function IssueDetailView({
   const queue = async () => {
     setBusy("queue");
     setNotice(null);
+    setPostedUrl(null);
     try {
       const res = await api.queueProjectIssue(projectId, number);
       setQueued(true);
@@ -400,6 +406,13 @@ export function IssueDetailView({
     } finally {
       setBusy(null);
     }
+  };
+
+  const postComment = async (body: string) => {
+    const res = await api.commentOnProjectIssue(projectId, number, body);
+    setPostedUrl(res.htmlUrl);
+    setNotice("Comment posted");
+    void refresh();
   };
 
   return (
@@ -452,7 +465,19 @@ export function IssueDetailView({
               <SessionPills links={link.sessions} />
             </div>
           )}
-          {notice && <div className="gh-detail-notice">{notice}</div>}
+          {notice && (
+            <div className="gh-detail-notice">
+              {notice}
+              {postedUrl && (
+                <>
+                  {" · "}
+                  <a href={postedUrl} target="_blank" rel="noreferrer">
+                    view on GitHub
+                  </a>
+                </>
+              )}
+            </div>
+          )}
           {issue.bodyHtml ? (
             <SafeHtml className="gh-html" html={issue.bodyHtml} />
           ) : (
@@ -479,6 +504,7 @@ export function IssueDetailView({
               ))}
             </div>
           )}
+          <CommentComposer label="Comment on this issue" onSubmit={postComment} />
         </>
       )}
     </div>

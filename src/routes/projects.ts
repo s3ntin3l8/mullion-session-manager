@@ -800,7 +800,7 @@ interface LoadProjectRepoContextOptions {
  * apart from "no github.com remote configured" (204); see host-git.ts's
  * own doc comments on both functions.
  */
-async function loadProjectRepoContext(
+export async function loadProjectRepoContext(
   app: FastifyInstance,
   reply: FastifyReply,
   projectId: number,

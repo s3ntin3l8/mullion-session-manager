@@ -43,6 +43,8 @@ export interface PrDetailReview extends PrDetailComment {
 }
 
 export interface PrDetailThread {
+  /** GraphQL node id — what reply/resolve address the thread by. */
+  id: string;
   isResolved: boolean;
   isOutdated: boolean;
   path: string | null;
@@ -173,6 +175,7 @@ interface GqlPr {
   } | null;
   reviewThreads: {
     nodes: Array<{
+      id: string;
       isResolved: boolean;
       isOutdated: boolean;
       path: string | null;
@@ -204,7 +207,7 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       ${OPINIONATED_REVIEWS_SELECTION}
       ${latestReviewsSelection()}
       reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt comments { totalCount } } }
-      reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
+      reviewThreads(last: 50) { nodes { id isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
       comments(last: 50) { nodes { author { login } bodyHTML createdAt } }
     }
   }
@@ -447,6 +450,7 @@ export async function getPrDetail(
         createdAt: r.submittedAt ?? pr.createdAt,
       })),
     threads: threads.map((t) => ({
+      id: t.id,
       isResolved: t.isResolved,
       isOutdated: t.isOutdated,
       path: t.path,

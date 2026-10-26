@@ -1219,7 +1219,12 @@ export interface GitHubPrDetailComment {
   createdAt: string;
 }
 
+/** What a review submitted from the sidebar says about the PR. */
+export type GitHubPrReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
 export interface GitHubPrDetailThread {
+  /** GraphQL node id — what reply/resolve address the thread by. */
+  id: string;
   isResolved: boolean;
   isOutdated: boolean;
   path: string | null;

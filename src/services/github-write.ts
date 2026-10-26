@@ -691,7 +691,8 @@ export async function createPullRequestReview(
   pullNumber: number,
   params: {
     body: string;
-    commitId: string;
+    /** Omitted: GitHub reviews the PR's current head. */
+    commitId?: string;
     comments?: ReviewCommentParams[];
     event?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   },
@@ -1452,6 +1453,55 @@ export async function resolveReviewThread(token: string, threadId: string): Prom
     }`,
     { id: threadId },
   );
+}
+
+/** A reply just posted to a review thread, in the PR drill-in's own comment shape. */
+export interface ReviewThreadReply {
+  author: string | null;
+  bodyHtml: string;
+  createdAt: string;
+  htmlUrl: string;
+}
+
+/**
+ * Replies to a review thread, addressed by its GraphQL node id — the same id
+ * `resolveReviewThread` takes, so the sidebar needs nothing else to do both.
+ * (REST's `pulls/:n/comments/:id/replies` needs the thread's *first*
+ * comment's database id instead, and a reply-to-a-reply id there is a 404
+ * that reads as "no write access".) No authorization check of its own, same
+ * posture as `resolveReviewThread`.
+ */
+export async function replyToReviewThread(
+  token: string,
+  threadId: string,
+  body: string,
+): Promise<ReviewThreadReply> {
+  const data = await githubGraphQL<{
+    addPullRequestReviewThreadReply: {
+      comment: {
+        author: { login: string } | null;
+        bodyHTML: string;
+        createdAt: string;
+        url: string;
+      } | null;
+    } | null;
+  }>(
+    token,
+    `mutation($id: ID!, $body: String!) {
+      addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) {
+        comment { author { login } bodyHTML createdAt url }
+      }
+    }`,
+    { id: threadId, body },
+  );
+  const comment = data.addPullRequestReviewThreadReply?.comment;
+  if (!comment) throw new GitHubApiError("GitHub did not return the posted reply", 502);
+  return {
+    author: comment.author?.login ?? null,
+    bodyHtml: comment.bodyHTML,
+    createdAt: comment.createdAt,
+    htmlUrl: comment.url,
+  };
 }
 
 /**
