@@ -38,6 +38,7 @@ import {
   getReviewRunForPr,
   getRelayStatus,
   getRunForTarget,
+  markerConclusionForRunStatus,
   requestHermesReview,
   requestRelay,
   stopHermesReview,
@@ -774,14 +775,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
         // later request does not mistake a finished review for a live one.
         // The shared workflow closes its own marker the same way.
         if (record?.markerCheckRunId && target.markerToken) {
-          const conclusion =
-            status.status === "completed"
-              ? "success"
-              : status.status === "failed" ||
-                  status.status === "cancelled" ||
-                  status.status === "interrupted"
-                ? "failure"
-                : null;
+          const conclusion = markerConclusionForRunStatus(status.status);
           if (conclusion) {
             try {
               await completeReviewMarkerCheckRun(

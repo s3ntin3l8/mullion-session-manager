@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { getHermesKey } from "./hermes-integration.js";
-import { createReviewMarkerCheckRun, listCommitCheckRuns } from "./github-write.js";
+import {
+  completeReviewMarkerCheckRun,
+  createReviewMarkerCheckRun,
+  listCommitCheckRuns,
+} from "./github-write.js";
 import {
   getConfiguredAppId,
   markerUnavailableMessage,
   recordChecksMarkerOutcome,
+  resolveMarkerTokens,
 } from "./github-integration.js";
 import type { MarkerUnavailableReason } from "./github-integration.js";
 import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
@@ -1463,6 +1468,104 @@ export async function getRelayStatus(
     };
   }
   return fetchRun(root, key, record);
+}
+
+/**
+ * The conclusion the in-flight marker closes with for a run's status, or null
+ * while the run is still going. One mapping for both closers — the status
+ * route's lazy close and the sweep below — so they cannot disagree.
+ */
+export function markerConclusionForRunStatus(status: string): "success" | "failure" | null {
+  if (status === "completed") return "success";
+  if (status === "failed" || status === "cancelled" || status === "interrupted") return "failure";
+  return null;
+}
+
+/**
+ * How long a marker may stay open before the sweep gives up on its run. A
+ * review takes 10-30 minutes; a run Hermes has lost (its status window is 24h)
+ * would otherwise pin a pending check on the pull request forever.
+ */
+export const MARKER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Closes the in-flight marker of every tracked run that has finished, so a
+ * pending "Hermes review" check does not outlive its review.
+ *
+ * The status route only closes the marker of the LATEST run for a pull
+ * request, and only when someone asks — so a review nobody polls (its verdict
+ * is already on the PR), or one on a head that has since moved, kept its
+ * marker open. A marker that outlives its run also stops the shared
+ * workflow's ledger pairing the round, so the next review loses its delta
+ * base.
+ *
+ * A run still going is left alone; one older than MARKER_MAX_AGE_MS closes
+ * `neutral`. A failure on one marker (Hermes down, a token that cannot be
+ * minted, a refused PATCH) is retried by the next pass, never thrown. Returns
+ * how many markers were closed.
+ */
+export async function sweepOpenReviewMarkers(
+  app: FastifyInstance,
+  now: number = Date.now(),
+): Promise<number> {
+  const open = [...runsById.values()].filter((r) => r.markerCheckRunId !== undefined);
+  if (open.length === 0) return 0;
+  let key: string;
+  let root: string;
+  try {
+    key = assertReviewerConfigured(app);
+    root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
+  } catch {
+    // Hermes is not configured (or its URL is unusable): there is no run to
+    // read. The status route reports the misconfiguration; a sweep that threw
+    // it every minute would only add noise.
+    return 0;
+  }
+  // One token mint per repository per pass, not one per marker.
+  const tokens = new Map<string, string | null>();
+  let closed = 0;
+  for (const record of open) {
+    const checkRunId = record.markerCheckRunId;
+    if (checkRunId === undefined) continue;
+    try {
+      // The token first: a repository that cannot mint one cannot close
+      // anything, so it must not cost a Hermes read per marker per pass.
+      const repoKey = `${record.owner}/${record.repo}`.toLowerCase();
+      if (!tokens.has(repoKey)) {
+        const { markerToken } = await resolveMarkerTokens(app, {
+          owner: record.owner,
+          repo: record.repo,
+        });
+        tokens.set(repoKey, markerToken);
+      }
+      const token = tokens.get(repoKey);
+      if (!token) continue;
+      const expired = now - record.dispatchedAt > MARKER_MAX_AGE_MS;
+      let conclusion: "success" | "failure" | "neutral" | null = null;
+      try {
+        conclusion = markerConclusionForRunStatus((await fetchRun(root, key, record)).status);
+      } catch (err) {
+        // An unreadable status (Hermes down, a revoked key) must not pin the
+        // marker past its age limit: that is the outage the limit is for.
+        if (!expired) throw err;
+        app.log.warn(
+          { err, runId: record.runId, owner: record.owner, repo: record.repo },
+          "closing the in-flight marker neutral — the run status is unreadable",
+        );
+      }
+      conclusion ??= expired ? "neutral" : null;
+      if (!conclusion) continue;
+      await completeReviewMarkerCheckRun(token, record.owner, record.repo, checkRunId, conclusion);
+      record.markerCheckRunId = undefined;
+      closed += 1;
+    } catch (err) {
+      app.log.warn(
+        { err, runId: record.runId, owner: record.owner, repo: record.repo },
+        "could not close the in-flight marker — retrying on the next pass",
+      );
+    }
+  }
+  return closed;
 }
 
 /** Recent runs with their live Hermes status — the Settings "Recent reviews" list. */
