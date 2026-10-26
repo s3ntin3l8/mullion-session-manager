@@ -478,12 +478,12 @@ export async function integrationsRoute(app: FastifyInstance) {
     const configured =
       (settings.runway?.apiUrl ?? "").trim() !== "" && getRunwayIntegration(app).hasKey;
     if (!configured) {
-      return { configured: false, fetchedAt: null, agents: [] };
+      return { configured: false, fetchedAt: null, agents: [], unmappedProviders: [] };
     }
 
     const limits = await fetchRunwayLimits(app);
     if (limits === null) {
-      return { configured: true, fetchedAt: null, agents: [] };
+      return { configured: true, fetchedAt: null, agents: [], unmappedProviders: [] };
     }
 
     const agents: Array<{
@@ -494,9 +494,16 @@ export async function integrationsRoute(app: FastifyInstance) {
       exhausted: boolean;
       quarantined: boolean;
     }> = [];
+    // Issue #1841 — the providers Runway reports that the map has no entry
+    // for. This is the operator's coverage check: it runs here, where the
+    // key already lives, so nothing about the key reaches the client.
+    const unmapped = new Set<string>();
     for (const card of limits.cards) {
       const agent = agentForProvider(app, card.providerId);
-      if (agent === null) continue;
+      if (agent === null) {
+        unmapped.add(card.providerId);
+        continue;
+      }
       agents.push({
         agent,
         providerId: card.providerId,
@@ -515,6 +522,7 @@ export async function integrationsRoute(app: FastifyInstance) {
       configured: true,
       fetchedAt: limits.fetchedAt.toISOString(),
       agents,
+      unmappedProviders: [...unmapped].sort(),
     };
   });
 }

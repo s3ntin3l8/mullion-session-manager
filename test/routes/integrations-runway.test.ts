@@ -100,7 +100,12 @@ describe("Runway quota integration routes", () => {
     it("reports configured:false when the feature is off", async () => {
       const res = await call("GET", "/api/runway/quota");
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ configured: false, fetchedAt: null, agents: [] });
+      expect(res.json()).toEqual({
+        configured: false,
+        fetchedAt: null,
+        agents: [],
+        unmappedProviders: [],
+      });
       // An unconfigured feature must not reach out to Runway at all.
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -148,6 +153,28 @@ describe("Runway quota integration routes", () => {
         exhausted: false,
       });
       expect(body.agents[0].resetAt).toBe("2026-10-24T12:00:00.000Z");
+    });
+
+    it("lists the providers Runway reports that the map has no entry for (#1841)", async () => {
+      applySettingsPatch(app, {
+        runway: { apiUrl: "https://runway.example", providerMap: { anthropic: "claude" } },
+      });
+      await call("PUT", "/api/integrations/runway/key", { key: "runway-admin" }); // pragma: allowlist secret
+      fetchMock.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          limits: [
+            { provider_id: "anthropic", pct_used: 10 },
+            { provider_id: "xai", pct_used: 78 },
+            { provider_id: "gemini" },
+            // Several windows of one provider — listed once.
+            { provider_id: "xai", pct_used: 5 },
+          ],
+        }),
+      });
+
+      const res = await call("GET", "/api/runway/quota");
+      expect(res.json().unmappedProviders).toEqual(["gemini", "xai"]);
     });
 
     it("marks an exhausted provider", async () => {

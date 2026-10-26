@@ -574,10 +574,9 @@ export interface AppSettings {
      * A mapping, not a derivation: Runway's provider ids describe
      * *providers* (anthropic, opencode, chatgpt, minimax, …) and Mullion's
      * agents are *CLIs* (claude, codex, opencode, agy). Neither set
-     * contains the other, several Runway providers have no Mullion agent at
-     * all (gemini, github, ollama, …), and several Mullion agents have no
-     * Runway provider (agy). So the correspondence is a per-install
-     * decision, with a conservative default.
+     * contains the other and several Runway providers have no Mullion agent
+     * at all (gemini, github, ollama, …). So the correspondence is a
+     * per-install decision, with a conservative default.
      *
      * An agent that is NOT in this map is never quarantined: absence of
      * data must not block work.
@@ -760,19 +759,44 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   runway: {
     apiUrl: "",
-    // The conservative default: the two providers whose quota genuinely
-    // tracks the CLI that spends it. Runway's real provider ids (confirmed
-    // against the installed Runway: anthropic, opencode, chatgpt, minimax,
-    // gemini, antigravity, github, ollama, xai, zai, deepseek, kimi_*, …)
-    // are PROVIDER names, and Mullion's agents are CLI names — so the
-    // correspondence is configured, not derived.
+    // The default maps the providers whose quota IS the CLI's own quota.
+    // Runway's provider ids are PROVIDER names and Mullion's agents are CLI
+    // names, so the correspondence is configured, not derived.
     //
-    // `chatgpt` is deliberately NOT mapped to `codex` by default: Codex
-    // authenticates with a ChatGPT plan, but so does a browser, and
-    // quarantining every codex task because an unrelated ChatGPT window
-    // ran out would be the wrong call. An operator whose Codex quota really
-    // is that window can add the mapping.
-    providerMap: { anthropic: "claude", opencode: "opencode" },
+    // Verified (issue #1841) against the `latest_usage` table of a live
+    // Runway on 2026-10-26, read-only and without the admin key. That
+    // install reported: anthropic, anthropic_console, antigravity, chatgpt,
+    // deepseek, gemini, github, kimi_coding, minimax, ollama, opencode,
+    // openrouter, xai. kimi_api, kimi_k2 and zai had no card there, so they
+    // are known only from the collectors' source. One install's snapshot,
+    // not the full set.
+    //
+    // Mapped, and why each one is the CLI's own quota:
+    //   anthropic   -> claude    the Claude plan's session/weekly windows.
+    //   chatgpt     -> codex     Runway's chatgpt collector reads
+    //                            chatgpt.com/backend-api/wham/usage, which is
+    //                            Codex's own rate-limit endpoint.
+    //   antigravity -> agy       read with agy's OAuth token. agy is
+    //                            quarantined when ANY of its pools is
+    //                            exhausted, even if another still has room.
+    //   minimax     -> mcode     the MiniMax Code plan (coding_plan/remains).
+    //   opencode    -> opencode  the OpenCode Go usage API. opencode also
+    //                            spends other providers' quota (xai,
+    //                            openrouter, ...); those are not mapped, so
+    //                            only Go exhaustion holds opencode tasks.
+    //
+    // Left unmapped on purpose: gemini (stale cards, API-strategy collector),
+    // anthropic_console, deepseek, github, kimi_*, ollama, openrouter, xai,
+    // zai — none is a quota a Mullion agent CLI spends by itself. An
+    // operator who disagrees adds the entry in Settings; the Runway section
+    // lists the providers Runway reports that have no entry.
+    providerMap: {
+      anthropic: "claude",
+      opencode: "opencode",
+      chatgpt: "codex",
+      antigravity: "agy",
+      minimax: "mcode",
+    },
     pollSeconds: 60,
   },
   browser: {
@@ -1469,9 +1493,28 @@ function normalizeBotLogin(login: string): string {
   return login.endsWith("[bot]") ? login : `${login}[bot]`;
 }
 
+/**
+ * `runway.providerMap` is the one settings field whose KEYS are data
+ * (operator-chosen Runway provider ids), not schema. `deepMerge` only
+ * carries keys the base object already has, so it would clamp the map to
+ * the default's keys: an added mapping would vanish on load and a removed
+ * default would come back. When the raw source carries a map, it replaces
+ * the merged one wholesale — the settings form always commits the whole
+ * map — and `sanitizeSettings` then cleans it (null prototype, no empty
+ * entries). A source without a map leaves the merged value alone.
+ */
+function withRawProviderMap(merged: AppSettings, raw: unknown): AppSettings {
+  const map = (raw as { runway?: { providerMap?: unknown } } | null)?.runway?.providerMap;
+  if (!isPlainObject(map)) return merged;
+  return {
+    ...merged,
+    runway: { ...merged.runway, providerMap: map as Record<string, string> },
+  };
+}
+
 /** Deep-merges a possibly-partial/older stored blob over the current defaults. */
 export function mergeSettings(stored: unknown): AppSettings {
-  const merged = sanitizeSettings(deepMerge(DEFAULT_SETTINGS, stored));
+  const merged = sanitizeSettings(withRawProviderMap(deepMerge(DEFAULT_SETTINGS, stored), stored));
   // Relay settings saved before `provider` existed were Hermes-only: keep
   // them working instead of silently switching the reviewer off.
   const legacy = (stored as { reviewRelay?: { provider?: unknown; apiUrl?: unknown } } | null)
@@ -1558,7 +1601,9 @@ export function applySettingsPatch(
   // hand-edited text as wizard output.
   const patch = withoutAppliedSnapshot(rawPatch);
   const previous = getStoredSettings(app.db);
-  const next: AppSettings = sanitizeSettings(deepMerge(previous, patch, DEFAULT_SETTINGS));
+  const next: AppSettings = sanitizeSettings(
+    withRawProviderMap(deepMerge(previous, patch, DEFAULT_SETTINGS), patch),
+  );
   // A patched conventions text is "applied" only when it is exactly what the
   // answers generate (the wizard's single PATCH); anything else is a hand edit.
   const patchedSessions = patch.sessions as Record<string, unknown> | undefined;
