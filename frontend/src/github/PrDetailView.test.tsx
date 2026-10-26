@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
 import type { GitHubPrDetail, ReviewSummary } from "../api/types.js";
+import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
 
 const PR: GitHubPrDetail = {
   number: 12,
@@ -285,16 +286,16 @@ describe("PrDetailView", () => {
   it("shows nothing when no relay run is known for the PR", async () => {
     vi.stubGlobal("fetch", stubReview({ state: "none" }));
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    expect(await screen.findByText("Add thing")).toBeInTheDocument();
+    expect(await screen.findByText(/Add thing/)).toBeInTheDocument();
     expect(screen.queryByText(/A review was requested/)).toBeNull();
     expect(screen.queryByText(/Review posted/)).toBeNull();
   });
 
   it("shows status rows, changes, and the conversation with open threads first", async () => {
-    stub(PR);
+    stub(PR, (url) => (url.endsWith("/jobs") ? jsonResponse(200, []) : null));
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
 
-    expect(await screen.findByText("Add thing")).toBeInTheDocument();
+    expect(await screen.findByText(/Add thing/)).toBeInTheDocument();
     expect(screen.getByText("Approved by bob")).toBeInTheDocument();
     expect(screen.getByText("All checks have passed")).toBeInTheDocument();
     expect(screen.getByText("Ready to merge (squash)")).toBeInTheDocument();
@@ -399,7 +400,7 @@ describe("PrDetailView", () => {
         : null,
     );
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Re-review" }));
     expect(
       await screen.findByText(
         "Re-review requested — in-flight marker not written: no Checks grant",
@@ -414,7 +415,7 @@ describe("PrDetailView", () => {
         : null,
     );
     const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Re-review" }));
     expect(await screen.findByText("Re-review requested")).toBeInTheDocument();
 
     unmount();
@@ -423,7 +424,7 @@ describe("PrDetailView", () => {
       url.endsWith("/re-review") ? jsonResponse(409, { message: "wait 60s" }) : null,
     );
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Re-review" }));
     expect(await screen.findByRole("alert")).toBeInTheDocument();
   });
 
@@ -442,7 +443,7 @@ describe("PrDetailView", () => {
     useDashboardStore.setState({ createSession, requestOpenSession });
 
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Hand off to session" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Open session" }));
     await waitFor(() => expect(requestOpenSession).toHaveBeenCalledWith(7));
     expect(createSession).toHaveBeenCalledWith(1, "claude", {
       worktree: { branch: "feat-thing" },
@@ -453,7 +454,7 @@ describe("PrDetailView", () => {
   it("re-fetches on Refresh", async () => {
     const fn = stub(PR);
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await screen.findByText("Add thing");
+    await screen.findByText(/Add thing/);
     const prFetches = () => fn.mock.calls.filter((c) => String(c[0]).endsWith("/prs/12")).length;
     expect(prFetches()).toBe(1);
 
@@ -481,7 +482,7 @@ describe("PrDetailView", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      await screen.findByText("Add thing");
+      await screen.findByText(/Add thing/);
       const prFetches = () => fn.mock.calls.filter((c) => String(c[0]).endsWith("/prs/12")).length;
       expect(prFetches()).toBe(1);
 
@@ -515,7 +516,337 @@ describe("PrDetailView", () => {
     const onBack = vi.fn();
     render(<PrDetailView projectId={1} number={99} onBack={onBack} />);
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "← Back" }));
+    await userEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
+  });
+
+  describe("status-first layout (epic #1965, B4)", () => {
+    const latest = (over: Partial<ReviewSummary["latest"][number]> = {}) => ({
+      author: "hermes[bot]",
+      isBot: true,
+      state: "COMMENTED",
+      body: "Looks right overall.",
+      submittedAt: "2026-01-02T00:00:00Z",
+      reviewedSha: "abc1234",
+      stale: false,
+      ...over,
+    });
+
+    it("puts the PR's own open-on-GitHub icon in the header", async () => {
+      stub(PR);
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const link = await screen.findByRole("link", { name: "Open PR #12 on GitHub" });
+      expect(link).toHaveAttribute("href", "https://github.com/a/b/pull/12");
+    });
+
+    it("pins the latest review under Status, marks it pinned above in the timeline", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<p>Looks right overall.</p>",
+            createdAt: "2026-01-02T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({ unresolvedThreads: 2, latest: [latest()] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: "Latest review by hermes[bot]" });
+      expect(pin).toHaveTextContent("Looks right overall.");
+      expect(pin).toHaveTextContent("Commented");
+      expect(pin).toHaveTextContent("2 unresolved");
+      expect(pin.textContent).not.toMatch(/stale/);
+      // Not repeated as a full card in the conversation.
+      expect(screen.getByText("pinned above")).toBeInTheDocument();
+      expect(screen.getAllByText("Looks right overall.")).toHaveLength(1);
+    });
+
+    it("marks a review stale once the head moved past the commit it reviewed", async () => {
+      stub({
+        ...PR,
+        commits: [
+          { oid: "abc1234ffff", headline: "a", author: null, committedDate: "t" },
+          { oid: "def", headline: "b", author: null, committedDate: "t" },
+          { oid: "ghi", headline: "c", author: null, committedDate: "t" },
+        ],
+        reviewSummary: summaryOf({ latest: [latest({ stale: true })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin).toHaveTextContent("stale · on abc1234, head +2");
+    });
+
+    it("says stale without a distance when the reviewed commit is unknown", async () => {
+      stub({
+        ...PR,
+        reviewSummary: summaryOf({ latest: [latest({ stale: true, reviewedSha: "" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin).toHaveTextContent("stale");
+      expect(pin.textContent).not.toMatch(/head \+/);
+    });
+
+    it("clamps a long review body and expands it", async () => {
+      const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
+      stub({ ...PR, reviewSummary: summaryOf({ latest: [latest({ body })] }) });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body--clamp")).not.toBeNull();
+      await userEvent.click(within(pin).getByRole("button", { name: "Read more" }));
+      expect(pin.querySelector(".pr-pin-body--clamp")).toBeNull();
+      await userEvent.click(within(pin).getByRole("button", { name: "Show less" }));
+      expect(pin.querySelector(".pr-pin-body--clamp")).not.toBeNull();
+    });
+
+    it("pins the relay's landed review when the summary carries none yet", async () => {
+      vi.stubGlobal(
+        "fetch",
+        stubReview({
+          state: "landed",
+          verdict: "CHANGES_REQUESTED",
+          author: "hermes[bot]",
+          body: "Please fix the retry loop.",
+        }),
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: "Latest review by hermes[bot]" });
+      expect(pin).toHaveTextContent("Changes requested");
+      expect(pin).toHaveTextContent("Please fix the retry loop.");
+    });
+
+    it("re-reviews and hands off from the pinned card", async () => {
+      stub({ ...PR, reviewSummary: summaryOf({ latest: [latest()] }) }, (url) =>
+        url.endsWith("/re-review")
+          ? jsonResponse(200, { status: "dispatched", runId: "r", replayed: false })
+          : null,
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      await userEvent.click(within(pin).getByRole("button", { name: "Re-review" }));
+      expect(await screen.findByText("Re-review requested")).toBeInTheDocument();
+      expect(within(pin).getByRole("button", { name: "Hand off comments" })).toBeInTheDocument();
+    });
+
+    it("stops a running relay review from the pinned card and the Mullion card", async () => {
+      const stopped = vi.fn();
+      stub({ ...PR, reviewSummary: summaryOf({ latest: [latest()] }) }, (url, init) => {
+        if (url.endsWith("/api/reviews/run_9/stop") && init?.method === "POST") {
+          stopped();
+          return jsonResponse(200, { runId: "run_9", status: "stopped" });
+        }
+        return null;
+      });
+      useDashboardStore.setState({
+        prsByProject: {
+          1: {
+            prs: [
+              {
+                number: 12,
+                title: "Add thing",
+                htmlUrl: "u",
+                author: "me",
+                headSha: "abc",
+                headBranch: "feat-thing",
+                baseBranch: "main",
+                ciStatus: "success",
+                actionsRuns: [],
+                relayReview: { state: "requested", runId: "run_9", status: "running" },
+              },
+            ],
+            prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+          },
+        },
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const mullion = await screen.findByRole("region", { name: "Mullion" });
+      expect(mullion).toHaveTextContent("review run · running");
+      expect(within(mullion).getByRole("button", { name: "Stop" })).toBeInTheDocument();
+      const pin = screen.getByRole("region", { name: /Latest review/ });
+      await userEvent.click(within(pin).getByRole("button", { name: "Stop review" }));
+      await waitFor(() => expect(stopped).toHaveBeenCalled());
+      expect(await screen.findByText("Review stopped")).toBeInTheDocument();
+      useDashboardStore.setState({ prsByProject: {} });
+    });
+
+    it("offers Open existing session when a session already works the PR", async () => {
+      stub(PR);
+      const requestOpenSession = vi.fn();
+      useDashboardStore.setState({
+        requestOpenSession,
+        projects: [makeProject({ id: 1 })],
+        sessions: [
+          makeSession({ id: 31, projectId: 1, name: "thing worker", liveBranch: "feat-thing" }),
+        ],
+        tasks: [makeTask({ id: 5, projectId: 1, branchName: "feat-thing", status: "in_progress" })],
+        prsByProject: {
+          1: {
+            prs: [
+              {
+                number: 12,
+                title: "Add thing",
+                htmlUrl: "u",
+                author: "me",
+                headSha: "abc",
+                headBranch: "feat-thing",
+                baseBranch: "main",
+                ciStatus: "success",
+                actionsRuns: [],
+              },
+            ],
+            prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+          },
+        },
+        events: {
+          31: [
+            {
+              seq: 1,
+              sessionId: 31,
+              kind: "pr_ci_failed",
+              ts: Date.now() - 60_000,
+              payload: { number: 12, title: "Add thing" },
+            },
+            {
+              seq: 2,
+              sessionId: 31,
+              kind: "pr_ci_failed",
+              ts: Date.now(),
+              payload: { number: 99, title: "Other PR" },
+            },
+          ],
+        } as never,
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const btn = await screen.findByRole("button", { name: "Open existing session" });
+      expect(screen.queryByRole("button", { name: "Open session" })).toBeNull();
+      // The Mullion card: session pill, task chip, the PR's own recent events only.
+      const mullion = screen.getByRole("region", { name: "Mullion" });
+      expect(within(mullion).getByRole("button", { name: /thing worker/ })).toBeInTheDocument();
+      expect(mullion).toHaveTextContent("task #5 · in_progress");
+      const events = within(mullion).getByRole("list", { name: "Recent PR events" });
+      expect(events).toHaveTextContent("#12: CI failed");
+      expect(events).not.toHaveTextContent("#99");
+      await userEvent.click(btn);
+      expect(requestOpenSession).toHaveBeenCalledWith(31);
+      useDashboardStore.setState({
+        projects: [],
+        sessions: [],
+        tasks: [],
+        prsByProject: {},
+        events: {},
+      });
+    });
+
+    it.each([
+      ["reviewing", "Approve task", "approveTask", "Task #5 approved"],
+      ["failed", "Retry task", "retryTask", "Task #5 retried"],
+    ] as const)(
+      "offers %s tasks their Task Master action from the Mullion card",
+      async (status, label, action, notice) => {
+        stub(PR);
+        const fn = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          [action]: fn,
+          projects: [makeProject({ id: 1 })],
+          tasks: [makeTask({ id: 5, projectId: 1, branchName: "feat-thing", status })],
+          prsByProject: {
+            1: {
+              prs: [
+                {
+                  number: 12,
+                  title: "Add thing",
+                  htmlUrl: "u",
+                  author: "me",
+                  headSha: "abc",
+                  headBranch: "feat-thing",
+                  baseBranch: "main",
+                  ciStatus: "success",
+                  actionsRuns: [],
+                },
+              ],
+              prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+            },
+          },
+        });
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        await userEvent.click(await screen.findByRole("button", { name: label }));
+        expect(await screen.findByText(notice)).toBeInTheDocument();
+        expect(fn).toHaveBeenCalledWith(5);
+        useDashboardStore.setState({ projects: [], tasks: [], prsByProject: {} });
+      },
+    );
+
+    it("shows nothing-linked copy when no session, task or run is linked", async () => {
+      stub(PR);
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      expect(
+        await screen.findByText(/No session, task or review run linked yet/),
+      ).toBeInTheDocument();
+    });
+
+    it("lists non-Actions checks under Other checks in the Checks row", async () => {
+      stub(
+        {
+          ...PR,
+          prPhase: "ci_failing",
+          otherChecks: [
+            { name: "codecov/patch", state: "failure", url: "https://c/x", source: "status" },
+            { name: "lint-bot", state: "success", url: null, source: "check_run" },
+          ],
+          checksTruncated: true,
+        },
+        (url) => (url.endsWith("/jobs") ? jsonResponse(200, []) : null),
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      expect(await screen.findByText("1 failing")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /Checks/ }));
+      const drill = screen.getByRole("region", { name: "Checks" });
+      expect(within(drill).getByText("Other checks")).toBeInTheDocument();
+      expect(within(drill).getByRole("link", { name: /codecov\/patch/ })).toHaveAttribute(
+        "href",
+        "https://c/x",
+      );
+      expect(within(drill).getByText("lint-bot")).toBeInTheDocument();
+      expect(within(drill).getByText("More checks exist than are shown")).toBeInTheDocument();
+    });
+
+    it("offers the fix for what blocks the merge, in the Merge row", async () => {
+      stub({ ...PR, prPhase: "ci_failing" }, (url) =>
+        url.endsWith("/jobs") ? jsonResponse(200, []) : null,
+      );
+      const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /Merge/ }));
+      await userEvent.click(screen.getByRole("button", { name: "Show failing checks" }));
+      expect(screen.getByRole("region", { name: "Checks" })).toBeInTheDocument();
+      unmount();
+      __resetGithubCacheForTests();
+
+      stub({ ...PR, prPhase: "review_pending" });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /Merge/ }));
+      expect(screen.getByRole("button", { name: "Request re-review" })).toBeInTheDocument();
+    });
+
+    it("lists a comment-only reviewer in the Reviews drilldown, not 'No reviewers'", async () => {
+      stub({
+        ...PR,
+        reviewDecision: null,
+        reviewers: [],
+        reviewSummary: summaryOf({ commented: ["hermes-bot"] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: /Reviews/ }));
+      const drill = screen.getByRole("region", { name: "Reviews" });
+      expect(within(drill).getByText("hermes-bot")).toBeInTheDocument();
+      expect(within(drill).queryByText("No reviewers")).toBeNull();
+    });
+
+    it("says reviews and conversation are unavailable on a partial detail", async () => {
+      stub({ ...PR, partial: true });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      expect(await screen.findByText(/unavailable right now/)).toBeInTheDocument();
+    });
   });
 });

@@ -81,7 +81,7 @@ describe("GitHubSidebarView", () => {
   it("embeds the real GitHub panel: repo, PR cards and issues", async () => {
     const { container } = renderView();
 
-    const repo = await screen.findByRole("link", { name: "o/r" });
+    const repo = await screen.findByRole("link", { name: "Open repository on GitHub" });
     expect(repo.getAttribute("href")).toBe("https://github.com/o/r");
     expect(await screen.findByText("PR title 1")).toBeTruthy();
     // Embedded: the drawer scrolls, not the panel.
@@ -126,9 +126,15 @@ describe("GitHubSidebarView", () => {
     expect(actions.onOpenGitHub).toHaveBeenCalledWith(4);
   });
 
+  it("uses the pop-out-to-dock glyph, not the external-link one, for the toolbar button", () => {
+    renderView();
+    const svg = screen.getByRole("button", { name: "Open GitHub panel" }).querySelector("svg");
+    expect(svg?.querySelector("path")?.getAttribute("d")).toContain("M14 4h6v6");
+  });
+
   it("subscribes to live updates while mounted and unsubscribes on unmount", async () => {
     const { unmount } = renderView();
-    await screen.findByRole("link", { name: "o/r" });
+    await screen.findByRole("link", { name: "Open repository on GitHub" });
 
     expect(subscribe).toHaveBeenCalledWith(4);
     expect(unsubscribe).not.toHaveBeenCalled();

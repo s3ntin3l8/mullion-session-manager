@@ -1,348 +1,21 @@
-import { checkDotClass } from "./github/checkDot.js";
-import { runStatusText } from "./lib/statusTone.js";
-import { ciDotClass } from "./dock/dockHelpers.js";
-import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./github/prPhase.js";
+import { runStatusText, statusTone } from "./lib/statusTone.js";
+import { sortPrsByAttention } from "./github/prPhase.js";
 import { PrDetailView } from "./github/PrDetailView.js";
+import { PrRow } from "./github/PrRow.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api/index.js";
-import type {
-  GitHubActionsRun,
-  GitHubJob,
-  GitHubLogResponse,
-  GitHubPRsStatus,
-  GitHubPROrWithChecks,
-  ProjectReleaseStatus,
-  RelayReviewState,
-  ReleaseRunReason,
-  ReleaseMergeReason,
-} from "./api/index.js";
-import { ChevronDownIcon, GitHubIcon } from "./ui/icons.js";
+import type { ProjectReleaseStatus, ReleaseRunReason, ReleaseMergeReason } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
-import { useGitHubStatus, usePrList, useRunJobs } from "./hooks/useGitHubData.js";
+import { useGitHubStatus, usePrList } from "./hooks/useGitHubData.js";
+import { useMullionLinks } from "./hooks/useMullionLinks.js";
 import { useDashboardStore } from "./store/index.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { Skeleton, SkeletonRegion } from "./ui/Skeleton.js";
+import { Button, SidebarRow, SidebarSection, ViewHeader } from "./ui/sidebar/index.js";
 
 export interface GitHubPanelParams {
   projectId: number;
-}
-
-function runIdFromUrl(url: string): number | null {
-  const match = url.match(/\/actions\/runs\/(\d+)/);
-  return match ? parseInt(match[1], 10) : null;
-}
-
-function checkGlyph(status: string, conclusion: string | null): string {
-  switch (checkDotClass(status, conclusion)) {
-    case "good":
-      return "✓";
-    case "bad":
-      return "✗";
-    case "pending":
-      return "⋯";
-    default:
-      return "–";
-  }
-}
-
-// Failures first, then in-progress, then everything that passed.
-function jobRank(job: GitHubJob): number {
-  const dot = checkDotClass(job.status, job.conclusion);
-  return dot === "bad" ? 0 : dot === "pending" ? 1 : 2;
-}
-
-function CollapsibleSection({
-  expanded,
-  children,
-}: {
-  expanded: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="github-panel-collapsible">
-      {expanded && <div className="github-panel-collapsible-body">{children}</div>}
-    </div>
-  );
-}
-
-function JobRow({ projectId, runId, job }: { projectId: number; runId: number; job: GitHubJob }) {
-  const [log, setLog] = useState<GitHubLogResponse | null | undefined>(undefined);
-  const [loading, setLoading] = useState(false);
-
-  const fetchLog = useCallback(() => {
-    if (log !== undefined) {
-      setLog(log ? null : undefined);
-      return;
-    }
-    setLoading(true);
-    api
-      .getGitHubLogs(projectId, runId, job.id)
-      .then((r) => {
-        setLog(r);
-      })
-      .catch(() => setLog(null))
-      .finally(() => setLoading(false));
-  }, [projectId, runId, job.id, log]);
-
-  return (
-    <div>
-      <button
-        className="github-panel-run-row"
-        onClick={(e) => {
-          e.stopPropagation();
-          fetchLog();
-        }}
-      >
-        <span className={`github-panel-ci-dot ${checkDotClass(job.status, job.conclusion)}`} />
-        <span className="github-panel-run-name">{job.name}</span>
-        <span className="github-panel-run-status" title={runStatusText(job.status, job.conclusion)}>
-          {checkGlyph(job.status, job.conclusion)}
-        </span>
-      </button>
-      {loading && <div className="github-panel-empty-row indent-job">Loading logs…</div>}
-      {log && log.log && (
-        <pre className="github-panel-log" onClick={(e) => e.stopPropagation()}>
-          {log.log}
-          {log.truncated && (
-            <span className="github-panel-log-truncated">… ({log.lineCount} lines shown)</span>
-          )}
-        </pre>
-      )}
-      {log && !log.log && <div className="github-panel-empty-row indent-job">No log output</div>}
-    </div>
-  );
-}
-
-type RunJobs = GitHubJob[] | null | undefined;
-
-// One workflow run: a plain label, then its jobs on a single level —
-// failures first, skipped/cancelled folded into one expandable row.
-function RunGroup({
-  projectId,
-  run,
-  runId,
-  jobs,
-}: {
-  projectId: number;
-  run: GitHubActionsRun;
-  runId: number | null;
-  jobs: RunJobs;
-}) {
-  const [showSkipped, setShowSkipped] = useState(false);
-  const label = (
-    <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="github-panel-ci-group-label">
-      <span className={`github-panel-ci-dot ${checkDotClass(run.status, run.conclusion)}`} />
-      {run.name}
-    </a>
-  );
-  if (runId == null) return <div className="github-panel-ci-group">{label}</div>;
-
-  const active = (jobs ?? []).filter((j) => jobRank(j) < 2 || !isSkipped(j));
-  const skipped = (jobs ?? []).filter((j) => jobRank(j) === 2 && isSkipped(j));
-  active.sort((x, y) => jobRank(x) - jobRank(y));
-  return (
-    <div className="github-panel-ci-group">
-      {label}
-      {jobs === undefined && <div className="github-panel-empty-row indent-job">Loading jobs…</div>}
-      {jobs === null && (
-        <div className="github-panel-empty-row indent-job">Failed to load jobs</div>
-      )}
-      {active.map((job) => (
-        <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
-      ))}
-      {skipped.length > 0 && (
-        <>
-          <button
-            className="github-panel-run-row indent-job"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowSkipped(!showSkipped);
-            }}
-          >
-            <span className="github-panel-ci-dot none" />
-            <span className="github-panel-run-name">{skipped.length} skipped</span>
-            <ChevronDownIcon
-              size={10}
-              style={{ transform: showSkipped ? "rotate(180deg)" : undefined, flexShrink: 0 }}
-            />
-          </button>
-          {showSkipped &&
-            skipped.map((job) => (
-              <JobRow key={job.id} projectId={projectId} runId={runId} job={job} />
-            ))}
-        </>
-      )}
-    </div>
-  );
-}
-
-function isSkipped(job: GitHubJob): boolean {
-  return checkDotClass(job.status, job.conclusion) === "none";
-}
-
-function prCiSummary(pr: GitHubPROrWithChecks, jobsByRun: Record<number, RunJobs>): string | null {
-  const loaded = Object.values(jobsByRun).filter((j): j is GitHubJob[] => Array.isArray(j));
-  const fetchable = pr.actionsRuns.filter((r) => runIdFromUrl(r.htmlUrl) != null).length;
-  if (loaded.length > 0 && loaded.length === fetchable) {
-    const all = loaded.flat();
-    const failed = all.filter((j) => checkDotClass(j.status, j.conclusion) === "bad").length;
-    const pending = all.filter((j) => checkDotClass(j.status, j.conclusion) === "pending").length;
-    const skipped = all.filter(isSkipped).length;
-    const passed = all.length - failed - pending - skipped;
-    return [
-      failed > 0 ? `✗${failed}` : null,
-      pending > 0 ? `⋯${pending}` : null,
-      passed > 0 ? `✓${passed}` : null,
-      skipped > 0 ? `–${skipped}` : null,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-  if (pr.actionsRuns.length === 0) return null;
-  const failing = pr.actionsRuns.filter((r) => checkDotClass(r.status, r.conclusion) === "bad");
-  if (failing.length > 0) return `${failing.length} failed`;
-  return `${pr.actionsRuns.length} run${pr.actionsRuns.length === 1 ? "" : "s"}`;
-}
-
-/**
- * The relay's marker on a PR row, in words (issue #1630).
- *
- * A review that was requested but could not be confirmed — the landed-review
- * lookup failed — is not the same as one that is simply on its way, and the
- * title says so instead of implying the bot is still working.
- */
-function relayPillTitle(relay: RelayReviewState): string {
-  if (relay.state === "landed") {
-    return `Review posted: ${relay.verdict ?? "review"}${relay.author ? ` by ${relay.author}` : ""}`;
-  }
-  if (relay.landedChecked === false) {
-    return "A review was requested for this pull request — it could not be confirmed on the pull request";
-  }
-  return "A review was requested for this pull request";
-}
-
-const HOVER_PREFETCH_MS = 120;
-
-function PRCard({
-  pr,
-  projectId,
-  onOpen,
-}: {
-  pr: GitHubPROrWithChecks;
-  projectId: number;
-  onOpen: (number: number) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const prefetchGithubPr = useDashboardStore((st) => st.prefetchGithubPr);
-  // Cached per run, so collapsing, re-expanding or coming back from the PR
-  // detail keeps the jobs instead of refetching them.
-  const runIds = pr.actionsRuns.flatMap((run) => {
-    const id = runIdFromUrl(run.htmlUrl);
-    return id == null ? [] : [id];
-  });
-  const jobsByRun = useRunJobs(projectId, runIds, expanded);
-
-  // Expanding shows every run's jobs as one flat list.
-  const toggle = () => setExpanded((e) => !e);
-  // A short intent delay, so sweeping the pointer down a long list doesn't
-  // fire a live GitHub call per row it crosses.
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cancelWarm = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = null;
-  };
-  const warmDetail = () => {
-    cancelWarm();
-    hoverTimer.current = setTimeout(
-      () => prefetchGithubPr(projectId, pr.number),
-      HOVER_PREFETCH_MS,
-    );
-  };
-  useEffect(() => cancelWarm, []);
-  const summary = prCiSummary(pr, jobsByRun);
-
-  return (
-    <div
-      className="github-panel-pr-card"
-      onMouseEnter={warmDetail}
-      onMouseLeave={cancelWarm}
-      onFocus={warmDetail}
-      onBlur={cancelWarm}
-    >
-      <button className="github-panel-pr-header" onClick={toggle}>
-        <span className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`} />
-        <a
-          href={pr.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="github-panel-row-number"
-          onClick={(e) => e.stopPropagation()}
-        >
-          #{pr.number}
-        </a>
-        <span className="github-panel-row-title">{pr.title}</span>
-        {pr.prPhase && pr.prPhase !== "unknown" && (
-          <span className={`gh-phase-pill ${phaseTone(pr.prPhase)}`}>
-            {PHASE_LABEL[pr.prPhase]}
-          </span>
-        )}
-        {pr.unresolvedThreads != null && pr.unresolvedThreads > 0 && (
-          <span className="github-panel-row-number" title="Unresolved review threads">
-            💬 {pr.unresolvedThreads}
-          </span>
-        )}
-        {pr.author && <span className="github-panel-pr-author">{pr.author}</span>}
-        {summary && <span className="github-panel-pr-ci-summary">{summary}</span>}
-        {pr.relayReview && pr.relayReview.state !== "none" && (
-          <span
-            className={`github-panel-pr-relay-pill ${pr.relayReview.state}${
-              pr.relayReview.verdict === "CHANGES_REQUESTED" ? " changes-requested" : ""
-            }`}
-            title={relayPillTitle(pr.relayReview)}
-          >
-            {pr.relayReview.state === "landed" ? "Review posted" : "Review requested"}
-          </span>
-        )}
-        <ChevronDownIcon
-          size={12}
-          style={{ transform: expanded ? "rotate(180deg)" : undefined, flexShrink: 0 }}
-        />
-      </button>
-      <div className="github-panel-branch-labels">
-        {pr.baseBranch} <span className="github-panel-branch-arrow">←</span> {pr.headBranch}
-        <button type="button" className="gh-link-button" onClick={() => onOpen(pr.number)}>
-          Details
-        </button>
-      </div>
-      <CollapsibleSection expanded={expanded}>
-        {pr.actionsRuns.length === 0 && (
-          <div className="github-panel-empty-row indent-run">No workflow runs for this PR</div>
-        )}
-        {pr.actionsRuns.map((run) => {
-          const runId = runIdFromUrl(run.htmlUrl);
-          return (
-            <RunGroup
-              key={run.htmlUrl}
-              projectId={projectId}
-              run={run}
-              runId={runId}
-              jobs={runId == null ? undefined : jobsByRun[runId]}
-            />
-          );
-        })}
-      </CollapsibleSection>
-    </div>
-  );
-}
-
-function prSummaryText(summary: GitHubPRsStatus["prSummary"]): string {
-  const parts: string[] = [];
-  if (summary.pass > 0) parts.push(`${summary.pass}✅`);
-  if (summary.fail > 0) parts.push(`${summary.fail}❌`);
-  if (summary.pending > 0) parts.push(`${summary.pending}⏳`);
-  if (summary.unknown > 0) parts.push(`${summary.unknown}❓`);
-  return `${summary.total} PR${summary.total === 1 ? "" : "s"} — ${parts.join(" ") || "no CI data"}`;
 }
 
 // #744 — reason→copy for the Release section's Run/Merge refusals. Same
@@ -466,29 +139,18 @@ function ReleaseSection({
   // Hidden entirely when this repo isn't a release-please repo — but NOT
   // collapsed together with "the token can't tell" (docs/github-
   // integration.md's Current-limitations section already regrets doing
-  // exactly that for the CI dot: "no UI signal distinguishing 'no
-  // workflows' from 'no permission'"). "no-actions-scope" gets a small,
-  // dismissable-by-just-not-looking note instead of silence, so a repo that
-  // DOES use release-please but is missing `Actions: read` doesn't look
-  // indistinguishable from one that simply doesn't use it.
-  // release.conventionalTitlesWarning is read directly off `release` (not a
-  // separate prop) in both this branch and the main one below — a single
-  // "Release" header per render either way, never a second, duplicate one
-  // from a sibling block. See conventionalTitlesWarningRow's own doc comment
-  // for why the "not-configured" case (the ONLY branch that renders no
-  // header at all — the early return just above) is the sole case still
-  // handled by a sibling block in the main component below.
+  // exactly that for the CI dot): "no-actions-scope" gets a small note
+  // instead of silence.
   if (release.detection.kind === "not-configured") return null;
   if (release.detection.kind === "no-actions-scope") {
     return (
-      <div className="github-panel-section">
-        <div className="github-panel-section-title">Release</div>
+      <SidebarSection title="Release" persistKey="github-release">
         {release.conventionalTitlesWarning && conventionalTitlesWarningRow()}
         <div className="github-panel-empty-row">
           Can't check for a release-please workflow — the connected token lacks{" "}
           <code>Actions: read</code>.
         </div>
-      </div>
+      </SidebarSection>
     );
   }
 
@@ -497,62 +159,57 @@ function ReleaseSection({
     pr !== null && !pr.draft && pr.mergeable === true && pr.mergeableState === "clean";
 
   return (
-    <div className="github-panel-section">
-      <div className="github-panel-section-title">Release</div>
+    <SidebarSection title="Release" persistKey="github-release">
       {release.conventionalTitlesWarning && conventionalTitlesWarningRow()}
-      <div className="git-panel-sync-row">
-        <span className="git-panel-ahead-behind">
-          {pr ? (
-            <a
-              href={pr.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="github-panel-row-number"
-            >
+      <SidebarRow
+        lead={
+          pr ? (
+            <span
+              className={`sb-dot sb-dot--${statusTone({ ci: pr.ciStatus })}`}
+              aria-hidden="true"
+            />
+          ) : undefined
+        }
+        title={pr ? pr.title : "No release PR open"}
+        meta={
+          pr ? (
+            <a href={pr.htmlUrl} target="_blank" rel="noreferrer" className="mono">
               #{pr.number}
             </a>
-          ) : (
-            "No release PR open"
-          )}
-        </span>
-        <span className="git-panel-sync-controls">
-          <button
-            className="git-panel-fetch-btn"
-            onClick={handleRun}
-            disabled={isRunning}
-            title="Run release-please now, without waiting for the next push to the default branch"
-          >
-            {isRunning ? "⟳" : "▶"} Run
-          </button>
-          <button
-            className="git-panel-fetch-btn"
-            onClick={handleMerge}
-            disabled={isMerging || !canMerge}
-            title={
-              pr === null
-                ? "No release PR open"
-                : canMerge
-                  ? "Merge this release"
-                  : `Not ready to merge (${pr.draft ? "draft" : pr.mergeableState})`
-            }
-          >
-            {isMerging ? "⟳" : "✓"} Merge
-          </button>
-        </span>
-      </div>
-      {pr && (
-        <div className="github-panel-branch-labels">
-          <span
-            className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`}
-          />
-          {pr.title}
-        </div>
-      )}
+          ) : undefined
+        }
+        extra={
+          <div className="pr-dr-actions">
+            <Button
+              size="sm"
+              onClick={handleRun}
+              disabled={isRunning}
+              title="Run release-please now, without waiting for the next push to the default branch"
+            >
+              {isRunning ? "Running…" : "Run"}
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleMerge}
+              disabled={isMerging || !canMerge}
+              title={
+                pr === null
+                  ? "No release PR open"
+                  : canMerge
+                    ? "Merge this release"
+                    : `Not ready to merge (${pr.draft ? "draft" : pr.mergeableState})`
+              }
+            >
+              {isMerging ? "Merging…" : "Merge"}
+            </Button>
+          </div>
+        }
+      />
       {runError && <div className="github-panel-empty-row github-panel-conflicts">{runError}</div>}
       {mergeError && (
         <div className="github-panel-empty-row github-panel-conflicts">{mergeError}</div>
       )}
-    </div>
+    </SidebarSection>
   );
 }
 
@@ -602,7 +259,8 @@ export function GitHubPanel({
   // The store's live PRs (kept fresh by the WS) win over the cached fetch.
   const status = useGitHubStatus(params.projectId);
   const effectivePrs = usePrList(params.projectId);
-  const prsStatus = effectivePrs;
+  // Sessions / task / review run per PR (B7); the list's own PRs feed the join.
+  const links = useMullionLinks(params.projectId, { prs: effectivePrs?.prs });
 
   useAsyncData(
     () => api.getProjectRelease(params.projectId),
@@ -667,18 +325,22 @@ export function GitHubPanel({
     );
   }
 
+  const prs = effectivePrs?.prs ?? [];
+  const showEmptyPrs =
+    ((effectivePrs && effectivePrs.prs.length === 0) || (!effectivePrs && status)) &&
+    status?.pulls.length === 0;
+
   return (
     <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
       {status && (
-        <a
-          className="github-panel-repo"
-          href={status.repo.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          <GitHubIcon size={14} />
-          {status.repo.owner}/{status.repo.repo}
-        </a>
+        // The repo's own open-on-GitHub icon; a PR's detail view owns its header
+        // (and the PR's URL) while it is open, an issue's does the same.
+        <ViewHeader
+          title={`${status.repo.owner}/${status.repo.repo}`}
+          subtitle={`${status.openPRs} open PR${status.openPRs === 1 ? "" : "s"}`}
+          externalUrl={status.repo.htmlUrl}
+          externalLabel="Open repository on GitHub"
+        />
       )}
 
       {releaseStatus && (
@@ -699,41 +361,44 @@ export function GitHubPanel({
           doc comment for why a second copy here would double up. */}
       {releaseStatus?.conventionalTitlesWarning &&
         releaseStatus.detection.kind === "not-configured" && (
-          <div className="github-panel-section">
-            <div className="github-panel-section-title">Release</div>
+          <SidebarSection title="Release" persistKey="github-release">
             {conventionalTitlesWarningRow()}
-          </div>
+          </SidebarSection>
         )}
 
-      {effectivePrs && effectivePrs.prs.length > 0 && (
-        <div className="github-panel-section">
-          <div className="github-panel-section-title">
-            Pull requests ({prSummaryText(effectivePrs.prSummary)})
-          </div>
-          {sortPrsByAttention(effectivePrs.prs).map((pr) => (
-            <PRCard key={pr.number} pr={pr} projectId={params.projectId} onOpen={setOpenPr} />
+      {prs.length > 0 && (
+        <SidebarSection title="Pull requests" count={prs.length} persistKey="github-prs">
+          {sortPrsByAttention(prs).map((pr) => (
+            <PrRow
+              key={pr.number}
+              pr={pr}
+              projectId={params.projectId}
+              links={links.byPr.get(pr.number)}
+              onOpen={setOpenPr}
+            />
           ))}
-        </div>
+        </SidebarSection>
       )}
 
       {/* Fallback when PR poller cache is empty (cold-start, remote-hosted
-          Phase 1 skip) but the live /github endpoint has PRs. */}
+          Phase 1 skip) but the live /github endpoint has PRs. A row drills in
+          like any other: the detail loads on its own. */}
       {!effectivePrs && status && status.pulls.length > 0 && (
-        <div className="github-panel-section">
-          <div className="github-panel-section-title">Pull requests ({status.openPRs})</div>
+        <SidebarSection title="Pull requests" count={status.openPRs} persistKey="github-prs">
           {status.pulls.map((pr) => (
-            <a
+            <SidebarRow
               key={pr.number}
-              className="github-panel-row"
-              href={pr.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="github-panel-row-number">#{pr.number}</span>
-              <span className="github-panel-row-title">{pr.title}</span>
-            </a>
+              title={pr.title}
+              meta={
+                <>
+                  <span className="mono">#{pr.number}</span>
+                  {pr.author ? ` · ${pr.author}` : ""}
+                </>
+              }
+              onClick={() => setOpenPr(pr.number)}
+            />
           ))}
-        </div>
+        </SidebarSection>
       )}
 
       {status && (
@@ -745,35 +410,38 @@ export function GitHubPanel({
         />
       )}
 
-      {((prsStatus && prsStatus.prs.length === 0) || (!prsStatus && status)) &&
-        status?.pulls.length === 0 && (
-          <div className="github-panel-section">
-            <div className="github-panel-section-title">Pull requests (0)</div>
-            <div className="github-panel-empty-row">No open pull requests</div>
-          </div>
-        )}
+      {showEmptyPrs && (
+        <SidebarSection title="Pull requests" persistKey="github-prs">
+          <div className="github-panel-empty-row">No open pull requests</div>
+        </SidebarSection>
+      )}
 
       {status && status.actionsRuns.length > 0 && (
-        <div className="github-panel-section">
-          <div className="github-panel-section-title">Default branch CI</div>
+        <SidebarSection
+          title="Default branch CI"
+          persistKey="github-default-ci"
+          defaultOpen={false}
+        >
           {status.actionsRuns.map((run) => (
-            <a
+            <SidebarRow
               key={run.htmlUrl}
-              className="github-panel-row"
-              href={run.htmlUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span
-                className={`github-panel-ci-dot ${checkDotClass(run.status, run.conclusion)}`}
-              />
-              <span className="github-panel-row-title">{run.name}</span>
-              <span className="github-panel-row-number">
-                {runStatusText(run.status, run.conclusion)}
-              </span>
-            </a>
+              lead={
+                <span
+                  className={`sb-dot sb-dot--${statusTone({ status: run.status, conclusion: run.conclusion })}`}
+                  aria-hidden="true"
+                />
+              }
+              title={
+                <a href={run.htmlUrl} target="_blank" rel="noreferrer" className="pr-run-link">
+                  {run.name}
+                </a>
+              }
+              trailing={
+                <span className="pr-dr-end">{runStatusText(run.status, run.conclusion)}</span>
+              }
+            />
           ))}
-        </div>
+        </SidebarSection>
       )}
     </div>
   );

@@ -1837,14 +1837,6 @@
   overflow: visible;
   padding-top: 0;
 }
-.github-panel.embedded .github-panel-branch-labels {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.github-panel.embedded .github-panel-pr-author {
-  display: none;
-}
 
 /* PR 25 (frontend refactor plan) — was `.github-panel-empty`, borrowed
    as-is by six other panels (GitPanel, UnifiedBoard, DockConfigPanel,
@@ -1926,20 +1918,6 @@
   font-size: 0.75rem;
   color: var(--dim);
   padding: 4px 2px;
-}
-/* GitHubPanel.tsx's CI accordion (PR → workflow run → job → log) placeholder
-   rows — "No workflow runs for this PR", "Loading jobs…"/"Failed to load
-   jobs", "Loading logs…"/"No log output" — used inline paddingLeft that
-   didn't match the depth of the row each one replaces (see
-   .github-panel-run-group/.github-panel-job-row's own left-inset below).
-   `.indent-run` matches a workflow-run row's own 16px; `.indent-job`
-   matches a job row's 24px (and .github-panel-log's own 24px left padding,
-   for the log-output placeholders). */
-.github-panel-empty-row.indent-run {
-  padding-left: 10px;
-}
-.github-panel-empty-row.indent-job {
-  padding-left: 18px;
 }
 .github-panel-row {
   display: flex;
@@ -2104,56 +2082,6 @@ button.github-panel-row.gh-issue-row {
 }
 .gh-phase-pill.good {
   color: var(--g);
-}
-.gh-status-row {
-  border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
-}
-.gh-status-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px;
-  background: none;
-  border: 0;
-  color: var(--fg);
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-}
-.gh-status-head:disabled {
-  cursor: default;
-}
-.gh-status-glyph {
-  width: 18px;
-  text-align: center;
-  font-weight: 600;
-}
-.gh-status-glyph.good {
-  color: var(--g);
-}
-.gh-status-glyph.bad {
-  color: var(--r);
-}
-.gh-status-glyph.warn {
-  color: var(--y);
-}
-.gh-status-text {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-}
-.gh-status-title {
-  font-size: 0.78125rem;
-  font-weight: 600;
-}
-.gh-status-summary {
-  font-size: 0.71875rem;
-  color: var(--dim);
-}
-.gh-status-body {
-  padding: 0 6px 6px 30px;
 }
 .gh-thread {
   padding: 4px 0;
@@ -2657,133 +2585,13 @@ button.github-panel-row.gh-issue-row {
   cursor: default;
 }
 
-/* Per-PR CI accordion cards (GitHubPanel.tsx's PR section, issue #102) —
-   structured expand/collapse with ciStatus dot + branch labels + run rows. */
-.github-panel-pr-card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 6px;
-  overflow: hidden;
-}
-.github-panel-pr-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  background: none;
-  border: none;
-  color: var(--fg);
-  font-size: 0.78125rem;
-  cursor: pointer;
-  text-align: left;
-}
-.github-panel-pr-header:hover {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
-}
-.github-panel-pr-author {
-  font-size: 0.6875rem;
-  color: var(--dim);
-  flex-shrink: 0;
-}
+/* CI status dot with no verdict (skipped / no runs). */
 .github-panel-ci-dot.none {
   background: var(--dim);
   opacity: 0.35;
 }
-.github-panel-branch-labels {
-  font-size: 0.6875rem;
-  color: var(--dim);
-  padding: 0 10px 6px;
-  font-family: "Geist Mono", monospace;
-}
-.github-panel-branch-arrow {
-  color: var(--accent-solid);
-}
-.github-panel-collapsible-body {
-  border-top: 1px solid var(--border);
-}
-.github-panel-run-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 12px 5px 18px;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  font: inherit;
-  font-size: 0.71875rem;
-  text-align: left;
-  color: var(--fg);
-  text-decoration: none;
-}
-.github-panel-run-row:hover {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
-}
-.github-panel-run-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.github-panel-run-status {
-  flex-shrink: 0;
-  font-size: 0.6875rem;
-  color: var(--dim);
-  font-family: "Geist Mono", monospace;
-}
-.github-panel-pr-ci-summary {
-  flex-shrink: 0;
-  font-size: 0.6875rem;
-  color: var(--dim);
-  font-family: "Geist Mono", monospace;
-}
 
-/* The review relay's state for a PR (issue #1630): a review was requested,
-   or one has landed. */
-.github-panel-pr-relay-pill {
-  flex-shrink: 0;
-  font-size: 0.65625rem;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--dim);
-  white-space: nowrap;
-}
-.github-panel-pr-relay-pill.requested {
-  border-color: color-mix(in srgb, var(--accent-solid) 45%, transparent);
-  color: var(--accent-solid);
-}
-.github-panel-pr-relay-pill.landed {
-  border-color: color-mix(in srgb, var(--status-success-fg) 45%, transparent);
-  color: var(--status-success-fg);
-}
-/* A landed review that asked for changes is not the good news an approval
-   is — the tone follows the verdict, not merely the fact that a review
-   landed. */
-.github-panel-pr-relay-pill.landed.changes-requested {
-  border-color: color-mix(in srgb, var(--y) 45%, transparent);
-  color: var(--y);
-}
-
-/* A workflow run in a PR's expanded CI list: a plain label above its jobs. */
-.github-panel-ci-group {
-  padding-bottom: 4px;
-}
-.github-panel-ci-group-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px 2px;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: var(--dim);
-  text-decoration: none;
-}
-.github-panel-ci-group-label:hover {
-  color: var(--fg);
-}
-
+/* Job log output, shown inline under a job in a PR's Checks drilldown. */
 .github-panel-log {
   margin: 0;
   padding: 8px 16px 8px 18px;
