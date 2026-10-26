@@ -136,7 +136,7 @@ export async function listBranches(
 
   const output = await runGit(cwd, [
     "for-each-ref",
-    "--format=%(HEAD)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(committerdate:relative)",
+    "--format=%(HEAD)%09%(refname:short)%09%(upstream:short)%09%(upstream:track)%09%(committerdate:relative)%09%(objectname)",
     "refs/heads",
   ]);
   if (output === null) return null;
@@ -145,11 +145,12 @@ export async function listBranches(
     .split("\n")
     .filter((line) => line.length > 0)
     .map((line) => {
-      const [head, name, upstream, track, relative] = line.split("\t");
+      const [head, name, upstream, track, relative, sha] = line.split("\t");
       const info: GitBranchInfo = { name: name ?? "", isCurrent: head === "*" };
       if (upstream) info.upstream = upstream;
       if (track) Object.assign(info, parseUpstreamTrack(track));
       if (relative) info.lastCommitRelative = relative;
+      if (sha) info.sha = sha;
       return info;
     })
     .filter((branch) => branch.name.length > 0);
@@ -172,6 +173,9 @@ export async function listBranches(
         const defaultBranchName = base.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
         for (const branch of branches) {
           branch.isMerged = branch.name !== defaultBranchName && mergedNames.has(branch.name);
+          if (branch.name === defaultBranchName) continue;
+          if (branch.isMerged) branch.mergeState = "ancestor";
+          else if (branch.upstreamGone) branch.mergeState = "upstream-gone";
         }
       }
     }
@@ -415,4 +419,139 @@ export function isWithinAnyWorktree(candidate: string, worktreePaths: string[]):
       resolvedCandidate.startsWith(resolvedWorktree + path.sep)
     );
   });
+}
+
+const MAX_UNIQUE_COMMITS = 50;
+
+export interface GitBranchCommit {
+  sha: string;
+  subject: string;
+  author: string;
+  /** Unix seconds. */
+  time: number;
+}
+
+export interface GitBranchDetail {
+  name: string;
+  sha: string;
+  upstream?: string;
+  upstreamGone?: boolean;
+  /** Commits ahead of / behind the upstream (absent without one). */
+  upstreamAhead?: number;
+  upstreamBehind?: number;
+  /** The base ref the numbers below compare against (e.g. "origin/main"). */
+  base: string | null;
+  baseAhead?: number;
+  baseBehind?: number;
+  /** `base..branch`, newest first, capped at 50 (`uniqueTruncated` says so). */
+  uniqueCommits: GitBranchCommit[];
+  uniqueTruncated: boolean;
+  lastCommit: GitBranchCommit | null;
+}
+
+/** Same rejection rules as `deleteBranch`'s name check: no flags, globs,
+ * whitespace, `..` or control bytes may reach a git argv or ref pattern. */
+export function isPlainBranchName(name: string): boolean {
+  if (name.length === 0 || name.length > 255) return false;
+  if (name.startsWith("-") || name.includes("..")) return false;
+  if (/\s/.test(name) || /[*?[~^:\\]/.test(name)) return false;
+  // eslint-disable-next-line no-control-regex -- deliberately matching raw control bytes
+  return !/[\x00-\x1f\x7f]/.test(name);
+}
+
+function parseBranchCommits(output: string): GitBranchCommit[] {
+  return output
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [sha, time, author, ...subject] = line.split("\t");
+      return {
+        sha: sha ?? "",
+        time: Number(time) || 0,
+        author: author ?? "",
+        subject: subject.join("\t"),
+      };
+    })
+    .filter((commit) => commit.sha.length > 0);
+}
+
+/** Left/right counts from `rev-list --left-right --count a...b`. */
+async function countAheadBehind(
+  cwd: string,
+  base: string,
+  tip: string,
+): Promise<{ ahead: number; behind: number } | null> {
+  const out = await runGit(cwd, ["rev-list", "--left-right", "--count", `${base}...${tip}`]);
+  if (out === null) return null;
+  const [behind, ahead] = out.trim().split(/\s+/).map(Number);
+  return Number.isFinite(ahead) && Number.isFinite(behind) ? { ahead, behind } : null;
+}
+
+/**
+ * Drilldown for one local branch: where it stands against its upstream and
+ * the default base, and the commits only it has. `null` for a non-repo, an
+ * unsafe name, or a branch that doesn't exist. Local spawns only, no network.
+ */
+export async function getBranchDetail(cwd: string, name: string): Promise<GitBranchDetail | null> {
+  if (!isSafeAbsolutePath(cwd) || !existsSync(path.join(cwd, ".git"))) return null;
+  if (!isPlainBranchName(name)) return null;
+  const ref = `refs/heads/${name}`;
+  const header = await runGit(cwd, [
+    "for-each-ref",
+    "--format=%(objectname)%09%(upstream:short)%09%(upstream:track)",
+    ref,
+  ]);
+  const line = header?.split("\n")[0];
+  if (!line) return null;
+  const [sha, upstream, track] = line.split("\t");
+  if (!sha) return null;
+
+  const detail: GitBranchDetail = {
+    name,
+    sha,
+    base: null,
+    uniqueCommits: [],
+    uniqueTruncated: false,
+    lastCommit: null,
+  };
+  if (upstream) {
+    detail.upstream = upstream;
+    if (track) {
+      const parsed = parseUpstreamTrack(track);
+      if (parsed.upstreamGone) detail.upstreamGone = true;
+      if (!parsed.upstreamGone) {
+        detail.upstreamAhead = parsed.ahead ?? 0;
+        detail.upstreamBehind = parsed.behind ?? 0;
+      }
+    } else {
+      detail.upstreamAhead = 0;
+      detail.upstreamBehind = 0;
+    }
+  }
+
+  const commitFormat = "--format=%H%x09%at%x09%an%x09%s";
+  const last = await runGit(cwd, ["log", "-1", commitFormat, ref]);
+  detail.lastCommit = last ? (parseBranchCommits(last)[0] ?? null) : null;
+
+  const base = await resolveDefaultBaseRefNoFetch(cwd);
+  if (base !== "HEAD") {
+    detail.base = base;
+    const counts = await countAheadBehind(cwd, base, ref);
+    if (counts) {
+      detail.baseAhead = counts.ahead;
+      detail.baseBehind = counts.behind;
+    }
+    const unique = await runGit(cwd, [
+      "log",
+      `--max-count=${MAX_UNIQUE_COMMITS + 1}`,
+      commitFormat,
+      `${base}..${ref}`,
+    ]);
+    if (unique) {
+      const commits = parseBranchCommits(unique);
+      detail.uniqueTruncated = commits.length > MAX_UNIQUE_COMMITS;
+      detail.uniqueCommits = commits.slice(0, MAX_UNIQUE_COMMITS);
+    }
+  }
+  return detail;
 }

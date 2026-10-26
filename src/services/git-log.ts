@@ -122,18 +122,23 @@ export function isValidSha(sha: string): boolean {
 
 export async function getCommitLog(
   cwd: string,
-  opts: { limit?: number; skip?: number; all?: boolean } = {},
+  opts: { limit?: number; skip?: number; all?: boolean; branch?: string } = {},
 ): Promise<CommitLogEntry[] | null> {
   if (!(await isRepo(cwd))) return null;
+  // `branch` scopes the walk to one local branch's history. The caller has
+  // already vetted the name (isPlainBranchName); the refs/heads/ prefix keeps
+  // it a ref, never a flag or a revision expression.
+  const revs = opts.branch !== undefined ? [`refs/heads/${opts.branch}`] : [];
   const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 100), 1), MAX_LOG_PAGE);
   const skip = Math.max(Math.trunc(opts.skip ?? 0), 0);
   const out = await runGit(cwd, [
     "log",
     "--topo-order",
-    ...(opts.all === false ? [] : ["--all"]),
+    ...(opts.branch !== undefined || opts.all === false ? [] : ["--all"]),
     `--max-count=${limit}`,
     `--skip=${skip}`,
     `--format=%H${FIELD}%P${FIELD}%an${FIELD}%at${FIELD}%s${FIELD}%D${RECORD}`,
+    ...revs,
   ]);
   if (out === null) return null;
   const entries: CommitLogEntry[] = [];
