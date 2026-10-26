@@ -2057,6 +2057,7 @@ export interface AppSettings {
   // kitten.md, PR 4) — see shared/types.ts's own doc comment on LayoutMode.
   layoutMode: LayoutMode;
   tabletPaneCap: TabletPaneCap;
+  balancePanesOnDrop: boolean;
   projectRoots: string[];
   // Mirrors AppSettings.externalReadRoots: folders outside any project the
   // file viewer may open read-only (absolute or `~/`).

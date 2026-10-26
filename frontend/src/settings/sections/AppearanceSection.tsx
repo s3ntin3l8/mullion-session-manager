@@ -1,5 +1,5 @@
 import { useDashboardStore } from "../../store/index.js";
-import { GroupHeading, Row, Segmented } from "../../ui/primitives.js";
+import { GroupHeading, Row, Segmented, Toggle } from "../../ui/primitives.js";
 import { useLayoutTier } from "../../lib/layoutTier.js";
 
 export function AppearanceSection() {
@@ -53,6 +53,15 @@ export function AppearanceSection() {
             { value: "tablet", label: "Tablet" },
             { value: "desktop", label: "Desktop" },
           ]}
+        />
+      </Row>
+      <Row
+        label="Balance panes after dragging"
+        desc="When you drag a panel to a pane's edge, even out that row or column, like the split buttons do. Off: the dropped panel takes half of the pane it landed on."
+      >
+        <Toggle
+          on={settings.balancePanesOnDrop}
+          onChange={(v) => updateSettings({ balancePanesOnDrop: v })}
         />
       </Row>
       {/* Hermes review — shown whenever tablet is REACHABLE (the live tier

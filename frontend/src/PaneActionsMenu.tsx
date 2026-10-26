@@ -22,8 +22,8 @@ import {
   openTimelinePanel,
   openBrowserPanePanel,
   openOrFocusSessionPanel,
-  resetTiledGroupWidths,
-  canResetTiledGroupWidths,
+  balanceSiblingsOf,
+  canBalanceSiblingsOf,
   otherTiledGroups,
 } from "./panelUtils.js";
 import { liveChildCount } from "./sidebarHierarchy.js";
@@ -329,9 +329,9 @@ export function PaneActionsMenu({
   // cached could disable/enable the "Reset pane sizes" item below against a
   // layout that's since changed underneath it. Skipped while the menu is
   // closed since it's only ever read from the (conditionally rendered) menu
-  // content — `canResetTiledGroupWidths` is cheap and pure either way, but
+  // content — `canBalanceSiblingsOf` is cheap and pure either way, but
   // there's no reason to call it on every render of the trigger button.
-  const canReset = overflowOpen && canResetTiledGroupWidths(containerApi);
+  const canReset = overflowOpen && !!api.group && canBalanceSiblingsOf(containerApi, api.group.id);
 
   // Tablet only: touch can't drag a tab between columns (the strip pans
   // instead — xterm.css), so offer the move as menu actions. Read fresh on
@@ -506,9 +506,9 @@ export function PaneActionsMenu({
                 rather than a session one.
 
                 Disabled (not just a silent no-op click) whenever
-                resetTiledGroupWidths itself has nothing eligible to
-                redistribute — fewer than two tiled groups, or a multi-row
-                grid the same-row heuristic rejects — same
+                balanceSiblingsOf itself has nothing to balance — this
+                pane has no siblings in its row or column, or the layout is
+                maximized — same
                 aria-disabled+explanatory-title pattern as "Move (drag tab)"
                 above, rather than leaving a user-invoked "repair my layout"
                 action clickable with no way to tell whether it did
@@ -547,10 +547,13 @@ export function PaneActionsMenu({
               className="pane-tab-overflow-item"
               role="menuitem"
               aria-disabled={!canReset || undefined}
-              title={canReset ? undefined : "No skewed row of tiled panes to reset"}
+              title={
+                canReset ? undefined : "No neighbouring panes in this row or column to balance"
+              }
               onClick={() => {
                 if (!canReset) return;
-                closeMenuAfterAction(() => resetTiledGroupWidths(containerApi));
+                const groupId = api.group?.id;
+                if (groupId) closeMenuAfterAction(() => balanceSiblingsOf(containerApi, groupId));
               }}
             >
               <GridIcon size={14} style={{ color: "var(--muted)" }} />

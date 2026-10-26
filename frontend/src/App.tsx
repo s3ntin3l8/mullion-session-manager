@@ -60,6 +60,7 @@ import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
+import { useBalanceOnDrop } from "./hooks/useBalanceOnDrop.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts.js";
 import { useAppStreams } from "./hooks/useAppStreams.js";
@@ -548,6 +549,7 @@ export function App() {
   // other effect in this file, or with each other beyond the ref the hook
   // now owns internally — see that hook's own header comment.
   const { dockviewRef } = useDockviewDrop({ dockviewApi, setSidebarOpen });
+  useBalanceOnDrop({ dockviewApi, enabled: settings.balancePanesOnDrop });
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);

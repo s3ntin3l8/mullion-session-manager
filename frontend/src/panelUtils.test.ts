@@ -32,8 +32,9 @@ import {
   applyLayoutPresentation,
   snapshotTiledGroupWidths,
   restoreTiledGroupWidths,
-  resetTiledGroupWidths,
-  canResetTiledGroupWidths,
+  balanceSiblingsOf,
+  canBalanceSiblingsOf,
+  findParentBranch,
   otherTiledGroups,
   attentionTransitionPanelIds,
   newChildSessionIds,
@@ -2071,7 +2072,7 @@ describe("applyLayoutPresentation (issue #85; tri-state as of tablet tier plan, 
   });
 });
 
-describe("snapshotTiledGroupWidths / restoreTiledGroupWidths / resetTiledGroupWidths (fold/unfold pane-skew fix)", () => {
+describe("snapshotTiledGroupWidths / restoreTiledGroupWidths (fold/unfold pane-skew fix)", () => {
   function mockApiWithGroups(groups: DockviewGroupPanel[]): DockviewApi {
     return { groups } as unknown as DockviewApi;
   }
@@ -2182,30 +2183,6 @@ describe("snapshotTiledGroupWidths / restoreTiledGroupWidths / resetTiledGroupWi
     });
   });
 
-  describe("resetTiledGroupWidths", () => {
-    it("distributes an already-skewed row evenly", () => {
-      const left = mockGroup("left", "grid", { width: 100, height: 600 });
-      const middle = mockGroup("middle", "grid", { width: 100, height: 600 });
-      const right = mockGroup("right", "grid", { width: 600, height: 600 });
-      const api = mockApiWithGroups([left, middle, right]);
-
-      resetTiledGroupWidths(api);
-
-      expect(left.api.setSize).toHaveBeenCalledWith({ width: 267 });
-      expect(middle.api.setSize).toHaveBeenCalledWith({ width: 267 });
-      expect(right.api.setSize).not.toHaveBeenCalled();
-    });
-
-    it("no-ops with a single tiled group", () => {
-      const only = mockGroup("only", "grid", { width: 800, height: 600 });
-      const api = mockApiWithGroups([only]);
-
-      resetTiledGroupWidths(api);
-
-      expect(only.api.setSize).not.toHaveBeenCalled();
-    });
-  });
-
   describe("restoreTiledGroupWidths return value", () => {
     it("is true when the proportions were applied, false on every no-op", () => {
       const left = mockGroup("left", "grid", { width: 300, height: 600 });
@@ -2264,29 +2241,145 @@ describe("snapshotTiledGroupWidths / restoreTiledGroupWidths / resetTiledGroupWi
       expect(otherTiledGroups(mockApiWithGroups([only]), only)).toEqual([]);
     });
   });
+});
 
-  describe("canResetTiledGroupWidths", () => {
-    it("is true for a same-row multi-group layout", () => {
-      const left = mockGroup("left", "grid", { width: 300, height: 600 });
-      const right = mockGroup("right", "grid", { width: 700, height: 600 });
-      const api = mockApiWithGroups([left, right]);
+describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
+  const leaf = (id: string) => ({ type: "leaf" as const, data: { id } });
+  const branch = (...data: unknown[]) => ({ type: "branch" as const, data });
 
-      expect(canResetTiledGroupWidths(api)).toBe(true);
+  function mockApi(
+    grid: { root: unknown; orientation: string },
+    groups: ReturnType<typeof mockGroup>[],
+    maximized = false,
+  ): DockviewApi {
+    return {
+      toJSON: () => ({ grid }),
+      getGroup: (id: string) => groups.find((g) => g.id === id),
+      hasMaximizedGroup: () => maximized,
+    } as unknown as DockviewApi;
+  }
+
+  describe("findParentBranch", () => {
+    it("finds a horizontal row's siblings and reports the width axis", () => {
+      const grid = { root: branch(leaf("a"), leaf("b"), leaf("c")), orientation: "HORIZONTAL" };
+      const found = findParentBranch(grid, "b");
+      expect(found?.axis).toBe("width");
+      expect(found?.siblings).toHaveLength(3);
     });
 
-    it("is false with fewer than two tiled groups", () => {
-      const only = mockGroup("only", "grid", { width: 800, height: 600 });
-      const api = mockApiWithGroups([only]);
-
-      expect(canResetTiledGroupWidths(api)).toBe(false);
+    it("reports the height axis for a vertical root", () => {
+      const grid = { root: branch(leaf("a"), leaf("b")), orientation: "VERTICAL" };
+      expect(findParentBranch(grid, "a")?.axis).toBe("height");
     });
 
-    it("is false across multiple rows (mismatched heights) — must agree with restoreTiledGroupWidths's own no-op", () => {
-      const topRow = mockGroup("top", "grid", { width: 300, height: 300 });
-      const bottomRow = mockGroup("bottom", "grid", { width: 700, height: 600 });
-      const api = mockApiWithGroups([topRow, bottomRow]);
+    it("flips the axis for a nested branch", () => {
+      const grid = {
+        root: branch(leaf("a"), branch(leaf("b"), leaf("c"))),
+        orientation: "HORIZONTAL",
+      };
+      expect(findParentBranch(grid, "c")?.axis).toBe("height");
+    });
 
-      expect(canResetTiledGroupWidths(api)).toBe(false);
+    it("returns null for a missing group or an only child", () => {
+      const grid = { root: branch(leaf("a")), orientation: "HORIZONTAL" };
+      expect(findParentBranch(grid, "a")).toBeNull();
+      expect(findParentBranch(grid, "zzz")).toBeNull();
+      expect(findParentBranch({ root: leaf("a"), orientation: "HORIZONTAL" }, "a")).toBeNull();
+    });
+  });
+
+  describe("balanceSiblingsOf", () => {
+    it("evens out a 50/25/25 row, leaving the last group to absorb the rest", () => {
+      const a = mockGroup("a", "grid", { width: 500, height: 600 });
+      const b = mockGroup("b", "grid", { width: 250, height: 600 });
+      const c = mockGroup("c", "grid", { width: 250, height: 600 });
+      const api = mockApi(
+        { root: branch(leaf("a"), leaf("b"), leaf("c")), orientation: "HORIZONTAL" },
+        [a, b, c],
+      );
+
+      expect(balanceSiblingsOf(api, "b")).toBe(true);
+
+      expect(a.api.setSize).toHaveBeenCalledWith({ width: 333 });
+      expect(b.api.setSize).toHaveBeenCalledWith({ width: 333 });
+      expect(c.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("balances heights in a vertical column", () => {
+      const a = mockGroup("a", "grid", { width: 800, height: 600 });
+      const b = mockGroup("b", "grid", { width: 800, height: 200 });
+      const api = mockApi({ root: branch(leaf("a"), leaf("b")), orientation: "VERTICAL" }, [a, b]);
+
+      expect(balanceSiblingsOf(api, "a")).toBe(true);
+
+      expect(a.api.setSize).toHaveBeenCalledWith({ height: 400 });
+    });
+
+    it("resizes a branch sibling through its direct leaf child", () => {
+      const a = mockGroup("a", "grid", { width: 700, height: 600 });
+      const top = mockGroup("top", "grid", { width: 300, height: 300 });
+      const bottom = mockGroup("bottom", "grid", { width: 300, height: 300 });
+      const c = mockGroup("c", "grid", { width: 300, height: 600 });
+      const api = mockApi(
+        {
+          root: branch(leaf("a"), branch(leaf("top"), leaf("bottom")), leaf("c")),
+          orientation: "HORIZONTAL",
+        },
+        [a, top, bottom, c],
+      );
+
+      balanceSiblingsOf(api, "a");
+
+      expect(a.api.setSize).toHaveBeenCalledWith({ width: 433 });
+      expect(top.api.setSize).toHaveBeenCalledWith({ width: 433 });
+      expect(bottom.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("leaves out a branch with no direct leaf child", () => {
+      const a = mockGroup("a", "grid", { width: 700, height: 600 });
+      const b = mockGroup("b", "grid", { width: 300, height: 600 });
+      const x = mockGroup("x", "grid", { width: 100, height: 100 });
+      const y = mockGroup("y", "grid", { width: 100, height: 100 });
+      const api = mockApi(
+        {
+          root: branch(leaf("a"), branch(branch(leaf("x")), branch(leaf("y"))), leaf("b")),
+          orientation: "HORIZONTAL",
+        },
+        [a, b, x, y],
+      );
+
+      balanceSiblingsOf(api, "a");
+
+      expect(a.api.setSize).toHaveBeenCalledWith({ width: 500 });
+      expect(x.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("no-ops when maximized, for an only child, or with zero total size", () => {
+      const a = mockGroup("a", "grid", { width: 0, height: 0 });
+      const b = mockGroup("b", "grid", { width: 0, height: 0 });
+      const grid = { root: branch(leaf("a"), leaf("b")), orientation: "HORIZONTAL" };
+
+      expect(balanceSiblingsOf(mockApi(grid, [a, b], true), "a")).toBe(false);
+      expect(balanceSiblingsOf(mockApi(grid, [a, b]), "a")).toBe(false);
+      expect(
+        balanceSiblingsOf(
+          mockApi({ root: branch(leaf("a")), orientation: "HORIZONTAL" }, [a]),
+          "a",
+        ),
+      ).toBe(false);
+      expect(a.api.setSize).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("canBalanceSiblingsOf", () => {
+    it("agrees with balanceSiblingsOf's eligibility", () => {
+      const a = mockGroup("a", "grid", { width: 500, height: 600 });
+      const b = mockGroup("b", "grid", { width: 500, height: 600 });
+      const grid = { root: branch(leaf("a"), leaf("b")), orientation: "HORIZONTAL" };
+
+      expect(canBalanceSiblingsOf(mockApi(grid, [a, b]), "a")).toBe(true);
+      expect(canBalanceSiblingsOf(mockApi(grid, [a, b], true), "a")).toBe(false);
+      expect(canBalanceSiblingsOf(mockApi(grid, [a, b]), "nope")).toBe(false);
     });
   });
 });
