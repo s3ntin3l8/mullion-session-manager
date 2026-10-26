@@ -743,8 +743,11 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   timestamp, outside the worktree) the worker writes a reason to when its fix
   outgrew a small suggestion; the transition reads it through the same
   backend → `/internal/task-rereview-request` path as the PR-title file, and its
-  presence makes the return a normal review **and spends a round**, so a worker that asks every time still ends at the cap. An unreadable request (host down,
-  an older peer build) is read as "no request" and the approval is carried; a host that is merely unreachable is retried next tick, without holding up the host's other tasks.
+  presence makes the return a normal review **and spends a round**, so a
+  worker that asks every time still ends at the cap. An unreadable request
+  (an older peer build, a 5xx) is read as "no request" and the approval is
+  carried; a host that is merely unreachable is retried next tick, without
+  holding up the host's other tasks.
 - **The round budget** (`tasks.autoReturnRounds`, renamed from
   `reviewRounds` — the TS property only; the SQL column stays
   `review_rounds`, since every other migration in this repo is a purely

@@ -736,7 +736,10 @@ function normalizeStringArray(raw: unknown): string[] {
  * that keeps a human in the loop, not the one that lets the task glide
  * through.
  */
-export function parseReviewFindings(raw: string): ParsedReviewFindings {
+export function parseReviewFindings(
+  raw: string,
+  opts: { ignorePrevious?: boolean } = {},
+): ParsedReviewFindings {
   const trimmed = raw.trim();
   try {
     const obj: unknown = JSON.parse(trimmed);
@@ -751,7 +754,11 @@ export function parseReviewFindings(raw: string): ParsedReviewFindings {
       const findings: ReviewFinding[] = Array.isArray(rawFindings)
         ? rawFindings.map(normalizeReviewFinding).filter((f): f is ReviewFinding => f !== null)
         : [];
-      const previous = normalizeDispositions(rec.previous);
+      // After an APPROVING prior round everything it listed was an optional
+      // suggestion, which never blocks — so the parser drops any disposition
+      // the reviewer lists anyway, rather than trusting the prompt to have
+      // stopped it from forcing `changes-requested` over a skipped nit.
+      const previous = opts.ignorePrevious ? [] : normalizeDispositions(rec.previous);
       const claimed = rec.verdict === "clean" ? "approved" : (rec.verdict as string);
       const verdict = deriveVerdict({ findings, previous, claimed });
       const notes = normalizeStringArray(rec.notes);

@@ -3824,7 +3824,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // for an explicit verdict — `parsed` (not `findings`) is now what
         // both gates below key off. `parsed === null` covers a missing OR
         // empty file, i.e. "wrote nothing", never a real "clean" verdict.
-        const parsed = findings !== null ? parseReviewFindings(findings) : null;
+        const parsed =
+          findings !== null
+            ? parseReviewFindings(findings, {
+                ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+              })
+            : null;
 
         // Hermes review, PR #576 — a review agent that never derives
         // "finished" (exits right after its turn instead of staying running,

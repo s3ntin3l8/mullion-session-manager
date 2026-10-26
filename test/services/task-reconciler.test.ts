@@ -7140,6 +7140,34 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("a re-review after an approval ignores dispositions for the earlier optional suggestions", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db
+          .update(tasks)
+          .set({ lastReviewVerdict: "approved-with-suggestions" })
+          .where(eq(tasks.id, taskId))
+          .run();
+        writeFindings(
+          app,
+          taskId,
+          0,
+          JSON.stringify({
+            verdict: "approved",
+            summary: "Grew, but fine.",
+            previous: [{ ref: "a.ts:3", status: "still-open", evidence: "nit not applied" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.status).toBe("reviewing");
+
+        await app.close();
+      });
+
       it("a human Reject clears the carried approval so the next finish is reviewed", async () => {
         const app = await buildApp();
         const { taskId } = await claimIntoReviewing(app, "codex");

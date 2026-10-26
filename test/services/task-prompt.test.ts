@@ -1303,6 +1303,18 @@ describe("verdict derivation", () => {
     expect(parsed.verdict).toBe("approved");
   });
 
+  it("ignores listed dispositions after an approving prior round — an optional suggestion never blocks", () => {
+    const raw = JSON.stringify({
+      verdict: "approved",
+      summary: "s",
+      previous: [{ ref: "a.ts:1", status: "still-open", evidence: "skipped nit" }],
+    });
+    expect(parseReviewFindings(raw).verdict).toBe("changes-requested");
+    const parsed = parseReviewFindings(raw, { ignorePrevious: true });
+    expect(parsed.verdict).toBe("approved");
+    expect(parsed.previous).toEqual([]);
+  });
+
   it("drops malformed dispositions", () => {
     const parsed = parse({
       verdict: "approved",
