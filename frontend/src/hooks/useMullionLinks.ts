@@ -142,7 +142,11 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
   );
   const projectTasks = tasks.filter((t) => t.projectId === projectId);
   const prs = args.prs ?? [];
-  const previews = (args.previews ?? []).filter((p) => p.projectId === projectId);
+  // A branch preview (its own port) sorts ahead of the checkout preview, so a
+  // branch both serve resolves to the one started for it.
+  const previews = (args.previews ?? [])
+    .filter((p) => p.projectId === projectId)
+    .sort((a, b) => Number(b.upstreamPort != null) - Number(a.upstreamPort != null));
 
   const byId = new Map(sessions.map((s) => [s.id, s]));
   const childrenOf = new Map<number, Session[]>();

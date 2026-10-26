@@ -2768,7 +2768,9 @@ export async function projectsRoute(app: FastifyInstance) {
         });
       }
       try {
-        const preview = await getOrCreateBranchPreview(app, projectId, detail.headBranch);
+        const preview = await getOrCreateBranchPreview(app, projectId, detail.headBranch, {
+          fastForward: true,
+        });
         reply.code(201);
         return preview;
       } catch (err) {

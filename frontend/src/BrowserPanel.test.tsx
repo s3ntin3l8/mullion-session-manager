@@ -255,9 +255,20 @@ describe("BrowserPanel", () => {
     it("serves the slug through the proxy without a devServerUrl or a new preview", async () => {
       const fetchMock = mock();
       useDashboardStore.setState({ projects: [noDevServer] });
-      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      const updateParameters = vi.fn();
+      render(
+        <BrowserPanel
+          params={{ projectId: 1, previewSlug: "br1" }}
+          api={{ updateParameters } as unknown as DockviewPanelApi}
+        />,
+      );
       const frame = await screen.findByTitle("Preview");
       expect(frame).toHaveAttribute("src", branchSrc);
+      // The layout write-back never touches the pane's own preview binding
+      // (dockview drops a key written as undefined).
+      expect(updateParameters).toHaveBeenCalled();
+      for (const [update] of updateParameters.mock.calls)
+        expect(update).not.toHaveProperty("previewSlug");
       expect(
         fetchMock.mock.calls.some(
           ([u, i]) => String(u) === "/api/previews" && i?.method === "POST",
@@ -269,18 +280,18 @@ describe("BrowserPanel", () => {
     it("says the dev server may still be starting when the proxy can't reach it", async () => {
       mock({ probe: 502 });
       useDashboardStore.setState({ projects: [noDevServer] });
-      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      render(<BrowserPanel params={{ projectId: 1, previewSlug: "br1" }} />);
       expect(await screen.findByText(/may still be starting/)).toBeInTheDocument();
     });
 
     it("explains previews being off, and a failed server-info", async () => {
       mock({ enabled: false });
       useDashboardStore.setState({ projects: [noDevServer] });
-      const { unmount } = render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      const { unmount } = render(<BrowserPanel params={{ projectId: 1, previewSlug: "br1" }} />);
       expect(await screen.findByText(/Previews are not enabled/)).toBeInTheDocument();
       unmount();
       mock({ info: "fail" });
-      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      render(<BrowserPanel params={{ projectId: 1, previewSlug: "br1" }} />);
       expect(await screen.findByText("nope")).toBeInTheDocument();
     });
   });

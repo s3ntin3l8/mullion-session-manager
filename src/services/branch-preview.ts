@@ -5,7 +5,13 @@ import { and, eq, ne } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { dockPreviewWorktreePath, ensureLocalBranch, removeWorktree } from "./git-worktree.js";
+import {
+  deletePreviewWorktree,
+  dockPreviewWorktreePath,
+  ensureLocalBranch,
+  findPreviewWorktreeSessionId,
+  removeWorktree,
+} from "./git-worktree.js";
 import {
   bindBranchPreview,
   findBranchPreview,
@@ -161,6 +167,11 @@ async function clearStaleWorktree(
       );
     }
   }
+  // Untrack the dead session's worktree first: its entry would otherwise
+  // have the reconciler (or the sync tick's pending-removal retry) remove
+  // this same path again — from under the new session about to be cut there.
+  const tracked = findPreviewWorktreeSessionId(worktreePath);
+  if (tracked !== undefined) deletePreviewWorktree(tracked);
   if (!(await removeWorktree(worktreePath, projectCwd))) {
     throw new BranchPreviewError(
       "worktree_busy",
@@ -176,18 +187,22 @@ const inflight = new Map<string, Promise<PreviewSummary>>();
 
 /**
  * The (project, branch) preview, started if nothing serves it. Idempotent per
- * (project, branch): a live bound session is returned as is. Throws
- * BranchPreviewError for every refusal a caller should surface.
+ * (project, branch): a live bound session is returned as is. `fastForward`
+ * (a PR's head branch) also fast-forwards an existing local branch from
+ * origin. Throws BranchPreviewError for every refusal a caller should surface.
  */
 export function getOrCreateBranchPreview(
   app: FastifyInstance,
   projectId: number,
   branch: string,
+  opts: { fastForward?: boolean } = {},
 ): Promise<PreviewSummary> {
   const key = `${projectId}\0${branch}`;
   const pending = inflight.get(key);
   if (pending) return pending;
-  const created = createBranchPreview(app, projectId, branch).finally(() => inflight.delete(key));
+  const created = createBranchPreview(app, projectId, branch, opts).finally(() =>
+    inflight.delete(key),
+  );
   inflight.set(key, created);
   return created;
 }
@@ -196,6 +211,7 @@ async function createBranchPreview(
   app: FastifyInstance,
   projectId: number,
   branch: string,
+  opts: { fastForward?: boolean },
 ): Promise<PreviewSummary> {
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) throw new BranchPreviewError("unknown_project", `Unknown project ${projectId}`);
@@ -205,6 +221,11 @@ async function createBranchPreview(
       "Branch previews are not available yet for a project on a remote host",
     );
   }
+
+  // A PR's head branch is brought up to origin first (best effort), so a
+  // stale local copy doesn't serve old code — a live preview with
+  // worktreeRefresh then follows it too.
+  if (opts.fastForward) await ensureLocalBranch(project.cwd, branch, { fastForward: true });
 
   const existing = findBranchPreview(app, projectId, branch);
   if (existing?.sessionId != null && (await isServing(app, existing.sessionId))) return existing;

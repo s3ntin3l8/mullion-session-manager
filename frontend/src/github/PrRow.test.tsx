@@ -64,7 +64,8 @@ describe("PrRow preview action (#2018)", () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("opens an existing preview without starting another", async () => {
+  it("asks again for a known preview, which restarts a dead one", async () => {
+    vi.mocked(api.createPrPreview).mockResolvedValue({ slug: "old" } as never);
     const preview = {
       slug: "old",
       kind: "project" as const,
@@ -72,11 +73,14 @@ describe("PrRow preview action (#2018)", () => {
       externalUrl: null,
       createdAt: "",
       branch: "fix-attention",
+      upstreamPort: 4000,
     };
     render(<PrRow pr={PR} projectId={1} links={entry(preview)} onOpen={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "Open preview" }));
-    expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "old" });
-    expect(api.createPrPreview).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "old" }),
+    );
+    expect(api.createPrPreview).toHaveBeenCalledWith(1, 42);
   });
 
   it("says why a fork's PR can't be previewed", async () => {

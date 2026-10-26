@@ -3035,7 +3035,7 @@ describe("projects route", () => {
         const ok = await app.inject({ method: "POST", url });
         expect(ok.statusCode).toBe(201);
         expect(ok.json()).toMatchObject({ slug: "s1", branch: "feat" });
-        expect(start.mock.calls[0].slice(1)).toEqual([id, "feat"]);
+        expect(start.mock.calls[0].slice(1)).toEqual([id, "feat", { fastForward: true }]);
 
         start.mockRejectedValueOnce(
           new branchPreview.BranchPreviewError("no_preview_control", "configure one"),

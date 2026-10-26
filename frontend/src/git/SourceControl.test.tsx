@@ -560,25 +560,48 @@ describe("Branches", () => {
       expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b1" }),
     );
 
+    // A known branch preview is asked for again (the call restarts a dead
+    // one); a checkout preview that serves the branch just opens.
     act(() =>
       useDashboardStore.setState({
         previews: [
           {
-            slug: "b2",
+            slug: "b1",
             kind: "project",
             projectId: 1,
             externalUrl: null,
             createdAt: "",
             branch: "feat/open",
+            upstreamPort: 4000,
+          },
+        ],
+        openPreviewRequest: null,
+      }),
+    );
+    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b1" }),
+    );
+
+    act(() =>
+      useDashboardStore.setState({
+        previews: [
+          {
+            slug: "checkout",
+            kind: "project",
+            projectId: 1,
+            externalUrl: null,
+            createdAt: "",
+            branch: "feat/open",
+            upstreamPort: null,
           },
         ],
       }),
     );
     await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
-    await waitFor(() =>
-      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b2" }),
-    );
-    expect(m.createBranchPreview).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "checkout" });
+    expect(m.createBranchPreview).toHaveBeenCalledTimes(2);
   });
 
   it("explains a refused branch preview", async () => {

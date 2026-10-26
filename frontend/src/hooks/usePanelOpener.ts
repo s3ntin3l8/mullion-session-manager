@@ -469,7 +469,7 @@ export function usePanelOpener({
           id,
           component: "browser",
           title: branch ? `Preview · ${branch}` : "Preview",
-          params: { projectId, slug },
+          params: { projectId, previewSlug: slug },
         });
         // Same guard as onOpenBrowserUrl above — see its own comment.
         if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);

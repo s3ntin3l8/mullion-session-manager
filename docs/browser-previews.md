@@ -312,6 +312,11 @@ one that a different live session is still running in is refused
 (`409 worktree_busy`). The first open usually lands before the dev server
 has bound its port — the pane says so; reload in a moment.
 
+To stop a branch preview, stop its dock session (from the Dock). Deleting
+the preview row alone (`DELETE /api/previews/:slug`) leaves that dev server
+running, and the next start then refuses with `409 worktree_busy` until it
+is stopped.
+
 Not yet supported, refused with a code the UI explains:
 
 - A project on a **remote host** (`409 remote_unsupported`) — needs an

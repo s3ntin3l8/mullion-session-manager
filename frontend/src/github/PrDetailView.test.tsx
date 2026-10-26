@@ -777,7 +777,7 @@ describe("PrDetailView", () => {
       useDashboardStore.setState({ prsByProject: {} });
     });
 
-    it("starts the PR's preview from the Mullion card, or opens the existing one (#2018)", async () => {
+    it("starts the PR's preview from the Mullion card, and re-asks for a known one (#2018)", async () => {
       const fetchMock = stub(PR, (url, init) =>
         /\/github\/prs\/12\/preview$/.test(url) && init?.method === "POST"
           ? jsonResponse(201, { slug: "pr12", branch: "feat-thing" })
@@ -800,26 +800,32 @@ describe("PrDetailView", () => {
       );
       unmount();
 
+      // Known: the label says so, and the (idempotent) route is still asked,
+      // so a preview whose session died is restarted.
       fetchMock.mockClear();
       useDashboardStore.setState({
+        openPreviewRequest: null,
         previews: [
           {
-            slug: "existing",
+            slug: "pr12",
             kind: "project",
             projectId: 1,
             externalUrl: null,
             createdAt: "",
             branch: "feat-thing",
+            upstreamPort: 4000,
           },
         ],
       });
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
       const card = await screen.findByRole("region", { name: "Mullion" });
       await userEvent.click(within(card).getByRole("button", { name: "Open preview" }));
-      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "existing" });
+      await waitFor(() =>
+        expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "pr12" }),
+      );
       expect(
         fetchMock.mock.calls.some(([u, i]) => /\/preview$/.test(String(u)) && i?.method === "POST"),
-      ).toBe(false);
+      ).toBe(true);
       useDashboardStore.setState({ previews: [], openPreviewRequest: null });
     });
 

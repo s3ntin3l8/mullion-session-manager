@@ -978,7 +978,7 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
         id: "browser-preview-s1",
         component: "browser",
         title: "Preview · feat/x",
-        params: { projectId: 1, slug: "s1" },
+        params: { projectId: 1, previewSlug: "s1" },
       }),
     );
     const panel = api.getPanel("browser-preview-s1")!;

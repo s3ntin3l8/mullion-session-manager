@@ -14,6 +14,10 @@ export interface BrowserPanelParams {
   kind?: "external";
   url?: string;
   slug?: string;
+  /** Issues #2016/#2018 — a pane opened on one branch preview. Kept apart
+   * from `slug`, which the params write-back below rewrites from whatever
+   * the pane last loaded (and clears while it loads). */
+  previewSlug?: string;
   activeSavedUrlId?: number | null;
   activeSavedUrlLabel?: string | null;
 }
@@ -173,7 +177,7 @@ export function BrowserPanel({
   // Issues #2016/#2018 — a pane opened on one branch preview carries its
   // slug. The proxy resolves that slug to the preview's own dock session, so
   // the project's devServerUrl (the checkout's dev server) plays no part.
-  const previewSlug = isExternal ? undefined : params.slug;
+  const previewSlug = isExternal ? undefined : params.previewSlug;
 
   const initialUrl = params.url ? normalizeUrl(params.url) : "";
   const [fetchState, setFetchState] = useState<BrowserPanelState>({ status: "loading" });

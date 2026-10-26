@@ -460,23 +460,30 @@ export function dockPreviewWorktreePath(projectRoot: string, branch: string): st
  * user never checked out). A local ref, not a remote-tracking one, because
  * both `checkoutBranchWorktree`'s `worktree add --detach <path> <branch>` and
  * `syncWorktree`'s `reset --hard refs/heads/<branch>` resolve the bare name
- * against local heads. An existing local branch is left as it is — never
- * fetched over. False when the name is not a valid branch name or `origin`
- * has no such branch.
+ * against local heads. An existing local branch is left as it is unless
+ * `fastForward` (a PR's head, which should show the PR's code): then it is
+ * fast-forwarded from origin, best effort — never forced, so a branch with
+ * local commits, or one checked out somewhere, just stays as it is. False
+ * when the name is not a valid branch name or neither this repo nor `origin`
+ * has the branch.
  */
-export async function ensureLocalBranch(cwd: string, branch: string): Promise<boolean> {
+export async function ensureLocalBranch(
+  cwd: string,
+  branch: string,
+  opts: { fastForward?: boolean } = {},
+): Promise<boolean> {
   if (branch.length === 0 || branch.startsWith("-")) return false;
   const valid = await runGit(cwd, ["check-ref-format", "--branch", branch]);
   if (valid.code !== 0) return false;
   const local = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
-  if (local.code === 0) return true;
+  if (local.code === 0 && !opts.fastForward) return true;
   const fetched = await runGit(cwd, [
     "fetch",
     "--quiet",
     "origin",
     `refs/heads/${branch}:refs/heads/${branch}`,
   ]);
-  return fetched.code === 0;
+  return fetched.code === 0 || local.code === 0;
 }
 
 // ── Per-path serialization ────────────────────────────────────────────────

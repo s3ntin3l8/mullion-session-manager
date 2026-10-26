@@ -21,7 +21,12 @@ import {
   getOrCreateProjectPreview,
   listUpstreamPorts,
 } from "../../src/services/preview-registry.js";
-import { dockPreviewWorktreePath, ensureLocalBranch } from "../../src/services/git-worktree.js";
+import {
+  dockPreviewWorktreePath,
+  ensureLocalBranch,
+  getPreviewWorktree,
+  trackPreviewWorktree,
+} from "../../src/services/git-worktree.js";
 
 type App = Awaited<ReturnType<typeof buildApp>>;
 
@@ -161,6 +166,36 @@ describe("branch previews (issues #2016/#2018)", () => {
       expect(await ensureLocalBranch(cwd, "feat/nowhere")).toBe(false);
       expect(await ensureLocalBranch(cwd, "bad..name")).toBe(false);
       expect(await ensureLocalBranch(cwd, "-x")).toBe(false);
+    });
+
+    it("fast-forwards an existing branch from origin only when asked, never forcing", async () => {
+      const { cwd, origin } = repo();
+      // origin's feat/x moves ahead of the local one.
+      const other = path.join(path.dirname(cwd), "other");
+      git(path.dirname(cwd), "clone", "--quiet", origin, other);
+      git(other, "checkout", "--quiet", "-b", "feat/x", "origin/main");
+      fs.writeFileSync(path.join(other, "b.txt"), "b\n");
+      git(other, "add", ".");
+      git(other, "commit", "--quiet", "-m", "ahead");
+      git(other, "push", "--quiet", "origin", "feat/x");
+      const tip = git(other, "rev-parse", "HEAD").trim();
+
+      expect(await ensureLocalBranch(cwd, "feat/x")).toBe(true);
+      expect(git(cwd, "rev-parse", "feat/x").trim()).not.toBe(tip);
+      expect(await ensureLocalBranch(cwd, "feat/x", { fastForward: true })).toBe(true);
+      expect(git(cwd, "rev-parse", "feat/x").trim()).toBe(tip);
+
+      // A diverged local branch is left alone, and still usable.
+      git(cwd, "checkout", "--quiet", "feat/x");
+      fs.writeFileSync(path.join(cwd, "c.txt"), "c\n");
+      git(cwd, "add", ".");
+      git(cwd, "commit", "--quiet", "-m", "local");
+      git(cwd, "checkout", "--quiet", "main");
+      const local = git(cwd, "rev-parse", "feat/x").trim();
+      git(other, "commit", "--quiet", "--allow-empty", "-m", "more");
+      git(other, "push", "--quiet", "origin", "feat/x");
+      expect(await ensureLocalBranch(cwd, "feat/x", { fastForward: true })).toBe(true);
+      expect(git(cwd, "rev-parse", "feat/x").trim()).toBe(local);
     });
   });
 
@@ -302,11 +337,22 @@ describe("branch previews (issues #2016/#2018)", () => {
         .insert(sessions)
         .values({ projectId, command: "npm run dev", kind: "dock", cwd: wt, status: "active" })
         .run();
+      const [dead] = app.db.select().from(sessions).where(eq(sessions.cwd, wt)).all();
+      // Still tracked (the reconciler hasn't swept it): it must be untracked,
+      // or a later sweep would remove the recut worktree under the new session.
+      trackPreviewWorktree(dead.id, {
+        worktreePath: wt,
+        branch: "feat/x",
+        worktreeRefresh: false,
+        parentCwd: cwd,
+        projectId,
+      });
       fakeLiveness("dead");
       const create = fakeCreate(app);
-      await getOrCreateBranchPreview(app, projectId, "feat/x");
+      await getOrCreateBranchPreview(app, projectId, "feat/x", { fastForward: true });
       expect(create).toHaveBeenCalledTimes(1);
       expect(fs.existsSync(wt)).toBe(false);
+      expect(getPreviewWorktree(dead.id)).toBeUndefined();
     });
 
     it("is refused while a live session runs in it", async () => {
