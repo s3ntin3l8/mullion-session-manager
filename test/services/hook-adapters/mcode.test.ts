@@ -557,7 +557,15 @@ describe("buildMcodeHookHandoff", () => {
       token: ctx.hookToken,
       forwarderPath: "/fwd.mjs",
       nodePath: "/usr/bin/node",
+      worktreesInDotWt: "",
     });
+  });
+
+  it("carries the .wt worktree-convention flag (issue #1979)", () => {
+    const handoff = JSON.parse(
+      buildMcodeHookHandoff({ ...ctx, worktreesInDotWt: true }, "/fwd.mjs", "/usr/bin/node"),
+    );
+    expect(handoff.worktreesInDotWt).toBe("1");
   });
 });
 

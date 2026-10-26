@@ -94,8 +94,11 @@ fi
 
 # Re-export the socket/token/forwarder the way the forwarder expects them, so
 # the forwarder itself needs no mcode-specific branch for the CONNECTION. Only
-# the EVENT MAPPING differs, and that lives in forwarder-core.mjs.
+# the EVENT MAPPING differs, and that lives in forwarder-core.mjs. The `.wt`
+# convention flag (issue #1979) rides along the same way: the session env sets
+# it for the other CLIs, but mcode's hook child never sees the session env.
 MULLION_HOOK_SOCKET="$SOCKET_PATH" \
 MULLION_HOOK_TOKEN="$TOKEN" \
 MULLION_FORWARDER_PATH="$FORWARDER_PATH" \
+MULLION_WORKTREES_IN_DOT_WT="$(read_field worktreesInDotWt)" \
 exec "$NODE_PATH" "$FORWARDER_PATH" "$@"

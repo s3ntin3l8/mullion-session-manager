@@ -112,7 +112,7 @@ async function main() {
       // forwarder-core.mjs's worktreeNudge). Only ever returned for an agent
       // formatPostToolUseOutput has a reply shape for.
       console.log(
-        JSON.stringify(formatPostToolUseOutput(process.argv[2], result.additionalContext)),
+        JSON.stringify(formatPostToolUseOutput(process.argv[2], result.additionalContext) ?? {}),
       );
     } else if (process.argv[2] === "agy" && process.argv[3] === "PreToolUse") {
       // agy's PreToolUse is purely observational now (issue #264 removed the
