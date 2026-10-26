@@ -2219,7 +2219,19 @@ describe("projects route", () => {
           state: "closed",
           bodyHtml: "<p>body</p>",
           comments: [{ id: 9, author: "bob", bodyHtml: "<p>hi</p>" }],
+          taskStatus: null,
         });
+        // A task tracking the issue seeds the detail's Queued state.
+        const { tasks } = await import("../../src/db/schema.js");
+        app.db
+          .insert(tasks)
+          .values({ projectId: id, title: "t", issueNumber: 5, status: "in_progress" })
+          .run();
+        const queued = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/issues/5`,
+        });
+        expect(queued.json()).toMatchObject({ number: 5, taskStatus: "in_progress" });
         const pr = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/6` });
         expect(pr.statusCode).toBe(404);
         const bad = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/x` });

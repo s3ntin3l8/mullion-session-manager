@@ -363,8 +363,9 @@ export function IssueDetailView({
   const startSessionFrom = useStartSessionFrom(projectId);
   const link = useMullionLinks(projectId).byIssue.get(number);
   const action = decideSessionAction(link);
-  // A linked task means it is already queued (survives a remount).
-  const isQueued = queued || !!link?.task;
+  // A linked task, or the task status the detail response carries, means it
+  // is already queued (survives a remount).
+  const isQueued = queued || !!link?.task || !!issue?.taskStatus;
 
   const startSession = async () => {
     if (!issue) return;

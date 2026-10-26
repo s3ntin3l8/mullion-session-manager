@@ -37,6 +37,7 @@ const LIST = {
 
 const DETAIL = {
   ...LIST.issues[0],
+  taskStatus: null,
   state: "open",
   bodyHtml: '<p>It <b>crashes</b></p><img src=x onerror="boom()">',
   comments: [
@@ -327,6 +328,31 @@ describe("IssueDetailView", () => {
     );
     expect(await screen.findByRole("button", { name: "Queued" })).toBeDisabled();
     useDashboardStore.setState({ tasks: [] });
+  });
+
+  it("shows Queued on a fresh mount when the detail response carries a task status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          jsonResponse(
+            200,
+            url.includes("/github/issues/7") ? { ...DETAIL, taskStatus: "queued" } : LIST,
+          ),
+        ),
+      ),
+    );
+    useDashboardStore.setState({ projects: [makeProject({ id: 1 })], tasks: [] });
+    render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={vi.fn()}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Queued" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Queue for Task Master" })).toBeNull();
   });
 
   it("shows an error when the issue cannot be loaded", async () => {

@@ -2205,7 +2205,16 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
         const detail = await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
-        return { ...detail, triage: issueTriageFor(repoRef.owner, repoRef.repo, number) };
+        const taskRow = app.db
+          .select({ status: tasks.status })
+          .from(tasks)
+          .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, number)))
+          .get();
+        return {
+          ...detail,
+          taskStatus: taskRow?.status ?? null,
+          triage: issueTriageFor(repoRef.owner, repoRef.repo, number),
+        };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         if (err.statusCode === 404) return reply.notFound("Issue not found");
