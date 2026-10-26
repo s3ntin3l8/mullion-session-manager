@@ -36,7 +36,7 @@ floating on `@main` like every other caller here:
   why. `on-demand-review` is **not** excluded — a human can still
   explicitly ask Hermes for a second opinion on a Task Master PR. The
   `pull_request` path also checks `head.repo.full_name == github.repository`,
-  but that guard only catches accidents: a fork PR runs its *own* copy of the
+  but that guard only catches accidents: a fork PR runs its _own_ copy of the
   workflow file and can delete the check. The real control keeping fork PRs
   off this repo's self-hosted runner is the Actions setting "Require approval
   for all outside collaborators" (tracked in `s3ntin3l8/.github#139`).
