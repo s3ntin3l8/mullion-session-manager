@@ -787,6 +787,152 @@ describe("hosts route (issue #26)", () => {
     }
   });
 
+  // Issue #1951 follow-up — editing a remote host's project roots from the
+  // config dialog. The AGENT decides (validation, the operator's lock); the
+  // primary only relays and translates its refusal.
+  describe("PUT /api/hosts/:id/config/projects-roots (issue #1951)", () => {
+    type Stub = { status: number; body: unknown };
+    async function withAgent(
+      stub: Stub,
+      run: (ctx: {
+        app: Awaited<ReturnType<typeof buildApp>>;
+        id: string;
+        received: () => string;
+      }) => Promise<void>,
+    ) {
+      let seen = "";
+      const server = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (c) => (body += c));
+        req.on("end", () => {
+          seen = `${req.method} ${req.url} ${body}`;
+          res.writeHead(stub.status, { "content-type": "application/json" });
+          res.end(typeof stub.body === "string" ? stub.body : JSON.stringify(stub.body));
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        const address = server.address();
+        if (address === null || typeof address === "string") throw new Error("no address");
+        const app = await buildApp();
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: `roots-${Math.random()}`,
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            token: "t",
+          },
+        });
+        await run({ app, id: created.json().id, received: () => seen });
+        await app.close();
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    }
+    const put = (app: Awaited<ReturnType<typeof buildApp>>, id: string, roots: unknown) =>
+      app.inject({
+        method: "PUT",
+        url: `/api/hosts/${id}/config/projects-roots`,
+        payload: { roots },
+      });
+
+    it("relays the roots to the agent and returns its fresh config", async () => {
+      const config = {
+        role: "agent",
+        projectsRoots: ["/Users/x/work"],
+        projectsRootsSource: "override",
+      };
+      await withAgent({ status: 200, body: config }, async ({ app, id, received }) => {
+        const res = await put(app, id, ["/Users/x/work"]);
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject(config);
+        expect(received()).toBe('PUT /internal/projects-roots {"roots":["/Users/x/work"]}');
+      });
+    });
+
+    it("sends null through to remove the saved override", async () => {
+      await withAgent({ status: 200, body: { role: "agent" } }, async ({ app, id, received }) => {
+        expect((await put(app, id, null)).statusCode).toBe(200);
+        expect(received()).toBe('PUT /internal/projects-roots {"roots":null}');
+      });
+    });
+
+    it("turns the agent's 422 {status: 400} into a 400 carrying its message", async () => {
+      await withAgent(
+        { status: 422, body: { status: 400, error: '"/x" does not exist on this host' } },
+        async ({ app, id }) => {
+          const res = await put(app, id, ["/x"]);
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toBe('"/x" does not exist on this host');
+        },
+      );
+    });
+
+    it("turns the agent's 422 {status: 409} (pinned by its operator) into a 409", async () => {
+      await withAgent(
+        { status: 422, body: { status: 409, error: "pinned (PROJECTS_ROOTS_LOCKED)" } },
+        async ({ app, id }) => {
+          const res = await put(app, id, ["/x"]);
+          expect(res.statusCode).toBe(409);
+          expect(res.json().message).toMatch(/pinned/);
+        },
+      );
+    });
+
+    it("reports an agent too old to have the route as 501 'upgrade it', not a bare 404", async () => {
+      await withAgent({ status: 404, body: { message: "no such route" } }, async ({ app, id }) => {
+        const res = await put(app, id, ["/x"]);
+        expect(res.statusCode).toBe(501);
+        expect(res.json().message).toMatch(/too old.*upgrade/);
+      });
+    });
+
+    it("falls back to the generic forwarding for an unparseable refusal", async () => {
+      await withAgent({ status: 422, body: "not json" }, async ({ app, id }) => {
+        const res = await put(app, id, ["/x"]);
+        expect(res.statusCode).not.toBe(200);
+        expect(res.statusCode).toBeLessThan(600);
+      });
+    });
+
+    it("503s for an unreachable host", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "roots-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      expect((await put(app, created.json().id, ["/x"])).statusCode).toBe(503);
+      await app.close();
+    });
+
+    it("refuses the local host — its roots are Settings → Projects & discovery's", async () => {
+      const app = await buildApp();
+      const res = await put(app, "local", ["/x"]);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/Settings/);
+      await app.close();
+    });
+
+    it("404s an unknown host and rejects a malformed body", async () => {
+      const app = await buildApp();
+      expect((await put(app, "does-not-exist", ["/x"])).statusCode).toBe(404);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "roots-bad-body", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const res = await app.inject({
+        method: "PUT",
+        url: `/api/hosts/${created.json().id}/config/projects-roots`,
+        payload: { roots: { not: "a list" } },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
   // Issue #647 / roadmap 7.8 — proxied host-update status/apply. Every
   // scenario needs a real listening agent stub (like the /config tests
   // above), routed by path since a single check touches both

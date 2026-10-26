@@ -106,6 +106,17 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Pins an AGENT's PROJECTS_ROOTS: when true, the roots can only come from
+    // the env value above and the primary's Settings → Hosts → config dialog
+    // cannot override them (PUT /internal/projects-roots answers 409, and a
+    // previously saved override is ignored). Enforced on the agent itself, not
+    // in the UI — PROJECTS_ROOTS is the containment barrier for the file and
+    // git routes, and the host's own operator decides whether the primary may
+    // move it. Off by default.
+    PROJECTS_ROOTS_LOCKED: {
+      type: "boolean",
+      default: false,
+    },
     // Global (non-per-project) config dir for launcher/dock defaults — see
     // src/services/project-config.ts. Same "~" expansion as PROJECTS_ROOTS.
     // A per-project ".crs/" dir inside a project's own cwd always takes
@@ -1050,6 +1061,7 @@ declare module "fastify" {
       SESSIONS_DIR: string;
       FRONTEND_DIST: string;
       PROJECTS_ROOTS: string;
+      PROJECTS_ROOTS_LOCKED: boolean;
       CRS_CONFIG_DIR: string;
       MULLION_ROLE: "primary" | "agent";
       MULLION_AGENT_TOKEN: string;

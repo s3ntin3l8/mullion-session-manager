@@ -237,6 +237,34 @@ export const terminateSchema = {
   params: SESSION_ID_PARAMS_SCHEMA,
 };
 
+// Issue #1951 follow-up — the primary editing this agent's project roots
+// (PUT /internal/projects-roots). `roots: null` removes the saved override.
+// The count and per-entry length are bounded here; whether each entry is a
+// safe, existing directory is validateProjectsRoots' job (a schema cannot stat).
+export interface ProjectsRootsBody {
+  roots: string[] | null;
+}
+export const projectsRootsSchema = {
+  body: {
+    type: "object",
+    required: ["roots"],
+    additionalProperties: false,
+    properties: {
+      roots: {
+        anyOf: [
+          { type: "null" },
+          {
+            type: "array",
+            minItems: 1,
+            maxItems: 16,
+            items: { type: "string", minLength: 1, maxLength: 1024 },
+          },
+        ],
+      },
+    },
+  },
+} as const;
+
 // Issue #1951 — `sessions.prompt` / `sessions.wait_for_output` for a child on
 // this host, proxied by the primary. The text bound is a character count (the
 // primary has already enforced MAX_PROMPT_BYTES in bytes, which is never

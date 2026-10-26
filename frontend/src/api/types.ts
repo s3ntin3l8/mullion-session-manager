@@ -437,6 +437,14 @@ export interface HostConfig {
   role: "primary" | "agent";
   version: string;
   projectsRoots: string[];
+  // Issue #1951 follow-up — where `projectsRoots` comes from ("env": the
+  // host's own PROJECTS_ROOTS, "override": saved from this dialog), the env
+  // value a reset goes back to, and whether the host's operator pinned the
+  // roots. Optional: absent means the host predates them, and the dialog then
+  // offers no editing rather than guessing.
+  projectsRootsSource?: "env" | "override";
+  projectsRootsEnv?: string[];
+  projectsRootsLocked?: boolean;
   sessionsDir: string;
   crsConfigDir: string;
   browserEnabled: boolean;

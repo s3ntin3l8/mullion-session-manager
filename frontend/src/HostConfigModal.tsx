@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { HostsIcon } from "./ui/icons.js";
-import { api } from "./api/index.js";
+import { CloseIcon, HostsIcon, PlusIcon } from "./ui/icons.js";
+import { api, LOCAL_HOST_ID } from "./api/index.js";
 import type { HostConfig } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { ErrorText } from "./ui/ErrorText.js";
@@ -52,6 +52,34 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
   // review, PR #527: originally no way to retry a failed fetch short of
   // closing and reopening the modal).
   const [attempt, setAttempt] = useState(0);
+
+  // Issue #1951 follow-up — editing this (remote) host's project roots.
+  // `rootsDraft` is the list being edited, null when not editing.
+  const [rootsDraft, setRootsDraft] = useState<string[] | null>(null);
+  const [rootsSaving, setRootsSaving] = useState(false);
+  const [rootsError, setRootsError] = useState<string | null>(null);
+
+  const saveRoots = async (roots: string[] | null) => {
+    setRootsSaving(true);
+    setRootsError(null);
+    try {
+      setConfig(await api.setHostProjectsRoots(hostId, roots));
+      setRootsDraft(null);
+    } catch (err) {
+      setRootsError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRootsSaving(false);
+    }
+  };
+
+  const submitRootsDraft = () => {
+    const cleaned = (rootsDraft ?? []).map((r) => r.trim()).filter((r) => r !== "");
+    if (cleaned.length === 0) {
+      setRootsError('Add at least one directory, or use "Reset to default".');
+      return;
+    }
+    void saveRoots(cleaned);
+  };
 
   useAsyncData(
     () => api.getHostConfig(hostId),
@@ -105,13 +133,126 @@ export function HostConfigModal({ hostId, hostName, onClose }: HostConfigModalPr
             <span className="create-modal-field-label">Version</span>
             <span className="settings-readonly-value">{config.version}</span>
           </div>
-          <div className="create-modal-field">
+          <div className="create-modal-field" role="group" aria-label="Projects roots">
             <span className="create-modal-field-label">Projects roots</span>
-            <span className="settings-readonly-value">
-              {config.projectsRoots.length > 0
-                ? config.projectsRoots.join(", ")
-                : "(none configured)"}
-            </span>
+            {rootsDraft === null ? (
+              <>
+                <span className="settings-readonly-value">
+                  {config.projectsRoots.length > 0
+                    ? config.projectsRoots.join(", ")
+                    : "(none configured)"}
+                </span>
+                {/* Only a remote host whose Mullion reports the lock flag can be
+                    edited from here: an older build omits it (and has no route to
+                    save to), and this machine's roots live in Settings → Projects
+                    & discovery. */}
+                {hostId !== LOCAL_HOST_ID && config.projectsRootsLocked === undefined && (
+                  <span className="create-modal-field-hint">
+                    This host's Mullion is too old to change its roots from here — upgrade it.
+                  </span>
+                )}
+                {hostId !== LOCAL_HOST_ID && config.projectsRootsLocked === true && (
+                  <span className="create-modal-field-hint">
+                    Pinned by that host's operator (PROJECTS_ROOTS_LOCKED) — it cannot be changed
+                    from here.
+                  </span>
+                )}
+                {hostId !== LOCAL_HOST_ID && config.projectsRootsLocked === false && (
+                  <>
+                    <span className="create-modal-field-hint">
+                      {config.projectsRootsSource === "override"
+                        ? "Set from this dialog. Reset goes back to the host's own setting"
+                        : "From the host's own PROJECTS_ROOTS"}
+                      {config.projectsRootsSource === "override" && config.projectsRootsEnv
+                        ? ` (${config.projectsRootsEnv.length > 0 ? config.projectsRootsEnv.join(", ") : "none"}).`
+                        : "."}
+                    </span>
+                    <span className="create-modal-input-row">
+                      <button
+                        className="create-modal-cancel"
+                        onClick={() => {
+                          setRootsError(null);
+                          setRootsDraft(
+                            config.projectsRoots.length > 0 ? [...config.projectsRoots] : [""],
+                          );
+                        }}
+                      >
+                        Edit roots
+                      </button>
+                      {config.projectsRootsSource === "override" && (
+                        <button
+                          className="create-modal-cancel"
+                          disabled={rootsSaving}
+                          onClick={() => void saveRoots(null)}
+                        >
+                          Reset to default
+                        </button>
+                      )}
+                    </span>
+                  </>
+                )}
+                {rootsError && <ErrorText>{rootsError}</ErrorText>}
+              </>
+            ) : (
+              <>
+                {rootsDraft.map((root, i) => (
+                  <span key={i} className="create-modal-input-row">
+                    <input
+                      className="mono"
+                      aria-label={`Root ${i + 1}`}
+                      value={root}
+                      placeholder="/Users/you/projects"
+                      onChange={(e) =>
+                        setRootsDraft((prev) =>
+                          (prev ?? []).map((r, j) => (j === i ? e.target.value : r)),
+                        )
+                      }
+                    />
+                    <button
+                      className="create-modal-cancel"
+                      aria-label={`Remove root ${i + 1}`}
+                      onClick={() =>
+                        setRootsDraft((prev) => (prev ?? []).filter((_, j) => j !== i))
+                      }
+                    >
+                      <CloseIcon size={12} />
+                    </button>
+                  </span>
+                ))}
+                <button
+                  className="settings-add-btn"
+                  onClick={() => setRootsDraft((prev) => [...(prev ?? []), ""])}
+                >
+                  <PlusIcon size={13} />
+                  Add a root directory
+                </button>
+                <span className="create-modal-field-hint">
+                  Directories on that host. They must already exist; the host refuses anything too
+                  broad (its home directory, or a folder containing it). Projects outside these
+                  roots stop being reachable on that host. Applies immediately, no restart.
+                </span>
+                {rootsError && <ErrorText>{rootsError}</ErrorText>}
+                <span className="create-modal-input-row">
+                  <button
+                    className="create-modal-submit"
+                    disabled={rootsSaving}
+                    onClick={submitRootsDraft}
+                  >
+                    {rootsSaving ? "Saving…" : "Save roots"}
+                  </button>
+                  <button
+                    className="create-modal-cancel"
+                    disabled={rootsSaving}
+                    onClick={() => {
+                      setRootsDraft(null);
+                      setRootsError(null);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </span>
+              </>
+            )}
           </div>
           <div className="create-modal-field">
             <span className="create-modal-field-label">Sessions directory</span>
