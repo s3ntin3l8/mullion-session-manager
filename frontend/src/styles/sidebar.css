@@ -812,7 +812,7 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   min-width: 0;
 }
 .host-derived-status-health,
@@ -1130,7 +1130,7 @@
    the row focuses the pane you already have. */
 .session-open-label {
   flex-shrink: 0;
-  font-size: 9.5px;
+  font-size: 0.59375rem;
   line-height: 14px;
   color: var(--dim);
   border: 1px solid var(--border-soft);
