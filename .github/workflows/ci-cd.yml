@@ -236,16 +236,13 @@ jobs:
   # prove it isn't flaky before every future merge is gated on it.
   test-e2e:
     runs-on: ubuntu-latest
-    # 25, not 15 (2026-10-22 CI audit). The `Install Playwright Chromium`
-    # step measured 11-32s in 8 of 10 runs but 632s and 509s in the other
-    # two — and the slow runs are apt, not Playwright: the Chromium cache
-    # hit normally, but `playwright install --with-deps` also runs apt,
-    # and one run fetched 25.9 MB at 43.1 kB/s ("Fetched 25.9 MB in 10min
-    # 2s"). At 15 minutes the 632s case left only ~3.5m of headroom for a
-    # 2-minute e2e suite, so a slightly slower mirror timed the job out —
-    # a red e2e that is easy to miss, since this job is not a required
-    # status check.
-    timeout-minutes: 25
+    # 15. A normal run is ~1 minute. The slowest legitimate step is a cold
+    # Chromium download (every lockfile change misses the cache), which the
+    # install step caps at 10 minutes on its own. It used to be 25 (2026-10-22 CI audit) to absorb a stalled
+    # apt mirror in `playwright install --with-deps` (632s and 509s runs,
+    # one fetching 25.9 MB at 43.1 kB/s) — apt no longer runs here, see the
+    # "Install Playwright Chromium" step.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -256,9 +253,7 @@ jobs:
           cache: "npm"
       - name: Install dependencies
         run: npm ci
-      # Caches the downloaded Chromium binary (not the OS-level deps
-      # `--with-deps` also installs below, which don't persist across the
-      # runner's ephemeral filesystem anyway) — keyed off a hash of the
+      # Caches the downloaded Chromium binary — keyed off a hash of the
       # whole root package-lock.json (the pinned `playwright` version lives
       # in there, so a version bump invalidates the cache automatically),
       # not restricted to just the playwright entry: hashFiles() can't hash
@@ -271,17 +266,23 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright Chromium
-        run: |
-          # `playwright install --with-deps` also runs apt, and apt is the
-          # step that actually varies: one measured run fetched 25.9 MB at
-          # 43.1 kB/s and took 10m02s on its own. That transfer SUCCEEDED,
-          # just slowly — so `Acquire::Retries` (which only re-attempts a
-          # fetch that FAILED) does not address it; the timeout bump on this
-          # job is the real fix. The retry below is still worth setting:
-          # a mirror that fails outright is then retried instead of
-          # failing the job.
-          echo 'Acquire::Retries "3";' | sudo tee /etc/apt/apt.conf.d/99-retries
-          npx playwright install --with-deps chromium
+        # A tripwire: a stalled browser download on a cache miss fails THIS
+        # step by name instead of spending the whole job's budget. 10, not
+        # tighter: a cold miss pulls ~260 MB (Chromium + headless shell), and
+        # a slow-but-progressing download must not newly fail.
+        timeout-minutes: 10
+        # No `--with-deps`: it unconditionally runs `apt-get update` +
+        # `install`, and apt was the variable part of this job (a run that
+        # fetched 25.9 MB at 43.1 kB/s took 10m02s on its own). On
+        # ubuntu-latest it only added fonts, xvfb and upgrades of libs that
+        # are already present — the runner image ships Google Chrome, which
+        # brings Chromium's runtime libraries with it. If a future runner
+        # image drops one, `chromium.launch()` fails loudly with Playwright's
+        # "Host system is missing dependencies" error instead of stalling.
+        # (A prebuilt mcr.microsoft.com/playwright container would also avoid
+        # apt, but `npm ci` compiles node-pty from source on Linux and the
+        # image has no toolchain, so it would need apt for that instead.)
+        run: npx playwright install chromium
       # Install the pinned opencode (v2) the
       # `test/e2e/opencode-v2-contract.e2e.test.ts` contract test asserts
       # against: `--standalone`, `OPENCODE_CONFIG_CONTENT` layering

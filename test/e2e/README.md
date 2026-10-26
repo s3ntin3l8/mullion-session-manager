@@ -40,7 +40,7 @@ first.
   own `make test`/`npm test` run stays fast and dependency-free.
 - **It does now run in CI** (issue #407 / B3), via `.github/workflows/ci-cd.yml`'s
   `test-e2e` job — but as a real, custom multi-step job (checkout, `npm ci`,
-  `npx playwright install --with-deps chromium`, `npm run test:e2e`), not a
+  `npx playwright install chromium`, `npm run test:e2e`), not a
   `with:` parameter to the shared `ci-node.yml` reusable workflow that
   `test-node`/`test-frontend` use: that reusable job has no hook to run an
   arbitrary setup command (like installing a browser) before its own Test
