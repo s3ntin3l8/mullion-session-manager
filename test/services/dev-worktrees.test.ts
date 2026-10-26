@@ -350,6 +350,15 @@ describe("dev-worktrees", () => {
       expect(orphans.map((c) => c.slug)).toEqual(["stray"]);
     });
 
+    it("reports an orphan once when two roots are the same directory", async () => {
+      fs.mkdirSync(path.join(repo, ".wt", "stray"), { recursive: true });
+      fs.symlinkSync(path.join(repo, ".wt"), path.join(repo, ".worktrees"));
+      const orphans = (await inspectDevWorktrees(opts())).candidates.filter(
+        (c) => c.reason === "orphaned",
+      );
+      expect(orphans.map((c) => c.slug)).toEqual(["stray"]);
+    });
+
     it("finds orphans in a project that has no registered developer worktree at all", async () => {
       fs.mkdirSync(path.join(repo, ".wt", "leftover"), { recursive: true });
       const status = await inspectDevWorktrees(opts());

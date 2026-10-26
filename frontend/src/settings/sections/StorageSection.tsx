@@ -26,7 +26,9 @@ function describeWorktree(candidate: DevWorktreeCandidate): string {
       ? "branch deleted on the remote"
       : candidate.reason === "merged"
         ? `PR ${candidate.detail ?? ""} merged`.trim()
-        : "already in the default branch";
+        : candidate.reason === "orphaned"
+          ? "not a registered git worktree"
+          : "already in the default branch";
   return `${kind}, ${why}`;
 }
 

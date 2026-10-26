@@ -388,10 +388,11 @@ export function detectWorktreeAdd(payload, resolveCwd) {
 // Issue #1979 — the agents whose PostToolUse hook reads a
 // `hookSpecificOutput.additionalContext` reply back into the model's context:
 // Claude Code, and Codex (its embedded `post-tool-use.command.output` schema
-// carries the same field, checked against codex-cli 0.164.0). agy's
-// PostToolUse has no result message at all, and opencode is a plugin that
-// never runs this forwarder.
-const WORKTREE_NUDGE_AGENTS = new Set(["claude-code", "codex"]);
+// carries the same field, checked against codex-cli 0.164.0), and mcode, whose
+// CLAUDE-format result parser reads it too (see formatSessionStartOutput's
+// mcode case). agy's PostToolUse has no result message at all, and opencode
+// is a plugin that never runs this forwarder.
+const WORKTREE_NUDGE_AGENTS = new Set(["claude-code", "codex", "mcode"]);
 
 /** Whether a worktree path sits somewhere under a `.wt/` directory: a path
  * segment named `.wt` with something after it. Relative paths count too, so a

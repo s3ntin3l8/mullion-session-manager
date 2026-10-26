@@ -579,10 +579,12 @@ describe("worktreeNudge (issue #1979)", () => {
     expect(nudge).toContain("promote_to_worktree");
   });
 
-  it("nudges Codex the same way", () => {
-    expect(
-      worktreeNudge("codex", "PostToolUse", bash("git worktree add .worktrees/x"), true),
-    ).toContain("`/repo/.worktrees/x`");
+  it("nudges Codex and mcode the same way", () => {
+    for (const agent of ["codex", "mcode"]) {
+      expect(
+        worktreeNudge(agent, "PostToolUse", bash("git worktree add .worktrees/x"), true),
+      ).toContain("`/repo/.worktrees/x`");
+    }
   });
 
   it("stays quiet for a worktree under .wt/, relative or absolute", () => {
@@ -614,7 +616,7 @@ describe("worktreeNudge (issue #1979)", () => {
     expect(isUnderDotWt("/repo/foo.wt/x")).toBe(false);
   });
 
-  it("formatPostToolUseOutput has a reply shape only for Claude Code and Codex", () => {
+  it("formatPostToolUseOutput has a reply shape only for Claude Code, Codex and mcode", () => {
     expect(formatPostToolUseOutput("codex", "hi")).toEqual({
       hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "hi" },
     });
