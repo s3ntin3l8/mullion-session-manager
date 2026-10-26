@@ -969,10 +969,12 @@ interface ForcePushedHeadsData {
  * relay's base differ from the shared workflow's for that dispatch (a lost
  * dedup, never a wrong review).
  *
- * Deliberately NOT the poller's `graphql()` helper: that one arms an app-wide
- * backoff on a 403/429 and shares a warning slot with the PR-list refresh, so a
- * failure of this read would pause the UI. This one only reports through its
- * result.
+ * Goes through `githubGraphQL()` (this file's shared POST on `githubApiFetch`), so
+ * a GraphQL throttle is recorded into the shared rate-limit budget like every
+ * other read here. Deliberately NOT the poller's `graphql()` helper
+ * (github-pr-reviews.ts): that one arms an app-wide backoff on a 403/429 and
+ * shares a warning slot with the PR-list refresh, so a failure of this read
+ * would pause the UI.
  */
 async function listForcePushedHeads(
   prToken: string,
@@ -981,26 +983,16 @@ async function listForcePushedHeads(
   prNumber: number,
 ): Promise<string[] | null> {
   validateGitHubRepoRef(owner, repo);
-  if (isGitHubRateLimited()) return null;
-  let data: ForcePushedHeadsData | undefined;
+  let data: ForcePushedHeadsData;
   try {
-    const res = await fetch(`${GITHUB_API_BASE}/graphql`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${prToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/vnd.github+json",
-        "User-Agent": USER_AGENT,
-      },
-      body: JSON.stringify({
-        query: FORCE_PUSHED_HEADS_QUERY,
-        variables: { owner, repo, number: prNumber },
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    data = await githubGraphQL<ForcePushedHeadsData>(prToken, FORCE_PUSHED_HEADS_QUERY, {
+      owner,
+      repo,
+      number: prNumber,
     });
-    if (!res.ok) return null;
-    data = ((await res.json()) as { data?: ForcePushedHeadsData }).data;
   } catch {
+    // A rate limit (already recorded into the shared budget by githubApiFetch), a
+    // token without access, a GraphQL error: all the same to the caller.
     return null;
   }
   const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
