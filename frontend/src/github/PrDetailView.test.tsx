@@ -386,6 +386,35 @@ describe("PrDetailView", () => {
     expect(JSON.parse(String(call[1]?.body))).toEqual({ headSha: "abc" });
   });
 
+  // Issue #1672 — GitHub's "Update branch", offered only to a PR behind its base.
+  it("updates a behind branch, pinned to the head sha, and reports GitHub's refusal", async () => {
+    let refuse = false;
+    const fn = stub({ ...PR, mergeStateStatus: "BEHIND" }, (url) =>
+      url.endsWith("/update-branch")
+        ? refuse
+          ? jsonResponse(409, { message: "GitHub refused to update the branch" })
+          : jsonResponse(200, { updated: true })
+        : null,
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Update branch" }));
+    expect(await screen.findByText(/Branch update requested/)).toBeInTheDocument();
+    const call = fn.mock.calls.find(([u]) => String(u).endsWith("/update-branch"))!;
+    expect(call[1]?.method).toBe("POST");
+    expect(JSON.parse(String(call[1]?.body))).toEqual({ headSha: "abc" });
+
+    refuse = true;
+    await userEvent.click(screen.getByRole("button", { name: "Update branch" }));
+    expect(await screen.findByText(/refused to update the branch/)).toBeInTheDocument();
+  });
+
+  it("offers no Update branch to a PR that is not behind", async () => {
+    stub({ ...PR, mergeStateStatus: "CLEAN" });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await screen.findByRole("button", { name: /Squash and merge/ });
+    expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
+  });
+
   it("says when the re-review's in-flight marker could not be written (#1790)", async () => {
     stub(PR, (url) =>
       url.endsWith("/re-review")

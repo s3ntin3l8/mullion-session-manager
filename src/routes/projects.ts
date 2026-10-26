@@ -20,7 +20,11 @@ import {
   PLACEMENT_MODES,
   type PlacementMode,
 } from "../shared/constants.js";
-import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import {
+  getRemoteHostClient,
+  HostRequestError,
+  HostUnreachableError,
+} from "../services/remote-host-client.js";
 import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -92,6 +96,7 @@ import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import {
   getIntegration,
   getToken,
+  resolveChecksReadToken,
   resolveGitHubToken,
   resolveMarkerTokens,
 } from "../services/github-integration.js";
@@ -126,7 +131,9 @@ import {
   GitHubWriteScopeError,
   invalidateReleaseCache,
   mergePullRequest,
+  updatePullRequestBranch,
 } from "../services/github-write.js";
+import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js";
 import { withRelay } from "../services/review-summary.js";
 import { derivePrPhase } from "../services/github-pr-phase.js";
@@ -697,6 +704,59 @@ function sessionsUnderWorktree(
   }
 
   return [...matched];
+}
+
+/**
+ * Issue #1672 — the active sessions working IN the project's own checkout,
+ * which a checkout/rebase would yank out from under them: an effective cwd
+ * at or below `project.cwd`, but not inside one of its linked worktrees
+ * (`.mullion-worktrees/…`, `.wt/…` live below the checkout yet have their
+ * own HEAD and index, which these operations never touch). A session with
+ * no cwd of its own runs in its project's cwd, so it counts.
+ *
+ * Matched by directory and host, not by `projectId`: two project rows may
+ * point at one clone (see git-clone-busy.ts), and a session of the other
+ * one is just as much in the way.
+ *
+ * Same remote-host gap as `sessionsUnderWorktree` above: only the DB cwd is
+ * known for a remote session, not the live one.
+ */
+function sessionsInProjectCheckout(
+  app: FastifyInstance,
+  project: { id: number; hostId: string; cwd: string },
+  linkedWorktreePaths: string[],
+): number[] {
+  const rows = app.db
+    .select({
+      id: sessions.id,
+      cwd: sessions.cwd,
+      hostId: sessions.hostId,
+      projectCwd: projects.cwd,
+      projectHostId: projects.hostId,
+    })
+    .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
+    .all();
+  const matched: number[] = [];
+  for (const row of rows) {
+    // NULL inherits the project's host — resolveSessionHostId (session-live-info.ts).
+    const hostId = row.hostId ?? row.projectHostId;
+    if (hostId !== project.hostId) continue;
+    let effectiveCwd = row.cwd ?? row.projectCwd;
+    if (hostId === LOCAL_HOST_ID) {
+      const liveCwd = app.pty.get(String(row.id))?.liveCwd;
+      if (liveCwd && isGitRepo(liveCwd)) effectiveCwd = liveCwd;
+    }
+    if (
+      effectiveCwd &&
+      isWithinAnyWorktree(effectiveCwd, [project.cwd]) &&
+      !isWithinAnyWorktree(effectiveCwd, linkedWorktreePaths)
+    ) {
+      matched.push(row.id);
+    }
+  }
+  return matched;
 }
 
 /**
@@ -2286,7 +2346,10 @@ export async function projectsRoute(app: FastifyInstance) {
     number: number,
     ctx: { repoRef: GitHubRepoRef; token: string },
   ) {
-    const detail = await getPrDetail(ctx.token, ctx.repoRef.owner, ctx.repoRef.repo, number);
+    // The detail selects the head commit's statusCheckRollup: read it with a
+    // token that sees non-Actions checks too, when the App has that grant.
+    const detailToken = (await resolveChecksReadToken(app, ctx.repoRef)) ?? ctx.token;
+    const detail = await getPrDetail(detailToken, ctx.repoRef.owner, ctx.repoRef.repo, number);
     // The poller's entry is keyed by PR number; trust it only if it describes
     // the head the user is looking at — after a push, its CI answer and runs
     // belong to the old commit.
@@ -2584,6 +2647,53 @@ export async function projectsRoute(app: FastifyInstance) {
             return reply.conflict("GitHub refused the merge — the PR is not mergeable right now");
           }
           return reply.code(502).send({ message: "GitHub merge failed", statusCode: 502 });
+        }
+        throw err;
+      }
+    },
+  );
+
+  // GitHub's "Update branch" (issue #1672): merges the base into a PR that
+  // has fallen behind it. Pinned to the head SHA the user was looking at,
+  // like the merge above, so a push in between makes GitHub refuse.
+  app.post<{ Params: { id: string; number: string }; Body: { headSha?: string } }>(
+    "/api/projects/:id/github/prs/:number/update-branch",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr update branch",
+        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+        noTokenMessage: "No GitHub token with write access is available to update this branch",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      const expectedSha = request.body?.headSha;
+      if (!expectedSha) return reply.badRequest("headSha is required");
+      try {
+        await updatePullRequestBranch(
+          ctx.token,
+          ctx.repoRef.owner,
+          ctx.repoRef.repo,
+          number,
+          expectedSha,
+        );
+        invalidatePrDetail(ctx.repoRef.owner, ctx.repoRef.repo, number);
+        return { updated: true };
+      } catch (err) {
+        if (err instanceof GitHubWriteScopeError) {
+          return reply.code(403).send({ message: err.message, statusCode: 403 });
+        }
+        if (err instanceof GitHubApiError) {
+          // 422: the head moved, the branch is already up to date, or the
+          // merge of the base conflicts — GitHub does not say which.
+          if (err.statusCode === 409 || err.statusCode === 422) {
+            return reply.conflict(
+              "GitHub refused to update the branch — it may have changed, be up to date, or conflict with the base",
+            );
+          }
+          return reply.code(502).send({ message: "GitHub branch update failed", statusCode: 502 });
         }
         throw err;
       }
@@ -3994,6 +4104,143 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
     },
+  );
+
+  // Issue #1672 — guarded checkout / create / rebase of the project's own
+  // checkout, from the Git view. Each goes through the host's backend (an
+  // agent runs the same git-branch-ops.ts) and claims the clone like Pull.
+  // A refusal is a 200 with a reason (GitBranchOpResult), never a 4xx:
+  // the dirty-tree, conflict and branch-state guards are git-branch-ops.ts's,
+  // and the one that needs the DB — an active session working in the
+  // checkout — runs here first, before the host is asked to touch anything.
+  const branchRefSchema = { type: "string", minLength: 1, maxLength: 255 } as const;
+  const projectIdParamsSchema = {
+    type: "object",
+    required: ["id"],
+    properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
+  } as const;
+
+  async function runGuardedBranchOp(
+    projectId: number,
+    reply: FastifyReply,
+    opts: { movesHead: boolean; label: string },
+    op: (
+      backend: ReturnType<typeof resolveBackend>,
+      project: typeof projects.$inferSelect,
+    ) => Promise<GitBranchOpResult>,
+  ): Promise<GitBranchOpResult | FastifyReply> {
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!project) return reply.notFound();
+    if (isCloneBusy(project.hostId, project.cwd)) {
+      return { ok: false, reason: "busy", detail: "A git operation is already running" };
+    }
+    markCloneBusy(project.hostId, project.cwd);
+    try {
+      const backend = resolveBackend(app, project.hostId);
+      if (opts.movesHead) {
+        const worktrees =
+          project.hostId === LOCAL_HOST_ID
+            ? await listWorktrees(project.cwd)
+            : ((
+                await getRemoteHostClient(app, project.hostId).resolveGitBranches(
+                  project.cwd,
+                  false,
+                )
+              )?.worktrees ?? null);
+        // A project may itself be rooted in a linked worktree: that one is
+        // the checkout being guarded, not a neighbour to exclude.
+        const linked = (worktrees ?? [])
+          .filter((w) => !w.isMain && !isWithinAnyWorktree(project.cwd, [w.path]))
+          .map((w) => w.path);
+        const sessionIds = sessionsInProjectCheckout(app, project, linked);
+        if (sessionIds.length > 0) {
+          return { ok: false, reason: "sessions-active", detail: sessionIds.join(",") };
+        }
+      }
+      return await op(backend, project);
+    } catch (err) {
+      if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
+      return reply.serviceUnavailable(
+        remoteHostFailureMessage(app, project.hostId, err, `git ${opts.label}`),
+      );
+    } finally {
+      releaseClone(project.hostId, project.cwd);
+    }
+  }
+
+  app.post<{ Params: { id: string }; Body: { branch: string } }>(
+    "/api/projects/:id/git-checkout",
+    {
+      schema: {
+        params: projectIdParamsSchema,
+        body: {
+          type: "object",
+          required: ["branch"],
+          additionalProperties: false,
+          properties: { branch: branchRefSchema },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) =>
+      runGuardedBranchOp(
+        Number(request.params.id),
+        reply,
+        { movesHead: true, label: "checkout" },
+        (backend, project) => backend.checkoutBranch(project.cwd, request.body.branch),
+      ),
+  );
+
+  app.post<{ Params: { id: string }; Body: { name: string; from: string; checkout?: boolean } }>(
+    "/api/projects/:id/git-branch-create",
+    {
+      schema: {
+        params: projectIdParamsSchema,
+        body: {
+          type: "object",
+          required: ["name", "from"],
+          additionalProperties: false,
+          properties: {
+            name: branchRefSchema,
+            from: branchRefSchema,
+            checkout: { type: "boolean" },
+          },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const { name, from, checkout } = request.body;
+      // Creating a branch alone moves nothing; switching to it does.
+      return runGuardedBranchOp(
+        Number(request.params.id),
+        reply,
+        { movesHead: checkout === true, label: "branch create" },
+        (backend, project) => backend.createBranch(project.cwd, name, from, { checkout }),
+      );
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { onto?: string } }>(
+    "/api/projects/:id/git-rebase",
+    {
+      schema: {
+        params: projectIdParamsSchema,
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: { onto: branchRefSchema },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) =>
+      runGuardedBranchOp(
+        Number(request.params.id),
+        reply,
+        { movesHead: true, label: "rebase" },
+        (backend, project) => backend.rebaseBranch(project.cwd, request.body?.onto),
+      ),
   );
 
   // A3 — one branch's drilldown: upstream / base ahead-behind, the commits

@@ -417,6 +417,11 @@ const GIT_FIELD_DEFS = {
   // repair runs (it moves files inside .git/objects and rewrites the
   // worktree indexes), so it must never be implied.
   confirm: { type: "boolean" },
+  // Issue #1672 — the guarded branch create/rebase. Ref names, validated
+  // again (isPlainBranchName) by git-branch-ops.ts before any git argv.
+  startPoint: { type: "string", minLength: 1, maxLength: 255 },
+  onto: { type: "string", minLength: 1, maxLength: 255 },
+  checkout: { type: "boolean" },
 } satisfies Record<string, FieldSchema>;
 
 type GitFieldName = keyof typeof GIT_FIELD_DEFS;
@@ -579,6 +584,39 @@ export interface GitPullBody {
 // project's fast-forward git pull.
 export const gitPullSchema = schemaFor({
   required: ["cwd"],
+});
+
+export interface GitCheckoutBody {
+  cwd: string;
+  branch: string;
+}
+
+// Issue #1672 — the agent-side counterparts of git-branch-ops.ts's guarded
+// checkout / create / rebase, for a remote-hosted project's Git view.
+export const gitCheckoutSchema = schemaFor({
+  required: ["cwd", "branch"],
+});
+
+export interface GitBranchCreateBody {
+  cwd: string;
+  name: string;
+  startPoint: string;
+  checkout?: boolean;
+}
+
+export const gitBranchCreateSchema = schemaFor({
+  required: ["cwd", "name", "startPoint"],
+  optional: ["checkout"],
+});
+
+export interface GitRebaseBody {
+  cwd: string;
+  onto?: string;
+}
+
+export const gitRebaseSchema = schemaFor({
+  required: ["cwd"],
+  optional: ["onto"],
 });
 
 export interface GitPushBody {

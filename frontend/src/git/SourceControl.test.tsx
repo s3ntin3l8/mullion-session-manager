@@ -26,6 +26,9 @@ vi.mock("../api/index.js", async (importOriginal) => {
       getProjectGitBranch: vi.fn(),
       pruneProjectGitBranches: vi.fn(),
       deleteProjectGitBranch: vi.fn(),
+      checkoutProjectGitBranch: vi.fn(),
+      createProjectGitBranch: vi.fn(),
+      rebaseProjectGitBranch: vi.fn(),
       removeProjectGitWorktree: vi.fn(),
       pruneProjectGitWorktrees: vi.fn(),
       getProjectGitStatus: vi.fn(),
@@ -401,6 +404,94 @@ describe("Branches", () => {
     ).toBeDisabled();
   });
 
+  // Issue #1672 — guarded checkout / rebase from the row, New branch from the header.
+  it("checks out a branch and refreshes; a refusal shows inline with no Force", async () => {
+    m.checkoutProjectGitBranch
+      .mockResolvedValueOnce({ ok: false, reason: "sessions-active", detail: "4" })
+      .mockResolvedValueOnce({ ok: true });
+    renderView();
+    await ready();
+    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Check out" }));
+    expect(await screen.findByText(/Active session: 4\. .*stop it first/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Force" })).toBeNull();
+
+    const loads = m.getProjectGitBranches.mock.calls.length;
+    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Check out" }));
+    await waitFor(() => expect(m.checkoutProjectGitBranch).toHaveBeenLastCalledWith(1, "misc"));
+    await waitFor(() => expect(m.getProjectGitBranches.mock.calls.length).toBeGreaterThan(loads));
+    expect(screen.queryByText(/stop it first/)).toBeNull();
+  });
+
+  it("offers Rebase on the current branch only, and reports an aborted conflict", async () => {
+    m.rebaseProjectGitBranch.mockResolvedValue({
+      ok: false,
+      reason: "conflicts",
+      detail: "origin/main",
+      conflicts: ["src/a.ts"],
+    });
+    renderView();
+    await ready();
+    // The current branch rebases; it has no Check out. A worktree's branch
+    // cannot be checked out here.
+    expect(within(rowOf("main")).queryByRole("button", { name: "Check out" })).toBeNull();
+    expect(
+      within(rowOf("feat/open")).getByRole("button", { name: /in use by feat-open/ }),
+    ).toBeDisabled();
+    await userEvent.click(within(rowOf("main")).getByRole("button", { name: /Rebase onto/ }));
+    expect(m.rebaseProjectGitBranch).not.toHaveBeenCalled();
+    // Armed, the button reads its confirm label.
+    await userEvent.click(within(rowOf("main")).getByRole("button", { name: "Rebase" }));
+    expect(
+      await screen.findByText(/onto origin\/main conflicts in src\/a\.ts — aborted/),
+    ).toBeInTheDocument();
+    expect(m.rebaseProjectGitBranch).toHaveBeenCalledWith(1);
+  });
+
+  it("creates a branch from the header form, from the default base", async () => {
+    m.createProjectGitBranch
+      .mockResolvedValueOnce({ ok: false, reason: "dirty-tree" })
+      .mockResolvedValueOnce({ ok: true });
+    const pushToast = vi.fn();
+    seed({ pushToast });
+    renderView();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "New branch" }));
+    const form = screen.getByRole("form", { name: "New branch" });
+    expect(within(form).getByLabelText("Start point")).toHaveValue("origin/main");
+    expect(within(form).getByRole("button", { name: "Create" })).toBeDisabled();
+    await userEvent.type(within(form).getByLabelText("New branch name"), "topic");
+    await userEvent.click(within(form).getByRole("button", { name: "Create" }));
+    expect(await within(form).findByText(/uncommitted changes/)).toBeInTheDocument();
+    expect(m.createProjectGitBranch).toHaveBeenCalledWith(1, {
+      name: "topic",
+      from: "origin/main",
+      checkout: true,
+    });
+
+    await userEvent.click(within(form).getByRole("checkbox", { name: "Switch to it" }));
+    await userEvent.click(within(form).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(screen.queryByRole("form", { name: "New branch" })).toBeNull());
+    expect(m.createProjectGitBranch).toHaveBeenLastCalledWith(1, {
+      name: "topic",
+      from: "origin/main",
+      checkout: false,
+    });
+    expect(pushToast).toHaveBeenCalledWith({ message: "Created topic.", kind: "success" });
+  });
+
+  it("cancels the New branch form, and reports a thrown failure", async () => {
+    m.createProjectGitBranch.mockRejectedValue(new Error("503 unreachable"));
+    renderView();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: "New branch" }));
+    const form = screen.getByRole("form", { name: "New branch" });
+    await userEvent.type(within(form).getByLabelText("New branch name"), "x");
+    await userEvent.click(within(form).getByRole("button", { name: "Create" }));
+    expect(await within(form).findByText("503 unreachable")).toBeInTheDocument();
+    await userEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form", { name: "New branch" })).toBeNull();
+  });
+
   it("opens a session on the branch, or reports why it can't", async () => {
     const createSession = vi.fn(async () => makeSession({ id: 9 }));
     const requestOpenSession = vi.fn();
@@ -689,6 +780,41 @@ describe("Branch detail", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "misc", false));
     expect(await screen.findByText("Changes")).toBeInTheDocument();
+  });
+
+  it("checks the branch out, then reloads into its current-branch view with Rebase", async () => {
+    m.getProjectGitBranch
+      .mockResolvedValueOnce(detail({ name: "misc" }))
+      .mockResolvedValue(detail({ name: "misc", isCurrent: true }));
+    m.checkoutProjectGitBranch.mockResolvedValue({ ok: true });
+    m.rebaseProjectGitBranch.mockResolvedValue({
+      ok: true,
+      reason: "already-up-to-date",
+      detail: "origin/misc",
+    });
+    await openDetail("misc");
+    await userEvent.click(screen.getByRole("button", { name: /Checkout/ }));
+    expect(await screen.findByText("Checked out misc.")).toBeInTheDocument();
+    expect(m.checkoutProjectGitBranch).toHaveBeenCalledWith(1, "misc");
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rebase…/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm rebase" }));
+    expect(await screen.findByText("Already up to date with origin/misc.")).toBeInTheDocument();
+  });
+
+  it("shows a refused checkout inline, and disables it for a worktree's branch", async () => {
+    m.getProjectGitBranch.mockResolvedValueOnce(detail({ name: "misc" }));
+    m.checkoutProjectGitBranch.mockResolvedValue({ ok: false, reason: "dirty-tree" });
+    await openDetail("misc");
+    await userEvent.click(screen.getByRole("button", { name: /Checkout/ }));
+    expect(await screen.findByText(/uncommitted changes/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Force" })).toBeNull();
+  });
+
+  it("disables Checkout for a branch another worktree holds", async () => {
+    m.getProjectGitBranch.mockResolvedValue(detail({ worktreePath: "/repo/.wt/feat-open" }));
+    await openDetail();
+    expect(screen.getByRole("button", { name: /Checkout/ })).toBeDisabled();
   });
 
   it("locks delete for a task-owned branch and shows the owning task", async () => {

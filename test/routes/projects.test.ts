@@ -3033,6 +3033,42 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      // Issue #1672 — GitHub's "Update branch", pinned to the head the user saw.
+      it("update-branch: requires a head, updates the PR, and maps GitHub's refusal to 409", async () => {
+        const sent: unknown[] = [];
+        mockGithub(gqlPr(45), (url, init) => {
+          if (!url.endsWith("/pulls/45/update-branch")) return null;
+          const body = JSON.parse(String(init?.body)) as { expected_head_sha: string };
+          sent.push({ method: init?.method, ...body });
+          return body.expected_head_sha === "sha45"
+            ? jsonResponse(202, { message: "Updating pull request branch." })
+            : jsonResponse(422, { message: "expected head sha didn't match current head ref." });
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = `/api/projects/${id}/github/prs/45/update-branch`;
+
+        expect((await app.inject({ method: "POST", url, payload: {} })).statusCode).toBe(400);
+        const bad = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/x/update-branch`,
+          payload: { headSha: "sha45" },
+        });
+        expect(bad.statusCode).toBe(400);
+
+        const ok = await app.inject({ method: "POST", url, payload: { headSha: "sha45" } });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toEqual({ updated: true });
+
+        const stale = await app.inject({ method: "POST", url, payload: { headSha: "old" } });
+        expect(stale.statusCode).toBe(409);
+        expect(sent).toEqual([
+          { method: "PUT", expected_head_sha: "sha45" },
+          { method: "PUT", expected_head_sha: "old" },
+        ]);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
         await warmCiCache(44, "success", true);
@@ -6687,6 +6723,268 @@ describe("projects route", () => {
       });
       expect(bad.statusCode).toBe(400);
       await cleanup();
+    });
+  });
+
+  // Issue #1672 — guarded checkout / create / rebase of the project checkout.
+  describe("POST /api/projects/:id/git-checkout, git-branch-create, git-rebase (issue #1672)", () => {
+    async function makeProject(app: Awaited<ReturnType<typeof buildApp>>) {
+      const { execFileSync } = await import("node:child_process");
+      const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-branch-ops-"));
+      const run = (args: string[]) =>
+        execFileSync("git", args, { cwd: projectCwd, stdio: "pipe", env: gitEnv() });
+      run(["init", "-b", "main"]);
+      fs.writeFileSync(path.join(projectCwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      run(["branch", "feature"]);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "branch-ops-repo", cwd: projectCwd },
+      });
+      return { projectCwd, projectId: created.json().id as number, run };
+    }
+
+    const post = (app: Awaited<ReturnType<typeof buildApp>>, url: string, payload: object) =>
+      app.inject({ method: "POST", url, payload });
+
+    it("404s an unknown project and 400s a malformed body", async () => {
+      const app = await buildApp();
+      try {
+        expect(
+          (await post(app, "/api/projects/999999/git-checkout", { branch: "main" })).statusCode,
+        ).toBe(404);
+        expect((await post(app, "/api/projects/1/git-checkout", {})).statusCode).toBe(400);
+        expect(
+          (await post(app, "/api/projects/1/git-branch-create", { name: "x" })).statusCode,
+        ).toBe(400);
+        expect(
+          (await post(app, "/api/projects/1/git-rebase", { onto: "x".repeat(256) })).statusCode,
+        ).toBe(400);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("checks out, creates and rebases on a local project", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId, run } = await makeProject(app);
+      try {
+        const checkout = await post(app, `/api/projects/${projectId}/git-checkout`, {
+          branch: "feature",
+        });
+        expect(checkout.json()).toEqual({ ok: true });
+
+        const created = await post(app, `/api/projects/${projectId}/git-branch-create`, {
+          name: "topic",
+          from: "main",
+          checkout: true,
+        });
+        expect(created.json()).toEqual({ ok: true });
+
+        const rebased = await post(app, `/api/projects/${projectId}/git-rebase`, { onto: "main" });
+        expect(rebased.json()).toEqual({ ok: true, reason: "already-up-to-date", detail: "main" });
+        expect(String(run(["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("topic");
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("refuses while an active session works in the checkout, but not one in a linked worktree", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId, run } = await makeProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      try {
+        // A session in a linked worktree under the checkout has its own HEAD.
+        // Ignored, as a real repo ignores its `.wt/` — or it reads as untracked.
+        fs.appendFileSync(path.join(projectCwd, ".git", "info", "exclude"), ".wt/\n");
+        const linked = path.join(projectCwd, ".wt", "other");
+        run(["worktree", "add", "-q", "-b", "other", linked]);
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: linked }).run();
+        expect(
+          (
+            await post(app, `/api/projects/${projectId}/git-checkout`, { branch: "feature" })
+          ).json(),
+        ).toEqual({ ok: true });
+
+        // One with no cwd of its own runs in the checkout itself.
+        const inCheckout = app.db
+          .insert(sessions)
+          .values({ projectId, command: "bash", cwd: null })
+          .run();
+        const sessionId = Number(inCheckout.lastInsertRowid);
+        const blocked = { ok: false, reason: "sessions-active", detail: String(sessionId) };
+        expect(
+          (await post(app, `/api/projects/${projectId}/git-checkout`, { branch: "main" })).json(),
+        ).toEqual(blocked);
+        expect((await post(app, `/api/projects/${projectId}/git-rebase`, {})).json()).toEqual(
+          blocked,
+        );
+        expect(
+          (
+            await post(app, `/api/projects/${projectId}/git-branch-create`, {
+              name: "t2",
+              from: "main",
+              checkout: true,
+            })
+          ).json(),
+        ).toEqual(blocked);
+        // Creating without switching moves nothing, so it is allowed.
+        expect(
+          (
+            await post(app, `/api/projects/${projectId}/git-branch-create`, {
+              name: "t3",
+              from: "main",
+            })
+          ).json(),
+        ).toEqual({ ok: true });
+        expect(String(run(["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("feature");
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("counts a session of another project row on the same checkout", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId, run } = await makeProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      try {
+        const twin = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "branch-ops-twin", cwd: projectCwd },
+        });
+        const twinId = twin.json().id as number;
+        const inserted = app.db
+          .insert(sessions)
+          .values({ projectId: twinId, command: "bash", cwd: null })
+          .run();
+        expect(
+          (
+            await post(app, `/api/projects/${projectId}/git-checkout`, { branch: "feature" })
+          ).json(),
+        ).toEqual({
+          ok: false,
+          reason: "sessions-active",
+          detail: String(Number(inserted.lastInsertRowid)),
+        });
+        expect(String(run(["rev-parse", "--abbrev-ref", "HEAD"])).trim()).toBe("main");
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("guards a project rooted in a linked worktree like any other checkout", async () => {
+      const app = await buildApp();
+      const { projectCwd, run } = await makeProject(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      try {
+        const linked = path.join(projectCwd, "..", `${path.basename(projectCwd)}-wt`);
+        run(["worktree", "add", "-q", "-b", "wt-branch", linked]);
+        const project = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "branch-ops-in-worktree", cwd: linked },
+        });
+        const id = project.json().id as number;
+        const inserted = app.db
+          .insert(sessions)
+          .values({ projectId: id, command: "bash", cwd: linked })
+          .run();
+        expect(
+          (await post(app, `/api/projects/${id}/git-checkout`, { branch: "feature" })).json(),
+        ).toEqual({
+          ok: false,
+          reason: "sessions-active",
+          detail: String(Number(inserted.lastInsertRowid)),
+        });
+        fs.rmSync(linked, { recursive: true, force: true });
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("refuses while another git operation holds the clone", async () => {
+      const app = await buildApp();
+      const { projectCwd, projectId } = await makeProject(app);
+      const { markCloneBusy, releaseClone } = await import("../../src/services/git-clone-busy.js");
+      markCloneBusy("local", projectCwd);
+      try {
+        const res = await post(app, `/api/projects/${projectId}/git-checkout`, {
+          branch: "feature",
+        });
+        expect(res.json()).toMatchObject({ ok: false, reason: "busy" });
+      } finally {
+        releaseClone("local", projectCwd);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    async function remoteProject(app: Awaited<ReturnType<typeof buildApp>>, baseUrl: string) {
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: `branch-ops-host-${baseUrl.length}`, baseUrl, token: "t" },
+      });
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "remote-branch-ops", cwd: "/x", hostId: host.json().id },
+      });
+      return project.json().id as number;
+    }
+
+    it("503s for a project on an unreachable remote host", async () => {
+      const app = await buildApp();
+      try {
+        const id = await remoteProject(app, "http://127.0.0.1:1");
+        const res = await post(app, `/api/projects/${id}/git-rebase`, {});
+        expect(res.statusCode).toBe(503);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("runs on the owning agent for a remote project", async () => {
+      const app = await buildApp();
+      const calls: Array<[string, unknown]> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          const { pathname } = new URL(url);
+          calls.push([pathname, init?.body ? JSON.parse(String(init.body)) : undefined]);
+          const body =
+            pathname === "/internal/git-branches"
+              ? { branches: [], worktrees: [], remoteBranches: [] }
+              : { ok: false, reason: "conflicts", detail: "origin/main", conflicts: ["a.txt"] };
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }),
+      );
+      try {
+        const id = await remoteProject(app, "http://agent.invalid:9");
+        const res = await post(app, `/api/projects/${id}/git-rebase`, { onto: "origin/main" });
+        expect(res.json()).toEqual({
+          ok: false,
+          reason: "conflicts",
+          detail: "origin/main",
+          conflicts: ["a.txt"],
+        });
+        expect(calls).toContainEqual(["/internal/git-rebase", { cwd: "/x", onto: "origin/main" }]);
+      } finally {
+        vi.unstubAllGlobals();
+        await app.close();
+      }
     });
   });
 

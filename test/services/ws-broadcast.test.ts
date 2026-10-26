@@ -70,6 +70,36 @@ describe("createKeyedBroadcastChannel", () => {
     expect(channel.getSubscriberCountForTests("b")).toBe(0);
   });
 
+  // Issue #1672 — a per-key unsubscribe on a socket that stays open.
+  it("unsubscribes one key, keeps the others, and reuses the listener pair", () => {
+    const channel = createKeyedBroadcastChannel<{ n: number }, string>();
+    const socket = emitterSocket();
+    const other = emitterSocket();
+    channel.subscribe("a", socket);
+    channel.subscribe("b", socket);
+    channel.subscribe("a", other);
+
+    channel.unsubscribe("a", socket);
+    // A key the socket was never on, and a repeat, are no-ops.
+    channel.unsubscribe("zzz", socket);
+    channel.unsubscribe("a", socket);
+    expect(channel.getSubscriberCountForTests("a")).toBe(1);
+    expect(channel.getSubscriberCountForTests("b")).toBe(1);
+
+    channel.broadcast("a", { n: 1 });
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(other.send).toHaveBeenCalledTimes(1);
+
+    // Its last key gone, then back: still one close/error pair, and a close
+    // afterwards clears the resubscribed key.
+    channel.unsubscribe("b", socket);
+    expect(channel.getSubscriberCountForTests("b")).toBe(0);
+    channel.subscribe("b", socket);
+    expect(socket.listenerCount("close")).toBe(1);
+    socket.emit("close");
+    expect(channel.getSubscriberCountForTests("b")).toBe(0);
+  });
+
   it("still delivers broadcasts per key", () => {
     const channel = createKeyedBroadcastChannel<{ n: number }, string>();
     const socket = emitterSocket();

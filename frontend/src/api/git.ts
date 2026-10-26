@@ -12,6 +12,7 @@ import type {
   GitRefsBatchResult,
   GitFileDiffResponse,
   GitPullResult,
+  GitBranchOpResult,
   CloneHealth,
   RepairOutcome,
   RepairPlan,
@@ -135,6 +136,30 @@ export const gitApi = {
   postProjectGitPull: (projectId: number) =>
     request<GitPullResult>(`/api/projects/${projectId}/git-pull`, {
       method: "POST",
+    }),
+
+  // Issue #1672 — the guarded checkout / create / rebase of the project's own
+  // checkout. A refusal (dirty tree, active session, conflicting rebase —
+  // aborted, with its files) is a 200 `{ ok: false, reason }`, not a throw.
+  checkoutProjectGitBranch: (projectId: number, branch: string) =>
+    request<GitBranchOpResult>(`/api/projects/${projectId}/git-checkout`, {
+      method: "POST",
+      body: JSON.stringify({ branch }),
+    }),
+
+  createProjectGitBranch: (
+    projectId: number,
+    body: { name: string; from: string; checkout?: boolean },
+  ) =>
+    request<GitBranchOpResult>(`/api/projects/${projectId}/git-branch-create`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  rebaseProjectGitBranch: (projectId: number, onto?: string) =>
+    request<GitBranchOpResult>(`/api/projects/${projectId}/git-rebase`, {
+      method: "POST",
+      body: JSON.stringify(onto ? { onto } : {}),
     }),
 
   // Issue #442 — Source Control manual branch deletion. `deleted: false` with a

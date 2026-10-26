@@ -483,7 +483,7 @@ export async function resolveGitHubToken(
   // "checks" is excluded on purpose: GitHub only lets a GitHub App create
   // check runs, so a PAT/OAuth fallback for it can never succeed. Use
   // `resolveChecksToken` (#1790).
-  scope: Exclude<InstallationTokenScope, "checks"> = "write",
+  scope: Exclude<InstallationTokenScope, "checks" | "checks-read"> = "write",
 ): Promise<string | null> {
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the
@@ -548,6 +548,53 @@ export async function resolveGitHubToken(
     );
   }
   return getToken(app);
+}
+
+/**
+ * Issue #1672 — the App token that can read a head commit's full
+ * `statusCheckRollup` (third-party check runs and commit statuses, not just
+ * Actions'), or null. Deliberately no PAT fallback, unlike
+ * resolveGitHubToken: every caller already holds a working read token, and
+ * on an installation that has not approved `checks`/`statuses` yet (the
+ * mint 422s, negative-cached like any scope) the right fallback is that
+ * token — `resolveChecksReadToken(…) ?? token` — so one ungranted scope
+ * never moves the PR reads off the App. With no App configured the read
+ * token already IS the PAT/OAuth token, which sees every check.
+ */
+export async function resolveChecksReadToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<string | null> {
+  try {
+    const appCreds = getGitHubAppCredentials(app);
+    if (!appCreds) return null;
+    const result = await getInstallationToken(
+      appCreds.appId,
+      appCreds.privateKeyPem,
+      repo.owner,
+      repo.repo,
+      "checks-read",
+    );
+    return result.token;
+  } catch (err) {
+    if (!(
+      err instanceof GitHubAppError ||
+      err instanceof DecryptionError ||
+      err instanceof GitHubApiError
+    )) {
+      throw err;
+    }
+    app.log.debug(
+      {
+        owner: repo.owner,
+        repo: repo.repo,
+        status:
+          err instanceof GitHubApiError ? err.statusCode : (err as { status?: number }).status,
+      },
+      "[github-integration] checks-read token unavailable — CI reads keep the read token",
+    );
+    return null;
+  }
 }
 
 /** Why the in-flight marker for a Hermes review could not be written. */

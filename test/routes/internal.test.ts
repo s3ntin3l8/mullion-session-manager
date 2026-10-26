@@ -3833,6 +3833,105 @@ describe("internal routes (agent role, issue #26)", () => {
     });
   });
 
+  // Issue #1672 — the agent-side guarded checkout / create / rebase.
+  describe("POST /internal/git-checkout, /git-branch-create, /git-rebase (issue #1672)", () => {
+    async function withRepo(fn: (cwd: string, run: (args: string[]) => void) => Promise<void>) {
+      const { execFileSync } = await import("node:child_process");
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-1672-root-"));
+      const cwd = path.join(repoRoot, "real-repo");
+      fs.mkdirSync(cwd, { recursive: true });
+      const run = (args: string[]) => {
+        execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+      };
+      run(["init", "-b", "main"]);
+      fs.writeFileSync(path.join(cwd, "a.txt"), "a\n");
+      run(["add", "-A"]);
+      run(["commit", "-m", "initial", "--no-verify"]);
+      const previousRoots = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = repoRoot;
+      try {
+        await fn(cwd, run);
+      } finally {
+        process.env.PROJECTS_ROOTS = previousRoots;
+        fs.rmSync(repoRoot, { recursive: true, force: true });
+      }
+    }
+
+    const post = (app: Awaited<ReturnType<typeof buildApp>>, url: string, payload: object) =>
+      app.inject({
+        method: "POST",
+        url,
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload,
+      });
+
+    it("creates, checks out and rebases on this host's own filesystem", async () => {
+      await withRepo(async (cwd) => {
+        const app = await buildApp();
+        try {
+          const created = await post(app, "/internal/git-branch-create", {
+            cwd,
+            name: "topic",
+            startPoint: "main",
+          });
+          expect(created.json()).toEqual({ ok: true });
+
+          const checkedOut = await post(app, "/internal/git-checkout", { cwd, branch: "topic" });
+          expect(checkedOut.json()).toEqual({ ok: true });
+
+          const rebased = await post(app, "/internal/git-rebase", { cwd, onto: "main" });
+          expect(rebased.json()).toEqual({
+            ok: true,
+            reason: "already-up-to-date",
+            detail: "main",
+          });
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
+    it("refuses while the clone is claimed by another git operation", async () => {
+      await withRepo(async (cwd) => {
+        const { markCloneBusy, releaseClone } =
+          await import("../../src/services/git-clone-busy.js");
+        const app = await buildApp();
+        markCloneBusy("local", cwd);
+        try {
+          const res = await post(app, "/internal/git-checkout", { cwd, branch: "main" });
+          expect(res.json()).toMatchObject({ ok: false, reason: "busy" });
+        } finally {
+          releaseClone("local", cwd);
+          await app.close();
+        }
+      });
+    });
+
+    it("validates the body and rejects a cwd outside PROJECTS_ROOTS", async () => {
+      await withRepo(async () => {
+        const app = await buildApp();
+        try {
+          expect((await post(app, "/internal/git-checkout", {})).statusCode).toBe(400);
+          expect(
+            (await post(app, "/internal/git-branch-create", { cwd: "/etc", name: "x" })).statusCode,
+          ).toBe(400);
+          expect((await post(app, "/internal/git-rebase", { cwd: "/etc" })).statusCode).toBe(400);
+          expect(
+            (
+              await post(app, "/internal/git-branch-create", {
+                cwd: "/etc",
+                name: "x",
+                startPoint: "main",
+              })
+            ).statusCode,
+          ).toBe(400);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+  });
+
   it("returns this host's detected agents", async () => {
     const app = await buildApp();
     const res = await app.inject({

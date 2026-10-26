@@ -37,6 +37,12 @@ remote-host support uses.
 - **Fast-forward Pull** — advances the local working tree to match upstream
   (`git merge --ff-only @{u}`) after fetching, safely refusing if history
   has diverged or the tree is dirty.
+- **Guarded checkout, branch create and rebase** (#1672) — switch the
+  project checkout to another branch, create a branch from any branch or
+  remote-tracking ref (optionally switching to it), and rebase the current
+  branch onto its upstream (or `origin/<default>` when it has none). Each
+  refuses rather than touching uncommitted work, and a rebase that conflicts
+  is aborted — see the guards below.
 
 ## Endpoints
 
@@ -45,6 +51,9 @@ remote-host support uses.
 | `/api/projects/:id/git-branches`         | GET    | Branches + worktrees + remote branches. `?detail=1` additionally computes per-branch `isMerged`, `sha`, `mergeState` (`ancestor`, `upstream-gone`, `pr-merged`, `pr-closed`) and `pr`. Squash merges are found from one cached closed-PR listing per repo (never a call per branch), and only count when the PR head SHA equals the local tip. Rate-limited 30/min.                                                                                                                               |
 | `/api/projects/:id/git-fetch`            | POST   | Manual `git fetch origin` trigger. Rate-limited 10/min.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `/api/projects/:id/git-pull`             | POST   | Fast-forward `git pull --ff-only` (`git merge --ff-only @{u}`). Rate-limited 10/min.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `/api/projects/:id/git-checkout`         | POST   | `{ branch }`. Switches the project checkout (a branch only on `origin` is created tracking it). Returns `{ ok, reason?, detail? }` — a refusal is a 200 (see the guards below). Remote hosts: `/internal/git-checkout`. Rate-limited 10/min.                                                                                                                                                                                                                                                      |
+| `/api/projects/:id/git-branch-create`    | POST   | `{ name, from, checkout? }`. Creates `name` at `from` with no upstream; `checkout` also switches to it, and only then do the checkout guards apply. Remote hosts: `/internal/git-branch-create`. Rate-limited 10/min.                                                                                                                                                                                                                                                                             |
+| `/api/projects/:id/git-rebase`           | POST   | `{ onto? }`. Fetches, then rebases the current branch onto `onto`, else its upstream, else `origin/<default>`. A conflict is aborted and reported with `conflicts: [files]`. Remote hosts: `/internal/git-rebase`. Rate-limited 10/min.                                                                                                                                                                                                                                                           |
 | `/api/projects/:id/git-branch-delete`    | POST   | `{ name, force? }`. POST, not DELETE — a branch name can contain `/`. Rate-limited 10/min.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `/api/projects/:id/git-branch`           | GET    | `?name=`. One branch's drilldown: upstream and base ahead/behind, unique commits (≤ 50), last commit, `worktreePath`, `taskId`, `pr`, `mergeState`. Local projects only (204 otherwise). Rate-limited 60/min.                                                                                                                                                                                                                                                                                     |
 | `/api/projects/:id/git-branch-prune`     | POST   | `{ dryRun?, confirm?, names? }`. Local projects only; never touches the remote. Without `confirm` it previews `candidates` (`{ name, reason }`) and `skipped` (`{ name, why }`: `current`, `worktree`, `task-claimed`, `default`). `confirm` + `names` re-reads state (fresh PR listing) and deletes only names that are still candidates: `-d` for `ancestor`, `-D` for `pr-merged` / `upstream-gone` (an upstream-gone branch with unpushed commits is never a candidate). Rate-limited 10/min. |
@@ -70,9 +79,13 @@ damaged clone shows the repair plan and a confirmed **Repair**, #1896), an
   reason is in the tooltip), live session pills and a task chip. Task branches
   show their lock up front and cannot be deleted from here. Hover actions: open
   a session on the branch, preview, **View in History** (opens History scoped
-  to `branch:<name>`) and two-step delete with `Force`. Click a row for the
-  **branch detail** (status triad, Mullion links, upstream/base ahead-behind,
-  commits only on the branch).
+  to `branch:<name>`), **Check out** (any branch no other worktree holds) or,
+  on the current branch, a two-step **Rebase**, and two-step delete with
+  `Force`. A refused checkout or rebase shows its reason on the row. The
+  section header's **+** opens **New branch** (name, start point — the default
+  base pre-filled — and "Switch to it"). Click a row for the **branch detail**
+  (status triad, Mullion links, upstream/base ahead-behind, commits only on the
+  branch, and the same Checkout / Rebase).
 - **Prunable → Prune…** opens the **prune preview**: a dry run lists the
   candidates with reasons and the skipped branches with why; the two-step
   **Delete** removes exactly the ticked names, locally only (remotes are never
@@ -164,6 +177,34 @@ does is skip the _warning_, not the _action_.
   - Local commits have diverged from upstream (`not-fast-forward`).
     Sessions running in the main worktree do not block a pull as long as their
     working tree is clean (any uncommitted edits are caught by `dirty-tree`).
+- **Checkout, create and rebase refusals** (#1672). None of these has a
+  `force`: each refuses, and leaves the checkout exactly as it was, when
+  - the tree has uncommitted changes, untracked files included
+    (`dirty-tree`), or a merge/rebase/cherry-pick is stopped mid-way
+    (`operation-in-progress`) — a branch create without "Switch to it" is
+    exempt, since it never touches the tree;
+  - an **active session works in the checkout** (`sessions-active`, `detail:`
+    the comma-joined session ids): its effective cwd — the live one on a
+    local host — is the project directory or below it, and not inside one of
+    its linked worktrees (a `.wt/` or `.mullion-worktrees/` session has its
+    own HEAD and is unaffected). Any project's session on the same host
+    counts, since two projects may share one clone; a project that is itself
+    rooted in a linked worktree guards that worktree. Moving HEAD under a
+    running agent would change the files it is editing;
+  - another git operation already holds the clone (`busy`);
+  - the target makes no sense: `already-current`, `checked-out` (held by
+    another worktree, `detail` = its path), `no-such-branch`, `no-such-ref`,
+    `already-exists`, `invalid-name`, `detached-head`, `unborn-head`, or
+    nothing to rebase onto (`no-base`).
+
+  A rebase that stops on a conflict runs `git rebase --abort` and returns
+  `reason: "conflicts"` with the conflicting files; a rebase with nothing to
+  do succeeds with `reason: "already-up-to-date"`. A branch whose upstream
+  is gone on the remote rebases onto `origin/<default>` instead. The session
+  and `busy` guards run on the primary; the rest run on whichever host owns
+  the checkout. On a remote host the session guard sees each session's recorded
+  cwd only, not its live one — the same gap as the live-session guard below.
+
 - **Task-branch refusal.** Deleting a `mullion/task-<N>` branch belonging
   to a task whose status is `claimed`/`in_progress`/`reviewing`/`failed`
   refuses (`reason: "task-branch"`, `detail: "#<taskId>"`) — the same

@@ -1183,6 +1183,31 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("runs the guarded checkout / create / rebase on the agent (issue #1672)", async () => {
+    const result = { ok: false, reason: "dirty-tree" };
+    fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, result)));
+    await expect(client().resolveGitCheckout("/x/y", "feature")).resolves.toEqual(result);
+    await expect(
+      client().resolveGitBranchCreate("/x/y", "topic", "origin/main", true),
+    ).resolves.toEqual(result);
+    await expect(client().resolveGitRebase("/x/y", "origin/main")).resolves.toEqual(result);
+    const calls = fetchMock.mock.calls.map(([url, init]) => [url, (init as RequestInit).body]);
+    expect(calls).toEqual([
+      [
+        "http://example.invalid:1234/internal/git-checkout",
+        JSON.stringify({ cwd: "/x/y", branch: "feature" }),
+      ],
+      [
+        "http://example.invalid:1234/internal/git-branch-create",
+        JSON.stringify({ cwd: "/x/y", name: "topic", startPoint: "origin/main", checkout: true }),
+      ],
+      [
+        "http://example.invalid:1234/internal/git-rebase",
+        JSON.stringify({ cwd: "/x/y", onto: "origin/main" }),
+      ],
+    ]);
+  });
+
   it("deletes a remote branch via /internal/git-branch-delete (issue #442)", async () => {
     const result = { deleted: true };
     fetchMock.mockResolvedValue(jsonResponse(200, result));

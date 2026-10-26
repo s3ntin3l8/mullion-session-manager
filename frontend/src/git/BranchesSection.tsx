@@ -6,7 +6,16 @@ import { describeError } from "../lib/describeError.js";
 import { statusTone, type Tone } from "../lib/statusTone.js";
 import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
-import { GlobeIcon, HistoryIcon, PlayTriangleIcon, SearchIcon, TrashIcon } from "../ui/icons.js";
+import {
+  GitBranchIcon,
+  GlobeIcon,
+  HistoryIcon,
+  PlayTriangleIcon,
+  PlusIcon,
+  PullIcon,
+  SearchIcon,
+  TrashIcon,
+} from "../ui/icons.js";
 import {
   IconButton,
   SessionPills,
@@ -21,7 +30,9 @@ import {
   type MullionLinks,
 } from "../hooks/useMullionLinks.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
+import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
+import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
 
@@ -72,11 +83,15 @@ export function BranchesSection({
   // So a double click can't make two sessions racing the worktree the first creates.
   const [opening, setOpening] = useState<ReadonlySet<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
+  // One checkout/rebase at a time: both move the same checkout's HEAD.
+  const [moving, setMoving] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [prevProjectId, setPrevProjectId] = useState(projectId);
   if (projectId !== prevProjectId) {
     setPrevProjectId(projectId);
     setRowErrors({});
     setFilter("");
+    setCreating(false);
   }
 
   const prByBranch = useMemo(() => new Map((prs ?? []).map((p) => [p.headBranch, p])), [prs]);
@@ -121,6 +136,29 @@ export function BranchesSection({
     }
   };
 
+  // Issue #1672 — guarded checkout / rebase. A refusal lands on the row,
+  // inline, without a `reason`: none of these offer a Force.
+  const moveHead = async (name: string, kind: "checkout" | "rebase") => {
+    if (moving) return;
+    setMoving(true);
+    const outcome = await runBranchOp(
+      projectId,
+      () =>
+        kind === "checkout"
+          ? api.checkoutProjectGitBranch(projectId, name)
+          : api.rebaseProjectGitBranch(projectId),
+      kind === "checkout" ? () => `Checked out ${name}.` : rebaseNotice,
+    );
+    setMoving(false);
+    if (!outcome.ok) {
+      setError(name, { message: outcome.message });
+      return;
+    }
+    setError(name, null);
+    pushToast({ message: outcome.notice, kind: "success" });
+    onReload();
+  };
+
   const openSession = async (name: string) => {
     const flightKey = `${projectId}:${name}`;
     if (opening.has(flightKey)) return;
@@ -155,7 +193,33 @@ export function BranchesSection({
   const prunableCount = groups.find((g) => g.id === "prunable")?.branches.length ?? 0;
 
   return (
-    <SidebarSection title="Branches" count={total} persistKey="git.branches" defaultOpen>
+    <SidebarSection
+      title="Branches"
+      count={total}
+      persistKey="git.branches"
+      defaultOpen
+      actions={
+        <IconButton label="New branch" onClick={() => setCreating((c) => !c)}>
+          <PlusIcon size={13} />
+        </IconButton>
+      }
+    >
+      {creating && (
+        <NewBranchForm
+          projectId={projectId}
+          defaultFrom={
+            defaultBranch?.replace(/^refs\/remotes\//, "") ??
+            branches.find((b) => b.isCurrent)?.name ??
+            ""
+          }
+          onDone={(notice) => {
+            setCreating(false);
+            pushToast({ message: notice, kind: "success" });
+            onReload();
+          }}
+          onCancel={() => setCreating(false)}
+        />
+      )}
       <label className="sc-search">
         <SearchIcon size={13} />
         <input
@@ -285,6 +349,29 @@ export function BranchesSection({
                 }
                 actions={
                   <>
+                    {b.isCurrent ? (
+                      <ConfirmButton
+                        variant="neutral"
+                        title="Rebase onto its upstream (or the default branch)"
+                        armedLabel="Rebase"
+                        disabled={moving}
+                        onConfirm={() => void moveHead(b.name, "rebase")}
+                      >
+                        <PullIcon size={13} />
+                      </ConfirmButton>
+                    ) : (
+                      <IconButton
+                        label={
+                          worktree
+                            ? `Can't check out — in use by ${worktree.path.split("/").pop()}`
+                            : "Check out"
+                        }
+                        onClick={() => void moveHead(b.name, "checkout")}
+                        disabled={moving || worktree !== undefined}
+                      >
+                        <GitBranchIcon size={13} />
+                      </IconButton>
+                    )}
                     <IconButton
                       label={
                         entry?.sessions.length

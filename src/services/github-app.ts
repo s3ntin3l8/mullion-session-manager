@@ -291,7 +291,25 @@ export const CHECKS_PERMISSIONS = {
   metadata: "read",
 } as const;
 
-export type InstallationTokenScope = "write" | "read" | "issues" | "dispatch" | "review" | "checks";
+// Issue #1672 — reading the head commit's whole `statusCheckRollup`. Under
+// READ_PERMISSIONS the rollup only sees check runs the token can read, which
+// is Actions'; a third-party CI's check runs need `checks: read` and a
+// commit status (`POST /statuses` integrations) needs `statuses: read`.
+// A superset of READ_PERMISSIONS on purpose: it replaces the read token for
+// the PR queries that select the rollup, and those select pull-request data
+// too. Its own set rather than two more keys on READ_PERMISSIONS, for the
+// reason ISSUES_READ_PERMISSIONS gives: an installation not yet re-approved
+// with the new grants 422s THIS mint alone — resolveChecksReadToken then
+// hands back nothing and the caller keeps the read token (Actions-only CI,
+// today's behavior) — instead of every read surface falling to the PAT.
+export const CHECKS_READ_PERMISSIONS = {
+  ...READ_PERMISSIONS,
+  checks: "read",
+  statuses: "read",
+} as const;
+
+export type InstallationTokenScope =
+  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -307,6 +325,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return REVIEW_PERMISSIONS;
     case "checks":
       return CHECKS_PERMISSIONS;
+    case "checks-read":
+      return CHECKS_READ_PERMISSIONS;
   }
 }
 
