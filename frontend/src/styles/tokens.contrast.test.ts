@@ -87,6 +87,16 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     expect(contrast(accent, resolve(vars, "--surface"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // Kit rows paint on --surface-hover (hover/selected), headers on --pane-hd.
+  for (const surface of ["--surface", "--surface-hover", "--pane-hd"]) {
+    it(`--muted, --dim and status text clear AA on ${surface}`, () => {
+      const bg = resolve(vars, surface);
+      for (const fg of ["--fg", "--muted", "--dim", ...TONES.map((t) => `--status-${t}-fg`)]) {
+        expect(contrast(resolve(vars, fg), bg), `${fg} on ${surface}`).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+
   it("--border is visibly stronger than the old ~1.1:1 hairline", () => {
     const sidebar = resolve(vars, "--sidebar");
     expect(contrast(resolve(vars, "--border"), sidebar)).toBeGreaterThanOrEqual(1.3);

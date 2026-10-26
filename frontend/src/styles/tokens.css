@@ -65,8 +65,10 @@
      hue tinted into --sidebar with literal percentages so the contrast test
      (test/tokens.contrast.test.ts) can resolve it without a CSS engine. */
   --surface: #1e1e21;
-  --surface-hover: #26262a;
+  --surface-hover: #242427; /* #26262a put --dim at 4.41:1 */
   --accent: #34d399;
+  /* Graph lanes are deliberately independent of --b/--g/--y/--p/--c: a later
+     status-hue edit must not silently recolour the history graph. */
   --lane-1: #5c9bf5;
   --lane-2: #5ec27a;
   --lane-3: #d7b06a;

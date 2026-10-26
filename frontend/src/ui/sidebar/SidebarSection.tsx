@@ -18,9 +18,16 @@ export interface SidebarSectionProps {
 
 type Persisted = Record<string, boolean>;
 
+// readJSON casts without validating, so a stored `null`/array/string must not
+// reach the `[key]` lookup.
+function readAll(): Persisted {
+  const all = readJSON<unknown>(STORAGE_KEYS.sidebarKitSections, {});
+  return all && typeof all === "object" && !Array.isArray(all) ? (all as Persisted) : {};
+}
+
 function readPersisted(key: string | undefined, fallback: boolean): boolean {
   if (!key) return fallback;
-  const stored = readJSON<Persisted>(STORAGE_KEYS.sidebarKitSections, {})[key];
+  const stored = readAll()[key];
   return typeof stored === "boolean" ? stored : fallback;
 }
 
@@ -40,8 +47,7 @@ export function SidebarSection({
     const next = !open;
     if (controlled === undefined) setOwn(next);
     if (persistKey) {
-      const all = readJSON<Persisted>(STORAGE_KEYS.sidebarKitSections, {});
-      writeJSON(STORAGE_KEYS.sidebarKitSections, { ...all, [persistKey]: next });
+      writeJSON(STORAGE_KEYS.sidebarKitSections, { ...readAll(), [persistKey]: next });
     }
     onToggle?.(next);
   };

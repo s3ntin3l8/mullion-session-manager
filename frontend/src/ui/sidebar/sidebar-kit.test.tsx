@@ -235,29 +235,44 @@ describe("SidebarRow", () => {
     expect(container.querySelector(".sb-row")?.className).toContain("sb-row--nolead");
   });
 
-  it("activates on click and on Enter/Space, but not from a nested action", () => {
+  it("activates once from the title button or the row body; actions are siblings, not descendants", () => {
     const onClick = vi.fn();
     const onAct = vi.fn();
-    render(
+    const { container } = render(
       <SidebarRow
         title="row"
+        meta="m"
         selected
         onClick={onClick}
         actions={<button onClick={onAct}>Delete</button>}
       />,
     );
-    const row = screen.getByRole("button", { name: /row/ });
-    expect(row).toHaveAttribute("aria-current", "true");
-    fireEvent.click(row);
-    fireEvent.keyDown(row, { key: "Enter" });
-    fireEvent.keyDown(row, { key: " " });
-    expect(onClick).toHaveBeenCalledTimes(3);
-    fireEvent.keyDown(row, { key: "a" });
-    expect(onClick).toHaveBeenCalledTimes(3);
-    const del = screen.getByRole("button", { name: "Delete" });
-    fireEvent.keyDown(del, { key: "Enter" });
-    fireEvent.click(del);
+    const title = screen.getByRole("button", { name: "row" });
+    expect(title).toHaveAttribute("aria-current", "true");
+    // No role="button" wrapper around the nested action.
+    expect(container.querySelector('[role="button"]')).toBeNull();
+    expect(title.contains(screen.getByRole("button", { name: "Delete" }))).toBe(false);
+    fireEvent.click(title);
+    expect(onClick).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText("m"));
+    expect(onClick).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onAct).toHaveBeenCalledTimes(1);
-    expect(onClick).toHaveBeenCalledTimes(3);
+    expect(onClick).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SidebarSection persistence hardening", () => {
+  it("ignores a non-object stored value", () => {
+    localStorage.setItem("crs.sidebarKitSections", "null");
+    render(
+      <SidebarSection title="Z" persistKey="z" defaultOpen={false}>
+        <p>inside</p>
+      </SidebarSection>,
+    );
+    expect(screen.queryByText("inside")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Z/ }));
+    expect(screen.getByText("inside")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("crs.sidebarKitSections")!)).toEqual({ z: true });
   });
 });

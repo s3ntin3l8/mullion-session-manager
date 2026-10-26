@@ -1,5 +1,5 @@
-/* Sidebar kit (B1, #1971) — styles for frontend/src/ui/sidebar/*. Values come
-   from the approved mockup (docs/design/git-github-sidebar/mockup.html).
+/* Sidebar kit (B1, #1971, epic #1965) — styles for frontend/src/ui/sidebar/*.
+   Values come from the design approved on the epic (mockup PR #1990).
    Colours are ONLY semantic tokens (tokens.css): --status-<tone>-{fg,bg,border},
    --surface*, --border*, --accent. Panels migrate onto these in B2-B5; the
    legacy .github-panel-* / .gh-* rules in empty-states.css are deleted as
@@ -227,16 +227,28 @@
   padding: 6px 10px;
   cursor: default;
 }
-.sb-row[role="button"] {
+.sb-row--clickable {
   cursor: pointer;
 }
 .sb-row:hover,
 .sb-row--sel {
   background: var(--surface-hover);
 }
-.sb-row:focus-visible {
+.sb-row-title--btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+}
+.sb-row-title--btn:focus-visible {
   outline: 1.5px solid var(--accent);
-  outline-offset: -1.5px;
+  outline-offset: 2px;
 }
 .sb-row--sel::before {
   content: "";
