@@ -30,12 +30,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { chromium } from "playwright";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 import { startDemo } from "./demo/instance.mjs";
 import { withDemo } from "./demo/with-demo.mjs";
 
 const execFileAsync = promisify(execFile);
 const SHOTS = process.env.HISTORY_VIEW_SHOTS ?? tmpdir();
 const failures = [];
+const IDENTITY = {
+  GIT_AUTHOR_NAME: "Demo",
+  GIT_AUTHOR_EMAIL: "demo@example.invalid",
+  GIT_COMMITTER_NAME: "Demo",
+  GIT_COMMITTER_EMAIL: "demo@example.invalid",
+};
 
 function check(label, ok, detail = "") {
   console.log(`[verify] ${ok ? "ok  " : "FAIL"} ${label}${detail ? ` — ${detail}` : ""}`);
@@ -49,14 +56,10 @@ function check(label, ok, detail = "") {
  */
 async function widenHistory(repo) {
   const out = async (...args) => {
-    const env = {
-      ...process.env,
-      GIT_AUTHOR_NAME: "Demo",
-      GIT_AUTHOR_EMAIL: "demo@example.invalid",
-      GIT_COMMITTER_NAME: "Demo",
-      GIT_COMMITTER_EMAIL: "demo@example.invalid",
-    };
-    const { stdout } = await execFileAsync("git", ["-c", "gc.auto=0", ...args], { cwd: repo, env });
+    const { stdout } = await execFileAsync("git", [...GIT_NO_AUTO_GC, ...args], {
+      cwd: repo,
+      env: { ...gitEnv(), ...IDENTITY },
+    });
     return stdout.trim();
   };
   const root = await out("rev-list", "--max-parents=0", "HEAD");

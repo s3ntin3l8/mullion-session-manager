@@ -2243,7 +2243,7 @@ button.github-panel-row.gh-issue-row {
   stroke-width: 1.5;
 }
 .gh-graph-more {
-  font-size: 8px;
+  font-size: 0.5rem;
   fill: var(--muted);
 }
 /* One line per commit: graph · subject · refs · time. */
