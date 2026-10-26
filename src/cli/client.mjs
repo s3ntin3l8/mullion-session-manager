@@ -109,7 +109,9 @@ export class MullionSocketClient extends EventEmitter {
   constructor(opts = {}) {
     super();
     const env = opts.env ?? process.env;
-    this.socketPath = opts.socketPath ?? resolveSocketPath(env);
+    // `--socket` is mapped like every other discovery candidate (a named pipe
+    // on Windows, see ipc-path.mjs); ipcPath leaves a pipe name unchanged.
+    this.socketPath = opts.socketPath ? ipcPath(opts.socketPath) : resolveSocketPath(env);
     const resolved = resolveToken(env);
     this.token = opts.token ?? resolved.token;
     this.tokenSource = opts.token ? "explicit" : resolved.source;

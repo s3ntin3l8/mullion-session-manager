@@ -1082,8 +1082,11 @@ export class Session {
     // Issue #323, fix: if the dtach socket doesn't exist yet, this is a
     // brand-new session — nothing lost, nothing to restore. Only a reattach
     // scenario (where the socket already exists from a prior spawn) could
-    // have lost state.
-    if (!existsSync(this.socketPath)) {
+    // have lost state. Skipped for a named pipe (Windows): stat-ing a live
+    // pipe opens client connections to it (see unix-socket.ts), and leaving
+    // stateRestored to readStateFile() above costs nothing — a brand-new
+    // session has no state to keep, so spawn()'s reset to idle is right.
+    if (!isPipePath(this.socketPath) && !existsSync(this.socketPath)) {
       this.stateRestored = true;
     }
   }

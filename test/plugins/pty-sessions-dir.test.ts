@@ -529,19 +529,14 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
     }
   });
 
-  it("fails with a clear error when no root can hold the fallback", () => {
-    // The fallback has to fit the limit TOO, and a fallback that cannot hold
-    // a socket is worse than none. The error has to say what to do about it
-    // — a bare EINVAL at bind() time is what this whole check exists to
-    // prevent — and to name the levers that are actually available.
-    //
-    // Reachable only where neither root exists: on Windows there is no
-    // POSIX /tmp, so an undeterminable home directory leaves no root at all.
+  it("uses the configured dir as-is on Windows, where no fallback is ever needed", () => {
+    // Windows endpoints are named pipes (cli/ipc-path.mjs) with fixed-length
+    // names, so no sessions dir is too long to hold them (issue #1728) — not
+    // even with no home directory and no /tmp to fall back to.
     const spy = vi.spyOn(os, "homedir").mockReturnValue("");
     try {
       withPlatform("win32", () => {
-        expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
-        expect(() => ensureSessionsDir(configured)).toThrow(/point HOME at a shorter/);
+        expect(ensureSessionsDir(configured)).toBe(path.resolve(configured));
       });
     } finally {
       spy.mockRestore();
@@ -592,6 +587,11 @@ describe("ensureSessionsDir fallback hardening (finding H4)", () => {
       const spy = vi.spyOn(process, "getuid").mockImplementation(() => real.call(process) + 1);
       try {
         expect(() => ensureSessionsDir(configured)).toThrow(/owned by uid/);
+        // The error has to say what to do about it — a bare EINVAL at bind()
+        // time is what this whole check exists to prevent — and to name the
+        // levers that are actually available.
+        expect(() => ensureSessionsDir(configured)).toThrow(/set SESSIONS_DIR to a shorter path/);
+        expect(() => ensureSessionsDir(configured)).toThrow(/point HOME at a shorter/);
       } finally {
         spy.mockRestore();
       }

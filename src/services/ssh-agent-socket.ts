@@ -102,7 +102,11 @@ export async function materializeSshAgentSocket(
   // whatever connects to it — filesystem perms are the only gate (there's
   // no protocol-level auth on a unix socket the way the bridge WS itself
   // has a pairing/session credential), same posture as hooks.sock. A named
-  // pipe has no mode bits to set — its access is an ACL (issue #1728).
+  // pipe has no mode bits, and its DEFAULT access lets every local user open
+  // it read-only (#2065) — with no token behind it, unlike hooks.sock and
+  // mullion.sock. That is why materializesBridgeSocket() never materializes
+  // this socket on Windows until #2065 restricts the pipe; the guard here
+  // only keeps the chmod from throwing on a pipe path.
   if (!isPipePath(opts.socketPath)) chmodSync(opts.socketPath, 0o600);
 
   return {
@@ -137,7 +141,17 @@ export function sshAgentSocketPath(sessionsDir: string): string {
 // both materialize — this is deliberately still a function, not a bare
 // `true`, to keep that a documented decision rather than an accident of
 // there being only two roles.
-export function materializesBridgeSocket(role: string): boolean {
+//
+// Never on Windows (issue #1728): there the socket is a named pipe whose
+// default access lets any local user connect, and this socket has no
+// protocol-level auth to fall back on — so it stays off until #2065
+// restricts the pipe to the current user. Sessions there keep whatever
+// SSH_AUTH_SOCK they inherit (resolveSshAuthSock's ambient tier).
+export function materializesBridgeSocket(
+  role: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform === "win32") return false;
   return role === "agent" || role === "primary";
 }
 
