@@ -33,10 +33,25 @@ export const REVIEW_PROTOCOL_NOTE =
   "is not re-requested — the request is refused with its run id, and that " +
   "refusal is the answer, not an error to retry: wait for it, or stop it with " +
   "stop_review. A review takes 10-30 minutes; check review_status once " +
-  "instead of asking again. After pushing fixes, ask again only when no " +
-  "review is in flight. Never re-trigger a review with an @mention of the " +
-  "review bot: that path is for humans, and it queues another round behind " +
-  "the running one.";
+  "instead of asking again. After pushing fixes for a changes-requested " +
+  "review, ask again only when no review is in flight. " +
+  "Once the review bot has approved, apply its remaining suggestions and " +
+  "push without requesting another review, even though the head moved: " +
+  "small targeted fixes do not change the verdict, and re-reviewing them " +
+  "only breeds more nits. Never re-trigger a review with an @mention of " +
+  "the review bot: that path is for humans, and it queues another round " +
+  "behind the running one.";
+
+/**
+ * What `force` is for. The relay refuses a request on a pull request the
+ * review bot already approved (reviewRelay.reReviewAfterApproval), and this is
+ * the way past that refusal — for the two cases that do need another look.
+ */
+export const REVIEW_FORCE_NOTE =
+  "Ask for a review even though the review bot already approved this pull " +
+  "request (otherwise refused with a 409). Only when your change grew " +
+  "beyond the bot's suggestions, or a human asked for another review — " +
+  "never to re-check small fixes.";
 
 /**
  * What `repo` is for. The relay targets the repository of the session's

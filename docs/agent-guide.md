@@ -398,9 +398,18 @@ the previous rounds' transcript — until the queue was deep enough that
 reviews took hours and the review gateway started refusing new ones. Asking
 once and waiting is faster than asking twice.
 
-After pushing fixes, ask again — a new head commit is a new review, and the
-previous round's findings are in the reviewer's context, so the new round
-focuses on what changed.
+After pushing fixes to a **changes-requested** review, ask again — a new head
+commit is a new review, and the previous round's findings are in the
+reviewer's context, so the new round focuses on what changed.
+
+Once the review bot has approved, do **not** ask again for its remaining
+suggestions: apply them and push, even though the head moved. Small targeted
+fixes do not change the verdict, and re-reviewing them only breeds the next
+round of nits, so the cycle never ends. The relay enforces this — a request
+on a pull request the bot's newest decisive review approved is refused with a
+409 (`reviewRelay.reReviewAfterApproval`, Settings → Integrations; set it to
+`allow` to re-review every head). Pass `--force` (MCP: `force`) only when your
+change grew beyond the suggestions, or a human asked for another review.
 
 Do **not** re-trigger a review by commenting `@s3ntin3l8-hermes Review` on
 the PR. That path is for humans; from an agent it dispatches another round

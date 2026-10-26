@@ -7,7 +7,11 @@
 // `isError: true` result rather than a protocol-level failure.
 
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
-import { REVIEW_PROTOCOL_NOTE, REVIEW_REPO_NOTE } from "../cli/review-protocol.mjs";
+import {
+  REVIEW_FORCE_NOTE,
+  REVIEW_PROTOCOL_NOTE,
+  REVIEW_REPO_NOTE,
+} from "../cli/review-protocol.mjs";
 
 /**
  * Issue #271, option 2 — lets the model itself decide "start work now" and
@@ -676,8 +680,9 @@ const requestReview = {
     "exists yet. A commit that has ALREADY been reviewed is refused (409): there is nothing " +
     "new to review, so push a new commit to ask for another round, or dismiss that review " +
     "first. A session working an ACTIVE Task Master task is refused (409) for that task's own " +
-    "PR: Task Master runs the task's review. Use this for a re-review after pushing fixes; a newly opened PR is reviewed " +
-    "automatically. The result may carry a `marker` object: `written: false` means the in-flight " +
+    "PR: Task Master runs the task's review. Use this for a re-review after pushing fixes to a " +
+    "changes-requested review; a newly opened PR is reviewed automatically. A PR the review bot " +
+    "already APPROVED is refused (409) too — apply its suggestions and push; see `force`. The result may carry a `marker` object: `written: false` means the in-flight " +
     "marker (a check run the repository's own review workflow reads) could not be written, with " +
     "the reason — the review still runs, but that workflow may not see it.",
   inputSchema: {
@@ -699,12 +704,17 @@ const requestReview = {
         description:
           "With repo and no pr_number: the branch in that repository to find the open PR for.",
       },
+      force: {
+        type: "boolean",
+        description: REVIEW_FORCE_NOTE,
+      },
     },
   },
   async handler(args, client) {
     const result = await client.requestReview(args?.pr_number, {
       repo: args?.repo,
       branch: args?.branch,
+      force: args?.force,
     });
     return JSON.stringify(result);
   },

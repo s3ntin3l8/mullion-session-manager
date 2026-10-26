@@ -1188,6 +1188,21 @@ describe("runCommand", () => {
         expect(io.written.join("")).toContain("review requested for acme/widgets#42");
       });
 
+      it("sends force for `review --force`, and refuses it on status and stop", async () => {
+        const client = fakeClient({ request: vi.fn(async () => dispatched) });
+        const code = await runCommand(["review", "--force"], { client, io: fakeIo() });
+        expect(code).toBe(0);
+        expect(client.request).toHaveBeenCalledWith("reviews.request", { force: true });
+        for (const sub of ["status", "stop run_1"]) {
+          const io = fakeIo();
+          const refused = await runCommand(["review", ...sub.split(" "), "--force"], {
+            client: fakeClient({ request: vi.fn(async () => dispatched) }),
+            io,
+          });
+          expect(refused).not.toBe(0);
+        }
+      });
+
       it("says no new review started when Hermes replayed an earlier run", async () => {
         const client = fakeClient({
           request: vi.fn(async () => ({

@@ -1531,7 +1531,8 @@ export const OPS: Record<string, OpSpec> = {
     onSession((id, { body }) => ({
       method: "POST",
       url: `/api/sessions/${enc(id)}/review-request`,
-      payload: json(relayTargetFields(body)),
+      // `force` is for the request only: it overrides the approved-PR guard.
+      payload: json(relayTargetFields(body, ["prNumber", "repo", "branch", "force"])),
     })),
   ),
   // Status of the latest review run for the caller's PR, and stopping a run the

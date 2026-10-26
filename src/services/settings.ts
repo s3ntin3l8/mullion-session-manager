@@ -540,6 +540,18 @@ export interface AppSettings {
      * while it provably predates the review.
      */
     ledgerName: string;
+    /**
+     * What `request_review` does when the review bot has already APPROVED the
+     * pull request: "refuse" answers 409 (apply the bot's suggestions and push
+     * without another round — a re-review of small fixes only breeds more
+     * nits, so the cycle never ends); "allow" re-reviews every new head, as
+     * before. A request with `force` goes through either way. Only the
+     * reviewer bot's own newest decisive review counts, so a later
+     * CHANGES_REQUESTED, a dismissed approval or a human's approval does not;
+     * with no `reviewerBotLogin` set there is no verdict to go by, so nothing
+     * is refused.
+     */
+    reReviewAfterApproval: "refuse" | "allow";
   };
   /**
    * The Runway quota integration (issue #29).
@@ -744,6 +756,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     cooldownMinutes: 10,
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
     ledgerName: "Hermes review",
+    reReviewAfterApproval: "refuse",
   },
   runway: {
     apiUrl: "",
@@ -1368,6 +1381,8 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       )
         .trim()
         .slice(0, 100),
+      reReviewAfterApproval:
+        settings.reviewRelay.reReviewAfterApproval === "allow" ? "allow" : "refuse",
     },
     runway: {
       apiUrl: safeString(settings.runway.apiUrl, DEFAULT_SETTINGS.runway.apiUrl),

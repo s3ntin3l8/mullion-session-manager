@@ -27,6 +27,7 @@ import {
   HermesNotConfiguredError,
   HermesUnavailableError,
   ReviewAlreadyLandedError,
+  ReviewApprovedError,
   ReviewConflictError,
   ReviewCooldownError,
   ReviewInFlightError,
@@ -66,6 +67,8 @@ interface ReviewRequestBody {
   prNumber?: number;
   repo?: string;
   branch?: string;
+  /** Ask even though the review bot already approved (reviewRelay.reReviewAfterApproval). */
+  force?: boolean;
 }
 
 interface TriageRequestBody {
@@ -107,6 +110,7 @@ const reviewRequestSchema = {
       prNumber: { type: "integer", minimum: 1 },
       repo: repoProperty,
       branch: branchProperty,
+      force: { type: "boolean" },
     },
   },
 };
@@ -176,6 +180,9 @@ export function replyReviewError(reply: FastifyReply, err: unknown): FastifyRepl
   if (err instanceof ReviewConflictError) return reply.conflict(err.message);
   // The commit has already been reviewed: there is nothing new to review.
   if (err instanceof ReviewAlreadyLandedError) return reply.conflict(err.message);
+  // The bot already approved: the answer is "apply its suggestions", not a
+  // second round (reviewRelay.reReviewAfterApproval).
+  if (err instanceof ReviewApprovedError) return reply.conflict(err.message);
   // A review of this PR is already running: the answer is the run id, not a
   // second review queued behind it.
   if (err instanceof ReviewInFlightError) {
@@ -692,7 +699,9 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, headSha } = target;
 
       try {
-        const { reviewerBotLogin, ledgerName } = getStoredSettings(app.db).reviewRelay;
+        const { reviewerBotLogin, ledgerName, reReviewAfterApproval } = getStoredSettings(
+          app.db,
+        ).reviewRelay;
         const reader = reviewReader(
           target.token,
           owner,
@@ -710,6 +719,12 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           prNumber,
           headSha,
           resolveBase: reader.base,
+          // Run by the relay after its own cheap refusals, so a request it was
+          // going to refuse anyway does not pay for the reviews walk.
+          beforeDispatch:
+            reReviewAfterApproval === "refuse" && request.body.force !== true
+              ? () => refuseAfterApproval(app, reader, reviewerBotLogin, { owner, repo, prNumber })
+              : undefined,
           sameContent: reader.sameContent,
           sessionId,
           // Two tokens for the in-flight marker (#1790): any token that can
@@ -913,6 +928,7 @@ import {
   isReviewerLogin,
   LANDED_REVIEW_STATES,
   resolveReviewedCommit,
+  reviewerStandingVerdict,
 } from "../services/relay-review-state.js";
 export { getRelayReviewState, pruneLandedMemo } from "../services/relay-review-state.js";
 export type { RelayReviewState } from "../shared/types.js";
@@ -1158,6 +1174,30 @@ export function reviewReader(
  * A GitHub failure degrades to "no warning" — it must never block or fail the
  * dispatch it is attached to.
  */
+/**
+ * Throws ReviewApprovedError when the review bot's standing verdict on the PR
+ * is APPROVED. The reviews list is the one `reader` caches, so the base and
+ * the duplicate-review warning that follow do not fetch it again.
+ *
+ * Fails OPEN: a review lookup that errors must not stop a request that would
+ * otherwise go through — the guard stops a runaway cycle, it is not a gate.
+ */
+async function refuseAfterApproval(
+  app: FastifyInstance,
+  reader: { reviews: () => Promise<Awaited<ReturnType<typeof listPullRequestReviews>>> },
+  reviewerBotLogin: string,
+  at: { owner: string; repo: string; prNumber: number },
+): Promise<void> {
+  let verdict: ReturnType<typeof reviewerStandingVerdict>;
+  try {
+    verdict = reviewerStandingVerdict(await reader.reviews(), reviewerBotLogin);
+  } catch (err) {
+    app.log.warn({ err, ...at }, "review-request: could not read reviews for the approval guard");
+    return;
+  }
+  if (verdict?.state === "APPROVED") throw new ReviewApprovedError();
+}
+
 async function existingBotReviewWarning(
   t: Omit<ReviewTarget, "foreign">,
   reader: {

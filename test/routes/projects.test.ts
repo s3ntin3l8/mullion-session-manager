@@ -3387,6 +3387,29 @@ describe("projects route", () => {
         );
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
+
+      it("is never refused after an approval: the agent-only guard is not installed", async () => {
+        vi.mocked(assertReviewerConfigured).mockReturnValueOnce("key");
+        vi.mocked(requestHermesReview).mockResolvedValueOnce({
+          runId: "run_10",
+          status: "queued",
+          replayed: false,
+        });
+        mockGithub(gqlPr(48));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/48/re-review`,
+        });
+        expect(res.statusCode).toBe(200);
+        // `beforeDispatch` is how the review-request route refuses after an
+        // approval (reviewRelay.reReviewAfterApproval); a human's click must not carry it.
+        expect(vi.mocked(requestHermesReview).mock.calls.at(-1)?.[1]).not.toHaveProperty(
+          "beforeDispatch",
+        );
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
     });
 
     describe("git log routes", () => {

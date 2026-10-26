@@ -65,11 +65,12 @@ const BROWSER_ACTION_TIMEOUT_MS = 30_000;
 // implementation instead of re-deriving it.
 
 /** The target-selecting fields of a relay request, minus the unset ones. */
-function relayTarget({ prNumber, repo, branch }) {
+function relayTarget({ prNumber, repo, branch, force }) {
   const out = {};
   if (prNumber !== undefined) out.prNumber = prNumber;
   if (repo !== undefined) out.repo = repo;
   if (branch !== undefined) out.branch = branch;
+  if (force !== undefined) out.force = force;
   return out;
 }
 

@@ -2307,6 +2307,12 @@ export interface AppSettings {
      * together or the relay and the workflow derive different bases.
      */
     ledgerName: string;
+    /**
+     * What `request_review` does when the review bot has already approved the
+     * PR: "refuse" (409 — apply its suggestions and push without another
+     * round) or "allow" (re-review every new head). `force` bypasses it.
+     */
+    reReviewAfterApproval: "refuse" | "allow";
   };
   /**
    * The Runway quota integration (issue #29) — the non-secret half. The

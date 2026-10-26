@@ -448,6 +448,21 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ status: "dispatched", repo: "a/b", prNumber: 7 });
   });
 
+  it("request_review passes force through, and documents when it is for", async () => {
+    const tool = TOOLS.find((t) => t.name === "request_review")!;
+    const requestReview = vi.fn().mockResolvedValue({ status: "dispatched" });
+    await tool.handler({ pr_number: 7, force: true }, { requestReview });
+    expect(requestReview).toHaveBeenCalledWith(7, {
+      repo: undefined,
+      branch: undefined,
+      force: true,
+    });
+    expect(tool.inputSchema.properties.force).toMatchObject({ type: "boolean" });
+    expect(tool.inputSchema.properties.force.description).toContain("already approved");
+    // The rule an agent reads when it is about to ask.
+    expect(tool.description).toContain("Once the review bot has approved");
+  });
+
   it("request_review defaults pr_number to undefined (the server resolves the branch's PR)", async () => {
     const tool = TOOLS.find((t) => t.name === "request_review")!;
     const requestReview = vi.fn().mockResolvedValue({ status: "dispatched" });

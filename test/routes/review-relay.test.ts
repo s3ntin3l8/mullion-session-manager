@@ -362,6 +362,7 @@ describe("review-request routes", () => {
       // The base is resolved lazily, by the relay, so a request the relay
       // refuses does not pay for the PR's reviews.
       resolveBase: expect.any(Function),
+      beforeDispatch: expect.any(Function),
       sameContent: expect.any(Function),
       sessionId,
       // Any token that can read check runs finds the remembered session;
@@ -540,6 +541,128 @@ describe("review-request routes", () => {
       expect(res.statusCode).toBe(409);
       expect(res.json().message).toContain("run_live");
       expect(res.headers["retry-after"]).toBe("60");
+    });
+  });
+
+  describe("a PR the review bot already approved is not re-reviewed", () => {
+    // The settings live in a DB shared by the tests of this file: put them back.
+    afterEach(() => {
+      applySettingsPatch(app, {
+        reviewRelay: { reviewerBotLogin: "s3ntin3l8-hermes[bot]", reReviewAfterApproval: "refuse" },
+      });
+    });
+
+    const bot = "s3ntin3l8-hermes[bot]";
+    const review = (state: string, over: Record<string, unknown> = {}) => ({
+      author: bot,
+      authorIsBot: true,
+      state,
+      commitId: "sha4242",
+      submittedAt: "2026-01-02T00:00:00Z",
+      ...over,
+    });
+    // The relay runs the hook after its own cheap refusals; run it the same way.
+    const runHook = () =>
+      mocks.requestHermesReview.mockImplementation(
+        async (_app: unknown, t: { beforeDispatch?: () => Promise<void> }) => {
+          await t.beforeDispatch?.();
+          return { runId: "run_1", status: "queued", replayed: false };
+        },
+      );
+
+    it("refuses with a 409 that says to apply the suggestions and how to force", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([review("APPROVED")]);
+      const res = await post(sessionId, {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("already approved");
+      expect(res.json().message).toContain("force");
+    });
+
+    it("goes through with force", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([review("APPROVED")]);
+      const res = await post(sessionId, { force: true });
+      expect(res.statusCode).toBe(200);
+      const target = mocks.requestHermesReview.mock.calls.at(-1)?.[1] as {
+        beforeDispatch?: unknown;
+      };
+      expect(target.beforeDispatch).toBeUndefined();
+    });
+
+    it("goes through when the setting is allow", async () => {
+      applySettingsPatch(app, { reviewRelay: { reReviewAfterApproval: "allow" } });
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([review("APPROVED")]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("goes through when there is no approval yet", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("goes through when the bot's newest decisive review requested changes", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([
+        review("APPROVED"),
+        review("CHANGES_REQUESTED"),
+      ]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("keeps refusing when only a comment, or a dismissal, followed the approval", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([
+        review("APPROVED"),
+        review("COMMENTED"),
+        review("DISMISSED"),
+      ]);
+      expect((await post(sessionId, {})).statusCode).toBe(409);
+    });
+
+    it("goes through when the approval was dismissed", async () => {
+      runHook();
+      // A dismissed review is retracted: it is neither an approval nor a block.
+      mocks.listPullRequestReviews.mockResolvedValue([review("DISMISSED")]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("ignores an approval by a human or by another bot", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockResolvedValue([
+        review("APPROVED", { author: "a-human", authorIsBot: false }),
+        review("APPROVED", { author: "claude[bot]" }),
+      ]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("lets the request through when no reviewer login is configured (unknown identity, no verdict)", async () => {
+      applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
+      runHook();
+      // Any bot's approval would otherwise refuse the request in the review bot's name.
+      mocks.listPullRequestReviews.mockResolvedValue([
+        review("APPROVED", { author: "other[bot]" }),
+      ]);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("lets the request through when the reviews cannot be read", async () => {
+      runHook();
+      mocks.listPullRequestReviews.mockRejectedValue(new Error("github down"));
+      expect((await post(sessionId, {})).statusCode).toBe(200);
+    });
+
+    it("does not read the reviews for a request the relay refuses first", async () => {
+      // The hook is only run by the relay, after its own refusals.
+      mocks.requestHermesReview.mockRejectedValue(new ReviewCooldownError(60, "sha42"));
+      expect((await post(sessionId, {})).statusCode).toBe(409);
+      expect(mocks.listPullRequestReviews).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-boolean force", async () => {
+      expect((await post(sessionId, { force: "yes" })).statusCode).toBe(400);
     });
   });
 
@@ -910,6 +1033,7 @@ describe("review-request routes", () => {
       prNumber: 99,
       headSha: "sha99",
       resolveBase: expect.any(Function),
+      beforeDispatch: expect.any(Function),
       sameContent: expect.any(Function),
       sessionId,
       githubToken: "ghs_checks",

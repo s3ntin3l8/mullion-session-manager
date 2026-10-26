@@ -406,6 +406,19 @@ export function ReviewRelaySection() {
             onCommit={(v) => updateSettings({ reviewRelay: { ledgerName: v } })}
           />
           <Row
+            label="After an approval"
+            desc="What a review request does once the review bot has approved the pull request. “Refuse” answers 409 so the agent applies the bot's remaining suggestions and pushes without another round (small fixes rarely change the verdict, and re-reviewing them only breeds more nits). “Re-review” reviews every new head commit. An agent can still pass force when its change grew beyond the suggestions or you asked for another look."
+          >
+            <Segmented
+              options={[
+                { value: "refuse", label: "Refuse" },
+                { value: "allow", label: "Re-review" },
+              ]}
+              value={relay.reReviewAfterApproval}
+              onChange={(v) => updateSettings({ reviewRelay: { reReviewAfterApproval: v } })}
+            />
+          </Row>
+          <Row
             label="Cooldown"
             desc="Minimum time between two requests for the same target — the same commit for a review, the same issue for a triage."
           >

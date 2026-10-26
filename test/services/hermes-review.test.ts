@@ -334,6 +334,54 @@ describe("hermes review relay", () => {
       await expect(requestHermesReview(app, PR)).rejects.toBeInstanceOf(ReviewInFlightError);
     });
 
+    describe("beforeDispatch", () => {
+      it("runs before the base is read, and a throw dispatches nothing", async () => {
+        const order: string[] = [];
+        const refusal = new Error("refused by the caller");
+        await expect(
+          requestHermesReview(app, {
+            ...PR,
+            beforeDispatch: async () => {
+              order.push("beforeDispatch");
+              throw refusal;
+            },
+            resolveBase: async () => {
+              order.push("resolveBase");
+              return "base123";
+            },
+          }),
+        ).rejects.toBe(refusal);
+        // The caller's refusal comes first, so a refused request never pays for the base.
+        expect(order).toEqual(["beforeDispatch"]);
+        expect(calls("/v1/runs")).toHaveLength(0);
+      });
+
+      it("gives the cooldown slot back when it throws", async () => {
+        await expect(
+          requestHermesReview(app, {
+            ...PR,
+            beforeDispatch: async () => {
+              throw new Error("refused");
+            },
+          }),
+        ).rejects.toThrow("refused");
+        // The refusal did not use up the commit's cooldown: asking again dispatches.
+        await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_1" });
+      });
+
+      it("is not run for a request the relay refuses first", async () => {
+        await requestHermesReview(app, PR);
+        runEndpoint = async () =>
+          new Response(JSON.stringify({ run_id: "run_1", status: "running" }), { status: 200 });
+        const beforeDispatch = vi.fn(async () => undefined);
+        // The first request's run is still going: the in-flight refusal wins.
+        await expect(requestHermesReview(app, { ...PR, beforeDispatch })).rejects.toBeInstanceOf(
+          ReviewInFlightError,
+        );
+        expect(beforeDispatch).not.toHaveBeenCalled();
+      });
+    });
+
     it("refuses a commit that has already been reviewed — there is nothing new to review", async () => {
       // The range would be empty (the last landed review is on this very
       // commit), and an empty range is a key the previous round never used:
