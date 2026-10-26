@@ -178,6 +178,53 @@ describe("hermes review relay", () => {
       const review = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT");
       expect(review).toContain("Post the review as your GitHub App bot identity");
     });
+
+    it("names the head commit for a pull request with no base", () => {
+      const msg = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT", {
+        headSha: "head111",
+      });
+      expect(msg).toContain("Review the pull request at commit head111 — that exact commit");
+      expect(msg).not.toContain("FOLLOW-UP");
+      expect(msg.indexOf("Target:")).toBeLessThan(msg.indexOf("at commit"));
+    });
+
+    it("names the follow-up range, with the in-session history note", () => {
+      const msg = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT", {
+        headSha: "head111",
+        baseSha: "base000",
+      });
+      expect(msg).toContain("the range base000..head111");
+      expect(msg).toContain("If base000 is not an ancestor of head111");
+      expect(msg).toContain("Earlier rounds are in the history of this session");
+      expect(msg).not.toContain("This is a NEW session");
+    });
+
+    it("tells a fresh session to read the earlier rounds itself", () => {
+      const msg = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT", {
+        headSha: "head111",
+        baseSha: "base000",
+        freshSession: true,
+      });
+      expect(msg).toContain("This is a NEW session");
+      expect(msg).not.toContain("Earlier rounds are in the history of this session");
+    });
+
+    it("leaves an issue triage without a commit or range", () => {
+      const msg = buildRelayMessage("issue", "acme", "widgets", 7, "PROMPT", {
+        headSha: "head111",
+        baseSha: "base000",
+      });
+      expect(msg).not.toContain("at commit");
+      expect(msg).not.toContain("FOLLOW-UP");
+    });
+
+    it("names no commit when the head is unknown", () => {
+      const msg = buildRelayMessage("pull_request", "acme", "widgets", 7, "PROMPT", {
+        baseSha: "base000",
+      });
+      expect(msg).not.toContain("at commit");
+      expect(msg).not.toContain("undefined");
+    });
   });
 
   describe("issue triage (#1629)", () => {
@@ -638,6 +685,26 @@ describe("hermes review relay", () => {
       expect(bodyOf(1).session_id).toBe("hermes-review-acme-widgets-7-2");
       expect(keyOf(0)).toBe("hermes-review:acme/widgets#7@..abc1234");
       expect(keyOf(1)).toBe("hermes-review:acme/widgets#7@..abc1234#session-2");
+    });
+
+    it("names the range in a follow-up dispatch, and the NEW session after a refusal", async () => {
+      let n = 0;
+      dispatch = async () => {
+        n += 1;
+        if (n === 1) {
+          return new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
+        }
+        return accepted("run_fresh");
+      };
+      await requestHermesReview(app, { ...PR, resolveBase: async () => "base123" });
+      const inputs = calls("/v1/runs").map(
+        ([, init]) => JSON.parse((init as RequestInit).body as string).input as string,
+      );
+      expect(inputs).toHaveLength(2);
+      expect(inputs[0]).toContain("the range base123..abc1234");
+      expect(inputs[0]).toContain("Earlier rounds are in the history of this session");
+      expect(inputs[1]).toContain("the range base123..abc1234");
+      expect(inputs[1]).toContain("This is a NEW session");
     });
 
     it("gives up when every session is refused by the stuck session", async () => {

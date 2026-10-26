@@ -388,13 +388,47 @@ export function buildRelayMessage(
   repo: string,
   number: number,
   prompt: string,
+  range: {
+    /** The head commit to review. */
+    headSha?: string;
+    /** The commit the previous round reviewed up to; set on a follow-up round. */
+    baseSha?: string;
+    /** This dispatch moved to a new session, so earlier rounds are not in its history. */
+    freshSession?: boolean;
+  } = {},
 ): string {
   const target = kind === "issue" ? `issue #${number}` : `pr #${number}`;
   // A triage posts a comment, not a review — telling it to "post the review"
   // would ask for a verdict it has none to give.
   const post = kind === "issue" ? "comment" : "review";
+  // Same wording as the shared workflow's build_msg(), so both entry points
+  // instruct the reviewer identically. An issue triage has no commit or range.
+  let commit = "";
+  const { headSha, baseSha, freshSession } = range;
+  if (kind !== "issue" && headSha) {
+    commit =
+      `Review the pull request at commit ${headSha} — that exact commit. If the PR head has moved ` +
+      "since this request, say so in the review instead of reviewing a newer head.\n";
+    if (baseSha) {
+      const history = freshSession
+        ? "This is a NEW session: earlier rounds are NOT in your history. Read the pull request's " +
+          "existing reviews and comments (gh) for what was found before. Do not re-review them, but " +
+          "DO flag anything in the new range that interacts with those findings, and state whether " +
+          "they are addressed."
+        : "Earlier rounds are in the history of this session: do not re-review them, but DO flag " +
+          "anything in the new range that interacts with what was found before, and state whether " +
+          "the previous round findings are addressed.";
+      commit +=
+        `This is a FOLLOW-UP round. The previous round reviewed up to ${baseSha}. Review ONLY what ` +
+        `the PR itself changed since then: the range ${baseSha}..${headSha}, EXCLUDING the commits ` +
+        'already on the base branch (an "Update branch" merge brings those into the range; they ' +
+        `are not part of this PR). The review procedure gives the exact git command. ${history} ` +
+        `If ${baseSha} is not an ancestor of ${headSha} (the PR was rebased), review the whole PR instead.\n`;
+    }
+  }
   const header =
     `Target: ${target} in repo ${owner}/${repo}\n` +
+    commit +
     `Post the ${post} as your GitHub App bot identity (an installation token from your profile's ` +
     "App credentials) — never with a personal user token. If you have no App credentials, do not " +
     "post; reply with the reason instead. Do NOT ask the human for secrets.\n" +
@@ -992,6 +1026,10 @@ export async function requestRelay(
     // The attempt that owns the current session id: 1 is the pull request's
     // own session, 2 and 3 are the retries that follow a stuck one.
     let sessionAttempt = 1;
+    // Set once a session refused this request: the retry runs in a session
+    // with none of the earlier rounds in its history. A session remembered
+    // from an earlier round's marker is not fresh — it holds that history.
+    let freshSession = false;
     // The previous round may have had to move to a fresh session (its own was
     // stuck, and a stuck session never recovers). The in-flight marker it
     // wrote records the session it used, so the next round continues in it
@@ -1038,6 +1076,9 @@ export async function requestRelay(
             promptRepo,
             promptPath,
             sessionId,
+            headSha: target.headSha,
+            baseSha,
+            freshSession,
           });
         } catch (err) {
           if (!(err instanceof ReviewSessionRefusedError) || !sessionId) throw err;
@@ -1046,6 +1087,7 @@ export async function requestRelay(
           // The body carries the session id, so the idempotency key moves with
           // it — a key that stayed would conflict with the body it holds.
           sessionAttempt += 1;
+          freshSession = true;
           sessionId = `${baseSessionId}-${sessionAttempt}`;
           idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
           lastError = err;
@@ -1292,6 +1334,10 @@ async function dispatchReview(
     promptPath: string;
     /** The Hermes session to run in — one per pull request. */
     sessionId?: string;
+    headSha?: string;
+    baseSha?: string;
+    /** This request already moved to a new session after a refusal. */
+    freshSession?: boolean;
   },
 ): Promise<{ runId: string; status: string; replayed: boolean }> {
   const prompt = r.promptRepo
@@ -1304,7 +1350,11 @@ async function dispatchReview(
   const body = JSON.stringify({
     ...(r.model ? { model: r.model } : {}),
     ...(r.model && r.provider ? { provider: r.provider } : {}),
-    input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt),
+    input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt, {
+      headSha: r.headSha,
+      baseSha: r.baseSha,
+      freshSession: r.freshSession,
+    }),
     // The session id is what makes the review rounds of one pull request
     // continue the same conversation. Without it Hermes derives the session
     // from the request text, which made every request for a PR land in the
