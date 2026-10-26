@@ -121,7 +121,13 @@ export function resolveHostGitBranch(
   hostId: string,
   cwd: string,
 ): Promise<HostGitResult<string | null>> {
-  return viaRemote(app, hostId, (client) => client.resolveGitBranch(cwd));
+  return viaRemote(app, hostId, async (client) => {
+    const branch = await client.resolveGitBranch(cwd);
+    // The agent's /internal/git-branch allows a detached HEAD, reported as a
+    // 7-char SHA; that is not a branch (the local read passes allowDetached:
+    // false for the same reason).
+    return branch !== null && /^[0-9a-f]{7}$/.test(branch) ? null : branch;
+  });
 }
 
 /**

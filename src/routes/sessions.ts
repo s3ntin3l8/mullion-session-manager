@@ -1282,7 +1282,9 @@ export async function sessionsRoute(app: FastifyInstance) {
       const preview =
         app.config.PREVIEW_BASE_HOST.trim() === ""
           ? null
-          : getOrCreateProjectPreview(app, row.projectId);
+          : // Issue #2007 — the accepting session is the one serving this dev
+            // server, so it is the session the preview's branch follows.
+            getOrCreateProjectPreview(app, row.projectId, sessionId);
       return { devServerUrl: port, preview };
     },
   );

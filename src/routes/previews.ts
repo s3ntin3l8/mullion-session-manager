@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getPreviewWorktree } from "../services/git-worktree.js";
 import { resolveHostGitBranch } from "../services/host-git.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 import {
   UnknownProjectError,
   createExternalPreview,
@@ -24,7 +25,6 @@ interface CreatePreviewBody {
   kind: "project" | "external";
   projectId?: number;
   url?: string;
-  sessionId?: number;
 }
 
 const createPreviewSchema = {
@@ -35,7 +35,6 @@ const createPreviewSchema = {
     properties: {
       kind: { type: "string", enum: ["project", "external"] },
       projectId: { type: "number" },
-      sessionId: { type: "integer" },
       url: { type: "string", minLength: 1 },
     },
   },
@@ -59,14 +58,58 @@ function isAllowedExternalUrl(value: string): boolean {
 // `.git/HEAD` locally, or through the host client for a remote-hosted project
 // (whose cwd this host cannot read). External previews have none: null, never
 // a guess. A detached HEAD is null too — a short SHA is not a branch a
-// consumer could link to.
-async function withBranch(app: FastifyInstance, preview: PreviewSummary): Promise<PreviewSummary> {
-  return { ...preview, branch: await resolvePreviewBranch(app, preview) };
+// consumer could link to. Create responses carry no `branch` — the pane only
+// needs the slug, and the lookup can cost a host round trip; a GET pays it.
+async function withBranches(
+  app: FastifyInstance,
+  previewList: PreviewSummary[],
+): Promise<PreviewSummary[]> {
+  const live = await liveBranchesBySession(app, previewList);
+  return Promise.all(
+    previewList.map(async (p) => ({ ...p, branch: await resolvePreviewBranch(app, p, live) })),
+  );
+}
+
+// One `liveStatus` per host for every bound session (not one per preview).
+// A host that doesn't answer just contributes nothing: the read must not fail
+// on an unreachable host, so those previews fall through to the next source.
+async function liveBranchesBySession(
+  app: FastifyInstance,
+  previewList: PreviewSummary[],
+): Promise<Map<number, string>> {
+  const ids = previewList.flatMap((p) => (p.sessionId === null ? [] : [p.sessionId]));
+  const out = new Map<number, string>();
+  if (ids.length === 0) return out;
+  const rows = app.db
+    .select({ id: sessions.id, projectId: sessions.projectId, hostId: sessions.hostId })
+    .from(sessions)
+    .where(inArray(sessions.id, ids))
+    .all();
+  const byHost = new Map<string, string[]>();
+  for (const row of rows) {
+    const hostId = resolveSessionHostId(app, row);
+    byHost.set(hostId, [...(byHost.get(hostId) ?? []), String(row.id)]);
+  }
+  await Promise.all(
+    [...byHost].map(async ([hostId, hostIds]) => {
+      try {
+        const info = await resolveBackend(app, hostId).liveStatus(hostIds, 0);
+        for (const id of hostIds) {
+          const branch = info[id]?.liveBranch;
+          if (branch) out.set(Number(id), branch);
+        }
+      } catch (err) {
+        app.log.warn({ hostId, err }, "preview live branch lookup failed");
+      }
+    }),
+  );
+  return out;
 }
 
 async function resolvePreviewBranch(
   app: FastifyInstance,
   preview: PreviewSummary,
+  live: Map<number, string>,
 ): Promise<string | null> {
   if (preview.kind !== "project" || preview.projectId === null) return null;
   const [project] = app.db
@@ -77,24 +120,10 @@ async function resolvePreviewBranch(
   if (!project) return null;
 
   if (preview.sessionId !== null) {
-    const [session] = app.db
-      .select({ hostId: sessions.hostId })
-      .from(sessions)
-      .where(eq(sessions.id, preview.sessionId))
-      .all();
-    if (session) {
-      const hostId = session.hostId ?? project.hostId;
-      try {
-        const live = await resolveBackend(app, hostId).liveStatus([String(preview.sessionId)], 0);
-        const liveBranch = live[String(preview.sessionId)]?.liveBranch;
-        if (liveBranch) return liveBranch;
-      } catch (err) {
-        // An unreachable host must not fail the preview read; fall through.
-        app.log.warn({ hostId, sessionId: preview.sessionId, err }, "preview live branch lookup");
-      }
-      const worktree = getPreviewWorktree(preview.sessionId);
-      if (worktree?.branch) return worktree.branch;
-    }
+    const liveBranch = live.get(preview.sessionId);
+    if (liveBranch) return liveBranch;
+    const worktree = getPreviewWorktree(preview.sessionId);
+    if (worktree?.branch) return worktree.branch;
   }
 
   if (project.hostId === LOCAL_HOST_ID) return readGitBranch(project.cwd, { allowDetached: false });
@@ -109,9 +138,7 @@ export async function previewsRoute(app: FastifyInstance) {
   // than silently succeed into a dead end.
   if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
 
-  app.get("/api/previews", async () =>
-    Promise.all(listPreviews(app).map((p) => withBranch(app, p))),
-  );
+  app.get("/api/previews", async () => withBranches(app, listPreviews(app)));
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",
@@ -125,9 +152,9 @@ export async function previewsRoute(app: FastifyInstance) {
           return reply.badRequest('projectId is required for kind "project"');
         }
         try {
-          const preview = getOrCreateProjectPreview(app, projectId, request.body.sessionId);
+          const preview = getOrCreateProjectPreview(app, projectId);
           reply.code(201);
-          return await withBranch(app, preview);
+          return preview;
         } catch (err) {
           if (err instanceof UnknownProjectError) return reply.notFound(err.message);
           throw err;
@@ -140,14 +167,14 @@ export async function previewsRoute(app: FastifyInstance) {
       }
       const preview = createExternalPreview(app, url);
       reply.code(201);
-      return await withBranch(app, preview);
+      return preview;
     },
   );
 
   app.get<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {
     const preview = getPreviewBySlug(app, request.params.slug);
     if (!preview) return reply.notFound();
-    return await withBranch(app, preview);
+    return (await withBranches(app, [preview]))[0];
   });
 
   app.delete<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {

@@ -230,19 +230,6 @@ export function BrowserPanel({
   }, [isExternal]);
 
   // Main URL resolving effect
-  // The session the pane is bound to — sent with the preview request so the
-  // preview's branch follows it (issue #2007). Read through a ref so a session
-  // switch doesn't reload the iframe.
-  const activeSessionId = useDashboardStore((s) => {
-    if (!s.activePanelId) return null;
-    const match = s.activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-    return match ? parseInt(match[1], 10) : null;
-  });
-  const boundSessionIdRef = useRef(activeSessionId);
-  useEffect(() => {
-    boundSessionIdRef.current = activeSessionId;
-  }, [activeSessionId]);
-
   useEffect(() => {
     if (isExternal) {
       if (!currentUrl) return;
@@ -322,10 +309,7 @@ export function BrowserPanel({
             setFetchState({ status: "ready", src: devServerUrl });
             return;
           }
-          const preview = await api.createProjectPreview(
-            projectId!,
-            boundSessionIdRef.current ?? undefined,
-          );
+          const preview = await api.createProjectPreview(projectId!);
           if (cancelled) return;
           const token = await mintPreviewTokenIfRequired(info, preview.slug);
           if (cancelled) return;
@@ -374,6 +358,12 @@ export function BrowserPanel({
   }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel]);
 
   // Follow Agent URL sync
+  const activeSessionId = useDashboardStore((s) => {
+    if (!s.activePanelId) return null;
+    const match = s.activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
+    return match ? parseInt(match[1], 10) : null;
+  });
+
   const activeSession = useDashboardStore((s) =>
     activeSessionId !== null ? s.sessions.find((sess) => sess.id === activeSessionId) : undefined,
   );

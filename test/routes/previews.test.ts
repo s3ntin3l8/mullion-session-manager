@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { previews, projects, sessions } from "../../src/db/schema.js";
 import * as sessionBackendModule from "../../src/services/session-backend.js";
 import * as hostGitModule from "../../src/services/host-git.js";
+import { getOrCreateProjectPreview } from "../../src/services/preview-registry.js";
 import { trackPreviewWorktree, deletePreviewWorktree } from "../../src/services/git-worktree.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
@@ -303,7 +304,8 @@ describe("previews route (issue #28)", () => {
       url: "/api/previews",
       payload: { kind: "project", projectId },
     });
-    expect(preview.json().branch).toBe("feat/links");
+    // Create responses skip the branch lookup (the pane only needs the slug).
+    expect(preview.json().branch).toBeUndefined();
     const slug = preview.json().slug as string;
 
     const one = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
@@ -314,7 +316,7 @@ describe("previews route (issue #28)", () => {
       url: "/api/previews",
       payload: { kind: "external", url: "https://example.com/x" },
     });
-    expect(external.json().branch).toBeNull();
+    expect(external.json().branch).toBeUndefined();
 
     const list = await app.inject({ method: "GET", url: "/api/previews" });
     const rows = list.json() as Array<{ slug: string; branch: string | null }>;
@@ -339,9 +341,14 @@ describe("previews route (issue #28)", () => {
   describe("branch follows the session serving the preview (A7, #2007)", () => {
     afterEach(() => vi.restoreAllMocks());
 
+    // Answers for whichever session ids the route asks about.
     function fakeLive(liveBranch: string | null) {
       vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
-        liveStatus: vi.fn().mockResolvedValue({ "1": { liveBranch } }),
+        liveStatus: vi
+          .fn()
+          .mockImplementation(async (ids: string[]) =>
+            Object.fromEntries(ids.map((id) => [id, { liveBranch }])),
+          ),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
     }
 
@@ -366,17 +373,14 @@ describe("previews route (issue #28)", () => {
     it("prefers the bound session's live branch, then its worktree, then the checkout", async () => {
       const app = await buildApp();
       const { cwd, projectId, sessionId } = await setup(app);
-      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
-        liveStatus: vi.fn().mockResolvedValue({ [String(sessionId)]: { liveBranch: "feat/live" } }),
-      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      fakeLive("feat/live");
 
-      const bound = await app.inject({
-        method: "POST",
-        url: "/api/previews",
-        payload: { kind: "project", projectId, sessionId },
-      });
-      expect(bound.json().sessionId).toBe(sessionId);
-      expect(bound.json().branch).toBe("feat/live");
+      // Binding happens server-side (dev-server accept), not via the POST body.
+      const bound = getOrCreateProjectPreview(app, projectId, sessionId);
+      expect(bound.sessionId).toBe(sessionId);
+      const slug = bound.slug;
+      const viaLive = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaLive.json().branch).toBe("feat/live");
 
       // No live branch yet: the session's tracked worktree wins over the checkout.
       vi.restoreAllMocks();
@@ -390,7 +394,6 @@ describe("previews route (issue #28)", () => {
         parentCwd: cwd,
         projectId,
       });
-      const slug = bound.json().slug as string;
       const viaWorktree = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
       expect(viaWorktree.json().branch).toBe("feat/worktree");
 
@@ -416,22 +419,20 @@ describe("previews route (issue #28)", () => {
       const b = await setup(app);
       fakeLive("feat/live");
 
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/previews",
-        payload: { kind: "project", projectId: a.projectId, sessionId: b.sessionId },
-      });
-      expect(res.json().sessionId).toBeNull();
-      expect(res.json().branch).toBe("main-checkout");
+      const res = getOrCreateProjectPreview(app, a.projectId, b.sessionId);
+      expect(res.sessionId).toBeNull();
+      const unbound = await app.inject({ method: "GET", url: `/api/previews/${res.slug}` });
+      expect(unbound.json().branch).toBe("main-checkout");
 
-      const bound = await app.inject({
-        method: "POST",
-        url: "/api/previews",
-        payload: { kind: "project", projectId: a.projectId, sessionId: a.sessionId },
-      });
-      expect(bound.json().sessionId).toBe(a.sessionId);
+      const bound = getOrCreateProjectPreview(app, a.projectId, a.sessionId);
+      expect(bound.sessionId).toBe(a.sessionId);
+      const list = await app.inject({ method: "GET", url: "/api/previews" });
+      expect(
+        (list.json() as Array<{ slug: string; branch: string }>).find((r) => r.slug === bound.slug)
+          ?.branch,
+      ).toBe("feat/live");
       app.db.delete(sessions).where(eq(sessions.id, a.sessionId)).run();
-      const after = await app.inject({ method: "GET", url: `/api/previews/${bound.json().slug}` });
+      const after = await app.inject({ method: "GET", url: `/api/previews/${bound.slug}` });
       expect(after.json().sessionId).toBeNull();
 
       fs.rmSync(a.cwd, { recursive: true, force: true });
@@ -443,12 +444,7 @@ describe("previews route (issue #28)", () => {
       const app = await buildApp();
       const { cwd, projectId } = await setup(app);
       app.db.update(projects).set({ hostId: "remote-1" }).where(eq(projects.id, projectId)).run();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/previews",
-        payload: { kind: "project", projectId },
-      });
-      const slug = created.json().slug as string;
+      const slug = getOrCreateProjectPreview(app, projectId).slug;
 
       const spy = vi
         .spyOn(hostGitModule, "resolveHostGitBranch")
@@ -457,7 +453,22 @@ describe("previews route (issue #28)", () => {
       expect(ok.json().branch).toBe("feat/remote");
       expect(spy).toHaveBeenCalledWith(expect.anything(), "remote-1", cwd);
 
-      spy.mockResolvedValue({ ok: false, reason: "unreachable", detail: "x" });
+      // A detached HEAD (7-char SHA from the agent) is not a branch.
+      spy.mockResolvedValue({ ok: true, value: "abc1234" });
+      // The SHA filter lives in resolveHostGitBranch itself, so exercise it too.
+      spy.mockRestore();
+      vi.spyOn(
+        await import("../../src/services/remote-host-client.js"),
+        "getRemoteHostClient",
+      ).mockReturnValue({ resolveGitBranch: async () => "abc1234" } as never);
+      const detachedRemote = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(detachedRemote.json().branch).toBeNull();
+      vi.restoreAllMocks();
+      vi.spyOn(hostGitModule, "resolveHostGitBranch").mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "x",
+      });
       const down = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
       expect(down.json().branch).toBeNull();
 
