@@ -58,6 +58,14 @@ describe("checkoutBranch", () => {
     expect(await checkoutBranch(repo, "main")).toEqual({ ok: false, reason: "already-current" });
   });
 
+  it("refuses revision syntax that is not a branch name", async () => {
+    for (const ref of ["HEAD", "@", "main@{1}"]) {
+      expect(await checkoutBranch(repo, ref)).toEqual({ ok: false, reason: "invalid-name" });
+    }
+    expect(await createBranch(repo, "x", "main@{0}")).toMatchObject({ reason: "invalid-name" });
+    expect(await rebaseBranch(repo, "@")).toMatchObject({ reason: "invalid-name" });
+  });
+
   it("switches to a local branch", async () => {
     git(repo, ["branch", "feature"]);
     expect(await checkoutBranch(repo, "feature")).toEqual({ ok: true });
@@ -202,6 +210,30 @@ describe("rebaseBranch", () => {
     expect(head(repo)).toBe("feature");
     expect(git(repo, ["status", "--porcelain"])).toBe("");
     expect(fs.existsSync(path.join(repo, ".git", "rebase-merge"))).toBe(false);
+  });
+
+  it("falls back to origin/<default> when the upstream branch is gone", async () => {
+    git(repo, ["checkout", "-q", "-b", "merged"]);
+    commit(repo, "m.txt", "m\n", "merged work");
+    git(repo, ["push", "-q", "-u", "origin", "merged"]);
+    git(repo, ["push", "-q", "origin", "--delete", "merged"]);
+    expect(await rebaseBranch(repo)).toEqual({
+      ok: true,
+      reason: "already-up-to-date",
+      detail: "origin/main",
+    });
+  });
+
+  it("refuses while a rebase is paused at a break step", async () => {
+    git(repo, ["checkout", "-q", "-b", "paused"]);
+    commit(repo, "p.txt", "p\n", "paused work");
+    execFileSync("git", ["rebase", "-i", "main"], {
+      cwd: repo,
+      stdio: "pipe",
+      env: { ...gitEnv(), GIT_SEQUENCE_EDITOR: "sed -i '1i break'" },
+    });
+    expect(await rebaseBranch(repo)).toEqual({ ok: false, reason: "operation-in-progress" });
+    git(repo, ["rebase", "--abort"]);
   });
 
   it("refuses when nothing to rebase onto exists", async () => {

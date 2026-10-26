@@ -1,4 +1,6 @@
 import { spawn as spawnChild } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isPlainBranchName, listWorktrees, resolveDefaultBaseRefNoFetch } from "./git-refs.js";
 import { isGitRepo } from "./git-status.js";
@@ -126,9 +128,16 @@ const DIRTY: GitBranchOpResult = {
   detail: "The checkout has uncommitted changes",
 };
 
-/** True while a rebase, merge, cherry-pick or revert is stopped mid-way. */
+/** True while a rebase, merge, cherry-pick or revert is stopped mid-way. A
+ * rebase is detected by its state directory, not REBASE_HEAD: one paused at
+ * an `edit`/`break` step, or killed, has the directory and no REBASE_HEAD. */
 async function operationInProgress(cwd: string): Promise<boolean> {
-  for (const ref of ["REBASE_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
+  for (const dir of ["rebase-merge", "rebase-apply"]) {
+    const res = await runGit(cwd, ["rev-parse", "--git-path", dir]);
+    const gitPath = res.stdout.trim();
+    if (res.code === 0 && gitPath && existsSync(path.resolve(cwd, gitPath))) return true;
+  }
+  for (const ref of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
     const res = await runGit(cwd, ["rev-parse", "--verify", "--quiet", ref]);
     if (res.code === 0) return true;
   }
@@ -143,8 +152,16 @@ async function refExists(cwd: string, ref: string): Promise<boolean> {
 /** The worktree (other than `cwd`'s own) that has `branch` checked out. */
 async function checkedOutElsewhere(cwd: string, branch: string): Promise<string | null> {
   const worktrees = await listWorktrees(cwd);
-  const holder = worktrees?.find((w) => w.branch === branch && !w.isMain);
+  const self = path.resolve(cwd);
+  const holder = worktrees?.find((w) => w.branch === branch && path.resolve(w.path) !== self);
   return holder?.path ?? null;
+}
+
+/** A ref NAME, not revision syntax: on top of isPlainBranchName, no reflog
+ * (`@{…}`) or peel (`^{…}`) braces, and no bare `@`/`HEAD`, which name a
+ * position rather than a branch. Each value is still a single argv entry. */
+function isRefName(name: string): boolean {
+  return isPlainBranchName(name) && !/[{}]/.test(name) && name !== "@" && name !== "HEAD";
 }
 
 /**
@@ -154,7 +171,7 @@ async function checkedOutElsewhere(cwd: string, branch: string): Promise<string 
  */
 export async function checkoutBranch(cwd: string, branch: string): Promise<GitBranchOpResult> {
   if (!isGitRepo(cwd)) return { ok: false, reason: "not-a-repo" };
-  if (!isPlainBranchName(branch)) return { ok: false, reason: "invalid-name" };
+  if (!isRefName(branch)) return { ok: false, reason: "invalid-name" };
 
   const state = await readState(cwd);
   if (isResult(state)) return state;
@@ -191,10 +208,10 @@ export async function createBranch(
   opts: { checkout?: boolean } = {},
 ): Promise<GitBranchOpResult> {
   if (!isGitRepo(cwd)) return { ok: false, reason: "not-a-repo" };
-  if (!isPlainBranchName(name)) return { ok: false, reason: "invalid-name" };
+  if (!isRefName(name)) return { ok: false, reason: "invalid-name" };
   // A start point is a ref name, never revision syntax: the same validator
-  // keeps `HEAD~3`, `-flag` and globs out of the argv.
-  if (!isPlainBranchName(from)) return { ok: false, reason: "invalid-name", detail: from };
+  // keeps `HEAD~3`, `main@{1}`, `-flag` and globs out of the argv.
+  if (!isRefName(from)) return { ok: false, reason: "invalid-name", detail: from };
 
   const format = await runGit(cwd, ["check-ref-format", "--branch", name]);
   if (format.code !== 0) return { ok: false, reason: "invalid-name" };
@@ -223,23 +240,27 @@ export async function createBranch(
  */
 export async function rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
   if (!isGitRepo(cwd)) return { ok: false, reason: "not-a-repo" };
-  if (onto !== undefined && !isPlainBranchName(onto)) {
+  if (onto !== undefined && !isRefName(onto)) {
     return { ok: false, reason: "invalid-name", detail: onto };
   }
 
   const state = await readState(cwd);
   if (isResult(state)) return state;
+  // First: a stopped merge/rebase is the more specific (and more useful)
+  // answer for a tree that is also dirty, or detached, because of it.
+  if (await operationInProgress(cwd)) return { ok: false, reason: "operation-in-progress" };
   if (state.unborn) return { ok: false, reason: "unborn-head" };
   if (state.branch === null) return { ok: false, reason: "detached-head" };
-  // Before the dirty check: a stopped merge/rebase is the more specific
-  // (and more useful) answer for a tree that is also dirty because of it.
-  if (await operationInProgress(cwd)) return { ok: false, reason: "operation-in-progress" };
   if (!state.clean) return DIRTY;
 
   // A failed fetch (offline, no remote) rebases onto what the clone has.
   await runGit(cwd, ["fetch", "--quiet", "--prune"], FETCH_TIMEOUT_MS);
 
+  // An upstream whose remote branch is gone (deleted after its merge, and
+  // just pruned by the fetch above) is still configured: fall through to
+  // the default branch rather than refusing on a ref that no longer exists.
   let target = onto ?? state.upstream;
+  if (!onto && target && !(await refExists(cwd, target))) target = null;
   if (!target) {
     const base = await resolveDefaultBaseRefNoFetch(cwd);
     target = base === "HEAD" ? null : base;

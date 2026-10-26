@@ -197,9 +197,10 @@ does is skip the _warning_, not the _action_.
 
   A rebase that stops on a conflict runs `git rebase --abort` and returns
   `reason: "conflicts"` with the conflicting files; a rebase with nothing to
-  do succeeds with `reason: "already-up-to-date"`. Only the DB-backed
-  session guard runs on the primary; the rest run on whichever host owns the
-  checkout. On a remote host the session guard sees each session's recorded
+  do succeeds with `reason: "already-up-to-date"`. A branch whose upstream
+  is gone on the remote rebases onto `origin/<default>` instead. The session
+  and `busy` guards run on the primary; the rest run on whichever host owns
+  the checkout. On a remote host the session guard sees each session's recorded
   cwd only, not its live one — the same gap as the live-session guard below.
 
 - **Task-branch refusal.** Deleting a `mullion/task-<N>` branch belonging

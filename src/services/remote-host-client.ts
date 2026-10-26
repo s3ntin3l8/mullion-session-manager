@@ -253,6 +253,14 @@ const GIT_HEALTH_REQUEST_TIMEOUT_MS = 75_000;
 // with GIT_PUSH_REQUEST_TIMEOUT_MS below.
 const GIT_REPAIR_REQUEST_TIMEOUT_MS = 180_000;
 
+// Issue #1672 — the guarded checkout / create / rebase. A rebase fetches
+// (30s budget), rebases (60s) and runs a handful of 10s git calls around
+// them; checkout/create are several 10s calls. A proxy timeout that fires
+// first would report a healthy host as unreachable while the agent goes on
+// to move HEAD anyway, so both sit above the agent's own worst case.
+const GIT_BRANCH_OP_REQUEST_TIMEOUT_MS = 60_000;
+const GIT_REBASE_REQUEST_TIMEOUT_MS = 150_000;
+
 // Issue #345 — a dock-preview worktree's checkout/force-remove/sync
 // (`git worktree add`/`remove --force`/`reset --hard`) can take longer than
 // REQUEST_TIMEOUT_MS's 5s on a large repo — the agent's own runGit already
@@ -1192,10 +1200,11 @@ export class RemoteHostClient {
    * and /internal/git-rebase, each returning git-branch-ops.ts's
    * GitBranchOpResult. */
   resolveGitCheckout(cwd: string, branch: string): Promise<GitBranchOpResult> {
-    return this.request("/internal/git-checkout", {
-      method: "POST",
-      body: JSON.stringify({ cwd, branch }),
-    });
+    return this.request(
+      "/internal/git-checkout",
+      { method: "POST", body: JSON.stringify({ cwd, branch }) },
+      GIT_BRANCH_OP_REQUEST_TIMEOUT_MS,
+    );
   }
 
   resolveGitBranchCreate(
@@ -1204,17 +1213,19 @@ export class RemoteHostClient {
     startPoint: string,
     checkout?: boolean,
   ): Promise<GitBranchOpResult> {
-    return this.request("/internal/git-branch-create", {
-      method: "POST",
-      body: JSON.stringify({ cwd, name, startPoint, checkout }),
-    });
+    return this.request(
+      "/internal/git-branch-create",
+      { method: "POST", body: JSON.stringify({ cwd, name, startPoint, checkout }) },
+      GIT_BRANCH_OP_REQUEST_TIMEOUT_MS,
+    );
   }
 
   resolveGitRebase(cwd: string, onto?: string): Promise<GitBranchOpResult> {
-    return this.request("/internal/git-rebase", {
-      method: "POST",
-      body: JSON.stringify({ cwd, onto }),
-    });
+    return this.request(
+      "/internal/git-rebase",
+      { method: "POST", body: JSON.stringify({ cwd, onto }) },
+      GIT_REBASE_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /** Resolves this agent's default base ref (and its pinned commit SHA) on
