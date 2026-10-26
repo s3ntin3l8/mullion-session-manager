@@ -572,8 +572,14 @@
   padding: 0 4px;
   font-size: 0.625rem;
   font-weight: 600;
-  line-height: 14px;
+  /* Unitless, so the line box follows the font at any root size (a px value
+     would clip the letter at 200%). */
+  line-height: 1.4;
   font-family: var(--mono, ui-monospace, monospace);
+  /* Opaque: the letter is small, and over the hovered or selected row's tinted
+     background its status colour drops below 4.5:1 in the light theme. */
+  background: var(--bg);
+  border-radius: 3px;
 }
 .git-s-modified {
   color: var(--y);

@@ -33,6 +33,9 @@ import {
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+// Routes a client polls or fires as the user types (filename search; the change
+// check on every open editor), so they get a higher ceiling than the editor's own.
+const POLLED_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
 // A folder upload is one request per file (up to the drop walker's 5000-entry
 // cap, three at a time, a few ms each on loopback), so the transfer routes get
 // a ceiling far above the editor's own. The client also honours Retry-After
@@ -290,7 +293,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
     "/api/projects/:id/file/stat",
     {
-      config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
+      ...POLLED_RATE_LIMIT,
       schema: { params: idParams, querystring: pathQuery },
     },
     async (request, reply) => {
@@ -553,12 +556,11 @@ export async function projectFilesRoute(app: FastifyInstance) {
 
   // Filename search is fired as the user types (debounced client-side), so it
   // gets a higher ceiling than the other file routes.
-  const SEARCH_RATE_LIMIT = { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } };
 
   app.get<{ Params: { id: string }; Querystring: { q?: string; sessionId?: string } }>(
     "/api/projects/:id/files/search",
     {
-      ...SEARCH_RATE_LIMIT,
+      ...POLLED_RATE_LIMIT,
       schema: {
         params: idParams,
         querystring: {

@@ -177,13 +177,20 @@ function FileEditorBody({
   );
 
   const openFile = useCallback(
-    async (filePath: string) => {
+    async (filePath: string, opts: { onlyIfClean?: boolean } = {}) => {
       const seq = ++openSeq.current;
       setActionError(null);
       setConflict(false);
       try {
         const loaded = await api.readProjectFile(projectId, filePath, sessionId);
         if (seq !== openSeq.current) return;
+        // A background reload (the file changed on disk) was started when there was
+        // no draft; the user may have typed while the read was in flight. Never
+        // replace that: surface the change as a conflict instead.
+        if (opts.onlyIfClean && dirtyRef.current) {
+          setConflict(true);
+          return;
+        }
         setFile(loaded);
         setDraft(loaded.content);
         setFileNote(null);
@@ -346,8 +353,9 @@ function FileEditorBody({
   // differs); with unsaved edits the existing "changed on disk" banner offers
   // Reload or Overwrite, so a draft is never silently replaced.
   const loadedMtime = file?.mtimeMs;
+  const loadedSize = file?.size;
   useEffect(() => {
-    if (!openPath || loadedMtime === undefined) return;
+    if (!openPath || loadedMtime === undefined || loadedSize === undefined) return;
     let stopped = false;
     let inFlight = false;
     const check = async () => {
@@ -355,9 +363,11 @@ function FileEditorBody({
       inFlight = true;
       try {
         const st = await api.statProjectFile(projectId, openPath, sessionId);
-        if (stopped || st.mtimeMs === loadedMtime) return;
+        // Size too: a write that keeps the mtime (a coarse-grained filesystem, a
+        // tool restoring timestamps) would otherwise go unnoticed.
+        if (stopped || (st.mtimeMs === loadedMtime && st.size === loadedSize)) return;
         if (dirtyRef.current) setConflict(true);
-        else void openFile(openPath);
+        else void openFile(openPath, { onlyIfClean: true });
       } catch (err) {
         if (stopped) return;
         // Gone from disk: keep what is on screen (it may be the only copy) and say so.
@@ -379,7 +389,7 @@ function FileEditorBody({
       window.removeEventListener("focus", onVisible);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [projectId, sessionId, openPath, loadedMtime, openFile]);
+  }, [projectId, sessionId, openPath, loadedMtime, loadedSize, openFile]);
 
   const handleCreate = useCallback(async () => {
     const name = (newEntry?.name ?? "").trim();

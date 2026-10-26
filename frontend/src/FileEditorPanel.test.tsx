@@ -1306,7 +1306,13 @@ describe("FileEditorPanel", () => {
 
   describe("changes on disk while a file is open", () => {
     // `.env` is opened with mtimeMs 100 by mockFetch. `disk` is what stat reports.
-    const setup = (disk: { mtimeMs: number; content?: string; status?: number; code?: string }) => {
+    const setup = (disk: {
+      mtimeMs: number;
+      size?: number;
+      content?: string;
+      status?: number;
+      code?: string;
+    }) => {
       const state = { ...disk };
       const m = mockFetch({
         extra: (method, url) => {
@@ -1314,13 +1320,17 @@ describe("FileEditorPanel", () => {
             if (state.status === 404)
               return jsonResponse(404, { message: "gone", code: "not_found" });
             if (state.status === 503) return jsonResponse(503, { message: "blip" });
-            return jsonResponse(200, { path: ".env", size: 4, mtimeMs: state.mtimeMs });
+            return jsonResponse(200, {
+              path: ".env",
+              size: state.size ?? 4,
+              mtimeMs: state.mtimeMs,
+            });
           }
           if (method === "GET" && url.includes("/file?path=.env") && state.content !== undefined) {
             return jsonResponse(200, {
               path: ".env",
               content: state.content,
-              size: state.content.length,
+              size: state.size ?? state.content.length,
               mtimeMs: state.mtimeMs,
             });
           }
@@ -1390,6 +1400,46 @@ describe("FileEditorPanel", () => {
       expect(reads(calls)).toBe(1);
       fireEvent.click(screen.getByRole("button", { name: "Reload from disk" }));
       await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=theirs\n"));
+    });
+
+    it("notices a change that kept the mtime but not the size", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      // stat reports a different size for the same mtime
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      state.size = 999;
+      state.content = "A=same-mtime-new-size\n";
+      await tick();
+      await waitFor(() =>
+        expect(screen.getByLabelText("editor:.env")).toHaveValue("A=same-mtime-new-size\n"),
+      );
+      expect(reads(calls)).toBe(2);
+    });
+
+    it("never replaces a draft typed while the background reload was in flight", async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const { state, fn } = setup({ mtimeMs: 100 });
+      // hold the second read of .env until the test lets it through
+      let readsSeen = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if ((init?.method ?? "GET") === "GET" && url.includes("/file?path=.env")) {
+          readsSeen++;
+          if (readsSeen === 2) await gate;
+        }
+        return fn(input, init);
+      });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const editor = await openEnv();
+      state.mtimeMs = 500;
+      state.content = "A=theirs\n";
+      await tick(); // the change is seen and the (held) reload starts, with no draft yet
+      await waitFor(() => expect(readsSeen).toBe(2));
+      fireEvent.change(editor, { target: { value: "A=typed-meanwhile\n" } });
+      release();
+      expect(await screen.findByText(/changed on disk/)).toBeInTheDocument();
+      expect(screen.getByLabelText("editor:.env")).toHaveValue("A=typed-meanwhile\n");
     });
 
     it("says so when the file was deleted on disk, and keeps what is on screen", async () => {
