@@ -1360,9 +1360,11 @@ export class RemoteHostClient {
       body.resume();
       throw new HostUnreachableError(this.hostId, err);
     }
-    // Headers are in, but the (small) result body is not: keep the idle clock
-    // running through it, freshly armed, so a stalled agent can't hang the
-    // upload request — and the browser's XHR behind it — forever.
+    // Headers are in, but the (small) result body is not. Re-arm the timer so
+    // it bounds that read: a fixed deadline of one idle period from here (the
+    // body is a few bytes of JSON and never touches the clock itself), so a
+    // stalled agent can't hang the upload request — and the browser's XHR
+    // behind it — forever.
     idle.touch();
     try {
       // Read the JSON refusal (409/413 carry `code`) BEFORE discarding the
