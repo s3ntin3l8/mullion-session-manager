@@ -114,8 +114,7 @@
   cursor: pointer;
 }
 .create-modal-inline-link:hover {
-  text-decoration: underline;
-  color: var(--accent);
+  text-decoration-thickness: 2px;
 }
 .create-modal-input-row {
   display: flex;
