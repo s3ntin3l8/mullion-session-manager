@@ -40,7 +40,7 @@ const GQL_PR = {
     ],
   },
   reviewRequests: { nodes: [{ requestedReviewer: { login: "alice" } }, null] },
-  latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }] },
+  latestReviews: { nodes: [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }] },
   reviews: {
     nodes: [
       {
@@ -108,6 +108,56 @@ describe("getPrDetail", () => {
     });
     expect(d.reviews).toHaveLength(1);
     expect(d.commits[0]).toMatchObject({ headline: "feat: thing", author: "Me" });
+  });
+
+  it("builds the same ReviewSummary as the list, keeping an empty COMMENTED review that carries threads", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));
+      const pr = {
+        ...GQL_PR,
+        reviewDecision: null,
+        reviewRequests: { nodes: [] },
+        latestReviews: {
+          nodes: [
+            {
+              author: { login: "s3ntin3l8-hermes", __typename: "Bot" },
+              state: "COMMENTED",
+              body: "",
+              submittedAt: "2026-01-03T00:00:00Z",
+              commit: { oid: "older" },
+            },
+          ],
+        },
+        reviews: {
+          nodes: [
+            {
+              author: { login: "s3ntin3l8-hermes" },
+              state: "COMMENTED",
+              bodyHTML: "",
+              submittedAt: "2026-01-03T00:00:00Z",
+              comments: { totalCount: 2 },
+            },
+          ],
+        },
+      };
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { repository: { pullRequest: pr } } }), {
+          status: 200,
+        }),
+      );
+    });
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.reviews).toHaveLength(1);
+    expect(d.reviewers).toEqual([{ login: "s3ntin3l8-hermes", state: "COMMENTED" }]);
+    expect(d.reviewSummary).toMatchObject({
+      decision: "COMMENTED",
+      commented: ["s3ntin3l8-hermes"],
+      unresolvedThreads: 1,
+      latest: [
+        { author: "s3ntin3l8-hermes", state: "COMMENTED", reviewedSha: "older", stale: true },
+      ],
+    });
+    expect(String(fetchMock.mock.calls[0][1].body)).toContain("latestReviews");
   });
 
   it("caches for 30s and refetches after invalidation", async () => {

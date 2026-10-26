@@ -23,6 +23,12 @@ import {
 } from "./github.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
+import {
+  buildReviewSummary,
+  LATEST_REVIEWS_SELECTION,
+  reviewersOf,
+  type GqlLatestReviewNode,
+} from "./review-summary.js";
 
 const GRAPHQL_URL = "https://api.github.com/graphql";
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -87,6 +93,7 @@ type ReviewFields = Pick<
   | "commentCount"
   | "reviewStateKnown"
   | "checksRollup"
+  | "reviewSummary"
 >;
 
 // Last successfully fetched review fields per PR. A failed or backed-off
@@ -107,6 +114,7 @@ function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
     commentCount: pr.commentCount,
     reviewStateKnown: pr.reviewStateKnown,
     checksRollup: pr.checksRollup,
+    reviewSummary: pr.reviewSummary,
   };
 }
 
@@ -128,9 +136,7 @@ interface GqlPrNode {
       requestedReviewer: { __typename?: string; login?: string; name?: string } | null;
     } | null> | null;
   } | null;
-  latestOpinionatedReviews: {
-    nodes: Array<{ author: { login: string } | null; state: string } | null> | null;
-  } | null;
+  latestReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
   comments: { totalCount: number } | null;
   // Head commit's check rollup state — only the state (cheap); per-check
   // contexts are fetched by the single-PR detail query.
@@ -146,7 +152,7 @@ const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
       nodes {
         number isDraft updatedAt mergeable mergeStateStatus reviewDecision
         reviewRequests(first: 5) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
-        latestOpinionatedReviews(first: 5) { nodes { author { login } state } }
+        ${LATEST_REVIEWS_SELECTION}
         comments { totalCount }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
@@ -295,9 +301,8 @@ export async function enrichPrsWithReviewState(
     pr.requestedReviewers = (node.reviewRequests?.nodes ?? [])
       .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
       .filter((v): v is string => v !== null);
-    pr.reviewers = (node.latestOpinionatedReviews?.nodes ?? [])
-      .filter((n): n is NonNullable<typeof n> => n !== null && n.author !== null)
-      .map((n) => ({ login: n.author!.login, state: n.state }));
+    const latestReviews = node.latestReviews?.nodes ?? [];
+    pr.reviewers = reviewersOf(latestReviews);
 
     const cached = threadCache.get(keyFor(pr.number));
     if (
@@ -357,7 +362,20 @@ export async function enrichPrsWithReviewState(
     if (pr.unresolvedThreads === null) {
       pr.unresolvedThreads = lastKnown.get(keyFor(pr.number))?.unresolvedThreads ?? null;
     }
-    if (byNumber.has(pr.number)) lastKnown.set(keyFor(pr.number), reviewFieldsOf(pr));
+    const node = byNumber.get(pr.number);
+    if (node) {
+      // Built last, once the thread count is settled; the relay is folded in
+      // later by annotateRelayReviewState.
+      pr.reviewSummary = buildReviewSummary({
+        reviewDecision: pr.reviewDecision,
+        reviews: node.latestReviews?.nodes ?? [],
+        requestedReviewers: pr.requestedReviewers,
+        unresolvedThreads: pr.unresolvedThreads,
+        headSha: pr.headSha,
+        relayReview: pr.relayReview,
+      });
+      lastKnown.set(keyFor(pr.number), reviewFieldsOf(pr));
+    }
   }
 
   // Bound both caches to this repo's currently open PRs.

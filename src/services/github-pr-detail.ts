@@ -17,6 +17,13 @@ import {
   type OtherCheck,
 } from "./github.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
+import {
+  buildReviewSummary,
+  LATEST_REVIEWS_SELECTION,
+  reviewersOf,
+  type GqlLatestReviewNode,
+} from "./review-summary.js";
+import type { ReviewSummary } from "../shared/types.js";
 
 const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 100;
@@ -79,8 +86,10 @@ export interface PrDetail {
   mergeStateStatus: string | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: string[];
-  /** Latest opinionated review per reviewer. */
+  /** Latest review per reviewer, every state (COMMENTED included). */
   reviewers: { login: string; state: string }[];
+  /** The same server-computed status the PR list carries (epic #1965, A2). */
+  reviewSummary: ReviewSummary;
   reviews: PrDetailReview[];
   threads: PrDetailThread[];
   comments: PrDetailComment[];
@@ -150,15 +159,14 @@ interface GqlPr {
       requestedReviewer: { login?: string; name?: string } | null;
     } | null> | null;
   } | null;
-  latestOpinionatedReviews: {
-    nodes: Array<{ author: GqlAuthor | null; state: string } | null> | null;
-  } | null;
+  latestReviews: { nodes: Array<GqlLatestReviewNode | null> | null } | null;
   reviews: {
     nodes: Array<{
       author: GqlAuthor | null;
       state: string;
       bodyHTML: string;
       submittedAt: string | null;
+      comments?: { totalCount: number } | null;
     } | null> | null;
   } | null;
   reviewThreads: {
@@ -191,8 +199,8 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       commits(last: 20) { totalCount nodes { commit { oid messageHeadline committedDate author { name } } } }
       headCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { totalCount nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on StatusContext { context state targetUrl } } } } } } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
-      latestOpinionatedReviews(first: 20) { nodes { author { login } state } }
-      reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt } }
+      ${LATEST_REVIEWS_SELECTION}
+      reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt comments { totalCount } } }
       reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
       comments(last: 50) { nodes { author { login } bodyHTML createdAt } }
     }
@@ -329,6 +337,13 @@ async function partialDetail(
     reviewDecision: null,
     requestedReviewers: [],
     reviewers: [],
+    reviewSummary: buildReviewSummary({
+      reviewDecision: null,
+      reviews: [],
+      requestedReviewers: [],
+      unresolvedThreads: null,
+      headSha: rest.head.sha,
+    }),
     reviews: [],
     threads: [],
     comments: [],
@@ -368,6 +383,12 @@ export async function getPrDetail(
     createdAt: c.createdAt,
   });
 
+  const requestedReviewers = (pr.reviewRequests?.nodes ?? [])
+    .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
+    .filter(present);
+  const threads = (pr.reviewThreads?.nodes ?? []).filter(present);
+  const latestReviews = pr.latestReviews?.nodes ?? [];
+
   const detail: PrDetail = {
     number: pr.number,
     title: pr.title,
@@ -395,24 +416,31 @@ export async function getPrDetail(
     mergeable: asMergeable(pr.mergeable),
     mergeStateStatus: pr.mergeStateStatus,
     reviewDecision: asDecision(pr.reviewDecision),
-    requestedReviewers: (pr.reviewRequests?.nodes ?? [])
-      .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
-      .filter(present),
-    reviewers: (pr.latestOpinionatedReviews?.nodes ?? [])
-      .filter(present)
-      .filter((n) => n.author !== null)
-      .map((n) => ({ login: n.author!.login, state: n.state })),
+    requestedReviewers,
+    reviewers: reviewersOf(latestReviews),
+    reviewSummary: buildReviewSummary({
+      reviewDecision: asDecision(pr.reviewDecision),
+      reviews: latestReviews,
+      requestedReviewers,
+      unresolvedThreads: threads.filter((t) => !t.isResolved).length,
+      headSha: pr.headRefOid,
+    }),
     reviews: (pr.reviews?.nodes ?? [])
       .filter(present)
-      // Empty COMMENTED reviews are just the wrapper of inline threads.
-      .filter((r) => r.state !== "COMMENTED" || r.bodyHTML.trim() !== "")
+      // An empty COMMENTED review is just the wrapper of its inline threads —
+      // dropped, unless it carries some: then it is the only record that the
+      // reviewer reviewed, so it stays (the threads are listed with it).
+      .filter(
+        (r) =>
+          r.state !== "COMMENTED" || r.bodyHTML.trim() !== "" || (r.comments?.totalCount ?? 0) > 0,
+      )
       .map((r) => ({
         author: r.author?.login ?? null,
         state: r.state,
         bodyHtml: r.bodyHTML,
         createdAt: r.submittedAt ?? pr.createdAt,
       })),
-    threads: (pr.reviewThreads?.nodes ?? []).filter(present).map((t) => ({
+    threads: threads.map((t) => ({
       isResolved: t.isResolved,
       isOutdated: t.isOutdated,
       path: t.path,

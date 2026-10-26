@@ -15,6 +15,9 @@ export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
  * - `ci_failing`: a required signal is red.
  * - `changes_requested`: a reviewer asked for changes.
  * - `review_pending`: waiting on a review (required, requested, or blocked).
+ * - `reviewed`: a review landed with comments but no approval, and the PR is
+ *   still waiting on one — "someone looked, read what they said". It only ever
+ *   replaces `review_pending`; `ready_to_merge` is untouched.
  * - `ci_pending`: approved (or no review needed) but CI is still running.
  * - `ready_to_merge`: nothing left to wait for.
  * - `unknown`: review state couldn't be fetched (GraphQL failed or backed
@@ -27,6 +30,7 @@ export type PrPhase =
   | "ci_failing"
   | "changes_requested"
   | "review_pending"
+  | "reviewed"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
@@ -39,7 +43,7 @@ export interface PrPhaseInput {
   mergeStateStatus: string | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: readonly string[];
-  /** Latest opinionated review per reviewer (`reviewDecision` is null on a
+  /** Latest review per reviewer, every state (`reviewDecision` is null on a
    *  repo with no required-review rule even when someone asked for changes). */
   reviewers: readonly { state: string }[];
   ciStatus: GitHubCiStatus;
@@ -53,6 +57,12 @@ export interface PrPhaseInput {
 }
 
 export function derivePrPhase(pr: PrPhaseInput): PrPhase {
+  // Only a COMMENTED review and no approval: a landed review that did not clear the PR.
+  const waiting = (): PrPhase =>
+    pr.reviewers.some((r) => r.state === "COMMENTED") &&
+    !pr.reviewers.some((r) => r.state === "APPROVED")
+      ? "reviewed"
+      : "review_pending";
   if (pr.isDraft) return "draft";
   if (!pr.reviewStateKnown) {
     if (pr.ciStatus === "failure") return "ci_failing";
@@ -67,11 +77,11 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   ) {
     return "changes_requested";
   }
-  if (pr.reviewDecision === "REVIEW_REQUIRED") return "review_pending";
+  if (pr.reviewDecision === "REVIEW_REQUIRED") return waiting();
   // No review requirement configured (decision is null) but someone was
   // asked, or branch protection still reports the PR as blocked.
-  if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return "review_pending";
-  if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") return "review_pending";
+  if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
+  if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") return waiting();
   if (pr.ciStatus === "in_progress") return "ci_pending";
   if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";
   return "ready_to_merge";

@@ -7,7 +7,7 @@
 // independently testable).
 
 import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
-import type { RelayReviewState } from "../shared/types.js";
+import type { RelayReviewState, ReviewSummary } from "../shared/types.js";
 import {
   derivePrPhase,
   type PrMergeable,
@@ -130,7 +130,13 @@ export interface PROrWithChecks {
   reviewDecision: PrReviewDecision;
   mergeable: PrMergeable;
   mergeStateStatus: string | null;
+  /** Latest review per reviewer in every state (COMMENTED included). */
   reviewers: { login: string; state: string }[];
+  /**
+   * The server-computed review status shared with the PR detail (epic #1965,
+   * A2). Absent until the GraphQL enrichment has run for the PR.
+   */
+  reviewSummary?: ReviewSummary;
   requestedReviewers: string[];
   /** null = not fetched (yet), as opposed to a known zero. */
   unresolvedThreads: number | null;

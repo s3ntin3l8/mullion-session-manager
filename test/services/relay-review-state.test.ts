@@ -5,11 +5,13 @@ import type { PROrWithChecks } from "../../src/services/github.js";
 
 const mocks = vi.hoisted(() => ({
   listPullRequestReviews: vi.fn(),
+  listReviewMarkers: vi.fn(),
   getReviewRunForPr: vi.fn(),
 }));
 
 vi.mock("../../src/services/github-write.js", () => ({
   listPullRequestReviews: mocks.listPullRequestReviews,
+  listReviewMarkers: mocks.listReviewMarkers,
 }));
 vi.mock("../../src/services/hermes-review.js", () => ({
   getReviewRunForPr: mocks.getReviewRunForPr,
@@ -59,6 +61,7 @@ const ask = (app: FastifyInstance) =>
 
 beforeEach(() => {
   mocks.listPullRequestReviews.mockReset();
+  mocks.listReviewMarkers.mockReset();
   mocks.getReviewRunForPr.mockReset();
   mocks.getReviewRunForPr.mockReturnValue(run());
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -155,6 +158,93 @@ describe("getRelayReviewState memo", () => {
   });
 });
 
+describe("rehydrating the landed state after a restart (no run in memory)", () => {
+  // A finished ledger marker that ran 00:00-00:08, and Hermes's review at 00:05.
+  const marker = {
+    oid: "sha41",
+    id: 77,
+    startedAt: "2026-01-01T00:00:00Z",
+    completedAt: "2026-01-01T00:08:00Z",
+  };
+  beforeEach(() => {
+    mocks.getReviewRunForPr.mockReturnValue(null);
+  });
+
+  it("rebuilds `landed` from a ledger marker paired with the reviewer's review", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([
+      { ...hermesReview, state: "COMMENTED", htmlUrl: "https://github.com/r/1" },
+    ]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    expect(await ask(makeApp())).toMatchObject({
+      state: "landed",
+      runId: "marker-77",
+      landedChecked: true,
+      author: "hermes[bot]",
+      verdict: "COMMENTED",
+      htmlUrl: "https://github.com/r/1",
+    });
+  });
+
+  it("stays `none` when no marker covers the review, or there is no reviewer review", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([
+      { ...hermesReview, submittedAt: "2026-01-01T05:00:00Z" },
+    ]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    expect(await ask(makeApp())).toEqual({ state: "none" });
+
+    mocks.listPullRequestReviews.mockResolvedValue([]);
+    expect(await ask(makeApp())).toEqual({ state: "none" });
+    expect(mocks.listReviewMarkers).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores another bot's review and a failed GitHub read", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([{ ...hermesReview, author: "claude[bot]" }]);
+    expect(await ask(makeApp())).toEqual({ state: "none" });
+    mocks.listPullRequestReviews.mockRejectedValue(new Error("boom"));
+    const app = makeApp();
+    expect(await ask(app)).toEqual({ state: "none" });
+    expect(app.log.warn).toHaveBeenCalled();
+  });
+
+  it("memoizes per PR, and needs a token", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([hermesReview]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    const app = makeApp();
+    await ask(app);
+    await ask(app);
+    expect(mocks.listPullRequestReviews).toHaveBeenCalledTimes(1);
+    expect(
+      await getRelayReviewState(makeApp(), {
+        owner: "acme",
+        repo: "widgets",
+        prNumber: 41,
+        token: null,
+      }),
+    ).toEqual({ state: "none" });
+  });
+
+  it("annotates a PR the reviewer already reviewed, and folds the relay into its summary", async () => {
+    mocks.listPullRequestReviews.mockResolvedValue([hermesReview]);
+    mocks.listReviewMarkers.mockResolvedValue([marker]);
+    const summary = { decision: "COMMENTED", relay: null, latest: [] };
+    const reviewed = {
+      number: 41,
+      reviewers: [{ login: "hermes", state: "COMMENTED" }],
+      reviewSummary: summary,
+    } as unknown as PROrWithChecks;
+    const other = { number: 42, reviewers: [] } as unknown as PROrWithChecks;
+    const [a, b] = await annotateRelayReviewState(
+      makeApp(),
+      [reviewed, other],
+      { owner: "acme", repo: "widgets" },
+      "tok",
+    );
+    expect(a.relayReview).toMatchObject({ state: "landed", runId: "marker-77" });
+    expect(a.reviewSummary?.relay).toMatchObject({ state: "landed", reviewer: "hermes[bot]" });
+    expect(b).toBe(other);
+  });
+});
+
 describe("pruneLandedMemo", () => {
   it("honours each entry's own TTL in the age sweep, and still evicts the oldest over the cap", () => {
     const memo = new Map<string, { at: number; ttl?: number }>([
@@ -213,6 +303,17 @@ describe("overlayRelayRuns", () => {
   it("keeps the cached annotation when it describes the current run", () => {
     const prs = [pr({ state: "landed", runId: "run_1", verdict: "APPROVED" })];
     expect(overlayRelayRuns(prs, repoRef)).toBe(prs);
+  });
+
+  it("keeps the summary's relay in step with the requested overlay", () => {
+    mocks.getReviewRunForPr.mockReturnValue(run("run_2"));
+    const withSummary = {
+      number: 41,
+      reviewSummary: { decision: null, relay: null, latest: [] },
+    } as unknown as PROrWithChecks;
+    const [shown] = overlayRelayRuns([withSummary], repoRef);
+    expect(shown.reviewSummary?.relay).toMatchObject({ state: "requested" });
+    expect(withSummary.reviewSummary?.relay).toBeNull();
   });
 
   it("shows a run the cache does not know yet as requested, leaving the cache alone", () => {

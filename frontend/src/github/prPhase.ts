@@ -7,6 +7,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
   ci_failing: "CI failing",
   changes_requested: "Changes requested",
   review_pending: "Awaiting review",
+  reviewed: "Reviewed",
   ci_pending: "CI running",
   ready_to_merge: "Ready to merge",
   unknown: "Status unknown",

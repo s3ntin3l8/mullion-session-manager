@@ -45,7 +45,7 @@ function gqlNode(number: number, over: Record<string, unknown> = {}) {
     mergeStateStatus: "CLEAN",
     reviewDecision: "APPROVED",
     reviewRequests: { nodes: [{ requestedReviewer: { __typename: "User", login: "alice" } }] },
-    latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
+    latestReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
     comments: { totalCount: 3 },
     ...over,
   };
@@ -113,6 +113,47 @@ describe("enrichPrsWithReviewState", () => {
       unresolvedThreads: 2,
       updatedAt: "2026-10-18T10:00:00Z",
       prPhase: "ready_to_merge",
+    });
+  });
+
+  it("counts a COMMENTED-only bot review: reviewers, summary and the `reviewed` phase", async () => {
+    // Recorded shape: the Hermes bot's single COMMENTED review. The old
+    // `latestOpinionatedReviews` field returned no nodes for it.
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([
+          gqlNode(1, {
+            reviewDecision: null,
+            mergeStateStatus: "BLOCKED",
+            reviewRequests: { nodes: [] },
+            latestReviews: {
+              nodes: [
+                {
+                  author: { login: "s3ntin3l8-hermes", __typename: "Bot" },
+                  state: "COMMENTED",
+                  body: "Looks mostly fine.",
+                  submittedAt: "2026-10-18T09:00:00Z",
+                  commit: { oid: "old-sha" },
+                },
+              ],
+            },
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 1 }));
+    const prs = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+
+    expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");
+    expect(fetchMock.mock.calls[0][1].body).not.toContain("latestOpinionatedReviews");
+    expect(prs[0].reviewers).toEqual([{ login: "s3ntin3l8-hermes", state: "COMMENTED" }]);
+    expect(prs[0].prPhase).toBe("reviewed");
+    expect(prs[0].reviewSummary).toMatchObject({
+      decision: "COMMENTED",
+      commented: ["s3ntin3l8-hermes"],
+      unresolvedThreads: 1,
+      relay: null,
+      latest: [{ author: "s3ntin3l8-hermes", isBot: true, reviewedSha: "old-sha", stale: true }],
     });
   });
 

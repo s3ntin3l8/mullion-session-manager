@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import type { RelayReviewState } from "../shared/types.js";
 import type { PROrWithChecks } from "./github.js";
-import { listPullRequestReviews } from "./github-write.js";
+import { listPullRequestReviews, listReviewMarkers } from "./github-write.js";
+import { withRelay } from "./review-summary.js";
 import type { PullRequestReviewSummary, ReviewMarker } from "./github-write.js";
 import { getReviewRunForPr } from "./hermes-review.js";
 import { getStoredSettings } from "./settings.js";
@@ -63,6 +64,16 @@ const MARKER_PAIRING_SLACK_MS = 60_000;
  */
 const MARKER_MAX_RUN_MS = 90 * 60_000;
 
+/** Was a review submitted at `at` (epoch ms) made while the marker's run ran? */
+function markerCoversTime(m: ReviewMarker, at: number): boolean {
+  const from = Date.parse(m.startedAt);
+  const to = Math.min(
+    Date.parse(m.completedAt) + MARKER_PAIRING_SLACK_MS,
+    from + MARKER_MAX_RUN_MS,
+  );
+  return at >= from && at <= to;
+}
+
 /**
  * The commit the last review round demonstrably covered ("R") — the base of
  * the next round's delta, and the commit whose content decides "nothing new to
@@ -121,12 +132,7 @@ export async function resolveReviewedCommit(input: {
           // paired every older success marker, so a run that posted nothing
           // could be picked as the base by an unrelated review — a base that is
           // too NEW, which skips code nobody reviewed.
-          const from = Date.parse(m.startedAt);
-          const to = Math.min(
-            Date.parse(m.completedAt) + MARKER_PAIRING_SLACK_MS,
-            from + MARKER_MAX_RUN_MS,
-          );
-          return submitted.some((at) => at >= from && at <= to);
+          return submitted.some((at) => markerCoversTime(m, at));
         })
         .sort((a, b) => a.id - b.id)
         .at(-1);
@@ -306,6 +312,93 @@ export function pruneLandedMemo(
   }
 }
 
+// GraphQL reports a bot as `s3ntin3l8-hermes`, REST as `s3ntin3l8-hermes[bot]`.
+const bareLogin = (login: string) => login.toLowerCase().replace(/\[bot\]$/, "");
+
+const REHYDRATE_HIT_TTL_MS = LANDED_RECHECK_MS;
+const REHYDRATE_MISS_TTL_MS = 60_000;
+const rehydrateMemos = new WeakMap<
+  FastifyInstance,
+  Map<string, { at: number; state: RelayReviewState | null }>
+>();
+
+/**
+ * The relay's landed review, rebuilt from GitHub alone — for after a restart,
+ * when the in-memory run index is empty and a PR would otherwise lose its
+ * "review posted" state. The record that survives is the ledger check run
+ * `requestHermesReview` writes on the reviewed commit: a finished marker paired
+ * with a review by the reviewer's bot submitted while it ran is a landed relay
+ * run (the same pairing `resolveReviewedCommit` uses). With no ledger or no
+ * reviewer login configured there is nothing to pair, so no state is invented.
+ * Memoized per PR: it costs a review read plus the marker reads.
+ */
+export async function rehydrateLandedFromMarker(
+  app: FastifyInstance,
+  token: string,
+  t: { owner: string; repo: string; prNumber: number },
+): Promise<RelayReviewState | null> {
+  const { reviewerBotLogin, ledgerName } = getStoredSettings(app.db).reviewRelay;
+  if (reviewerBotLogin === "" || ledgerName === "") return null;
+
+  let memo = rehydrateMemos.get(app);
+  if (!memo) rehydrateMemos.set(app, (memo = new Map()));
+  const key = `${t.owner}/${t.repo}#${t.prNumber}`;
+  const now = Date.now();
+  const hit = memo.get(key);
+  if (hit && now - hit.at < (hit.state ? REHYDRATE_HIT_TTL_MS : REHYDRATE_MISS_TTL_MS)) {
+    return hit.state;
+  }
+
+  let state: RelayReviewState | null = null;
+  try {
+    const reviews = await listPullRequestReviews(token, t.owner, t.repo, t.prNumber);
+    const landed = reviews.filter(
+      (r) =>
+        r.authorIsBot &&
+        isReviewerLogin(r.author, reviewerBotLogin) &&
+        LANDED_REVIEW_STATES.has(r.state) &&
+        r.submittedAt,
+    );
+    if (landed.length > 0) {
+      const markers = await listReviewMarkers(
+        token,
+        token,
+        t.owner,
+        t.repo,
+        t.prNumber,
+        ledgerName,
+        (detail) =>
+          app.log.warn({ detail, ...t }, "relay-state: ledger read degraded while rehydrating"),
+      );
+      for (const review of landed.reverse()) {
+        const marker = markers
+          .filter((m) => markerCoversTime(m, Date.parse(review.submittedAt as string)))
+          .sort((a, b) => a.id - b.id)
+          .at(-1);
+        if (!marker) continue;
+        state = {
+          state: "landed",
+          runId: `marker-${marker.id}`,
+          dispatchedAt: marker.startedAt,
+          landedChecked: true,
+          author: review.author,
+          verdict: review.state,
+          ...(review.body !== undefined ? { body: review.body } : {}),
+          ...(review.bodyTruncated ? { bodyTruncated: true } : {}),
+          ...(review.htmlUrl !== undefined ? { htmlUrl: review.htmlUrl } : {}),
+        };
+        break;
+      }
+    }
+  } catch (err) {
+    app.log.warn({ detail: (err as Error).message, ...t }, "relay-state: rehydrate failed");
+    return null;
+  }
+  memo.set(key, { at: now, state });
+  if (memo.size > MAX_LANDED_MEMO_ENTRIES) memo.delete(memo.keys().next().value!);
+  return state;
+}
+
 /**
  * The relay's state for a pull request, as the operator's UI sees it
  * (issue #1630). Needs a GitHub token to look for the landed review; without
@@ -317,7 +410,14 @@ export async function getRelayReviewState(
 ): Promise<RelayReviewState> {
   const { owner, repo, prNumber } = opts;
   const record = getReviewRunForPr(owner, repo, prNumber);
-  if (!record) return { state: "none" };
+  if (!record) {
+    // The run index is in-memory; after a restart the ledger marker on GitHub
+    // is what still says a relay review landed.
+    const rehydrated = opts.token
+      ? await rehydrateLandedFromMarker(app, opts.token, { owner, repo, prNumber })
+      : null;
+    return rehydrated ?? { state: "none" };
+  }
 
   const base: RelayReviewState = {
     state: "requested",
@@ -393,13 +493,21 @@ export async function annotateRelayReviewState(
   repoRef: { owner: string; repo: string },
   token: string | null,
 ): Promise<PROrWithChecks[]> {
-  if (!prs.some((pr) => getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null)) {
-    return prs;
-  }
+  const { reviewerBotLogin } = getStoredSettings(app.db).reviewRelay;
+  const botKey = bareLogin(reviewerBotLogin);
+  const candidates = prs.map((pr) => {
+    const hasRun = getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) !== null;
+    // A restart empties the run index; a PR the reviewer's bot already
+    // reviewed is worth one ledger lookup (memoized) to recover its state.
+    const mayRehydrate =
+      !hasRun && botKey !== "" && (pr.reviewers ?? []).some((r) => bareLogin(r.login) === botKey);
+    return hasRun || mayRehydrate;
+  });
+  if (!candidates.some(Boolean)) return prs;
   return Promise.all(
-    prs.map(async (pr) => {
-      if (getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number) === null) return pr;
-      const relayReview = await getRelayReviewState(app, {
+    prs.map(async (pr, i) => {
+      if (!candidates[i]) return pr;
+      const state = await getRelayReviewState(app, {
         owner: repoRef.owner,
         repo: repoRef.repo,
         prNumber: pr.number,
@@ -407,8 +515,12 @@ export async function annotateRelayReviewState(
       });
       // The list renders the state, the verdict and the author — not the
       // review's whole text, which the drill-in fetches when it is opened.
-      const { body: _body, bodyTruncated: _truncated, ...summary } = relayReview;
-      return { ...pr, relayReview: summary };
+      const { body: _body, bodyTruncated: _truncated, ...summary } = state;
+      const relayReview = state.state === "none" ? undefined : summary;
+      const reviewSummary = pr.reviewSummary
+        ? withRelay(pr.reviewSummary, relayReview)
+        : pr.reviewSummary;
+      return { ...pr, relayReview, reviewSummary };
     }),
   );
 }
@@ -431,14 +543,16 @@ export function overlayRelayRuns(
     const record = getReviewRunForPr(repoRef.owner, repoRef.repo, pr.number);
     if (!record || pr.relayReview?.runId === record.runId) return pr;
     changed = true;
+    const relayReview = {
+      state: "requested" as const,
+      runId: record.runId,
+      dispatchedAt: new Date(record.dispatchedAt).toISOString(),
+      landedChecked: false,
+    };
     return {
       ...pr,
-      relayReview: {
-        state: "requested" as const,
-        runId: record.runId,
-        dispatchedAt: new Date(record.dispatchedAt).toISOString(),
-        landedChecked: false,
-      },
+      relayReview,
+      ...(pr.reviewSummary ? { reviewSummary: withRelay(pr.reviewSummary, relayReview) } : {}),
     };
   });
   return changed ? out : prs;

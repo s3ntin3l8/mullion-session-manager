@@ -43,6 +43,41 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...base, reviewDecision: "REVIEW_REQUIRED" })).toBe("review_pending");
   });
 
+  it("a landed COMMENTED review with no approval is `reviewed`, only where it was review_pending", () => {
+    const commented = [{ state: "COMMENTED" }];
+    expect(
+      derivePrPhase({ ...base, reviewDecision: "REVIEW_REQUIRED", reviewers: commented }),
+    ).toBe("reviewed");
+    expect(
+      derivePrPhase({
+        ...base,
+        reviewDecision: null,
+        requestedReviewers: ["a"],
+        reviewers: commented,
+      }),
+    ).toBe("reviewed");
+    expect(
+      derivePrPhase({
+        ...base,
+        reviewDecision: null,
+        mergeStateStatus: "BLOCKED",
+        reviewers: commented,
+      }),
+    ).toBe("reviewed");
+    // An approval alongside the comment is not "no approval".
+    expect(
+      derivePrPhase({
+        ...base,
+        reviewDecision: "REVIEW_REQUIRED",
+        reviewers: [{ state: "COMMENTED" }, { state: "APPROVED" }],
+      }),
+    ).toBe("review_pending");
+    // Merge gating is untouched: a comment never turns ready_to_merge into anything else.
+    expect(derivePrPhase({ ...base, reviewDecision: null, reviewers: commented })).toBe(
+      "ready_to_merge",
+    );
+  });
+
   it("waits on CI when approved but runs are still in progress", () => {
     expect(derivePrPhase({ ...base, ciStatus: "in_progress" })).toBe("ci_pending");
   });

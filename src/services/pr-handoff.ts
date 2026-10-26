@@ -54,12 +54,17 @@ export function buildHandoffPrompt(
     }
     lines.push("");
   }
-  const changes = pr.reviews.filter((r) => r.state === "CHANGES_REQUESTED" && r.bodyHtml.trim());
+  // Each reviewer's latest review that is still a request (changes) or a
+  // remark (a bot's COMMENTED review is all the feedback it gives): an
+  // approval, or a later review, supersedes their earlier text.
+  const latestByAuthor = new Map<string, PrDetail["reviews"][number]>();
+  for (const r of pr.reviews) latestByAuthor.set(r.author ?? "", r);
+  const changes = [...latestByAuthor.values()].filter(
+    (r) => (r.state === "CHANGES_REQUESTED" || r.state === "COMMENTED") && r.bodyHtml.trim(),
+  );
   for (const r of changes) {
-    lines.push(
-      `Changes requested by ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`,
-      "",
-    );
+    const verb = r.state === "CHANGES_REQUESTED" ? "Changes requested by" : "Review comments from";
+    lines.push(`${verb} ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`, "");
   }
   if (failingChecks.length > 0) {
     lines.push(`Failing checks: ${failingChecks.join(", ")}`, "");
