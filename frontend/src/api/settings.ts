@@ -142,6 +142,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sidebarDensity: "comfortable",
   layoutMode: "auto",
   tabletPaneCap: 2,
+  balancePanesOnDrop: true,
   projectRoots: [],
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },

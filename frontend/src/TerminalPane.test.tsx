@@ -527,6 +527,7 @@ function renderPane(
       sidebarDensity: "comfortable",
       layoutMode: "auto",
       tabletPaneCap: 2,
+      balancePanesOnDrop: true,
       projectRoots: [],
       externalReadRoots: [],
       diskCleanup: { cacheDirs: [] },

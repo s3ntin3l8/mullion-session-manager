@@ -24,16 +24,16 @@ import {
 // different rename UI — see PaneActionsMenu.tsx's own comment on why), and
 // the non-terminal-panel (`params: undefined`) case the phone switcher hits for
 // every non-session panel in `dockviewApi.panels`.
-const resetTiledGroupWidths = vi.fn();
+const balanceSiblingsOf = vi.fn();
 // Untyped (no inline implementation, unlike a `vi.fn(() => true)` initial
 // value would give it) so the `(...args) => fn(...args)` spread wrapper
-// below type-checks the same way resetTiledGroupWidths's own does — an
+// below type-checks the same way balanceSiblingsOf's own does — an
 // initial implementation narrows vi.fn's inferred signature to that
 // implementation's own arity, which a spread call can't satisfy. Defaults
 // to eligible via beforeEach's own `.mockReturnValue(true)` below, so the
 // existing click-through tests don't each have to opt back in — the
 // dedicated "disabled" describe block overrides it per-test.
-const canResetTiledGroupWidths = vi.fn();
+const canBalanceSiblingsOf = vi.fn();
 const otherTiledGroups = vi.fn();
 let layoutModeSetting = "desktop";
 
@@ -41,8 +41,8 @@ vi.mock("./panelUtils.js", () => ({
   openTimelinePanel: vi.fn(),
   openBrowserPanePanel: vi.fn(),
   openOrFocusSessionPanel: vi.fn(),
-  resetTiledGroupWidths: (...args: unknown[]) => resetTiledGroupWidths(...args),
-  canResetTiledGroupWidths: (...args: unknown[]) => canResetTiledGroupWidths(...args),
+  balanceSiblingsOf: (...args: unknown[]) => balanceSiblingsOf(...args),
+  canBalanceSiblingsOf: (...args: unknown[]) => canBalanceSiblingsOf(...args),
   otherTiledGroups: (...args: unknown[]) => otherTiledGroups(...args),
 }));
 
@@ -178,8 +178,8 @@ beforeEach(() => {
   deleteSession.mockResolvedValue(undefined);
   reportError.mockClear();
   mutedSessionIds = [];
-  canResetTiledGroupWidths.mockClear();
-  canResetTiledGroupWidths.mockReturnValue(true);
+  canBalanceSiblingsOf.mockClear();
+  canBalanceSiblingsOf.mockReturnValue(true);
   otherTiledGroups.mockReset();
   otherTiledGroups.mockReturnValue([]);
   layoutModeSetting = "desktop";
@@ -382,12 +382,12 @@ describe("PaneActionsMenu", () => {
   });
 
   describe("Reset pane sizes", () => {
-    it("calls resetTiledGroupWidths with the passed-in containerApi, closing the menu", async () => {
+    it("calls balanceSiblingsOf with the containerApi and the pane's own group id, closing the menu", async () => {
       const user = userEvent.setup();
-      resetTiledGroupWidths.mockClear();
+      balanceSiblingsOf.mockClear();
       render(
         <PaneActionsMenu
-          api={makeApi({ id: "session-42" })}
+          api={makeApi({ id: "session-42", group: { id: "g7" } } as never)}
           params={{ sessionId: session.id }}
           containerApi={CONTAINER_API}
           onRename={vi.fn()}
@@ -398,7 +398,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       await user.click(screen.getByText("Reset pane sizes"));
 
-      expect(resetTiledGroupWidths).toHaveBeenCalledWith(CONTAINER_API);
+      expect(balanceSiblingsOf).toHaveBeenCalledWith(CONTAINER_API, "g7");
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
 
@@ -406,7 +406,7 @@ describe("PaneActionsMenu", () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
-          api={makeApi({ id: "timeline-1" })}
+          api={makeApi({ id: "timeline-1", group: { id: "g7" } } as never)}
           params={undefined}
           containerApi={CONTAINER_API}
           onRename={vi.fn()}
@@ -419,18 +419,18 @@ describe("PaneActionsMenu", () => {
       expect(screen.getByText("Reset pane sizes")).toBeInTheDocument();
     });
 
-    // Independent code review — canResetTiledGroupWidths shares
-    // resetTiledGroupWidths's own eligibility guards (fewer than two tiled
-    // groups, or a multi-row grid), so the menu item disables itself
+    // Independent code review — canBalanceSiblingsOf shares
+    // balanceSiblingsOf's own guards (no siblings in the row/column, or a
+    // maximized layout), so the menu item disables itself
     // instead of staying clickable-but-silently-inert when there's nothing
     // to redistribute.
-    it("disables itself with an explanatory title when canResetTiledGroupWidths is false", async () => {
-      canResetTiledGroupWidths.mockReturnValue(false);
-      resetTiledGroupWidths.mockClear();
+    it("disables itself with an explanatory title when canBalanceSiblingsOf is false", async () => {
+      canBalanceSiblingsOf.mockReturnValue(false);
+      balanceSiblingsOf.mockClear();
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
-          api={makeApi({ id: "session-42" })}
+          api={makeApi({ id: "session-42", group: { id: "g7" } } as never)}
           params={{ sessionId: session.id }}
           containerApi={CONTAINER_API}
           onRename={vi.fn()}
@@ -445,11 +445,14 @@ describe("PaneActionsMenu", () => {
       // a disabled button can't reliably carry the explanatory title.
       expect(item).toHaveAttribute("aria-disabled", "true");
       expect(item).not.toBeDisabled();
-      expect(item).toHaveAttribute("title", "No skewed row of tiled panes to reset");
+      expect(item).toHaveAttribute(
+        "title",
+        "No neighbouring panes in this row or column to balance",
+      );
 
       await user.click(item!);
 
-      expect(resetTiledGroupWidths).not.toHaveBeenCalled();
+      expect(balanceSiblingsOf).not.toHaveBeenCalled();
     });
   });
 

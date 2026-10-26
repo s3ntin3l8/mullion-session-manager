@@ -722,6 +722,14 @@ describe("DEFAULT_SETTINGS.layoutMode / tabletPaneCap (tablet tier)", () => {
   });
 });
 
+describe("DEFAULT_SETTINGS.balancePanesOnDrop", () => {
+  it("defaults on, accepts a boolean, and ignores a non-boolean patch", () => {
+    expect(DEFAULT_SETTINGS.balancePanesOnDrop).toBe(true);
+    expect(mergeSettings({ balancePanesOnDrop: false }).balancePanesOnDrop).toBe(false);
+    expect(mergeSettings({ balancePanesOnDrop: "no" }).balancePanesOnDrop).toBe(true);
+  });
+});
+
 describe("sanitizeSettings: runtime env overrides", () => {
   it("defaults every runtime override to its inherit sentinel", () => {
     const s = mergeSettings({});

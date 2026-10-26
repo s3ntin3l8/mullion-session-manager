@@ -134,6 +134,10 @@ export interface AppSettings {
   // more visible panes; see AppearanceSection.tsx's Settings copy.
   layoutMode: LayoutMode;
   tabletPaneCap: TabletPaneCap;
+  // Dragging a panel onto a pane's edge makes dockview halve only the target
+  // (50/25/25 for a third pane); when on, the frontend evens out that row or
+  // column afterwards, as the split buttons already do.
+  balancePanesOnDrop: boolean;
   // Editable project-scan roots (Settings -> Projects & discovery). Empty
   // array = "use the PROJECTS_ROOTS env var" (see routes/projects.ts) —
   // this lets a fresh deploy keep working from its env config until someone
@@ -710,6 +714,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sidebarDensity: "comfortable",
   layoutMode: "auto",
   tabletPaneCap: 2,
+  balancePanesOnDrop: true,
   projectRoots: [],
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },

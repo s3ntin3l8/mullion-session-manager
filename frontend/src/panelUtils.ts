@@ -1,6 +1,7 @@
 import type {
   DockviewApi,
   DockviewGroupPanel,
+  IDockviewGroupPanel,
   IDockviewPanel,
   Position,
   SerializedDockview,
@@ -1523,11 +1524,8 @@ export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): voi
 // left as a known gap rather than chased here.
 const ROW_HEIGHT_TOLERANCE_PX = 2;
 
-// Shared by restoreTiledGroupWidths/resetTiledGroupWidths and the "Reset
-// pane sizes" menu item's own enablement check (canResetTiledGroupWidths) —
-// a single definition of "is there a single row of tiled groups worth
-// redistributing right now," so the menu item can't disagree with what the
-// action it triggers is actually willing to do.
+// Used by restoreTiledGroupWidths: "is there a single row of tiled groups
+// worth redistributing right now" — multi-row grids are rejected.
 function eligibleTiledRowGroups(api: DockviewApi): DockviewGroupPanel[] | null {
   const groups = api.groups.filter(isTiledGroup);
   if (groups.length < 2) return null;
@@ -1580,28 +1578,95 @@ export function restoreTiledGroupWidths(
   return true;
 }
 
-// The "Reset pane sizes" action (PaneActionsMenu.tsx) — distributes every
-// tiled group in the same row evenly, for a workspace whose proportions were
-// already skewed (by the fold/unfold bug above, or any other cause) before
-// this fix landed. Deliberately manual, not auto-applied on restore: a user
-// may have sized panes on purpose, and silently overriding that on every
-// workspace load would be worse than leaving an already-broken layout for one
-// explicit action to fix.
-export function resetTiledGroupWidths(api: DockviewApi): void {
-  const groups = eligibleTiledRowGroups(api);
-  if (!groups) return;
-  const even = new Map<string, number>();
-  for (const group of groups) even.set(group.id, 1 / groups.length);
-  restoreTiledGroupWidths(api, even);
+// Balance the row or column a pane sits in — the split button's own result
+// (dockview's `Sizing.Distribute`: 50/50, then 33/33/33) for panes that got
+// there another way. A drag-to-split goes through dockview-core's
+// `dropSizing`, hard-coded to `Sizing.Split` (halve the group the overlay was
+// drawn over, leave its siblings alone), so a third pane lands as 50/25/25 and
+// dockview exposes no option to change it.
+//
+// Works on either axis: the pane's parent branch is found in the serialized
+// grid (`toJSON().grid`, root orientation alternating by depth), and each
+// sibling is resized with `setSize` — the same live, sash-drag-equivalent
+// resize `restoreTiledGroupWidths` uses. A sibling that is itself a branch (a
+// stacked column inside a row, say) is resized through one of its DIRECT leaf
+// children: a leaf's size on the parent's axis is its orthogonal size, which
+// `BranchNode` re-emits exactly one level up, so a deeper leaf would not move
+// the branch. Reasoned from the dockview-core source, not integration-verified.
+// A branch with no direct leaf child can't be resized, so the whole balance
+// bails rather than dividing its space among the others. The
+// last participant is skipped so it absorbs the rounding, and the near-minimum
+// cascade gap in `restoreTiledGroupWidths`'s header comment applies here too.
+type GridNode = { type: "leaf"; data: { id: string } } | { type: "branch"; data: GridNode[] };
+
+export interface ParentBranch {
+  axis: "width" | "height";
+  siblings: GridNode[];
 }
 
-// PaneActionsMenu.tsx's own enablement check for "Reset pane sizes" —
-// without this, the menu item was present and clickable even when
-// resetTiledGroupWidths's own guards (fewer than two tiled groups, or a
-// multi-row grid the height heuristic above rejects) meant it would
-// silently do nothing, with no way for the user to tell whether it worked.
-export function canResetTiledGroupWidths(api: DockviewApi): boolean {
-  return eligibleTiledRowGroups(api) !== null;
+export function findParentBranch(
+  grid: { root: unknown; orientation: unknown },
+  groupId: string,
+): ParentBranch | null {
+  const walk = (node: GridNode, horizontal: boolean): ParentBranch | null => {
+    if (node.type !== "branch") return null;
+    if (node.data.some((c) => c.type === "leaf" && c.data.id === groupId)) {
+      return node.data.length > 1
+        ? { axis: horizontal ? "width" : "height", siblings: node.data }
+        : null;
+    }
+    for (const child of node.data) {
+      const found = walk(child, !horizontal);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(grid.root as GridNode, String(grid.orientation) === "HORIZONTAL");
+}
+
+// Siblings that can actually be resized: the group to call `setSize` on and
+// its current size along the axis.
+function balanceParticipants(
+  api: DockviewApi,
+  groupId: string,
+): { axis: "width" | "height"; items: Array<{ group: IDockviewGroupPanel; size: number }> } | null {
+  if (api.hasMaximizedGroup()) return null;
+  const parent = findParentBranch(api.toJSON().grid, groupId);
+  if (!parent) return null;
+  const items: Array<{ group: IDockviewGroupPanel; size: number }> = [];
+  for (const sibling of parent.siblings) {
+    const resizeId =
+      sibling.type === "leaf"
+        ? sibling.data.id
+        : (sibling.data.find((c) => c.type === "leaf")?.data as { id: string } | undefined)?.id;
+    const group = resizeId ? api.getGroup(resizeId) : undefined;
+    // A sibling we can't resize would be squeezed to the group minimum by the
+    // others absorbing its space, so give up on the whole balance instead.
+    if (!group) return null;
+    // Read the group being resized: a direct leaf child's extent on the
+    // parent's axis equals its branch's, where a deeper leaf's is a fraction.
+    items.push({ group, size: group.api[parent.axis] });
+  }
+  return items.length > 1 ? { axis: parent.axis, items } : null;
+}
+
+// Returns whether sizes were applied (false = a no-op).
+export function balanceSiblingsOf(api: DockviewApi, groupId: string): boolean {
+  const plan = balanceParticipants(api, groupId);
+  if (!plan) return false;
+  const total = plan.items.reduce((sum, item) => sum + item.size, 0);
+  if (total <= 0) return false;
+  const each = Math.round(total / plan.items.length);
+  for (const { group } of plan.items.slice(0, -1)) {
+    group.api.setSize({ [plan.axis]: each });
+  }
+  return true;
+}
+
+// The "Reset pane sizes" item's enablement check — shares
+// `balanceParticipants` with the action so the two can't disagree.
+export function canBalanceSiblingsOf(api: DockviewApi, groupId: string): boolean {
+  return balanceParticipants(api, groupId) !== null;
 }
 
 // The other tiled (grid) groups a panel could be moved into, numbered by their
