@@ -510,6 +510,12 @@ button.sb-chip:focus-visible,
   font-size: 0.6875rem;
   cursor: pointer;
 }
+/* Guard for a pill rendered without a tone class: neutral, never currentColor. */
+.sb-pill:not([class*="sb-chip--"]) {
+  color: var(--status-neutral-fg);
+  background: var(--status-neutral-bg);
+  border-color: var(--status-neutral-border);
+}
 .sb-pill:focus-visible {
   outline: 1.5px solid var(--accent);
   outline-offset: 1px;
