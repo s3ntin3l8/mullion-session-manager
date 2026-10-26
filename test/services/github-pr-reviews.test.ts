@@ -116,6 +116,24 @@ describe("enrichPrsWithReviewState", () => {
     });
   });
 
+  it("folds a failing non-Actions check (the head's rollup) into ciStatus, idempotently", async () => {
+    const rollup = (state: string) => ({
+      commits: { nodes: [{ commit: { statusCheckRollup: { state } } }] },
+    });
+    fetchMock
+      .mockResolvedValueOnce(listResponse([gqlNode(1, rollup("FAILURE"))]))
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1)];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+    expect(prs[0]).toMatchObject({ ciStatus: "failure", checksRollup: "failure" });
+
+    // Re-enriching the same objects derives from the Actions runs again, so a
+    // recovered rollup would clear the failure rather than stick.
+    fetchMock.mockResolvedValueOnce(listResponse([gqlNode(1, rollup("SUCCESS"))]));
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+    expect(prs[0]).toMatchObject({ ciStatus: "success", checksRollup: "success" });
+  });
+
   it("only re-queries threads for PRs whose updatedAt moved", async () => {
     // Own repo name: the thread cache is module-level.
     fetchMock

@@ -28,6 +28,13 @@ vi.mock("../../src/services/github.js", () => ({
   },
   getRepoPRsStatus: mockGetRepoPRsStatus,
   setRepoPRsStatus: vi.fn(),
+  computePRSummary: (prs: unknown[]) => ({
+    total: prs.length,
+    pass: 0,
+    fail: 0,
+    pending: 0,
+    unknown: 0,
+  }),
   refreshDefaultBranchCi: mockRefreshDefaultBranchCi,
   getPullRequestMergeState: mockMergeState,
 }));
@@ -260,10 +267,18 @@ describe("startGitHubPRPoller", () => {
     vi.useFakeTimers();
     const cleanup = startGitHubPRPoller(app);
 
-    // Initial fetch: no baseline, no push.
+    // Initial fetch: no baseline to diff, but the first poll still tells the
+    // project's browser to refetch (it may have loaded before the cache filled).
     await vi.advanceTimersByTimeAsync(1);
     expect(mockEnrich).toHaveBeenCalledTimes(1);
-    expect(mockBroadcast).not.toHaveBeenCalled();
+    expect(mockBroadcast).toHaveBeenCalledTimes(1);
+    expect(mockBroadcast).toHaveBeenCalledWith("1", {
+      type: "pr",
+      action: "sync",
+      projectId: "1",
+      pr: { changed: [] },
+    });
+    mockBroadcast.mockClear();
 
     // Sweep poll: identical snapshot, still no push.
     await vi.advanceTimersByTimeAsync(120_000);
@@ -285,9 +300,32 @@ describe("startGitHubPRPoller", () => {
     vi.useRealTimers();
   });
 
+  it("pulls the next poll forward to ~2s when a webhook marks the repo dirty", async () => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    const app = mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]);
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(app);
+
+    // Initial sweep, then the steady ticks begin after the sweep margin.
+    await vi.advanceTimersByTimeAsync(121_000);
+    const before = mockGetRepoPRsStatus.mock.calls.length;
+
+    app.githubActivityTracker!.markDirty("test-owner/test-repo");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(before);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(before + 1);
+    // The refresh covered it: the poller is back on its normal cadence.
+    expect(app.githubActivityTracker!.hasDirty()).toBe(false);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
   // Two projects on one repo: the initial per-project sweep may only have
-  // covered one of them, so it seeds a baseline but must never push.
-  it("never pushes from the initial sweep, even when projects share a repo", async () => {
+  // covered one of them, so it seeds a baseline but never pushes a diff (only
+  // the empty first-poll refetch nudge).
+  it("never pushes a diff from the initial sweep, even when projects share a repo", async () => {
     mockResolveGitHubToken.mockReturnValue("ghp_token");
     const prWith = (ciStatus: string) => ({
       number: 7,
@@ -313,7 +351,14 @@ describe("startGitHubPRPoller", () => {
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(mockGetRepoPRsStatus).toHaveBeenCalledTimes(2);
-    expect(mockBroadcast).not.toHaveBeenCalled();
+    // Each project's own sweep nudges its browser once, with no diff.
+    expect(mockBroadcast).toHaveBeenCalledTimes(2);
+    for (const pid of ["1", "2"]) {
+      expect(mockBroadcast).toHaveBeenCalledWith(
+        pid,
+        expect.objectContaining({ pr: { changed: [] } }),
+      );
+    }
 
     cleanup();
     vi.useRealTimers();

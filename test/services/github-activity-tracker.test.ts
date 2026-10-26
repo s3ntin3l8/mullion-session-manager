@@ -143,3 +143,24 @@ describe("ActivityTracker.setIntervals", () => {
     expect(tracker.quietInterval).toBe(120_000);
   });
 });
+
+describe("ActivityTracker.markDirty", () => {
+  const tracker = new ActivityTracker();
+  it("remembers the repo and pulls the poller forward until it is cleared", () => {
+    const pull = vi.fn();
+    tracker.onPullForward(pull);
+    expect(tracker.hasDirty()).toBe(false);
+    tracker.markDirty("o/r");
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(tracker.hasDirty()).toBe(true);
+    tracker.clearDirty();
+    expect(tracker.hasDirty()).toBe(false);
+  });
+
+  it("works with no poller attached and is reset by clearForTests", () => {
+    tracker.markDirty("o/r");
+    expect(tracker.hasDirty()).toBe(true);
+    tracker.clearForTests();
+    expect(tracker.hasDirty()).toBe(false);
+  });
+});

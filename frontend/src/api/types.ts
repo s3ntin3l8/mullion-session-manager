@@ -1157,7 +1157,17 @@ export interface GitHubPROrWithChecks {
   commentCount?: number | null;
   /** True once the poller fetched this PR's head runs (possibly none). */
   ciFetched?: boolean;
+  /** Head commit's check rollup (includes non-Actions checks); already folded into `ciStatus`. */
+  checksRollup?: "success" | "failure" | "pending" | null;
   prPhase?: GitHubPrPhase;
+}
+
+/** A head-commit check that is not a GitHub Actions run. */
+export interface GitHubOtherCheck {
+  name: string;
+  state: "success" | "failure" | "pending" | "neutral";
+  url: string | null;
+  source: "check_run" | "status";
 }
 
 export type GitHubPrPhase =
@@ -1217,9 +1227,17 @@ export interface GitHubPrDetail {
   ciKnown: boolean;
   actionsRuns: GitHubActionsRun[];
   prPhase: GitHubPrPhase;
+  /** Checks that are not Actions runs ("Other checks"); counted in `ciStatus`. */
+  otherChecks?: GitHubOtherCheck[];
+  /** More checks exist on the head than were read; `otherChecks` is partial. */
+  checksTruncated?: boolean;
+  /** GraphQL was unavailable: reviews/threads/conversation are missing, not empty. */
+  partial?: boolean;
 }
 
 export interface GitHubPRsStatus {
+  /** Served from a cache older than its TTL while a refresh is pending. */
+  stale?: boolean;
   prs: GitHubPROrWithChecks[];
   prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }

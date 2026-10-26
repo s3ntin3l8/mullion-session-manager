@@ -39,6 +39,11 @@ const PARENT_ISSUE_URL_RE =
 // "protect the 5000/hr budget" note. A project's Dock widget/panel re-fetches
 // at most this often even if the user reopens it repeatedly.
 const CACHE_TTL_MS = 60_000;
+// A PR status entry is served stale (flagged) past CACHE_TTL_MS so the UI never
+// blanks between polls, but not forever: if the poller stopped (integration
+// off, token gone) an hours-old CI answer must not pass as current for
+// callers like the Task Master reconciler.
+const PRS_MAX_STALE_MS = 30 * 60_000;
 
 export interface GitHubIssueOrPr {
   number: number;
@@ -80,6 +85,17 @@ export interface GitHubStep {
 // just doesn't render for that case (routes/projects.ts's GET .../github
 // still 200s; this is a feature-detect, not an error).
 export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+
+/** GitHub's `statusCheckRollup.state` for a head commit, collapsed to three. */
+export type ChecksRollupState = "success" | "failure" | "pending" | null;
+
+/** A head-commit check that is not a GitHub Actions run (third-party check run or commit status). */
+export interface OtherCheck {
+  name: string;
+  state: "success" | "failure" | "pending" | "neutral";
+  url: string | null;
+  source: "check_run" | "status";
+}
 
 // Per-PR CI status with head SHA and runs (issue #102).
 export interface PROrWithChecks {
@@ -124,6 +140,12 @@ export interface PROrWithChecks {
   reviewStateKnown: boolean;
   /** True once this PR's head-run lookup succeeded (runs may legitimately be empty). */
   ciFetched: boolean;
+  /**
+   * The head commit's `statusCheckRollup` state (GraphQL enrichment) — covers
+   * checks that are not Actions runs. Folded into `ciStatus` by
+   * `combineCiStatus`; kept so the fold is idempotent across re-enrichment.
+   */
+  checksRollup?: ChecksRollupState;
   prPhase: PrPhase;
 }
 
@@ -133,6 +155,8 @@ export function applyPrPhase(pr: PROrWithChecks): void {
 }
 
 export interface GitHubPRsStatus {
+  /** Set by `getPRsStatus` when the entry is older than the TTL: served anyway, refresh pending. */
+  stale?: boolean;
   prs: PROrWithChecks[];
   // Summary counts for the dock widget: "3 PRs — 2✅ 1❌"
   prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
@@ -233,6 +257,78 @@ export function computeCiStatus(runs: GitHubActionsRun[]): GitHubCiStatus {
   const meaningful = runs.filter((r) => r.conclusion !== "skipped" && r.conclusion !== "cancelled");
   if (meaningful.length === 0) return null;
   return meaningful.every((r) => r.conclusion === "success") ? "success" : "failure";
+}
+
+/** Maps GitHub's `StatusState` / `CheckConclusionState` / `CheckStatusState` onto three buckets. */
+export function normalizeRollupState(state: string | null | undefined): ChecksRollupState {
+  switch (state) {
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "ERROR":
+      return "failure";
+    case "PENDING":
+    case "EXPECTED":
+      return "pending";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Folds the head commit's check rollup (which includes non-Actions checks)
+ * into the Actions-only CI status: a failure anywhere wins, then anything
+ * still running, then success. With no rollup the Actions answer stands.
+ */
+export function combineCiStatus(
+  actions: GitHubCiStatus,
+  rollup: ChecksRollupState | undefined,
+): GitHubCiStatus {
+  if (!rollup) return actions;
+  if (actions === "failure" || rollup === "failure") return "failure";
+  if (actions === "in_progress" || rollup === "pending") return "in_progress";
+  return "success";
+}
+
+/**
+ * Keeps the rollup contexts that are not GitHub Actions runs. A check run
+ * whose app is `github-actions` is already in `actionsRuns`.
+ */
+export function parseOtherChecks(
+  nodes: Array<{
+    __typename?: string;
+    name?: string;
+    status?: string;
+    conclusion?: string | null;
+    detailsUrl?: string | null;
+    checkSuite?: { app?: { slug?: string | null } | null } | null;
+    context?: string;
+    state?: string;
+    targetUrl?: string | null;
+  } | null>,
+): OtherCheck[] {
+  const out: OtherCheck[] = [];
+  for (const n of nodes) {
+    if (!n) continue;
+    if (n.__typename === "CheckRun") {
+      if (n.checkSuite?.app?.slug === "github-actions") continue;
+      let state: OtherCheck["state"];
+      if (n.status !== "COMPLETED") state = "pending";
+      else if (n.conclusion === "SUCCESS") state = "success";
+      else if (n.conclusion === "NEUTRAL" || n.conclusion === "SKIPPED") state = "neutral";
+      else state = "failure";
+      out.push({ name: n.name ?? "check", state, url: n.detailsUrl ?? null, source: "check_run" });
+    } else if (n.__typename === "StatusContext") {
+      const r = normalizeRollupState(n.state);
+      out.push({
+        name: n.context ?? "status",
+        state: r ?? "neutral",
+        url: n.targetUrl ?? null,
+        source: "status",
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -1337,18 +1433,18 @@ export function setRepoPRsStatus(owner: string, repo: string, data: GitHubPRsSta
 }
 
 /**
- * Reads per-PR status from the cache. Returns null if no entry exists or
- * the entry is older than CACHE_TTL_MS — the caller (the route) should
- * degrade to 204 rather than fetching live.
+ * Reads per-PR status from the cache, stale-while-revalidate: an entry past
+ * CACHE_TTL_MS is still returned (flagged `stale: true`) because the poller
+ * is already refreshing it, and a slightly old CI answer beats a blank one.
+ * Returns null when the repo was never polled, or its entry is older than
+ * PRS_MAX_STALE_MS (the route degrades to 204).
  */
 export function getPRsStatus(owner: string, repo: string): GitHubPRsStatus | null {
-  const key = prsCacheKey(owner, repo);
-  const cached = prsCache.get(key);
+  const cached = prsCache.get(prsCacheKey(owner, repo));
   if (!cached) return null;
-  if (Date.now() - cached.ts > CACHE_TTL_MS) {
-    prsCache.delete(key);
-    return null;
-  }
+  const age = Date.now() - cached.ts;
+  if (age > PRS_MAX_STALE_MS) return null;
+  if (age > CACHE_TTL_MS) return { ...cached.data, stale: true };
   return cached.data;
 }
 

@@ -3140,6 +3140,154 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("fetches the runs for the detail's own head live when the poller's entry is for an older head", async () => {
+        mockGithub(gqlPr(57), (url) =>
+          url.includes("/actions/runs?head_sha=sha57")
+            ? jsonResponse(200, {
+                workflow_runs: [
+                  {
+                    name: "CI",
+                    status: "completed",
+                    conclusion: "success",
+                    html_url: "https://github.com/acme/widgets/actions/runs/9",
+                    head_sha: "sha57",
+                  },
+                ],
+              })
+            : null,
+        );
+        await warmCiCache(57, "failure", true, "sha-old");
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/57`,
+        });
+        expect(detail.json()).toMatchObject({
+          ciStatus: "success",
+          ciKnown: true,
+          prPhase: "ready_to_merge",
+        });
+        expect(detail.json().actionsRuns).toHaveLength(1);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("shares one live runs lookup between concurrent detail requests and caches a failed one briefly", async () => {
+        let runLookups = 0;
+        mockGithub(gqlPr(61), (url) => {
+          if (!url.includes("/actions/runs?head_sha=sha61")) return null;
+          runLookups += 1;
+          return jsonResponse(403, {});
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const get = () => app.inject({ method: "GET", url: `/api/projects/${id}/github/prs/61` });
+        const [a, b] = await Promise.all([get(), get()]);
+        expect(a.json().ciKnown).toBe(false);
+        expect(b.json().ciKnown).toBe(false);
+        // Even after the detail cache is dropped, the failed answer is remembered.
+        const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+        invalidatePrDetail("acme", "widgets", 61);
+        await get();
+        expect(runLookups).toBe(1);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("surfaces non-Actions checks as otherChecks and counts them in the CI status", async () => {
+        mockGithub(
+          gqlPr(59, {
+            headCommit: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: "FAILURE",
+                      contexts: {
+                        totalCount: 60,
+                        nodes: [
+                          {
+                            __typename: "StatusContext",
+                            context: "ci/circle",
+                            state: "FAILURE",
+                            targetUrl: "https://circle.example/1",
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          (url) =>
+            url.includes("/actions/runs?head_sha=")
+              ? jsonResponse(200, { workflow_runs: [] })
+              : null,
+        );
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/59`,
+        });
+        expect(detail.json()).toMatchObject({
+          ciStatus: "failure",
+          ciKnown: true,
+          checksTruncated: true,
+          otherChecks: [{ name: "ci/circle", state: "failure", source: "status" }],
+        });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("flags the PR list as stale (still serving it) once the poller's entry is past its TTL", async () => {
+        mockGithub(gqlPr(60));
+        await warmCiCache(60, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const fresh = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+        expect(fresh.json().stale).toBeUndefined();
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          vi.setSystemTime(Date.now() + 5 * 60_000);
+          const aged = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+          expect(aged.statusCode).toBe(200);
+          expect(aged.json()).toMatchObject({ stale: true });
+          expect(aged.json().prs).toHaveLength(1);
+        } finally {
+          vi.useRealTimers();
+        }
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("returns a partial detail, not a 502, when GraphQL is unavailable", async () => {
+        mockGithub(gqlPr(58), (url) => {
+          if (url.endsWith("/graphql")) return jsonResponse(500, {});
+          if (url.endsWith("/pulls/58")) {
+            return jsonResponse(200, {
+              number: 58,
+              title: "REST title",
+              html_url: "https://github.com/acme/widgets/pull/58",
+              state: "open",
+              user: { login: "me" },
+              base: { ref: "main" },
+              head: { ref: "feat", sha: "sha58" },
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-01T00:00:00Z",
+            });
+          }
+          return null;
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/58`,
+        });
+        expect(detail.statusCode).toBe(200);
+        expect(detail.json()).toMatchObject({ title: "REST title", partial: true, reviews: [] });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("an answered-but-empty lookup (no runs) is a CI answer and can be ready", async () => {
         mockGithub(gqlPr(56, { mergeStateStatus: "UNSTABLE" }));
         await warmCiCache(56, null, true);

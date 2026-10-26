@@ -6,8 +6,8 @@ import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
-import { invalidatePRsCache } from "../services/github.js";
 import { invalidateMergedPrs } from "../services/github-merged-prs.js";
+import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
@@ -76,6 +76,20 @@ interface GitHubPushPayload {
   blocked_issue?: GitHubIssueRefPayload;
   blocking_issue?: GitHubIssueRefPayload;
 }
+
+// check_run / check_suite / status are not in WEBHOOK_EVENTS today, so they are
+// forward-looking: they only count once the hook is subscribed to them.
+const PR_STATE_EVENTS = new Set([
+  "pull_request",
+  "pull_request_review",
+  "pull_request_review_comment",
+  "pull_request_review_thread",
+  "check_run",
+  "check_suite",
+  "status",
+  "workflow_run",
+  "push",
+]);
 
 export async function webhookRoutes(app: FastifyInstance) {
   // GitHub's HMAC (X-Hub-Signature-256) is computed over the exact bytes it
@@ -559,10 +573,29 @@ export async function webhookRoutes(app: FastifyInstance) {
         });
       }
 
-      // Invalidate the per-repo PRs cache so the next REST read goes live
-      // (the poller will re-fill it on the next tick).
-      invalidatePRsCache(owner, repo);
+      // The merged-PR lookup is cheap to re-derive and any delivery may change it.
       invalidateMergedPrs(owner, repo);
+      // Do NOT clear the per-repo PRs cache: both read routes are cache-only,
+      // so clearing it blanks the list until the next poll. Mark the repo dirty
+      // instead — the poller is pulled forward (~2s) and replaces the entry,
+      // while readers keep the last answer meanwhile. The PR detail cache is
+      // short-lived and fetched live, so that one is dropped (just this PR when
+      // the payload names one, else the repo's).
+      // Only events that can change the PR list / its CI / reviews / comment
+      // counts: issues, releases and dependency events cannot, and on a busy
+      // tracker they would otherwise hold the poller at ~2s.
+      if (
+        !PR_STATE_EVENTS.has(event) &&
+        !(event === "issue_comment" && payload.issue?.pull_request)
+      ) {
+        return reply.code(200).send({ ok: true });
+      }
+      if (matchedProjects.length > 0) app.githubActivityTracker?.markDirty(repoKey);
+      const prNum =
+        payload.pull_request?.number ??
+        (payload.issue?.pull_request ? payload.issue.number : undefined);
+      const prNumber = typeof prNum === "number" ? prNum : undefined;
+      invalidatePrDetail(owner, repo, prNumber);
 
       return reply.code(200).send({ ok: true });
     },
