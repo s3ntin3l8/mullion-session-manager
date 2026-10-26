@@ -22,7 +22,11 @@ import {
   hashBody,
   sign,
 } from "../../src/services/request-signature.js";
-import { taskReviewFindingsPath, taskCommitTitlePath } from "../../src/services/task-prompt.js";
+import {
+  taskReviewFindingsPath,
+  taskCommitTitlePath,
+  taskRereviewRequestPath,
+} from "../../src/services/task-prompt.js";
 import { sessionBriefingPath } from "../../src/services/project-briefing.js";
 import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
 
@@ -3368,6 +3372,63 @@ describe("internal routes (agent role, issue #26)", () => {
         headers: { authorization: `Bearer ${TOKEN}` },
       });
       expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
+  describe("GET /internal/task-rereview-request", () => {
+    it("returns { content: null } (200, not 404) for an absent file", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/task-rereview-request?taskId=999&key=1",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ content: null });
+      await app.close();
+    });
+
+    it("returns the worker's reason, and a placeholder for an empty file (existence is the request)", async () => {
+      const app = await buildApp();
+      const dir = path.dirname(app.pty.hookSocketPath);
+      const withReason = taskRereviewRequestPath(dir, 7, 100);
+      const empty = taskRereviewRequestPath(dir, 7, 101);
+      fs.writeFileSync(withReason, "  grew into a refactor \n");
+      fs.writeFileSync(empty, "  \n");
+
+      const a = await app.inject({
+        method: "GET",
+        url: "/internal/task-rereview-request?taskId=7&key=100",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      const b = await app.inject({
+        method: "GET",
+        url: "/internal/task-rereview-request?taskId=7&key=101",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(a.json()).toEqual({ content: "grew into a refactor" });
+      expect(b.json()).toEqual({ content: "(no reason given)" });
+
+      fs.rmSync(withReason, { force: true });
+      fs.rmSync(empty, { force: true });
+      await app.close();
+    });
+
+    it("rejects a non-integer taskId or key with 400, and never accepts a path fragment", async () => {
+      const app = await buildApp();
+      for (const url of [
+        "/internal/task-rereview-request?taskId=abc&key=1",
+        "/internal/task-rereview-request?taskId=1&key=abc",
+        `/internal/task-rereview-request?taskId=1&key=${encodeURIComponent("../../etc/passwd")}`,
+      ]) {
+        const res = await app.inject({
+          method: "GET",
+          url,
+          headers: { authorization: `Bearer ${TOKEN}` },
+        });
+        expect(res.statusCode).toBe(400);
+      }
       await app.close();
     });
   });

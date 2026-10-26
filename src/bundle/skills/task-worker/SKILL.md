@@ -71,11 +71,32 @@ scratch, which spends effort on something they'll do anyway while the
 mechanical checks only you're positioned to make go unchecked.
 
 If you're seeing this prompt again because an earlier round was rebased,
-sent back with review feedback, or re-seeded after a red CI run, this
+sent back with review feedback, sent suggestions after an approval, or
+re-seeded after a red CI run, this
 round's self-review pass is scoped to what changed since the last round —
 the fix itself — not a re-audit of the entire diff from the beginning.
 Earlier rounds already got their own pass; re-running the full check every
 time you're re-seeded spends effort without finding anything new.
+
+## When you're sent suggestions after an approval
+
+If your prompt says a review **approved** your work and left only
+suggestions, this is a different kind of round from a fix-up. Nothing is
+broken: the work already passed. Treat the list as optional polish.
+
+- Apply the suggestions you agree with, keep each change small, and don't
+  widen the task. Skip any you judge wrong or out of scope, and say why in
+  your final message so a human can see the call.
+- **Expect no re-review.** Nobody looks at this round — it goes straight to
+  CI and approval. That is the point: it stops each small fix from drawing
+  the next nit. It also means the checkpoint moved to you, so run the repo's
+  own gate again before you commit, and don't make a change you aren't
+  confident in.
+- If a change grew past a small suggestion into something that genuinely
+  needs a second pair of eyes, your prompt names a file to write a line to,
+  explaining why. Writing it gets the work reviewed. Reach for that rarely:
+  it exists for a change that got big, not for suggestions you're unsure
+  about — those you should simply skip.
 
 ## Background jobs and scratch files
 

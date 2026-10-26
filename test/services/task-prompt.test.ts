@@ -5,6 +5,10 @@ import {
   buildRejectPrompt,
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
+  buildSuggestionsPrompt,
+  deriveVerdict,
+  isApprovingVerdict,
+  taskRereviewRequestPath,
   taskReviewFindingsPath,
   taskCommitTitlePath,
   parseReviewFindings,
@@ -549,7 +553,9 @@ describe("buildReviewPrompt", () => {
       worktreePath: BASE.worktreePath,
       findingsPath: FINDINGS_PATH,
     });
-    expect(out).toContain('"verdict": "clean" | "changes-requested"');
+    expect(out).toContain(
+      '"verdict": "approved" | "approved-with-suggestions" | "changes-requested"',
+    );
     expect(out).toMatch(/missing or unparseable[\s\S]*inconclusive/);
     expect(out).not.toContain("do not create\nthat file at all");
   });
@@ -634,12 +640,9 @@ describe("buildReviewPrompt", () => {
     });
     expect(out).toContain("2 automatic fix-up round(s) left");
     expect(out).toContain("shared");
-    expect(out).toContain("never reset");
-    // Not gated on severity — an all-nits verdict spends the same round a
-    // blocker would (task-reconciler.ts's wantsAutoReturn checks only the
-    // verdict, never a finding's severity).
-    expect(out).toContain("regardless");
-    expect(out).toContain("of how severe your findings are");
+    // A backstop, not a budget to ration — and severity alone decides.
+    expect(out).toContain("not a budget");
+    expect(out).toContain("suggestions are applied once without");
   });
 
   // The zero case must not read as "so the verdict doesn't matter" — the
@@ -702,7 +705,7 @@ const CHANGES_REQUESTED_JSON = JSON.stringify({
 describe("parseReviewFindings", () => {
   it("parses a well-formed clean verdict with no findings array", () => {
     const parsed = parseReviewFindings(CLEAN_JSON);
-    expect(parsed.verdict).toBe("clean");
+    expect(parsed.verdict).toBe("approved");
     expect(parsed.summary).toContain("go test");
     expect(parsed.findings).toEqual([]);
   });
@@ -715,7 +718,7 @@ describe("parseReviewFindings", () => {
       path: "cmd/branchdam/main_test.go",
       line: 669,
       side: "RIGHT",
-      severity: "major",
+      severity: "critical",
     });
   });
 
@@ -836,7 +839,7 @@ describe("parseReviewFindings", () => {
 // silently drift into different severity styling.
 describe("severityPrefix", () => {
   it("renders a bracketed prefix with a trailing space for a recognized severity", () => {
-    expect(severityPrefix("blocker")).toBe("[blocker] ");
+    expect(severityPrefix("critical")).toBe("[critical] ");
   });
 
   it("renders nothing for null", () => {
@@ -903,14 +906,14 @@ describe("renderReviewFindingsMarkdown", () => {
   it("does not leave a dangling em-dash when the reviewer left summary empty", () => {
     const parsed = parseReviewFindings(JSON.stringify({ verdict: "clean", summary: "" }));
     const out = renderReviewFindingsMarkdown(parsed);
-    expect(out).toContain("**Verdict:** clean\n");
+    expect(out).toContain("**Verdict:** approved\n");
     expect(out).not.toContain("— \n");
     expect(out).not.toMatch(/— *$/m);
   });
 
   it("renders a legacy-shape (verdict/summary/findings only) JSON review with sections and no Verified", () => {
     const out = renderReviewFindingsMarkdown(parseReviewFindings(CLEAN_JSON));
-    expect(out).toContain("**Verdict:** clean — Reviewed the diff and ran `go test ./...`");
+    expect(out).toContain("**Verdict:** approved — Reviewed the diff and ran `go test ./...`");
     expect(out).toContain("### Critical\n- None");
     expect(out).toContain("### Warnings\n- None");
     expect(out).toContain("### Suggestions\n- None");
@@ -934,9 +937,9 @@ describe("renderReviewFindingsMarkdown", () => {
       expect(idx).toBeGreaterThan(cursor);
       cursor = idx;
     }
-    expect(out).toContain("### Critical\n- [blocker] **cmd/branchdam/main_test.go:669**");
+    expect(out).toContain("### Critical\n- [critical] **cmd/branchdam/main_test.go:669**");
     expect(out).toContain("### Warnings\n- None");
-    expect(out).toContain("### Suggestions\n- [nit] **cmd/branchdam/main.go:12**");
+    expect(out).toContain("### Suggestions\n- [suggestion] **cmd/branchdam/main.go:12**");
     expect(out).toContain(
       "### Verified\n- make lint && make typecheck\n- npx vitest run test/x.test.ts",
     );
@@ -957,7 +960,7 @@ describe("renderReviewFindingsMarkdown", () => {
     expect(out).toContain("### Suggestions\n- None");
   });
 
-  it("notes non-blocking-only when changes-requested has no Critical findings", () => {
+  it("labels an all-suggestions review approved with suggestions, not changes requested", () => {
     const parsed = parseReviewFindings(
       JSON.stringify({
         verdict: "changes-requested",
@@ -966,14 +969,26 @@ describe("renderReviewFindingsMarkdown", () => {
       }),
     );
     const out = renderReviewFindingsMarkdown(parsed);
-    expect(out).toContain("**Verdict:** changes requested (non-blocking findings only) — s");
+    expect(out).toContain("**Verdict:** approved with suggestions — s");
     expect(out).toContain("### Critical\n- None");
+    expect(out).toContain("### Suggestions\n- [suggestion] **a.go:1** — b");
   });
 
-  it("does not add the non-blocking note when Critical has a real finding", () => {
-    const out = renderReviewFindingsMarkdown(parseReviewFindings(CHANGES_REQUESTED_JSON));
-    expect(out).toContain("**Verdict:** changes requested — One errcheck failure");
-    expect(out).not.toContain("non-blocking findings only");
+  it("renders earlier-finding dispositions", () => {
+    const parsed = parseReviewFindings(
+      JSON.stringify({
+        verdict: "changes-requested",
+        summary: "s",
+        previous: [
+          { ref: "a.go:1", status: "still-open", evidence: "probe still fails" },
+          { ref: "b.go:2", status: "addressed", evidence: "abc123" },
+        ],
+      }),
+    );
+    const out = renderReviewFindingsMarkdown(parsed);
+    expect(out).toContain("### Earlier findings");
+    expect(out).toContain("- **a.go:1** — still-open: probe still fails");
+    expect(out).toContain("- **b.go:2** — addressed: abc123");
   });
 
   describe('mode: "review-body"', () => {
@@ -992,8 +1007,8 @@ describe("renderReviewFindingsMarkdown", () => {
         parseReviewFindings(FULL_SHAPE_JSON),
         "worker-prompt",
       );
-      expect(out).toContain("[blocker] **cmd/branchdam/main_test.go:669**");
-      expect(out).toContain("[nit] **cmd/branchdam/main.go:12**");
+      expect(out).toContain("[critical] **cmd/branchdam/main_test.go:669**");
+      expect(out).toContain("[suggestion] **cmd/branchdam/main.go:12**");
       expect(out).toContain("Worth filing a follow-up issue for the flaky test.");
       expect(out).not.toContain("Looks Good");
       expect(out).not.toContain("Verified");
@@ -1219,4 +1234,220 @@ describe("directive-line collisions", () => {
       expect(REVIEW_AGENT_LINE_RE.test(text)).toBe(false);
     });
   }
+});
+
+describe("verdict derivation", () => {
+  const parse = (o: Record<string, unknown>) =>
+    parseReviewFindings(JSON.stringify({ summary: "s", ...o }));
+  const finding = (severity: string) => ({ path: "a.ts", line: 1, body: "b", severity });
+
+  it("approves a review with no findings", () => {
+    expect(parse({ verdict: "approved" }).verdict).toBe("approved");
+  });
+
+  it("approves with suggestions when every finding is a suggestion", () => {
+    const parsed = parse({ verdict: "approved", findings: [finding("suggestion")] });
+    expect(parsed.verdict).toBe("approved-with-suggestions");
+  });
+
+  it.each(["critical", "warning"])("requests changes for a %s finding", (severity) => {
+    const parsed = parse({
+      verdict: "approved",
+      findings: [finding("suggestion"), finding(severity)],
+    });
+    expect(parsed.verdict).toBe("changes-requested");
+  });
+
+  it("treats a severity-less finding as blocking", () => {
+    const parsed = parse({ verdict: "approved", findings: [{ path: "a.ts", line: 1, body: "b" }] });
+    expect(parsed.verdict).toBe("changes-requested");
+  });
+
+  it.each([
+    ["blocker", "changes-requested"],
+    ["major", "changes-requested"],
+    ["minor", "changes-requested"],
+    ["nit", "approved-with-suggestions"],
+  ])("reads the legacy severity %s as %s", (severity, expected) => {
+    expect(parse({ verdict: "clean", findings: [finding(severity)] }).verdict).toBe(expected);
+  });
+
+  it("reads the legacy clean verdict as approved", () => {
+    expect(parse({ verdict: "clean" }).verdict).toBe("approved");
+  });
+
+  it("keeps changes-requested when an earlier blocker is still open, even with no findings", () => {
+    const parsed = parse({
+      verdict: "approved",
+      previous: [{ ref: "a.ts:1", status: "still-open", evidence: "probe fails" }],
+    });
+    expect(parsed.verdict).toBe("changes-requested");
+    expect(parsed.previous).toEqual([
+      { ref: "a.ts:1", status: "still-open", evidence: "probe fails" },
+    ]);
+  });
+
+  it("treats a re-broken earlier finding like a still-open one", () => {
+    const parsed = parse({
+      verdict: "approved",
+      previous: [{ ref: "a.ts:1", status: "re-broken", evidence: "" }],
+    });
+    expect(parsed.verdict).toBe("changes-requested");
+  });
+
+  it("approves when every earlier finding is addressed", () => {
+    const parsed = parse({
+      verdict: "approved",
+      previous: [{ ref: "a.ts:1", status: "addressed", evidence: "abc" }],
+    });
+    expect(parsed.verdict).toBe("approved");
+  });
+
+  it("ignores listed dispositions after an approving prior round — an optional suggestion never blocks", () => {
+    const raw = JSON.stringify({
+      verdict: "approved",
+      summary: "s",
+      previous: [{ ref: "a.ts:1", status: "still-open", evidence: "skipped nit" }],
+    });
+    expect(parseReviewFindings(raw).verdict).toBe("changes-requested");
+    const parsed = parseReviewFindings(raw, { ignorePrevious: true });
+    expect(parsed.verdict).toBe("approved");
+    expect(parsed.previous).toEqual([]);
+  });
+
+  it("drops malformed dispositions", () => {
+    const parsed = parse({
+      verdict: "approved",
+      previous: [null, { ref: "", status: "addressed" }, { ref: "a", status: "wat" }, "x"],
+    });
+    expect(parsed.previous).toEqual([]);
+    expect(parse({ verdict: "approved", previous: "nope" }).previous).toEqual([]);
+  });
+
+  it("fails safe: a bare changes-requested with nothing to derive from stays changes-requested", () => {
+    expect(parse({ verdict: "changes-requested" }).verdict).toBe("changes-requested");
+    expect(
+      parse({
+        verdict: "changes-requested",
+        previous: [{ ref: "a.ts:1", status: "addressed", evidence: "abc" }],
+      }).verdict,
+    ).toBe("changes-requested");
+  });
+
+  it("notes when the reviewer's own verdict disagrees with its findings", () => {
+    const parsed = parse({ verdict: "approved", findings: [finding("critical")] });
+    expect(parsed.verdict).toBe("changes-requested");
+    expect(parsed.notes.join("\n")).toContain('Reviewer wrote "approved"');
+  });
+
+  it("does not note anything when the verdict agrees", () => {
+    expect(parse({ verdict: "approved" }).notes).toEqual([]);
+  });
+
+  it("accepts approved-with-suggestions as a claimed verdict", () => {
+    const parsed = parse({
+      verdict: "approved-with-suggestions",
+      findings: [finding("suggestion")],
+    });
+    expect(parsed.verdict).toBe("approved-with-suggestions");
+    expect(parsed.notes).toEqual([]);
+  });
+
+  it("deriveVerdict ignores notes and looksGood by construction", () => {
+    expect(deriveVerdict({ findings: [], previous: [], claimed: "approved" })).toBe("approved");
+  });
+});
+
+describe("isApprovingVerdict", () => {
+  it.each(["approved", "approved-with-suggestions", "clean"])("approves %s", (v) => {
+    expect(isApprovingVerdict(v)).toBe(true);
+  });
+  it.each(["changes-requested", "inconclusive", "", null, undefined])(
+    "does not approve %s",
+    (v) => {
+      expect(isApprovingVerdict(v as string | null | undefined)).toBe(false);
+    },
+  );
+});
+
+describe("buildSuggestionsPrompt", () => {
+  const out = buildSuggestionsPrompt({
+    task: TASK,
+    branchName: "mullion/task-1",
+    worktreePath: BASE.worktreePath,
+    budgetMinutes: 60,
+    agentCommand: "claude",
+    suggestions: "- [suggestion] **a.ts:1** — rename x",
+    rereviewRequestPath: "/sessions/task-1.rereview.99",
+  });
+
+  it("frames the work as approved, carries the suggestions, and promises no re-review", () => {
+    expect(out).toContain("APPROVED your work and left only suggestions");
+    expect(out).toContain("rename x");
+    expect(out).toContain("Nobody will review this round");
+  });
+
+  it("tells the worker how to ask for a real review", () => {
+    expect(out).toContain("/sessions/task-1.rereview.99");
+  });
+});
+
+describe("taskRereviewRequestPath", () => {
+  it("is keyed by task and verdict time, outside any worktree", () => {
+    expect(taskRereviewRequestPath("/s", 7, 1234)).toBe("/s/task-7.rereview.1234");
+  });
+});
+
+describe("buildReviewPrompt follow-up round", () => {
+  const base = { task: TASK, worktreePath: BASE.worktreePath, findingsPath: FINDINGS_PATH };
+
+  it("states severity decides the outcome and what suggestions mean", () => {
+    const out = buildReviewPrompt(base);
+    expect(out).toContain('"severity": "critical" | "warning" | "suggestion"');
+    expect(out).toContain("applies them once and nobody reviews that again");
+  });
+
+  it("is a delta review of the range since the last reviewed commit", () => {
+    const out = buildReviewPrompt({
+      ...base,
+      priorRound: { reviewedSha: "abc1234", findings: "- [critical] **a.ts:1** — fix" },
+    });
+    expect(out).toContain("FOLLOW-UP review");
+    expect(out).toContain("git diff abc1234..HEAD");
+    expect(out).toContain("- [critical] **a.ts:1** — fix");
+    expect(out).toContain("keeps its severity and keeps the verdict at changes-requested");
+  });
+
+  it("tells the reviewer to track only blocking findings, not earlier suggestions", () => {
+    const out = buildReviewPrompt({
+      ...base,
+      priorRound: { reviewedSha: "abc1234", findings: "- [critical] **a.ts:1** — fix" },
+    });
+    expect(out).toContain("every earlier critical or warning finding");
+    expect(out).toContain("Earlier suggestions are not tracked");
+  });
+
+  it("after an approval, says the earlier suggestions were optional and must not be listed", () => {
+    const out = buildReviewPrompt({
+      ...base,
+      priorRound: {
+        reviewedSha: "abc1234",
+        findings: "- [suggestion] **a.ts:1** — rename",
+        approved: true,
+      },
+    });
+    expect(out).toContain("That review APPROVED the work");
+    expect(out).toContain("List NONE of it in `previous`");
+    expect(out).not.toContain("every earlier critical or warning finding");
+  });
+
+  it("falls back to a plain follow-up when the reviewed commit is unknown", () => {
+    const out = buildReviewPrompt({ ...base, priorRound: { reviewedSha: null, findings: "x" } });
+    expect(out).toContain("FOLLOW-UP review");
+    expect(out).not.toContain("git diff");
+  });
+
+  it("is a first review when there is no prior round", () => {
+    expect(buildReviewPrompt(base)).not.toContain("FOLLOW-UP");
+  });
 });

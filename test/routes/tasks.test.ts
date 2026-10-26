@@ -48,6 +48,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
     readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
     ...overrides,
   };
 }

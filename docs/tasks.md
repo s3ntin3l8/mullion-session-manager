@@ -5,8 +5,10 @@ dashboard — into an autonomously-worked, reviewed, and promoted pull
 request: an agent claims the task into an isolated worktree, works it, an
 optional review agent looks at the diff, and a human decides whether to
 approve or send it back — the review agent itself can only trigger up to a
-bounded number of automatic rounds of rework before that human decision
-(and even that human step can be removed — see "Auto-approve" in
+bounded number of automatic rounds of rework before that human decision,
+and only a finding that must be fixed (critical or warning) earns another
+review: an approval that leaves just suggestions has them applied once and
+is not reviewed again (and even that human step can be removed — see "Auto-approve" in
 [`tasks-internals.md`](tasks-internals.md#auto-approve)), never
 approve/reject on its own.
 
@@ -275,13 +277,15 @@ waiting for a free concurrency slot. It never holds a session; see the
   exceptions.
 - **`reviewing → in_progress`** has two triggers, one human and one
   automatic. The human one is Reject (see "Board actions" below). The
-  automatic one is the review-findings loop's own auto-return, and a red
-  required CI check or an unresolved PR review comment can trigger the same
-  transition too — see
+  automatic one is the review-findings loop's own auto-return (a
+  `changes-requested` review, or an approval that left suggestions for the
+  worker to apply — the latter spends no round and is not re-reviewed), and a
+  red required CI check or an unresolved PR review comment can trigger the
+  same transition too — see
   [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics) and
   [`tasks-internals.md`](tasks-internals.md#auto-approve). Both land on the
   same target status; `recordTaskTransition`'s `via` tag (`"reject"` vs.
-  `"review-feedback"`/`"ci-feedback"`/`"pr-comment-feedback"`) is what tells
+  `"review-feedback"`/`"suggestions-feedback"`/`"ci-feedback"`/`"pr-comment-feedback"`) is what tells
   them apart in the transition log and the `/ws/tasks` stream.
 - **`* → failed`** fires automatically on session exit (a `claimed`/
   `in_progress` task whose session dies is failed, not left pointing at a
@@ -511,7 +515,7 @@ Two independent choices are resolved per task, most-specific tier wins:
    This becomes load-bearing, not just advisory, once a project's
    `autoApprove` setting is on (see
    [`tasks-internals.md`](tasks-internals.md#auto-approve)): auto-approve's
-   gate requires an ingested `clean` verdict, which only exists if a review
+   gate requires an ingested approving verdict (`approved` or `approved-with-suggestions`), which only exists if a review
    agent actually ran. No review agent configured on a project means that
    project's tasks can never auto-approve, by design — the same "opt-in, no
    global default" posture above, just with a consequence attached now.

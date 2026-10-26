@@ -7,7 +7,11 @@ import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
-import { taskReviewFindingsPath, taskCommitTitlePath } from "./task-prompt.js";
+import {
+  taskReviewFindingsPath,
+  taskCommitTitlePath,
+  taskRereviewRequestPath,
+} from "./task-prompt.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -348,6 +352,12 @@ export interface SessionBackend {
   // (unlike review findings) — see `taskCommitTitlePath`'s own doc comment
   // — so there is no matching delete method; the file is meant to persist.
   readTaskCommitTitle(taskId: number): Promise<string | null>;
+  // A suggestions-round worker's "review this" request
+  // (`taskRereviewRequestPath`, task-prompt.ts): `null` ONLY for a genuinely
+  // absent file, throws for everything else (host unreachable, a peer 5xx,
+  // version skew — a peer build with no route included), same contract as
+  // `readTaskCommitTitle`. Keyed, never deleted — see the path helper.
+  readTaskRereviewRequest(taskId: number, key: number): Promise<string | null>;
 }
 
 class LocalBackend implements SessionBackend {
@@ -587,6 +597,17 @@ class LocalBackend implements SessionBackend {
     if (!existsSync(titlePath)) return null;
     const content = readFileSync(titlePath, "utf8").trim();
     return content.length > 0 ? content : null;
+  }
+
+  async readTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
+    const requestPath = taskRereviewRequestPath(
+      path.dirname(this.app.pty.hookSocketPath),
+      taskId,
+      key,
+    );
+    if (!existsSync(requestPath)) return null;
+    // The file's existence is the request, so an empty file still counts.
+    return readFileSync(requestPath, "utf8").trim() || "(no reason given)";
   }
 }
 
@@ -875,6 +896,10 @@ class RemoteBackend implements SessionBackend {
 
   readTaskCommitTitle(taskId: number): Promise<string | null> {
     return this.client.resolveReadTaskCommitTitle(taskId);
+  }
+
+  readTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
+    return this.client.resolveReadTaskRereviewRequest(taskId, key);
   }
 }
 

@@ -381,7 +381,7 @@ const {
 } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
-const { taskReviewFindingsPath, taskCommitTitlePath } =
+const { taskReviewFindingsPath, taskCommitTitlePath, taskRereviewRequestPath } =
   await import("../../src/services/task-prompt.js");
 const { deriveWorktreePath } = await import("../../src/services/git-worktree.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
@@ -415,6 +415,7 @@ function inertBackendMembers() {
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions-dir"),
     readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -1603,6 +1604,7 @@ describe("reconcileTasks", () => {
         deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
         resolveSessionsDir: vi.fn().mockResolvedValue("/remote/own/sessions-dir"),
         readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+        readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
       };
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
@@ -1702,6 +1704,7 @@ describe("reconcileTasks", () => {
         deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
         resolveSessionsDir: vi.fn().mockRejectedValue(new Error("host unreachable")),
         readTaskCommitTitle: vi.fn().mockResolvedValue(null),
+        readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
       };
       const resolveBackendSpy = vi
         .spyOn(sessionBackendModule, "resolveBackend")
@@ -6427,7 +6430,7 @@ describe("reconcileTasks", () => {
         expect(mockResolveReviewThread).toHaveBeenCalledExactlyOnceWith("tok", "thread-own");
         expect(mockResolveReviewThread).not.toHaveBeenCalledWith("tok", "thread-human");
         const row = await getTask(app, taskId);
-        expect(row.lastReviewVerdict).toBe("clean");
+        expect(row.lastReviewVerdict).toBe("approved");
 
         await app.close();
       });
@@ -6932,6 +6935,263 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    // An APPROVED review that left only suggestions: the worker applies them
+    // once, the task does NOT spend a round, and the worker's return skips the
+    // review — the nit loop this verdict exists to end.
+    describe("approved-with-suggestions", () => {
+      const SUGGESTIONS_JSON = JSON.stringify({
+        verdict: "approved",
+        summary: "Looks good, two nits.",
+        findings: [{ path: "a.ts", line: 3, severity: "suggestion", body: "rename x to count" }],
+      });
+
+      it("returns the task to the worker without spending a round, carrying the approval", async () => {
+        const app = await buildApp();
+        const { taskId, workerSessionId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastAutoReturnReason).toBe("suggestions");
+        expect(row.lastReviewVerdict).toBe("approved-with-suggestions");
+        expect(row.approvalCarriedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBe(reviewSessionId);
+        expect(row.reviewFindings).toContain("rename x to count");
+        expect(row.sessionId).not.toBe(workerSessionId);
+
+        await app.close();
+      });
+
+      it("skips the re-review when the worker returns: same review session, approval kept", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+        await reconcileTasks(app);
+        const returned = await getTask(app, taskId);
+        // The re-spawned worker finishes its turn.
+        mockFinishedSessionIds(app, returned.sessionId as number);
+
+        await reconcileTasks(app);
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        // No new review agent: the pointer neither changed nor was nulled and
+        // respawned, and the ingested marker still matches it — which is what
+        // the auto-approve gate reads.
+        expect(row.reviewSessionId).toBe(reviewSessionId);
+        expect(row.reviewFindingsIngestedSessionId).toBe(reviewSessionId);
+        expect(row.lastReviewVerdict).toBe("approved-with-suggestions");
+        expect(row.approvalCarriedAt).not.toBeNull();
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("re-reviews when the worker asks for it by writing the re-review request file", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+        await reconcileTasks(app);
+        const returned = await getTask(app, taskId);
+        fs.writeFileSync(
+          taskRereviewRequestPath(
+            path.dirname(app.pty.hookSocketPath),
+            taskId,
+            Math.floor(returned.lastReviewVerdictAt!.getTime() / 1000),
+          ),
+          "the fix grew into a refactor",
+        );
+        mockFinishedSessionIds(app, returned.sessionId as number);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.approvalCarriedAt).toBeNull();
+        // Asking for a review spends a round, so the hatch can't loop forever.
+        expect(row.autoReturnRounds).toBe(1);
+        // A genuinely new review: the old pointer was dropped and a fresh
+        // review session spawned in its place.
+        expect(row.reviewSessionId).not.toBe(reviewSessionId);
+        expect(row.reviewFindingsIngestedSessionId).not.toBe(row.reviewSessionId);
+
+        await app.close();
+      });
+
+      it("still returns the suggestions on a task that has used every round it had", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ autoReturnRounds: 2 }).where(eq(tasks.id, taskId)).run();
+        writeFindings(app, taskId, 2, SUGGESTIONS_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(2);
+        // Not parked as "needs a human": the task is moving.
+        expect(row.autoReturnCapAnnouncedAt).toBeNull();
+
+        await app.close();
+      });
+
+      it("does not return an all-suggestions review whose worker can't take a seeded prompt", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db.update(tasks).set({ agentCommand: "bash" }).where(eq(tasks.id, taskId)).run();
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.lastReviewVerdict).toBe("approved-with-suggestions");
+        expect(row.approvalCarriedAt).toBeNull();
+
+        await app.close();
+      });
+
+      // The read goes through the backend, which for a remote host can fail.
+      // A host that is only unreachable may hold a request the worker wrote,
+      // so wait; any other failure (an old peer, a 5xx) can't heal, so carry.
+      async function returnedWithFinishedWorker(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        readRequest: (taskId: number, key: number) => Promise<string | null>,
+      ) {
+        const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+        await reconcileTasks(app);
+        const returned = await getTask(app, taskId);
+        mockFinishedSessionIds(app, returned.sessionId as number);
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const spy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockImplementation((appArg, hostId) => {
+            const real = realResolveBackend(appArg, hostId);
+            return new Proxy(real, {
+              get(target, prop, receiver) {
+                if (prop === "readTaskRereviewRequest") return readRequest;
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          });
+        return { taskId, reviewSessionId, spy };
+      }
+
+      it("waits a tick, without leaving in_progress, when the host is unreachable for the re-review request", async () => {
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const app = await buildApp();
+        const { taskId, spy } = await returnedWithFinishedWorker(app, () =>
+          Promise.reject(new HostUnreachableError("h", "down")),
+        );
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+
+        spy.mockRestore();
+        await app.close();
+      });
+
+      it("one task's unreachable host does not stall the other tasks on that host", async () => {
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const app = await buildApp();
+        const first = await returnedWithFinishedWorker(app, (taskId) =>
+          taskId === first.taskId
+            ? Promise.reject(new HostUnreachableError("h", "down"))
+            : Promise.resolve(null),
+        );
+        // A second task whose worker has just finished, on the same host.
+        const { taskId: otherId, sessionId: otherWorker } =
+          await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
+        app.db.update(tasks).set({ agentCommand: "codex" }).where(eq(tasks.id, otherId)).run();
+        const firstRow = await getTask(app, first.taskId);
+        mockFinishedSessionIds(app, firstRow.sessionId as number, otherWorker);
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, first.taskId)).status).toBe("in_progress");
+        expect((await getTask(app, otherId)).status).toBe("reviewing");
+
+        first.spy.mockRestore();
+        await app.close();
+      });
+
+      it("carries the approval when the re-review request can't be read for any other reason", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId, spy } = await returnedWithFinishedWorker(app, () =>
+          Promise.reject(new Error("HTTP 404 from an old peer")),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.reviewSessionId).toBe(reviewSessionId);
+        expect(row.approvalCarriedAt).not.toBeNull();
+
+        spy.mockRestore();
+        await app.close();
+      });
+
+      it("a re-review after an approval ignores dispositions for the earlier optional suggestions", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        app.db
+          .update(tasks)
+          .set({ lastReviewVerdict: "approved-with-suggestions" })
+          .where(eq(tasks.id, taskId))
+          .run();
+        writeFindings(
+          app,
+          taskId,
+          0,
+          JSON.stringify({
+            verdict: "approved",
+            summary: "Grew, but fine.",
+            previous: [{ ref: "a.ts:3", status: "still-open", evidence: "nit not applied" }],
+          }),
+        );
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.status).toBe("reviewing");
+
+        await app.close();
+      });
+
+      it("a human Reject clears the carried approval so the next finish is reviewed", async () => {
+        const app = await buildApp();
+        const { taskId } = await claimIntoReviewing(app, "codex");
+        writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
+        await reconcileTasks(app);
+        // Back in reviewing with the approval carried…
+        const returned = await getTask(app, taskId);
+        mockFinishedSessionIds(app, returned.sessionId as number);
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).approvalCarriedAt).not.toBeNull();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${taskId}/reject`,
+          payload: { feedback: "not good enough" },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect((await getTask(app, taskId)).approvalCarriedAt).toBeNull();
+
+        await app.close();
+      });
+    });
+
     // Issue #1357 — a task that sat in "reviewing" long enough for its
     // ORIGINAL claimedAt to already be past the budget deadline (real
     // incident: task 410657, review round revived by #1346's own rearm
@@ -7176,7 +7436,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, task.id);
       expect(row.status).toBe("reviewing");
       expect(row.autoReturnRounds).toBe(2);
-      expect(row.lastReviewVerdict).toBe("clean");
+      expect(row.lastReviewVerdict).toBe("approved");
       expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
       // The normal clean-verdict review comment still posts (proving
       // postReviewFindingsComment actually ran here, not just skipped for
@@ -7685,7 +7945,7 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, task.id);
       expect(row.reviewFindingsIngestedSessionId).toBe(reviewSession.id);
       expect(row.reviewFindings).toContain("Looks good from the remote agent.");
-      expect(row.lastReviewVerdict).toBe("clean");
+      expect(row.lastReviewVerdict).toBe("approved");
       expect(deleteMock).toHaveBeenCalledWith(task.id, 0);
 
       resolveBackendSpy.mockRestore();

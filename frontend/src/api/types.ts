@@ -285,7 +285,7 @@ export interface Project {
   // branch is up to date. Mirrors src/db/schema.ts's projects.mergeOnApprove.
   mergeOnApprove: boolean | null;
   // A "reviewing" task approves itself once its review agent's latest
-  // verdict is "clean" and CI on the PR head is green — no human click.
+  // verdict is approving and CI on the PR head is green — no human click.
   // Needs a review agent configured (defaultReviewAgent above) to ever
   // produce a verdict at all. Mirrors projects.autoApprove.
   autoApprove: boolean | null;

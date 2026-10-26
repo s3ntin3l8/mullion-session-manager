@@ -39,15 +39,19 @@ import {
   postReviewFindingsComment,
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { HostUnreachableError } from "./remote-host-client.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
+  buildSuggestionsPrompt,
   buildCiFailurePrompt,
   buildRebasePrompt,
   buildPrReviewCommentsPrompt,
   taskReviewFindingsPath,
   taskCommitTitlePath,
+  taskRereviewRequestPath,
+  isApprovingVerdict,
   parseReviewFindings,
   parseCommitTitle,
   renderReviewFindingsMarkdown,
@@ -96,6 +100,33 @@ import {
   recordRateLimitEvent,
 } from "./task-rate-limit-grace.js";
 import type { ReleaseMergeResult } from "../shared/types.js";
+
+/**
+ * What the previous review round found, for a FOLLOW-UP review's delta
+ * prompt — the last `## Round N` block of `tasks.reviewFindings`, plus the
+ * head SHA that review covered. `undefined` for a first review, and after an
+ * inconclusive one (there was nothing to follow up on).
+ */
+function priorRoundFor(
+  task: typeof tasks.$inferSelect,
+): { reviewedSha: string | null; findings: string; approved?: boolean } | undefined {
+  if (!task.reviewFindings) return undefined;
+  if (
+    task.lastReviewVerdict !== "changes-requested" &&
+    task.lastReviewVerdict !== "approved-with-suggestions"
+  ) {
+    return undefined;
+  }
+  const blocks = task.reviewFindings.split(/\n\n(?=## Round )/);
+  const last = blocks[blocks.length - 1];
+  return last
+    ? {
+        reviewedSha: task.lastReviewedHeadSha,
+        findings: last,
+        approved: task.lastReviewVerdict === "approved-with-suggestions",
+      }
+    : undefined;
+}
 
 /**
  * Review agent decision (this phase's binding design) — when a project or
@@ -204,6 +235,7 @@ async function spawnReviewAgentNow(
       findingsPath,
       ci,
       roundsRemaining,
+      priorRound: priorRoundFor(task),
     });
     const result = await createSessionRecord(app, {
       projectId: project.id,
@@ -1982,10 +2014,9 @@ async function attemptMerge(
           // (verdict isn't "clean") or it hit its own early-return
           // (fetch failure/truncation), either way falling through to a
           // fresh fetch just for the count.
-          const selfHealResult =
-            task.lastReviewVerdict === "clean"
-              ? await resolveMullionOwnThreadsIfClean(app, task, project)
-              : null;
+          const selfHealResult = isApprovingVerdict(task.lastReviewVerdict)
+            ? await resolveMullionOwnThreadsIfClean(app, task, project)
+            : null;
           try {
             const threadsResult =
               selfHealResult ??
@@ -3028,7 +3059,7 @@ async function attemptAutoApprove(
   ) {
     return;
   }
-  if (task.lastReviewVerdict !== "clean") return;
+  if (!isApprovingVerdict(task.lastReviewVerdict)) return;
 
   if (current.mergeable === false || current.mergeableState === "dirty") {
     if (project.autoApprove && task.rebaseAttempts < MAX_REBASE_ATTEMPTS) {
@@ -3298,7 +3329,7 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 // across a growing list of triggers (review feedback here; a red required
 // CI check and an unresolved PR review comment are later triggers on the
 // same model — see the roadmap plan).
-export type AutoReturnReason = "review" | "ci" | "pr-comment";
+export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions";
 
 // `via` naming for recordTaskTransition — kept distinct from
 // AutoReturnReason itself (rather than reusing the reason string directly)
@@ -3308,7 +3339,16 @@ const AUTO_RETURN_VIA: Record<AutoReturnReason, string> = {
   review: "review-feedback",
   ci: "ci-feedback",
   "pr-comment": "pr-comment-feedback",
+  suggestions: "suggestions-feedback",
 };
+
+/** Epoch seconds of an ingested verdict — the key `taskRereviewRequestPath`
+ * hangs a suggestions-round worker's "review this" request on. Seconds, not
+ * ms, because `lastReviewVerdictAt` round-trips through a `timestamp` column
+ * that stores whole seconds; the writer and the reader must agree. */
+function rereviewRequestKey(verdictAt: Date): number {
+  return Math.floor(verdictAt.getTime() / 1000);
+}
 
 // Today's default — a single automatic round for an advisory review agent's
 // own findings was a reasonable default; a closed automatic loop (this
@@ -3430,11 +3470,19 @@ export async function autoReturnTask(
   project: typeof projects.$inferSelect,
   opts: { reason: AutoReturnReason; seedPrompt: string },
 ): Promise<{ ok: boolean }> {
+  // A suggestions round (an approved review's leftover nits) spends nothing:
+  // it's not a fix-up the cap is rationing, and it must stay possible even on
+  // a task that has used every round it had. It also marks the approval as
+  // carried, so the worker's return skips the review (see the
+  // `in_progress -> reviewing` transition).
+  const spendsRound = opts.reason !== "suggestions";
+  const roundAfter = task.autoReturnRounds + (spendsRound ? 1 : 0);
   const updated = app.db
     .update(tasks)
     .set({
       status: "in_progress",
-      autoReturnRounds: task.autoReturnRounds + 1,
+      autoReturnRounds: roundAfter,
+      approvalCarriedAt: spendsRound ? null : new Date(),
       lastAutoReturnReason: opts.reason,
       // Issue #1038 — every caller of autoReturnTask already gated on
       // !capReached, so this is null already in every designed path; clear
@@ -3486,6 +3534,7 @@ export async function autoReturnTask(
         // clobber the task with the wrong failure reason.
         status: "reviewing",
         autoReturnRounds: task.autoReturnRounds,
+        approvalCarriedAt: task.approvalCarriedAt,
         // Fresh subagent review, PR #774 — a rolled-back attempt means no
         // auto-return round actually completed, so leaving this set to
         // whatever reason the earlier CAS just wrote would contradict this
@@ -3518,7 +3567,7 @@ export async function autoReturnTask(
         and(
           eq(tasks.id, task.id),
           eq(tasks.status, "in_progress"),
-          eq(tasks.autoReturnRounds, task.autoReturnRounds + 1),
+          eq(tasks.autoReturnRounds, roundAfter),
         ),
       )
       .run();
@@ -3775,7 +3824,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // for an explicit verdict — `parsed` (not `findings`) is now what
         // both gates below key off. `parsed === null` covers a missing OR
         // empty file, i.e. "wrote nothing", never a real "clean" verdict.
-        const parsed = findings !== null ? parseReviewFindings(findings) : null;
+        const parsed =
+          findings !== null
+            ? parseReviewFindings(findings, {
+                ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+              })
+            : null;
 
         // Hermes review, PR #576 — a review agent that never derives
         // "finished" (exits right after its turn instead of staying running,
@@ -3891,7 +3945,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                 now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS);
         if (!isUsableSignal) continue;
 
-        const roundLabel = `## Round ${task.autoReturnRounds + 1}`;
+        // A suggestions round spends no round, so a re-review after one (the
+        // worker asked for it) shares its counter with the review before it.
+        const roundLabel = `## Round ${task.autoReturnRounds + 1}${
+          task.lastAutoReturnReason === "suggestions" ? " (re-review after suggestions)" : ""
+        }`;
         // Hermes review, PR #754 — wording keyed on `derived.status`
         // itself, not just "was it exited," so a session ingested via the
         // grace-elapsed branch above (which — per the comment on
@@ -3961,6 +4019,17 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         const maxRounds = resolveMaxAutoReturnRounds(project);
         const capReached = task.autoReturnRounds >= maxRounds;
         const shouldAutoReturn = wantsAutoReturn && !capReached;
+        // An approval that left only suggestions: same preconditions as any
+        // auto-return (a finished review, a worker that can take a seed) but
+        // NOT capped — the round it sends costs nothing.
+        const wantsSuggestionsRound =
+          derived.status === "finished" &&
+          parsed !== null &&
+          parsed.verdict === "approved-with-suggestions" &&
+          resolvedTaskMaster.enabled &&
+          task.worktreePath !== null &&
+          task.agentCommand !== null &&
+          commandSupportsSeed(task.agentCommand);
 
         // Hermes review, PR #576 — record BEFORE posting the PR comment
         // (previously the reverse), and CAS on `status = "reviewing"` even
@@ -4015,7 +4084,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // output is being ingested (isUsableSignal above), so `capReached`
         // alone already means "a capped task's findings were just
         // ingested" — no separate ingest-pointer comparison needed here.
-        const announcingCap = capReached;
+        const announcingCap = capReached && !wantsSuggestionsRound;
         // Issue #1039 — the PR head SHA this round's ingested findings are
         // actually about, read from the existing github-pr-poller.ts cache
         // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
@@ -4034,6 +4103,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             reviewFindings: appendedFindings,
             reviewFindingsIngestedSessionId: task.reviewSessionId,
             lastReviewVerdict: verdict,
+            // A fresh review of the current head supersedes any carried
+            // approval — the verdict above is now earned, not inherited.
+            approvalCarriedAt: null,
             // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
             // grace window; see that column's own doc comment in schema.ts.
             lastReviewVerdictAt: new Date(now),
@@ -4098,8 +4170,41 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // doesn't deadlock on a self-inflicted stale thread. Never fires on
         // "changes-requested" (there's nothing to corroborate yet) or
         // "inconclusive" (a crashed/silent reviewer confirms nothing).
-        if (verdict === "clean") {
+        if (isApprovingVerdict(verdict)) {
           await resolveMullionOwnThreadsIfClean(app, task, project);
+        }
+
+        if (wantsSuggestionsRound) {
+          const issueContext = await resolveTaskIssueContextSafe(app, task, project);
+          const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
+            taskId: task.id,
+            hostId: resolveTaskWorkerHost(app, task),
+          });
+          await autoReturnTask(app, task, project, {
+            reason: "suggestions",
+            seedPrompt: buildSuggestionsPrompt({
+              task: {
+                ...task,
+                comments: issueContext?.comments,
+                parent: issueContext?.parent,
+                siblings: issueContext?.siblings,
+              },
+              branchName: task.branchName ?? deriveTaskBranchName(task),
+              worktreePath: task.worktreePath!,
+              budgetMinutes: resolvedTaskMaster.budgetMinutes,
+              agentCommand: task.agentCommand,
+              suggestions: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
+              rereviewRequestPath: taskRereviewRequestPath(
+                sessionsDir,
+                task.id,
+                rereviewRequestKey(new Date(now)),
+              ),
+              commitTitlePath: project.conventionalCommitTitles
+                ? taskCommitTitlePath(sessionsDir, task.id)
+                : undefined,
+            }),
+          });
+          continue;
         }
 
         if (!shouldAutoReturn) continue;
@@ -4807,25 +4912,82 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 );
               }
             }
+            // A suggestions round (an APPROVED review's leftover nits) comes
+            // back here with its approval carried: the review keeps its
+            // session pointer, so nothing respawns, and the auto-approve
+            // gate sees the same ingested verdict it already trusted. The
+            // worker can ask for a real review instead by writing the
+            // re-review request file; an unreadable one (host down, old
+            // peer build) is read as "no request" — small nit fixes are
+            // exactly what the approval was granted for.
+            // An escape-hatch re-review spends a round like any other review
+            // fix-up, so a worker that asks every time still ends at the cap
+            // (and the findings file index moves on with it).
+            let rereviewRequested = false;
+            let carryApproval =
+              task.approvalCarriedAt !== null &&
+              task.reviewSessionId !== null &&
+              task.lastReviewVerdictAt !== null &&
+              isApprovingVerdict(task.lastReviewVerdict);
+            if (carryApproval) {
+              try {
+                const request = await backend.readTaskRereviewRequest(
+                  task.id,
+                  rereviewRequestKey(task.lastReviewVerdictAt!),
+                );
+                if (request !== null) {
+                  carryApproval = false;
+                  rereviewRequested = true;
+                  app.log.info(
+                    { taskId: task.id, reason: request },
+                    "task reconcile: suggestions-round worker asked for a re-review — not carrying the approval",
+                  );
+                }
+              } catch (err) {
+                // A host that is merely unreachable right now may well hold a
+                // request the worker wrote: wait a tick rather than skip a
+                // review it asked for. Anything else (a peer build with no
+                // such route, a 5xx) will not heal by waiting, so carry.
+                if (err instanceof HostUnreachableError) {
+                  app.log.warn(
+                    { err, taskId: task.id },
+                    "task reconcile: host unreachable reading the worker's re-review request — retrying next tick",
+                  );
+                  // `continue`, not `return`: this is one row of a host's loop,
+                  // and the rest of the host's tasks must still transition.
+                  continue;
+                }
+                app.log.warn(
+                  { err, taskId: task.id },
+                  "task reconcile: failed to read the worker's re-review request — carrying the approval",
+                );
+              }
+            }
             const updated = app.db
               .update(tasks)
               .set({
                 status: "reviewing",
                 reviewingAt: now,
+                ...(rereviewRequested ? { autoReturnRounds: task.autoReturnRounds + 1 } : {}),
                 // See the matching claimed -> reviewing branch above for why
                 // these are nulled here rather than left alone.
-                reviewSessionId: null,
-                reviewSeedDelivered: null,
-                reviewSpawnClaimedAt: null,
+                ...(carryApproval
+                  ? {}
+                  : {
+                      reviewSessionId: null,
+                      reviewSeedDelivered: null,
+                      reviewSpawnClaimedAt: null,
+                      approvalCarriedAt: null,
+                      // Task 409707 — a fresh review round earns its own
+                      // automatic inconclusive-rearm attempt, same reasoning
+                      // as autoReturnCapAnnouncedAt's own reset just below.
+                      inconclusiveReviewRearmCount: 0,
+                    }),
                 // Issue #1038 — a fresh review is about to spawn off this
                 // write (processPendingReviewSpawns has no cap check, by
                 // design), so any prior announcement is stale the instant
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
-                // Task 409707 — a fresh review round earns its own automatic
-                // inconclusive-rearm attempt, same reasoning as
-                // autoReturnCapAnnouncedAt's own reset just above.
-                inconclusiveReviewRearmCount: 0,
                 // #761 — `?? task.prTitle`, not a bare overwrite: a later
                 // round that doesn't rewrite the title file (see
                 // `taskCommitTitlePath`'s own doc comment on why that's
@@ -4855,7 +5017,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               // on rather than adding a network round-trip to this task's
               // own transition. Both postures are correct for where they
               // sit; this is not an inconsistency to "harmonize" later.
-              if (task.reviewSessionId !== null) {
+              if (task.reviewSessionId !== null && !carryApproval) {
                 void killSession(app, task.reviewSessionId).catch((err) => {
                   app.log.warn(
                     { err, taskId: task.id, reviewSessionId: task.reviewSessionId },

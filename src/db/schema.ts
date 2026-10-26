@@ -279,7 +279,7 @@ export const projects = sqliteTable("projects", {
   mergeOnApprove: integer("merge_on_approve", { mode: "boolean" }),
   // autoApprove: task-reconciler.ts's processAutoApprovals sweep approves a
   // "reviewing" task on its own once its review agent's last verdict is
-  // "clean" AND CI on the PR head is green — see tasks.lastReviewVerdict.
+  // approving (approved or approved-with-suggestions) AND CI on the PR head is green — see tasks.lastReviewVerdict.
   autoApprove: integer("auto_approve", { mode: "boolean" }),
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
@@ -914,8 +914,17 @@ export const tasks = sqliteTable(
     // from the verdict itself (`lastReviewVerdict`, below), since not every
     // trigger is a review verdict. Null until the first auto-return.
     lastAutoReturnReason: text("last_auto_return_reason", {
-      enum: ["review", "ci", "pr-comment"],
+      enum: ["review", "ci", "pr-comment", "suggestions"],
     }),
+    // Set when a "suggestions" round (an APPROVED review that left only
+    // suggestions) returns to `reviewing`: the approving verdict still holds
+    // for the head the worker just pushed, so NO review agent is spawned and
+    // the task goes straight to the CI / auto-approve gates. Cleared at
+    // every site that clears the review fields for a genuine re-review
+    // (the `in_progress -> reviewing` transition when a review is wanted,
+    // processReviewingTasks' ingest). Null means the verdict, if any, was
+    // earned by a review of the current head.
+    approvalCarriedAt: integer("approval_carried_at", { mode: "timestamp" }),
     // The reviewSessionId whose findings have already been read and acted
     // on (comment posted, review_findings appended, auto-return decided) —
     // NOT the same question autoReturnRounds answers. A task can sit in
@@ -1119,7 +1128,8 @@ export const tasks = sqliteTable(
     // itself already documents relative to githubSyncError above.
     releaseError: text("release_error"),
     // Auto-approve — the review agent's most recently ingested verdict
-    // ("clean" | "changes-requested" | "inconclusive"), written alongside
+    // ("approved" | "approved-with-suggestions" | "changes-requested" | "inconclusive";
+    // rows written before the rename hold "clean", read as "approved"), written alongside
     // reviewFindingsIngestedSessionId in task-reconciler.ts's
     // processReviewingTasks. Durable because auto-approve's gate needs to
     // read it back later, not just at ingestion time — re-parsing the

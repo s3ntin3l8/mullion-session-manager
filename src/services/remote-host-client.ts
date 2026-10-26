@@ -1937,6 +1937,20 @@ export class RemoteHostClient {
   }
 
   /**
+   * Reads a suggestions-round worker's re-review request file off this
+   * agent's own filesystem (`taskRereviewRequestPath`). Same shape and
+   * version-skew posture as `resolveReadTaskCommitTitle`: a 404 from a peer
+   * build without the route throws HostRequestError, never collapses into
+   * `null`.
+   */
+  async resolveReadTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
+    const result = await this.request<{ content: string | null }>(
+      `/internal/task-rereview-request?taskId=${taskId}&key=${key}`,
+    );
+    return result.content;
+  }
+
+  /**
    * Opens (but does not wait for) a WS connection to this agent's
    * `/internal/ws/attach`, bearer-authed via a request header (the `ws`
    * package is required for this — the browser/global WebSocket API can't

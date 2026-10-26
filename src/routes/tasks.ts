@@ -1516,6 +1516,9 @@ export async function tasksRoute(app: FastifyInstance) {
           // Clearing it here, same write, means the board stops claiming
           // "needs a human" the instant a human has, in fact, acted.
           autoReturnCapAnnouncedAt: null,
+          // A human sent it back: whatever approval a suggestions round was
+          // carrying no longer covers the work, so the next finish re-reviews.
+          approvalCarriedAt: null,
         })
         .where(and(eq(tasks.id, taskId), eq(tasks.status, "reviewing")))
         .returning()

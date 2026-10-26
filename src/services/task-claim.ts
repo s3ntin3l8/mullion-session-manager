@@ -1256,6 +1256,7 @@ export async function retryTask(
       // the one path that can otherwise carry a stale announcement into a
       // fresh in_progress run.
       autoReturnCapAnnouncedAt: null,
+      approvalCarriedAt: null,
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;

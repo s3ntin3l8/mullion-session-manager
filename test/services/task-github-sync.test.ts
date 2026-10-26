@@ -847,7 +847,7 @@ describe("task-github-sync", () => {
         body: "## Round 1\n\nOne errcheck failure.\n\n- **a.go:42** — unchecked error",
         reviewSummary: "## Round 1\n\nOne errcheck failure.",
         findings: [
-          { path: "a.go", line: 42, side: "RIGHT", severity: "major", body: "unchecked error" },
+          { path: "a.go", line: 42, side: "RIGHT", severity: "critical", body: "unchecked error" },
         ],
       });
 
@@ -866,7 +866,7 @@ describe("task-github-sync", () => {
         {
           body: "## Round 1\n\nOne errcheck failure.",
           commitId: "abc123",
-          comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "[major] unchecked error" }],
+          comments: [{ path: "a.go", line: 42, side: "RIGHT", body: "[critical] unchecked error" }],
         },
       );
     });
@@ -1076,10 +1076,28 @@ describe("task-github-sync", () => {
 
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nClean.",
-          verdict: "clean",
+          verdict: "approved",
         });
 
         expect(mockResolveReviewerToken).toHaveBeenCalledWith(expect.anything(), repoRef);
+        expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
+          "reviewer_tok",
+          repoRef.owner,
+          repoRef.repo,
+          9,
+          expect.objectContaining({ event: "APPROVE" }),
+        );
+      });
+
+      it("posts APPROVE from the reviewer token for an approved-with-suggestions verdict", async () => {
+        mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
+        const task = baseTask({ issueNumber: 5, prNumber: 9 });
+
+        await postReviewFindingsComment(app, task, project, {
+          body: "## Round 1\n\nApproved with one suggestion.",
+          verdict: "approved-with-suggestions",
+        });
+
         expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
           "reviewer_tok",
           repoRef.owner,
@@ -1096,7 +1114,7 @@ describe("task-github-sync", () => {
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nIssues found.",
           reviewSummary: "## Round 1\n\nIssues found.",
-          findings: [{ path: "a.go", line: 1, side: "RIGHT", severity: "major", body: "b" }],
+          findings: [{ path: "a.go", line: 1, side: "RIGHT", severity: "critical", body: "b" }],
           verdict: "changes-requested",
         });
 
@@ -1151,7 +1169,7 @@ describe("task-github-sync", () => {
 
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nClean.",
-          verdict: "clean",
+          verdict: "approved",
         });
 
         expect(mockCreatePullRequestReview).toHaveBeenCalledWith(
@@ -1177,7 +1195,7 @@ describe("task-github-sync", () => {
           body: "## Round 1\n\nOne finding.\n\n- **a.go:42** — x",
           reviewSummary: "## Round 1\n\nOne finding.",
           findings: [{ path: "a.go", line: 42, side: "RIGHT", severity: null, body: "x" }],
-          verdict: "clean",
+          verdict: "approved",
         });
 
         expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
@@ -1228,7 +1246,7 @@ describe("task-github-sync", () => {
 
         await postReviewFindingsComment(app, task, project, {
           body: "## Round 1\n\nClean.",
-          verdict: "clean",
+          verdict: "approved",
         });
 
         expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(2);
