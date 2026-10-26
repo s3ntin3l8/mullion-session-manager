@@ -148,3 +148,17 @@ describe("attachPtyHost input backlog", () => {
     client.kill();
   });
 });
+
+describe("attachPtyHost exit codes", () => {
+  it("reports a connection the master ends without an EXIT frame as a failed attach (1)", async () => {
+    // What a token refusal looks like from the client's side: a bare close.
+    const endpoint = tmpEndpoint();
+    const master = await fakeMaster(endpoint);
+    const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "stale-token");
+    const exits: Array<{ exitCode: number }> = [];
+    client.onExit((e) => exits.push(e));
+    (await master.connected).destroy();
+    await until(() => exits.length > 0);
+    expect(exits).toEqual([{ exitCode: 1 }]);
+  });
+});

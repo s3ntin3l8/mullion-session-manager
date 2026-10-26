@@ -9,7 +9,8 @@
 //
 // No systemd, no dtach: nothing here goes near a scope.
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 import net from "node:net";
 import fs from "node:fs";
@@ -18,7 +19,7 @@ import path from "node:path";
 import { attachPtyHost, type AttachClient } from "../../src/services/pty-host-client.js";
 import { probeSocket } from "../../src/services/unix-socket.js";
 import { ipcPath } from "../../src/cli/ipc-path.mjs";
-import { createSession, isServing, serve } from "../../src/pty-host/master.mjs";
+import { createSession, isServing, probeEndpoint, serve } from "../../src/pty-host/master.mjs";
 import { TOKEN_ENV, encodeFrame, encodeHello, FRAME_DATA } from "../../src/pty-host/protocol.mjs";
 
 const PTY_HOST = path.resolve(import.meta.dirname, "..", "..", "src", "pty-host", "pty-host.mjs");
@@ -246,6 +247,18 @@ describe("serve — the session token", () => {
     expect(logs.join("\n")).toMatch(/without a session token/);
   });
 
+  it("a refused attach reports a failed exit (1), never a clean one", async () => {
+    const { endpoint } = await servedWithClient();
+    const refused = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "stale-token");
+    const exits: Array<{ exitCode: number }> = [];
+    let bytes = 0;
+    refused.onData((d) => (bytes += d.length));
+    refused.onExit((e) => exits.push(e));
+    await until(() => exits.length > 0);
+    expect(exits).toEqual([{ exitCode: 1 }]);
+    expect(bytes).toBe(0);
+  }, 30_000);
+
   it("drops a client with the wrong token, which never sees output", async () => {
     const { endpoint, good } = await servedWithClient();
     const intruder = await rawClient(endpoint, [encodeHello("wrong")]);
@@ -275,6 +288,21 @@ describe("serve — the session token", () => {
 });
 
 describe("createSession (-n)", () => {
+  // A unix-socket-only case: a named pipe leaves no file behind.
+  it.skipIf(process.platform === "win32")(
+    "clears a stale socket file nothing serves before launching",
+    async () => {
+      const dir = tmpDir();
+      const endpoint = path.join(dir, "1.sock");
+      fs.writeFileSync(endpoint, ""); // connecting to it is refused: provably dead
+      const dies = path.join(dir, "dies.mjs");
+      fs.writeFileSync(dies, "process.exit(1);\n");
+      await createSession(endpoint, process.execPath, [], { entry: dies, log: () => {} });
+      expect(fs.existsSync(endpoint)).toBe(false);
+    },
+    30_000,
+  );
+
   it("refuses an endpoint that is already served, like dtach", async () => {
     const endpoint = tmpEndpoint();
     const holder = net.createServer();
@@ -363,5 +391,40 @@ describe("pty-host.mjs (the command line)", () => {
     const result = spawnSync(process.execPath, [PTY_HOST, "--bogus"], { encoding: "utf8" });
     expect(result.status).toBe(2);
     expect(result.stderr).toMatch(/usage: pty-host\.mjs -n <endpoint>/);
+  });
+});
+
+describe("probeEndpoint", () => {
+  it("answers live for a served endpoint and dead for one nothing serves", async () => {
+    const endpoint = tmpEndpoint();
+    expect(await probeEndpoint(endpoint)).toBe("dead");
+    const server = net.createServer();
+    await new Promise<void>((r) => server.listen(endpoint, r));
+    cleanups.push(() => void server.close());
+    expect(await probeEndpoint(endpoint)).toBe("live");
+  });
+
+  it("answers unknown, never dead, when the probe cannot finish in time", async () => {
+    // A connection that never answers either way.
+    const hung = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    const spy = vi.spyOn(net, "connect").mockReturnValue(hung as unknown as net.Socket);
+    try {
+      expect(await probeEndpoint(tmpEndpoint(), 50)).toBe("unknown");
+      expect(hung.destroy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("answers unknown for an error that does not prove the endpoint free", async () => {
+    const failing = Object.assign(new EventEmitter(), { destroy: vi.fn() });
+    const spy = vi.spyOn(net, "connect").mockReturnValue(failing as unknown as net.Socket);
+    try {
+      const answer = probeEndpoint(tmpEndpoint());
+      failing.emit("error", Object.assign(new Error("denied"), { code: "EACCES" }));
+      expect(await answer).toBe("unknown");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

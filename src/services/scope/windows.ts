@@ -3,7 +3,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOKEN_ENV } from "../../pty-host/protocol.mjs";
 import type { CgroupProcess } from "../cgroup-inventory.js";
-import { createPtyHostToken, removePtyHostToken } from "../pty-host-token.js";
+import {
+  createPtyHostToken,
+  readPtyHostToken,
+  removePtyHostToken,
+  writePtyHostToken,
+} from "../pty-host-token.js";
 import { probeSocket } from "../unix-socket.js";
 import { descendantsOf, type ProcessEntry } from "./detached.js";
 import { sessionSocketPath } from "./dtach.js";
@@ -184,11 +189,55 @@ export class WindowsScopeBackend implements ScopeBackend {
       : [program, rest];
     // A fresh token per launch: the master serves only clients presenting it
     // (src/pty-host/master.mjs), and Session.attachClient() reads it back
-    // from the sessions dir — see pty-host-token.ts.
+    // from the sessions dir — see pty-host-token.ts. The previous one is
+    // kept until the launch is known to have worked (see the catch below).
+    const previousToken = isSessionMaster ? readPtyHostToken(this.opts.sessionsDir, spec.id) : "";
     const env = isSessionMaster
       ? { ...spec.env, [TOKEN_ENV]: createPtyHostToken(this.opts.sessionsDir, spec.id) }
       : spec.env;
     const endpoint = this.endpointFor(spec.id);
+    try {
+      await this.launch(spec, command, argv, env, endpoint);
+    } catch (err) {
+      if (isSessionMaster)
+        await this.settleTokenAfterFailedLaunch(spec.id, endpoint, previousToken);
+      throw err;
+    }
+  }
+
+  /**
+   * A launch failed, so the token just written was never handed to a master
+   * that is now serving. If nothing answers on the endpoint, nothing needs
+   * a token — remove it. If something might (a master already serving it,
+   * `-n`'s "already in use" refusal, or a probe that could not tell), that
+   * master holds the PREVIOUS token: put it back, so the session stays
+   * attachable instead of being refused by its own master.
+   */
+  private async settleTokenAfterFailedLaunch(
+    id: string,
+    endpoint: string,
+    previousToken: string,
+  ): Promise<void> {
+    let probe: Awaited<ReturnType<typeof probeSocket>> = "unknown";
+    try {
+      probe = await probeSocket(endpoint);
+    } catch {
+      // Could not tell — treated as "something may be there".
+    }
+    if (probe === "dead" || previousToken === "") {
+      removePtyHostToken(this.opts.sessionsDir, id);
+    } else {
+      writePtyHostToken(this.opts.sessionsDir, id, previousToken);
+    }
+  }
+
+  private async launch(
+    spec: ScopeLaunchSpec,
+    command: string,
+    argv: string[],
+    env: NodeJS.ProcessEnv,
+    endpoint: string,
+  ): Promise<void> {
     await spawnScopeProcess({
       command,
       argv,

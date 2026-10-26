@@ -353,3 +353,62 @@ describe("WindowsScopeBackend.listProcesses", () => {
     expect(await backend().listProcesses("7")).toEqual([]);
   });
 });
+
+describe("WindowsScopeBackend.start — the token after a failed launch", () => {
+  const failLaunch = (id: string) =>
+    backend().start({
+      id,
+      argv: ["dtach", "-n", endpoint(id), "bash.exe"],
+      cwd: process.cwd(),
+      env: {},
+      timeoutMs: 5_000,
+      label: "master bootstrap",
+    });
+
+  it("puts the previous token back while a master still serves the pipe", async () => {
+    const previous = createPtyHostToken(SESSIONS_DIR, "21");
+    spawnExitCode = 1;
+    probeResults.set(endpoint("21"), "live");
+    await expect(failLaunch("21")).rejects.toThrow(/already in use/);
+    // The live master holds the previous token — the session stays attachable.
+    expect(readPtyHostToken(SESSIONS_DIR, "21")).toBe(previous);
+  });
+
+  it("keeps the previous token when the probe cannot tell", async () => {
+    const previous = createPtyHostToken(SESSIONS_DIR, "22");
+    spawnExitCode = 1;
+    await expect(failLaunch("22")).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "22")).toBe(previous);
+  });
+
+  it("removes the unused token when nothing serves the pipe", async () => {
+    createPtyHostToken(SESSIONS_DIR, "23");
+    spawnExitCode = 1;
+    probeResults.set(endpoint("23"), "dead");
+    await expect(failLaunch("23")).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "23")).toBe("");
+  });
+
+  it("removes the unused token when there was no previous one to restore", async () => {
+    spawnExitCode = 1;
+    probeResults.set(endpoint("24"), "live");
+    await expect(failLaunch("24")).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "24")).toBe("");
+  });
+
+  it("does not touch tokens for a program that is not a session master", async () => {
+    const previous = createPtyHostToken(SESSIONS_DIR, "25");
+    spawnExitCode = 1;
+    await expect(
+      backend().start({
+        id: "25",
+        argv: ["emulator.exe"],
+        cwd: process.cwd(),
+        env: {},
+        timeoutMs: 5_000,
+        label: "device bootstrap",
+      }),
+    ).rejects.toThrow();
+    expect(readPtyHostToken(SESSIONS_DIR, "25")).toBe(previous);
+  });
+});

@@ -48,9 +48,11 @@ function emitter<T>() {
  * tell:
  *   - output arrives through `onData`, as strings;
  *   - `onExit` fires exactly once — when the program exits (with its exit
- *     code), when the master goes away, when the endpoint cannot be reached
- *     at all (exit code 1, like `dtach -a` on a missing session), or after
- *     `kill()`;
+ *     code), after `kill()` (0), or when the connection ends any other way
+ *     (1, like `dtach -a` on a missing session): the endpoint cannot be
+ *     reached, the master refused this client's token, or the master went
+ *     away without reporting an exit. A refusal must never read as a clean
+ *     exit — it is exactly the case of a live session behind a stale token;
  *   - `kill()` DETACHES. It closes this connection; the master and its
  *     program keep running, exactly as killing a `dtach -a` client does.
  *
@@ -71,8 +73,11 @@ export function attachPtyHost(
   const data = emitter<string>();
   const exit = emitter<{ exitCode: number; signal?: number }>();
   const socket = net.createConnection(endpoint);
+  /** The program's exit code, once the master has reported it. */
   let exitCode: number | null = null;
   let exited = false;
+  /** Whether WE ended the connection (kill() — a detach, not a failure). */
+  let detached = false;
 
   const finish = (code: number) => {
     if (exited) return;
@@ -95,12 +100,11 @@ export function attachPtyHost(
       socket.destroy();
     }
   });
-  // An unreachable endpoint (no session) reads as a failed attach — code 1,
-  // the same thing `dtach -a` reports for a missing session.
-  socket.on("error", () => {
-    if (exitCode === null) exitCode = 1;
-  });
-  socket.on("close", () => finish(exitCode ?? 0));
+  // A program exit the master reported wins; then our own detach (0); any
+  // other end — unreachable, refused, the master gone without an EXIT — is a
+  // failed attach (1).
+  socket.on("error", () => {});
+  socket.on("close", () => finish(exitCode ?? (detached ? 0 : 1)));
 
   return {
     onData: data.event,
@@ -114,6 +118,7 @@ export function attachPtyHost(
       if (!socket.destroyed) socket.write(encodeResize(cols, rows));
     },
     kill: () => {
+      detached = true;
       socket.destroy();
     },
   };

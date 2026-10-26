@@ -19,10 +19,15 @@ export function ptyHostTokenPath(sessionsDir: string, id: string): string {
   return path.join(sessionsDir, `${id}.pty-token`);
 }
 
+/** Stores `token` as session `id`'s token, replacing any old one. */
+export function writePtyHostToken(sessionsDir: string, id: string, token: string): void {
+  writeFileSync(ptyHostTokenPath(sessionsDir, id), token, { mode: 0o600 });
+}
+
 /** Creates (replacing any old one) and returns a fresh token for session `id`. */
 export function createPtyHostToken(sessionsDir: string, id: string): string {
   const token = randomBytes(32).toString("hex");
-  writeFileSync(ptyHostTokenPath(sessionsDir, id), token, { mode: 0o600 });
+  writePtyHostToken(sessionsDir, id, token);
   return token;
 }
 

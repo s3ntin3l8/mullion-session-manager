@@ -40,16 +40,36 @@ export const MAX_CLIENT_BACKLOG_BYTES = 8 * 1024 * 1024;
 /** How long a new client has to present the session token before it is dropped. */
 export const AUTH_TIMEOUT_MS = 5_000;
 
-/** Resolves true when something accepts a connection on `endpoint`. */
-export function isServing(endpoint) {
+/** How long one endpoint probe may take before it answers "unknown". */
+export const PROBE_TIMEOUT_MS = 2_000;
+
+/**
+ * Asks `endpoint` whether anything serves it: "live" (something accepted),
+ * "dead" (provably nothing — ECONNREFUSED on a unix socket, ENOENT on a pipe
+ * or a missing socket file), or "unknown" (any other error, or no answer in
+ * time). The same tri-state, and the same rule that only the dead codes prove
+ * an endpoint free, as src/services/unix-socket.ts's probeSocket().
+ */
+export function probeEndpoint(endpoint, timeoutMs = PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
     const probe = net.connect(endpoint);
-    probe.once("connect", () => {
+    const settle = (result) => {
+      clearTimeout(timer);
       probe.destroy();
-      resolve(true);
+      resolve(result);
+    };
+    const timer = setTimeout(() => settle("unknown"), timeoutMs);
+    probe.once("connect", () => settle("live"));
+    probe.once("error", (err) => {
+      const dead = err.code === "ECONNREFUSED" || err.code === "ENOENT";
+      settle(dead ? "dead" : "unknown");
     });
-    probe.once("error", () => resolve(false));
   });
+}
+
+/** Resolves true when something accepts a connection on `endpoint`. */
+export async function isServing(endpoint) {
+  return (await probeEndpoint(endpoint)) === "live";
 }
 
 /**
@@ -61,15 +81,17 @@ export function isServing(endpoint) {
 export async function createSession(endpoint, program, args, opts) {
   const log = opts.log ?? ((line) => process.stderr.write(`${line}\n`));
   const readyTimeoutMs = opts.readyTimeoutMs ?? SERVE_READY_TIMEOUT_MS;
-  if (await isServing(endpoint)) {
+  const before = await probeEndpoint(endpoint);
+  if (before === "live") {
     // dtach refuses an in-use socket the same way.
     log(`pty-host: ${endpoint} is already in use`);
     return 1;
   }
-  // Not served: a unix socket file still at this path is stale (a master
-  // that was killed outright never closed it), and would make the new
-  // master's listen() fail. A named pipe leaves nothing behind.
-  if (!isPipePath(endpoint) && existsSync(endpoint)) {
+  // PROVABLY not served: a unix socket file still at this path is stale (a
+  // master killed outright never closed it) and would make the new master's
+  // listen() fail. Only a dead answer proves that — an "unknown" (EACCES, a
+  // timeout, ...) leaves the file alone. A named pipe leaves nothing behind.
+  if (before === "dead" && !isPipePath(endpoint) && existsSync(endpoint)) {
     try {
       unlinkSync(endpoint);
     } catch {
