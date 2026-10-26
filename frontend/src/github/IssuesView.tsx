@@ -1,23 +1,22 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api/index.js";
 import { useIssue, useIssues } from "../hooks/useGitHubData.js";
+import { useMullionLinks, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
-import type {
-  GitHubIssueLabel,
-  GitHubIssueListItem,
-  GitHubIssueSort,
-  Session,
-} from "../api/types.js";
+import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
 import type { Tone } from "../lib/statusTone.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
-import { indexIssueSessions, issueBranchName, issueSeedPrompt } from "./issueWork.js";
+import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 import { Button, DetailHeader, IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
+import { decideSessionAction } from "../ui/sidebar/linkDecisions.js";
+import { SessionPills } from "../ui/sidebar/SessionPills.js";
+import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
 // assignee, sort, title search, paging) and a drill-in detail with the
@@ -141,12 +140,7 @@ export function IssuesSection({
       labels: selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name],
     });
 
-  const sessions = useDashboardStore((st) => st.sessions);
-  const gitStatuses = useDashboardStore((st) => st.sessionGitStatuses);
-  const issueSessions = useMemo(
-    () => indexIssueSessions(sessions, gitStatuses, projectId),
-    [sessions, gitStatuses, projectId],
-  );
+  const links = useMullionLinks(projectId, { issues: data?.issues });
   const [starting, setStarting] = useState<ReadonlySet<number>>(new Set());
   const startSessionFrom = useStartSessionFrom(projectId);
   const [queued, setQueued] = useState<ReadonlySet<number>>(new Set());
@@ -241,7 +235,7 @@ export function IssuesSection({
             <IssueRow
               key={issue.number}
               issue={issue}
-              session={issueSessions.get(issue.number)}
+              link={links.byIssue.get(issue.number)}
               canQueue={ui.taskMaster?.enabled ?? data.taskMasterEnabled}
               queued={queued.has(issue.number)}
               onOpen={() => onOpenIssue(issue.number)}
@@ -267,7 +261,7 @@ export function IssuesSection({
 
 function IssueRow({
   issue,
-  session,
+  link,
   canQueue,
   queued,
   onOpen,
@@ -275,7 +269,7 @@ function IssueRow({
   onQueue,
 }: {
   issue: GitHubIssueListItem;
-  session: Session | undefined;
+  link: MullionLinkEntry | undefined;
   canQueue: boolean;
   queued: boolean;
   onOpen: () => void;
@@ -284,7 +278,15 @@ function IssueRow({
 }) {
   const done = issue.taskStatus === "done";
   const showQueue = canQueue && !issue.taskStatus && !queued;
-  const hasChips = issue.labels.length > 0 || issue.taskStatus || session || queued;
+  const action = decideSessionAction(link);
+  const task = link?.task;
+  const hasChips =
+    issue.labels.length > 0 ||
+    issue.taskStatus ||
+    task ||
+    issue.triage ||
+    link?.sessions.length ||
+    queued;
   return (
     <SidebarRow
       lead={<span className={`gh-issue-glyph${done ? " gh-issue-glyph--done" : ""}`} aria-hidden />}
@@ -309,13 +311,20 @@ function IssueRow({
             {issue.labels.map((l) => (
               <LabelChip key={l.name} label={l} />
             ))}
-            {issue.taskStatus && (
-              <StatusChip tone={taskTone(issue.taskStatus)}>Task: {issue.taskStatus}</StatusChip>
+            {task ? (
+              <TaskChip task={task} />
+            ) : (
+              issue.taskStatus && (
+                <StatusChip tone={taskTone(issue.taskStatus)}>Task: {issue.taskStatus}</StatusChip>
+              )
             )}
-            {queued && !issue.taskStatus && <StatusChip tone="info">Queued</StatusChip>}
-            {session && (
-              <StatusChip tone="success">Session: {session.name ?? session.id}</StatusChip>
+            {queued && !issue.taskStatus && !task && <StatusChip tone="info">Queued</StatusChip>}
+            {issue.triage && (
+              <StatusChip tone="info" title={`Triage run ${issue.triage.runId}`}>
+                Triage
+              </StatusChip>
             )}
+            <SessionPills links={link?.sessions ?? []} />
           </div>
         ) : undefined
       }
@@ -327,9 +336,11 @@ function IssueRow({
             </IconButton>
           )}
           <IconButton
-            label={session ? "Open session" : "Start session"}
+            label={action.kind === "open-existing" ? "Open session" : "Start session"}
             onClick={
-              session ? () => useDashboardStore.getState().requestOpenSession(session.id) : onStart
+              action.kind === "open-existing"
+                ? () => useDashboardStore.getState().requestOpenSession(action.sessionId)
+                : onStart
             }
           >
             <PlayTriangleIcon size={14} />
@@ -359,17 +370,13 @@ export function IssueDetailView({
   const [notice, setNotice] = useState<string | null>(null);
   const [queued, setQueued] = useState(false);
   const startSessionFrom = useStartSessionFrom(projectId);
-  const sessions = useDashboardStore((st) => st.sessions);
-  const gitStatuses = useDashboardStore((st) => st.sessionGitStatuses);
-  const session = useMemo(
-    () => indexIssueSessions(sessions, gitStatuses, projectId).get(number),
-    [sessions, gitStatuses, projectId, number],
-  );
+  const link = useMullionLinks(projectId).byIssue.get(number);
+  const action = decideSessionAction(link);
 
   const startSession = async () => {
     if (!issue) return;
-    if (session) {
-      useDashboardStore.getState().requestOpenSession(session.id);
+    if (action.kind === "open-existing") {
+      useDashboardStore.getState().requestOpenSession(action.sessionId);
       return;
     }
     setBusy("session");
@@ -433,7 +440,11 @@ export function IssueDetailView({
           )}
           <div className="gh-detail-actions">
             <Button variant="primary" disabled={busy !== null} onClick={startSession}>
-              {busy === "session" ? "Starting…" : session ? "Open session" : "Start session"}
+              {busy === "session"
+                ? "Starting…"
+                : action.kind === "open-existing"
+                  ? "Open session"
+                  : "Start session"}
             </Button>
             {taskMaster?.enabled && (
               <Button disabled={busy !== null || queued} onClick={queue}>
@@ -441,12 +452,10 @@ export function IssueDetailView({
               </Button>
             )}
           </div>
-          {session && (
+          {link && (link.sessions.length > 0 || link.task) && (
             <div className="gh-issue-card">
-              <StatusChip tone="success">Session: {session.name ?? session.id}</StatusChip>
-              <StatusChip tone="neutral" mono>
-                {issueBranchName(issue)}
-              </StatusChip>
+              {link.task && <TaskChip task={link.task} />}
+              <SessionPills links={link.sessions} />
             </div>
           )}
           {notice && <div className="gh-detail-notice">{notice}</div>}

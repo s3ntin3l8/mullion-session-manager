@@ -548,6 +548,7 @@ button.sb-chip:focus-visible,
 .sb-linked-note {
   font-size: 0.6875rem;
   color: var(--status-warn-fg);
+}
 
 /* ───────── Issues (B5): glyph, filter bar, label chips ───────── */
 .gh-issue-glyph {

@@ -16,27 +16,3 @@ export function issueSeedPrompt(issue: { number: number; title: string; htmlUrl:
     `then implement it on this branch.`
   );
 }
-
-/**
- * Live sessions by the issue they work, keyed on the immutable `issue-<n>`
- * prefix of the worktree branch (the slug drifts when the title is edited).
- * Like the sidebar rows, a worktree session's branch is the poll-derived git
- * status first — opencode's hook-reported `liveBranch` is the main checkout's.
- */
-export function indexIssueSessions<
-  S extends { id: number; projectId: number; liveBranch: string | null },
->(
-  sessions: readonly S[],
-  gitStatuses: Readonly<Record<number, { branch?: string | null } | null | undefined>>,
-  projectId: number,
-): Map<number, S> {
-  const byIssue = new Map<number, S>();
-  for (const s of sessions) {
-    if (s.projectId !== projectId) continue;
-    for (const branch of [gitStatuses[s.id]?.branch, s.liveBranch]) {
-      const m = branch ? /^issue-(\d+)(?:-|$)/.exec(branch) : null;
-      if (m && !byIssue.has(Number(m[1]))) byIssue.set(Number(m[1]), s);
-    }
-  }
-  return byIssue;
-}

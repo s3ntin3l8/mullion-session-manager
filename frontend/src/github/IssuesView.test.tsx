@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IssueDetailView, IssuesSection } from "./IssuesView.js";
-import { indexIssueSessions, issueBranchName, issueSeedPrompt } from "./issueWork.js";
+import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
+import { makeProject, makeSession } from "../test/fixtures.js";
 import { useState } from "react";
 
 const LIST = {
@@ -58,28 +59,6 @@ describe("issueBranchName / issueSeedPrompt", () => {
     const prompt = issueSeedPrompt({ number: 7, title: "Crash", htmlUrl: "https://x/7" });
     expect(prompt).toContain("#7");
     expect(prompt).toContain("gh issue view 7");
-  });
-});
-
-describe("indexIssueSessions", () => {
-  const sess = (id: number, projectId: number, liveBranch: string | null) => ({
-    id,
-    projectId,
-    liveBranch,
-  });
-  it("keys on the issue number, prefers git status, and ignores other projects", () => {
-    const sessions = [
-      sess(1, 1, "main"),
-      sess(2, 1, "issue-7-old-title"),
-      sess(3, 2, "issue-8-x"),
-      sess(4, 1, "main"),
-      sess(5, 1, "issue-70"),
-    ];
-    const map = indexIssueSessions(sessions, { 1: { branch: "issue-9-slug" }, 4: null }, 1);
-    expect([...map.keys()].sort((a, b) => a - b)).toEqual([7, 9, 70]);
-    expect(map.get(9)?.id).toBe(1);
-    expect(map.get(7)?.id).toBe(2);
-    expect(map.has(8)).toBe(false);
   });
 });
 
@@ -302,9 +281,15 @@ describe("IssueDetailView", () => {
     const requestOpenSession = vi.fn();
     useDashboardStore.setState({
       requestOpenSession,
+      projects: [makeProject({ id: 1 })],
       sessions: [
-        { id: 31, projectId: 1, name: "issue 7", liveBranch: "issue-7-crash-on-start" },
-      ] as never,
+        makeSession({
+          id: 31,
+          projectId: 1,
+          name: "issue 7",
+          liveBranch: "issue-7-crash-on-start",
+        }),
+      ],
     });
     render(
       <IssueDetailView
@@ -403,14 +388,20 @@ describe("Issues list ↔ detail round trip", () => {
     const requestOpenSession = vi.fn();
     useDashboardStore.setState({
       requestOpenSession,
+      projects: [makeProject({ id: 1 })],
       sessions: [
-        { id: 31, projectId: 1, name: "issue 7", liveBranch: "issue-7-crash-on-start" },
-      ] as never,
+        makeSession({
+          id: 31,
+          projectId: 1,
+          name: "issue 7",
+          liveBranch: "issue-7-crash-on-start",
+        }),
+      ],
     });
     render(
       <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
     );
-    expect(await screen.findByText("Session: issue 7")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /issue 7/ })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Open session" }));
     expect(requestOpenSession).toHaveBeenCalledWith(31);
   });
