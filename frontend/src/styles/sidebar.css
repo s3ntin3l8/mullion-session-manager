@@ -1473,8 +1473,8 @@
   white-space: pre;
 }
 .session-diff-add {
-  background: color-mix(in srgb, var(--good, #4caf50) 10%, transparent);
-  color: color-mix(in srgb, var(--good, #4caf50) 70%, var(--fg));
+  background: color-mix(in srgb, var(--status-success-fg) 10%, transparent);
+  color: color-mix(in srgb, var(--status-success-fg) 70%, var(--fg));
 }
 .session-diff-del {
   background: color-mix(in srgb, var(--bad, #f44336) 10%, transparent);

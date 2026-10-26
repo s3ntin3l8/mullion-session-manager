@@ -3,7 +3,7 @@ import { useDashboardStore } from "./store/index.js";
 import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
 import { api, ApiError, normalizeAgentId } from "./api/index.js";
-import type { GitHubCiStatus, Launcher, Session, Task, TaskBlocker } from "./api/index.js";
+import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -17,6 +17,7 @@ import {
 import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
+import { sessionPrDotClass } from "./lib/sidebarStatus.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 
@@ -24,16 +25,6 @@ const UNSET_AGENT = "";
 
 export interface TaskDetailParams {
   taskId: number;
-}
-
-// Same "success/failure/in_progress/null -> good/bad/pending/none" mapping
-// duplicated across Sidebar.tsx/GitHubPanel.tsx/Dock.tsx/UnifiedBoard.tsx —
-// this codebase's own established precedent for this exact small guard.
-function taskDetailPrDotClass(status: GitHubCiStatus): "good" | "bad" | "pending" | "none" {
-  if (status === "success") return "good";
-  if (status === "failure") return "bad";
-  if (status === "in_progress") return "pending";
-  return "none";
 }
 
 // #667 — same "N blocker(s) not visible to this token" special-case as
@@ -302,7 +293,7 @@ export function TaskDetail({
             {(matchedPr?.number ?? task.prNumber) !== null &&
               ` #${matchedPr?.number ?? task.prNumber}`}
             {matchedPr && (
-              <span className={`github-panel-ci-dot ${taskDetailPrDotClass(matchedPr.ciStatus)}`} />
+              <span className={`github-panel-ci-dot ${sessionPrDotClass(matchedPr.ciStatus)}`} />
             )}
           </a>
         )}

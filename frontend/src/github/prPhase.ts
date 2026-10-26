@@ -1,4 +1,5 @@
 import type { GitHubPrPhase } from "../api/types.js";
+import { legacyPillClass, statusTone } from "../lib/statusTone.js";
 
 export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
   draft: "Draft",
@@ -15,12 +16,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
 export const ATTENTION_ORDER: GitHubPrPhase[] = ["ci_failing", "changes_requested", "conflicts"];
 
 export function phaseTone(phase: GitHubPrPhase): "bad" | "warn" | "good" | "dim" {
-  if (phase === "ci_failing" || phase === "changes_requested" || phase === "conflicts") {
-    return "bad";
-  }
-  if (phase === "review_pending" || phase === "ci_pending") return "warn";
-  if (phase === "ready_to_merge") return "good";
-  return "dim";
+  return legacyPillClass(statusTone({ phase }));
 }
 
 /** Needs-attention PRs first (in ATTENTION_ORDER), then most recently updated. */
